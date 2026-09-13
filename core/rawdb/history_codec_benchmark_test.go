@@ -94,18 +94,25 @@ func TestHistoryCodecBenchmarkProductionFormatsAndRoundTrip(t *testing.T) {
 
 func TestHistoryCodecBenchmarkForcedCDCGateAndIndependentPacks(t *testing.T) {
 	b := newHistoryBenchmarkTest(t, HistoryCodecBenchmarkOptions{})
-	// Duplicate large values fit below the existing 2 MiB gate. The candidate
-	// must really invoke CDC, without changing the process-wide writer flag.
+	// Duplicate large values below the former 2 MiB gate now satisfy the shared
+	// production threshold. Benchmarking must not change the writer flag.
 	rows := chunkHistoryRows(512<<10, 3)
 	raw := encodeBorrowedStateDomainChangeTestBlock(t, rows)
 	r, err := b.BenchmarkPack(context.Background(), 42, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ProductionCDCGate || !r.HasRepeatedLargeKey || !r.ForcedCDCUsefulAgainstRaw || !r.ForcedCDCWouldReplaceSnappy || r.Candidates[2].StoredBytes >= r.Candidates[1].StoredBytes {
-		t.Fatalf("missed below-gate opportunity: %+v", r)
+	if !r.ProductionCDCGate || !r.HasRepeatedLargeKey || !r.ForcedCDCUsefulAgainstRaw || !r.ForcedCDCWouldReplaceSnappy || r.Candidates[2].StoredBytes >= r.Candidates[1].StoredBytes {
+		t.Fatalf("production gate missed repeated large values: %+v", r)
 	}
-	t.Logf("synthetic below-gate pack: raw=%d snappy=%d forced_cdc=%d zstd=%d (bytes only, no I/O claim)", len(raw), r.Candidates[1].StoredBytes, r.Candidates[2].StoredBytes, r.Candidates[3].StoredBytes)
+	prior := stateChangeBlockChunkEncoding.Swap(true)
+	t.Cleanup(func() { stateChangeBlockChunkEncoding.Store(prior) })
+	selected, _ := encodeStateDomainChangeBlockStorageForChanges(raw, rows)
+	if uint64(len(selected)) != r.Candidates[2].StoredBytes {
+		t.Fatal("real production policy and benchmark prediction differ")
+	}
+	stateChangeBlockChunkEncoding.Store(prior)
+	t.Logf("synthetic newly eligible pack: raw=%d snappy=%d production_cdc=%d zstd=%d (bytes only, no I/O claim)", len(raw), r.Candidates[1].StoredBytes, r.Candidates[2].StoredBytes, r.Candidates[3].StoredBytes)
 	// A single random large image repeated in separate packs does not become
 	// a cross-pack dictionary. Its forced CDC result explicitly falls back.
 	one := encodeBorrowedStateDomainChangeTestBlock(t, chunkHistoryRows(2<<20, 1))

@@ -8,7 +8,9 @@ import (
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
+	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -17,7 +19,24 @@ import (
 
 const stateDomainChangeBlockChunksVersion = byte(2)
 
+// Two qualifying Prev versions already contribute this many raw bytes. A
+// higher pack-size gate would exclude useful repeated values unnecessarily.
+// Keep diagnostics and the offline benchmark on the same production gate.
+const stateChangeBlockChunkMinRawBytes = 2 * historychunk.MaxSize
+
 var stateChangeBlockChunkEncoding atomic.Bool
+
+// These are encoding-stage observations for the newly admitted interval below
+// the former 2 MiB gate. They precede Put and can include failed writes/retries:
+// selected/saved bytes do not measure durable writes or physical reclamation.
+// work_nanos is wall time for CDC only, excluding the pre-existing baseline
+// encoding and eligibility scan, and may include scheduling/GC pauses.
+var (
+	stateChangeSmallChunkAttemptsCounter   = metrics.NewRegisteredCounter("state/history/changeset/block_pack/small_chunk/attempts", nil)
+	stateChangeSmallChunkSelectedCounter   = metrics.NewRegisteredCounter("state/history/changeset/block_pack/small_chunk/selected", nil)
+	stateChangeSmallChunkSavedBytesCounter = metrics.NewRegisteredCounter("state/history/changeset/block_pack/small_chunk/candidate_saved_bytes", nil)
+	stateChangeSmallChunkWorkNanosCounter  = metrics.NewRegisteredCounter("state/history/changeset/block_pack/small_chunk/work_nanos", nil)
+)
 
 // SetStateHistoryBlockDedup enables the additional foreground encoding work for
 // repeated large values. Readers always support it. Runtime defaults to disabled
@@ -53,9 +72,23 @@ func stateChangeBlockHasLargeVersions(changes []*StateDomainChange) bool {
 }
 
 func encodeStateDomainChangeBlockStorageForChanges(raw []byte, changes []*StateDomainChange) ([]byte, bool) {
-	if stateChangeBlockChunkEncoding.Load() && len(raw) >= 2<<20 && len(raw) <= stateDomainChangeBlockMaxDecodedBytes && stateChangeBlockHasLargeVersions(changes) {
+	if stateChangeBlockChunkEncoding.Load() && len(raw) >= stateChangeBlockChunkMinRawBytes && len(raw) <= stateDomainChangeBlockMaxDecodedBytes && stateChangeBlockHasLargeVersions(changes) {
 		baseline, compressed := encodeStateDomainChangeBlockStorage(raw)
-		if encoded, useful := encodeStateChangeChunks(raw); useful && len(encoded)*8 < len(baseline)*7 {
+		observeSmall := len(raw) < 2<<20 // Observation boundary, not an encoding gate.
+		var started time.Time
+		if observeSmall {
+			stateChangeSmallChunkAttemptsCounter.Inc(1)
+			started = time.Now()
+		}
+		encoded, useful := encodeStateChangeChunks(raw)
+		if observeSmall {
+			stateChangeSmallChunkWorkNanosCounter.Inc(time.Since(started).Nanoseconds())
+		}
+		if useful && len(encoded)*8 < len(baseline)*7 {
+			if observeSmall {
+				stateChangeSmallChunkSelectedCounter.Inc(1)
+				stateChangeSmallChunkSavedBytesCounter.Inc(int64(len(baseline) - len(encoded)))
+			}
 			return encoded, true
 		}
 		return baseline, compressed

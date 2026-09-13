@@ -210,7 +210,7 @@ func (b *HistoryCodecBenchmark) BenchmarkPack(ctx context.Context, blockNum uint
 	sample.RawSHA256 = historyBenchmarkDigest(raw)
 	// The data gate is reported assuming the production writer flag is enabled;
 	// this experiment never reads or changes that global flag.
-	sample.ProductionCDCGate = len(raw) >= 2<<20 && sample.HasRepeatedLargeKey
+	sample.ProductionCDCGate = len(raw) >= stateChangeBlockChunkMinRawBytes && sample.HasRepeatedLargeKey
 	sample.CDCWorkers = historyBenchmarkCDCWorkers()
 	sample.ZstdWindowBytes = historyBenchmarkZstdWindow
 	sample.Candidates = append(sample.Candidates, HistoryCodecBenchmarkCandidate{

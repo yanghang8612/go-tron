@@ -247,16 +247,16 @@ func TestInspectStateHistoryPrevChunkGateExactIdentityAndLimits(t *testing.T) {
 		t.Fatal("gate ignored full identity")
 	}
 	g.observe(row)
-	if g.result(2<<20, true) != "eligible_size_and_repeated_large_identity" || g.result(1<<20, true) != "ineligible_raw_below_2MiB" {
+	if g.result(stateChangeBlockChunkMinRawBytes, true) != "eligible_size_and_repeated_large_identity" || g.result(stateChangeBlockChunkMinRawBytes-1, true) != "ineligible_raw_below_256KiB" {
 		t.Fatal("gate size/repeat mismatch")
 	}
 	g = newGate()
 	row.Key = make([]byte, historyPrevGateKeyBytes+1)
 	g.observe(row)
-	if g.result(2<<20, true) != "unknown_identity_budget" || len(g.seen) != 0 {
+	if g.result(stateChangeBlockChunkMinRawBytes, true) != "unknown_identity_budget" || len(g.seen) != 0 {
 		t.Fatal("gate identity cap not respected")
 	}
-	if g.result(2<<20, false) != "unknown_incomplete_pack" {
+	if g.result(stateChangeBlockChunkMinRawBytes, false) != "unknown_incomplete_pack" {
 		t.Fatal("partial pack described as exact negative")
 	}
 }

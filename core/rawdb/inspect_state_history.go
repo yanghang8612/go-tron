@@ -200,7 +200,7 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 			"largest_rows is top20 processed rows; large_keys is top20 among the first4096 identities with Prev>=16KiB, counting only such large rows. Overflow is explicit; it is not a guaranteed global top.",
 			"Large-key grouping uses full identity plus SHA256(key); no value is retained or emitted. No account payload semantics are inferred.",
 			"Chunk gate checks only size and repeated large full identity; it does not prove runtime enablement or the additional codec saving threshold. Capped identity tracking reports unknown when inconclusive.",
-			"large_identity_max_versions counts PrevExists rows with Prev>=128KiB for one full identity inside a pack; measured only when raw>=2MiB. It is a lower bound unless large_identity_tracking_complete is true.",
+			fmt.Sprintf("large_identity_max_versions counts PrevExists rows with Prev>=%dKiB for one full identity inside a pack; measured only when raw>=%dKiB. It is a lower bound unless large_identity_tracking_complete is true.", historychunk.MaxSize>>10, stateChangeBlockChunkMinRawBytes>>10),
 		}}
 	domains := make(map[[2]uint16]*HistoryPrevDomainStat)
 	large := make(map[historyPrevIdentity]*HistoryPrevLargeKey)
@@ -373,14 +373,14 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 					entry.LastBlock = c.BlockNum
 				}
 			}
-			if decodedLen >= 2<<20 {
+			if decodedLen >= stateChangeBlockChunkMinRawBytes {
 				gate.observe(c)
 			}
 			return true, nil
 		})
 		sample.ChunkGate = gate.result(decodedLen, cont && err == nil)
 		sample.LargeIdentityMaxVersions = gate.maxVersions
-		sample.LargeIdentityTrackingComplete = decodedLen >= 2<<20 && cont && err == nil && !gate.overflow
+		sample.LargeIdentityTrackingComplete = decodedLen >= stateChangeBlockChunkMinRawBytes && cont && err == nil && !gate.overflow
 		if rowStop != "" {
 			sample.Status = rowStop
 			return stop(rowStop, err)
@@ -518,8 +518,8 @@ func (g *historyPrevChunkGate) result(decodedLen int, complete bool) string {
 	if !complete {
 		return "unknown_incomplete_pack"
 	}
-	if decodedLen < 2<<20 {
-		return "ineligible_raw_below_2MiB"
+	if decodedLen < stateChangeBlockChunkMinRawBytes {
+		return fmt.Sprintf("ineligible_raw_below_%dKiB", stateChangeBlockChunkMinRawBytes>>10)
 	}
 	if g.repeated {
 		return "eligible_size_and_repeated_large_identity"
