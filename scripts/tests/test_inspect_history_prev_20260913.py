@@ -221,5 +221,89 @@ class ContractTests(unittest.TestCase):
         self.assertIsNone(ops.child)
 
 
+class ConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        with patch.object(m, 'HELPER', ROOT / 'scripts/deploy_range_scheduling_20260913.py'):
+            self.h = m.load_helper()
+        self.running = ('{ path=' + m.CURRENT_EXE + ' ; argv[]=' + m.CURRENT_EXE +
+                        ' --datadir /data/gtron/main/datadir ; ignore_errors=no ; '
+                        'start_time=[Sun 2026-09-13 01:39:35 UTC] ; stop_time=[n/a] ; '
+                        'pid=4345 ; code=(null) ; status=0/0 }')
+        self.stopped = self.running.replace('stop_time=[n/a]',
+                                           'stop_time=[Sun 2026-09-13 10:26:42 UTC]').replace(
+                                               'code=(null) ; status=0/0', 'code=exited ; status=0')
+        self.before = {'holds': {}, 'guard_config': {}, 'guard_script': {},
+                       'main': {'files': [{'data_b64': 'unit bytes unchanged'}],
+                                'properties': {'ExecStart': self.running, 'ExecStartPre': '', 'Environment': 'FIVE=1',
+                                               'MemoryLimit': '42949672960'}},
+                       'others': {name: {'files': []} for name in self.h.PRESERVED_UNITS}}
+
+    def changed(self, value):
+        after = copy.deepcopy(self.before)
+        after['main']['properties']['ExecStart'] = value
+        return after
+
+    def test_observed_clean_stop_runtime_fields_are_not_configuration(self):
+        m.same_configuration(self.h, self.before, self.changed(self.stopped))
+        self.assertEqual(self.before['main']['properties']['ExecStart'], self.running)
+
+    def test_restart_pid_and_times_change_but_static_command_is_equal(self):
+        restarted = self.running.replace('pid=4345', 'pid=9999').replace(
+            '01:39:35 UTC', '10:28:00 UTC')
+        m.same_configuration(self.h, self.before, self.changed(restarted))
+
+    def test_changed_argv_is_rejected(self):
+        changed = self.stopped.replace('/data/gtron/main/datadir', '/data/other/datadir')
+        with self.assertRaisesRegex(RuntimeError, 'ExecStart'):
+            m.same_configuration(self.h, self.before, self.changed(changed))
+
+    def test_changed_unit_bytes_environment_and_memory_are_still_rejected(self):
+        for part in ('files', 'Environment', 'MemoryLimit'):
+            after = self.changed(self.stopped)
+            if part == 'files':
+                after['main']['files'] = []
+            else:
+                after['main']['properties'][part] = 'changed'
+            with self.assertRaises(RuntimeError):
+                m.same_configuration(self.h, self.before, after)
+
+    def test_unknown_missing_or_duplicate_fields_fail_closed(self):
+        for value in (self.running + ' ' + self.running,
+                      self.running.replace(' ; status=0/0', ''),
+                      self.running.replace(' ; status=0/0', ' ; status=0/0 ; flags=unknown'),
+                      self.running.replace(' ; status=0/0', ' ; status=0/0 ; pid=4345')):
+            with self.assertRaises(RuntimeError):
+                m.normalize_exec_start(value)
+
+    def test_prestart_runtime_changes_are_not_configuration(self):
+        before = copy.deepcopy(self.before)
+        before['main']['properties']['ExecStartPre'] = self.running.replace(
+            m.CURRENT_EXE, '/usr/bin/python3').replace(
+                '--datadir /data/gtron/main/datadir', '/usr/local/libexec/gtron-mainnet-space-guard.py check')
+        after = copy.deepcopy(before)
+        after['main']['properties']['ExecStartPre'] = after['main']['properties']['ExecStartPre'].replace(
+            'pid=4345', 'pid=9998').replace('01:39:35 UTC', '10:29:00 UTC').replace(
+                'stop_time=[n/a]', 'stop_time=[Sun 2026-09-13 10:29:01 UTC]').replace(
+                    'code=(null) ; status=0/0', 'code=exited ; status=0')
+        m.same_configuration(self.h, before, after)
+
+    def test_prestart_empty_is_allowed_but_adding_command_is_rejected(self):
+        m.same_configuration(self.h, self.before, copy.deepcopy(self.before))
+        after = copy.deepcopy(self.before)
+        after['main']['properties']['ExecStartPre'] = self.running
+        with self.assertRaisesRegex(RuntimeError, 'ExecStartPre'):
+            m.same_configuration(self.h, self.before, after)
+
+    def test_prestart_changed_argv_and_unknown_format_are_rejected(self):
+        before = copy.deepcopy(self.before)
+        before['main']['properties']['ExecStartPre'] = self.running
+        for value in (self.running.replace('/data/gtron/main/datadir', '/data/other/datadir'),
+                      self.running.replace(' ; status=0/0', ' ; status=0/0 ; flags=unknown')):
+            after = copy.deepcopy(before)
+            after['main']['properties']['ExecStartPre'] = value
+            with self.assertRaises(RuntimeError):
+                m.same_configuration(self.h, before, after)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -7,6 +7,7 @@ bounded read-only child. Run under a durable operator session; SIGKILL or host
 failure cannot be recovered by a Python finally. No automatic retry of inspect.
 """
 import argparse
+import copy
 import fcntl
 import hashlib
 import json
@@ -172,12 +173,59 @@ def snapshot(h, initial=True):
     return out
 
 
+def normalize_exec_start(value):
+    """Parse the observed systemd single-command form, excluding runtime state."""
+    require(isinstance(value, str) and len(value) <= 64 * 1024,
+            'invalid ExecStart property')
+    match = re.fullmatch(r'\{\s*(.*?)\s*\}', value)
+    require(match is not None, 'unknown ExecStart serialization')
+    body = match.group(1)
+    require('{' not in body and '}' not in body, 'multiple or nested ExecStart commands')
+    fields = {}
+    for part in re.split(r'\s*;\s*', body):
+        key, separator, field = part.partition('=')
+        key, field = key.strip(), field.strip()
+        require(separator and key not in fields and field, 'malformed or duplicate ExecStart field')
+        fields[key] = field
+    require(set(fields) == {'path', 'argv[]', 'ignore_errors', 'start_time',
+                            'stop_time', 'pid', 'code', 'status'},
+            'unknown or missing ExecStart fields')
+    require(fields['path'].startswith('/') and '\n' not in fields['path'] and
+            (fields['argv[]'] == fields['path'] or fields['argv[]'].startswith(fields['path'] + ' ')),
+            'invalid ExecStart path/argv serialization')
+    require(fields['ignore_errors'] in ('yes', 'no'), 'unknown ExecStart ignore_errors value')
+    require(fields['pid'].isdigit(), 'invalid ExecStart runtime pid')
+    for name in ('start_time', 'stop_time'):
+        require(fields[name].startswith('[') and fields[name].endswith(']'),
+                'unknown ExecStart time serialization')
+    require(re.fullmatch(r'(\(null\)|[a-zA-Z_]+|[0-9]+)', fields['code']) is not None and
+            re.fullmatch(r'[0-9]+(?:/[0-9]+)?', fields['status']) is not None,
+            'unknown ExecStart exit serialization')
+    return {name: fields[name] for name in ('path', 'argv[]', 'ignore_errors')}
+
+
+def same_configuration(h, before, after):
+    # Keep full unit bytes and all previous configuration checks. Only the
+    # embedded process-status fields of startup commands are not configuration.
+    normalized = []
+    for original in (before, after):
+        item = copy.deepcopy(original)
+        properties = item['main']['properties']
+        for name in ('ExecStart', 'ExecStartPre'):
+            value = properties.get(name)
+            if name == 'ExecStartPre' and value == '':
+                continue  # No configured pre-start command.
+            properties[name] = json.dumps(normalize_exec_start(value), sort_keys=True)
+        normalized.append(item)
+    h.same_configuration(normalized[0], normalized[1])
+
+
 def check_configuration(h, before):
     now = {'main': h.unit_snapshot(SERVICE),
            'others': {u: h.unit_snapshot(u) for u in h.PRESERVED_UNITS},
            'holds': {p: h.hold_snapshot(p) for p in (h.GLOBAL_HOLD, h.MAIN_HOLD)},
            'guard_config': h.saved_file(h.GUARD_CONFIG), 'guard_script': h.saved_file(h.GUARD)}
-    h.same_configuration(before, now)
+    same_configuration(h, before, now)
     h.guard_check()
     require(h.file_sha(CURRENT_EXE) == CURRENT_SHA, 'production binary changed')
     return now
@@ -281,7 +329,7 @@ def prepare(h, args):
                 'offline codec benchmark CLI contract missing')
         verify_source(h, admission['manifest'])
         after = snapshot(h)
-        h.same_configuration(before, after)
+        same_configuration(h, before, after)
         require(h.file_sha(library) == rust_sha, 'native Sapling library changed')
         record = dict(admission, prepared=True, prepared_at=time.time(),
                       helper_sha256=HELPER_SHA, binary_sha256=h.file_sha(BINARY),
@@ -316,7 +364,7 @@ class LiveOps:
         require(self.h.file_sha(RELEASE / 'prepared.json') == self.args.prepared_sha,
                 'prepared record differs from operator-reviewed SHA')
         before = snapshot(self.h)
-        self.h.same_configuration(record['preflight'], before)
+        same_configuration(self.h, record['preflight'], before)
         require(not RESULT.exists(), 'inspection already attempted; do not overwrite evidence')
         RESULT.mkdir(mode=0o700)
         if self.args.export_packs:
@@ -420,7 +468,7 @@ class LiveOps:
             self.h.run([SYSTEMCTL, 'start', SERVICE], timeout=180, log='inspect-start.log')
         healthy = self.h.wait_healthy(CURRENT_EXE, CURRENT_SHA, before['process']['argv'], seconds=240)
         after = snapshot(self.h, initial=False)
-        self.h.same_configuration(before, after)
+        same_configuration(self.h, before, after)
         require((healthy['process']['pid'], healthy['process']['start_ticks']) ==
                 (after['process']['pid'], after['process']['start_ticks']), 'process changed after health')
         self.h.save_json('inspection-after.json', after)
