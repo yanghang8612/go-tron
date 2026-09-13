@@ -67,6 +67,23 @@ class GuardTests(unittest.TestCase):
                       command().replace('pid=0', 'pid=0 ; pid=1'), command()+' junk '+command()):
             with self.assertRaises(RuntimeError): s.parse_commands(value)
 
+    def test_old_systemctl_repeated_pre_properties_preserve_all_commands(self):
+        first,second=command('/bin/space-guard'),command('/usr/bin/python3')
+        raw='ActiveState=inactive\nExecStartPre='+first+'\nExecStartPre='+second+'\nMainPID=0\n'
+        parsed=m.systemd_properties(raw,s.parse_commands)
+        self.assertEqual(s.parse_commands(parsed['ExecStartPre']),s.parse_commands(first+' ; '+second))
+        self.assertEqual(parsed['MainPID'],'0')
+        self.assertEqual(parsed['ActiveState'],'inactive')
+        self.assertEqual(m.systemd_properties('ExecStartPre=\n',s.parse_commands)['ExecStartPre'],'')
+        with self.assertRaises(RuntimeError):
+            m.systemd_properties('ExecStartPre=\nExecStartPre='+first,s.parse_commands)
+
+    def test_repeated_start_commands_are_not_silently_dropped(self):
+        value=command()
+        parsed=m.systemd_properties('ExecStart='+value+'\nExecStart='+value,s.parse_commands)
+        with self.assertRaisesRegex(RuntimeError,'one mandatory ExecStart'):
+            s.check_command(parsed['ExecStart'],'/candidate/gtron','a'*64,'b'*40,None)
+
 
 class DeploymentTests(unittest.TestCase):
     @classmethod
@@ -319,6 +336,18 @@ class ModuleAdmissionTests(unittest.TestCase):
 
     def test_original_record_changed_rejected(self):
         with self.assertRaisesRegex(RuntimeError,'original native record changed'):self.load('f'*64)
+
+    def test_loaded_show_aggregates_original_and_reader_pre_guard(self):
+        _,_,h,_,_,_=self.load()
+        first,second=command('/bin/space-guard'),command('/usr/bin/python3')
+        raw='ExecStartPre='+first+'\nExecStartPre='+second+'\n'
+        with patch.object(h,'run',return_value=(raw,0)):
+            self.assertEqual(s.parse_commands(h.show(h.SERVICE)['ExecStartPre']),
+                             s.parse_commands(first+' ; '+second))
+        # Preserved unrelated units can use arbitrary shell command syntax;
+        # their exact files are checked, without applying main's argv parser.
+        with patch.object(h,'run',return_value=('ExecStart=arbitrary shell serialization\n',0)):
+            self.assertEqual(h.show('preserved.service')['ExecStart'],'arbitrary shell serialization')
 
     def test_loaded_wrapper_closures_edit_current_and_preserve_other_argv(self):
         g,i,h,_,_,_=self.load()

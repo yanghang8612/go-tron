@@ -112,6 +112,22 @@ def module_from_blob(name, blob, filename):
     return module
 
 
+def systemd_properties(output, parse_commands):
+    """Preserve old systemctl's repeated command-property lines in order."""
+    properties = {}
+    for line in output.splitlines():
+        if '=' not in line:
+            continue
+        name, value = line.split('=', 1)
+        if name in ('ExecStart', 'ExecStartPre'):
+            parse_commands(value)  # Reject malformed command serializations.
+            if name in properties:
+                require(properties[name] and value, 'ambiguous empty repeated startup property')
+                value = properties[name] + ' ; ' + value
+        properties[name] = value
+    return properties
+
+
 def load_modules(args, helper_path=None):
     require(APPROVED and ALLOWED_FILES, 'shared history deployment review not frozen')
     require(args.current_pid > 0 and args.current_start_ticks > 0, 'fresh native process pins required')
@@ -139,6 +155,14 @@ def load_modules(args, helper_path=None):
     h.OLD_PID, h.OLD_START_TICKS = args.current_pid, args.current_start_ticks
     guard_blob = git_blob(args.script_revision, GUARD_SOURCE)
     guard = module_from_blob('shared_reader_guard', guard_blob, GUARD_SOURCE)
+    def show(unit):
+        output, _ = h.run([h.SYSTEMCTL, 'show', unit, '--no-pager'])
+        if unit == h.SERVICE:
+            return systemd_properties(output, guard.parse_commands)
+        return dict(line.split('=', 1) for line in output.splitlines() if '=' in line)
+    # Old systemctl prints one ExecStartPre= line per command. The inherited
+    # dict parser discarded all but the final command after adding our guard.
+    h.show = show
     def normalize(value):
         values = guard.parse_commands(value)
         return values[0] if len(values) == 1 else values
