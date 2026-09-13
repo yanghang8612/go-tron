@@ -32,9 +32,9 @@ BINARY = RELEASE / 'gtron'
 OLD_EXE = '/data/gtron/releases/20260912-posting-prune-fair-lock/gtron'
 # Last recorded binary; the operator must freshly verify all old identity pins.
 OLD_SHA = '5fed1e1a9cbf46c2e24a5581d09920f34f83281d23bdbaff0ef720ddeb502836'
-# Pending fresh live verification (previously observed 18236 / 4492264350).
-OLD_PID = 0
-OLD_START_TICKS = 0
+# Freshly verified 2026-09-13T00:02:30Z from the native terminal screenshot.
+OLD_PID = 18236
+OLD_START_TICKS = 4492264350
 BASE_PREFIX = 'd3793a24f6a2f339c8d23dc2e9eb0bc6f2c2ac31'
 # The isolated release may be newer than the intentionally unchanged checkout.
 CHECKOUT_COMMIT = '19eda11f44424f673a40b06051edcbf629b50846'
