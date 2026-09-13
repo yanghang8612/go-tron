@@ -862,8 +862,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		// Full-sync state writes benefit from fewer, larger SSTables. Bloom
 		// filters remain enabled through L5; as before, L6 omits one because
 		// Pebble does not use it for read efficiency there.
-		Levels:   levelOptions(tune.TargetFileSizeBytes),
-		ReadOnly: readonly,
+		Levels:           levelOptions(tune.TargetFileSizeBytes),
+		ReadOnly:         readonly,
+		ErrorIfNotExists: readonly,
 		EventListener: &pebble.EventListener{
 			CompactionBegin: db.onCompactionBegin,
 			CompactionEnd:   db.onCompactionEnd,

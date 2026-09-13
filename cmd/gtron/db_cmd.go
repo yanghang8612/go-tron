@@ -77,6 +77,8 @@ func dbCommand() *cli.Command {
 		Usage: "Database maintenance utilities",
 		Subcommands: []*cli.Command{
 			dbInspectCommand(),
+			dbInspectHistoryCommand(),
+			dbHistoryCodecBenchmarkCommand(),
 			dbBenchmarkAncientCommand(),
 			dbBenchmarkTxIndexCommand(),
 			dbMigrateAncientV2Command(),
