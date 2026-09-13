@@ -177,3 +177,10 @@ func (a *domainPrunerChainSource) TryWithStateDomainChangePruneGuard(ctx context
 	}
 	return a.chain.TryWithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work)
 }
+
+func (a *domainPrunerChainSource) WithStateDomainChangePruneGuard(ctx context.Context, through, proofHead uint64, proofHash common.Hash, work func() error) (bool, error) {
+	if a == nil || a.prunerChainSource == nil || a.chain == nil {
+		return false, errors.New("state domain change prune: unavailable chain adapter")
+	}
+	return a.chain.WithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work)
+}

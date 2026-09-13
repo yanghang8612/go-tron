@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -41,91 +42,104 @@ func TestStateDomainChangePruneGuardOnlyBusyAllowsFallback(t *testing.T) {
 }
 
 func TestStateDomainChangePruneGuardRejectsUnprovenWork(t *testing.T) {
-	for _, name := range []string{"zero-through", "proof-behind", "zero-hash", "nil-work", "closed", "history-disabled", "nil-config", "head", "solidified", "missing-proof", "proof-replaced", "missing-through", "missing-finish", "missing-index", "finish-behind", "index-behind", "finish-hash", "index-hash", "unbound-finish", "unbound-index", "read-error", "canceled"} {
-		t.Run(name, func(t *testing.T) {
-			f := newPostingPruneGuardFixture(t)
-			ctx := context.Background()
-			through, proofHead, proofHash := uint64(2), uint64(4), f.blocks[4].Hash()
-			called := false
-			work := func() error { called = true; return nil }
-			switch name {
-			case "zero-through":
-				through = 0
-			case "proof-behind":
-				proofHead = 1
-			case "zero-hash":
-				proofHash = common.Hash{}
-			case "nil-work":
-				work = nil
-			case "closed":
-				f.bc.closed.Store(true)
-				defer f.bc.closed.Store(false)
-			case "history-disabled":
-				f.bc.config.HistoryEnabled = false
-			case "nil-config":
-				cfg := f.bc.config
-				f.bc.config = nil
-				defer func() { f.bc.config = cfg }()
-			case "head":
-				f.bc.currentBlock.Store(f.blocks[3])
-			case "solidified":
-				dp := f.bc.cachedDynProps()
-				dp.SetLatestSolidifiedBlockNum(1)
-				f.bc.storeDynPropsCache(dp)
-			case "missing-proof", "missing-through":
-				store := rawdb.NewMemoryDatabase()
-				defer func() { _ = store.Close() }()
-				for _, block := range f.blocks {
-					if name == "missing-proof" && block.Number() == 4 || name == "missing-through" && block.Number() == 2 {
-						continue
+	for _, entry := range []string{"try", "queued"} {
+		t.Run(entry, func(t *testing.T) {
+			for _, name := range []string{"zero-through", "proof-behind", "zero-hash", "nil-work", "closed", "history-disabled", "nil-config", "head", "solidified", "missing-proof", "proof-replaced", "missing-through", "missing-finish", "missing-index", "finish-behind", "index-behind", "finish-hash", "index-hash", "unbound-finish", "unbound-index", "read-error", "canceled"} {
+				t.Run(name, func(t *testing.T) {
+					f := newPostingPruneGuardFixture(t)
+					ctx := context.Background()
+					through, proofHead, proofHash := uint64(2), uint64(4), f.blocks[4].Hash()
+					called := false
+					work := func() error { called = true; return nil }
+					switch name {
+					case "zero-through":
+						through = 0
+					case "proof-behind":
+						proofHead = 1
+					case "zero-hash":
+						proofHash = common.Hash{}
+					case "nil-work":
+						work = nil
+					case "closed":
+						f.bc.closed.Store(true)
+						defer f.bc.closed.Store(false)
+					case "history-disabled":
+						f.bc.config.HistoryEnabled = false
+					case "nil-config":
+						cfg := f.bc.config
+						f.bc.config = nil
+						defer func() { f.bc.config = cfg }()
+					case "head":
+						f.bc.currentBlock.Store(f.blocks[3])
+					case "solidified":
+						dp := f.bc.cachedDynProps()
+						dp.SetLatestSolidifiedBlockNum(1)
+						f.bc.storeDynPropsCache(dp)
+					case "missing-proof", "missing-through":
+						store := rawdb.NewMemoryDatabase()
+						defer func() { _ = store.Close() }()
+						for _, block := range f.blocks {
+							if name == "missing-proof" && block.Number() == 4 || name == "missing-through" && block.Number() == 2 {
+								continue
+							}
+							if err := rawdb.WriteBlock(store, block); err != nil {
+								t.Fatal(err)
+							}
+						}
+						f.bc.chaindb = rawdb.NewChainDB(store, nil)
+					case "proof-replaced":
+						replacement := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 4, Timestamp: 99}}})
+						if err := rawdb.WriteBlock(f.db, replacement); err != nil {
+							t.Fatal(err)
+						}
+					case "read-error":
+						f.db.readErr = errors.New("injected proof read error")
+						defer func() { f.db.readErr = nil }()
+					case "canceled":
+						var cancel context.CancelFunc
+						ctx, cancel = context.WithCancel(ctx)
+						cancel()
+					default:
+						stage := rawdb.StageFinish
+						if name == "missing-index" || name == "index-behind" || name == "index-hash" || name == "unbound-index" {
+							stage = rawdb.StageStateHistoryIndex
+						}
+						var err error
+						switch name {
+						case "missing-finish", "missing-index":
+							err = rawdb.DeleteStageProgress(f.db, stage)
+						case "finish-behind", "index-behind":
+							err = rawdb.WriteStageProgressWithHash(f.db, stage, 1, f.blocks[1].Hash())
+						case "finish-hash", "index-hash":
+							err = rawdb.WriteStageProgressWithHash(f.db, stage, 6, common.Hash{0xee})
+						case "unbound-finish", "unbound-index":
+							err = rawdb.WriteStageProgress(f.db, stage, 6)
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
 					}
-					if err := rawdb.WriteBlock(store, block); err != nil {
-						t.Fatal(err)
+					invoke := f.bc.TryWithStateDomainChangePruneGuard
+					if entry == "queued" {
+						invoke = f.bc.WithStateDomainChangePruneGuard
 					}
-				}
-				f.bc.chaindb = rawdb.NewChainDB(store, nil)
-			case "proof-replaced":
-				replacement := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 4, Timestamp: 99}}})
-				if err := rawdb.WriteBlock(f.db, replacement); err != nil {
-					t.Fatal(err)
-				}
-			case "read-error":
-				f.db.readErr = errors.New("injected proof read error")
-				defer func() { f.db.readErr = nil }()
-			case "canceled":
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
-			default:
-				stage := rawdb.StageFinish
-				if name == "missing-index" || name == "index-behind" || name == "index-hash" || name == "unbound-index" {
-					stage = rawdb.StageStateHistoryIndex
-				}
-				var err error
-				switch name {
-				case "missing-finish", "missing-index":
-					err = rawdb.DeleteStageProgress(f.db, stage)
-				case "finish-behind", "index-behind":
-					err = rawdb.WriteStageProgressWithHash(f.db, stage, 1, f.blocks[1].Hash())
-				case "finish-hash", "index-hash":
-					err = rawdb.WriteStageProgressWithHash(f.db, stage, 6, common.Hash{0xee})
-				case "unbound-finish", "unbound-index":
-					err = rawdb.WriteStageProgress(f.db, stage, 6)
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
+					ran, err := invoke(ctx, through, proofHead, proofHash, work)
+					if ran || err == nil || called {
+						t.Fatalf("rejected ran=%v err=%v called=%v", ran, err, called)
+					}
+					assertStateDomainChangeGuardUnlocked(t, f)
+				})
 			}
-			ran, err := f.bc.TryWithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work)
-			if ran || err == nil || called {
-				t.Fatalf("rejected ran=%v err=%v called=%v", ran, err, called)
+			var bc *BlockChain
+			invoke := bc.TryWithStateDomainChangePruneGuard
+			if entry == "queued" {
+				invoke = bc.WithStateDomainChangePruneGuard
 			}
-			assertStateDomainChangeGuardUnlocked(t, f)
+			if ran, err := invoke(context.Background(), 2, 4, common.Hash{1}, func() error { return nil }); ran || err == nil {
+				t.Fatalf("nil chain ran=%v err=%v", ran, err)
+			}
+
 		})
-	}
-	var bc *BlockChain
-	if ran, err := bc.TryWithStateDomainChangePruneGuard(context.Background(), 2, 4, common.Hash{1}, func() error { return nil }); ran || err == nil {
-		t.Fatalf("nil chain ran=%v err=%v", ran, err)
 	}
 }
 
@@ -352,4 +366,220 @@ func TestStateDomainChangePruneGuardRangeLeavesNewerAsyncRows(t *testing.T) {
 			t.Fatalf("block %d exists=%v err=%v", height, exists, err)
 		}
 	}
+}
+
+func stateDomainChangeGuardMetricCounts(m *stateDomainChangePruneGuardMetrics) map[string]int64 {
+	return map[string]int64{
+		"attempts": m.attempts.Snapshot().Count(), "busy_index": m.busyIndex.Snapshot().Count(),
+		"busy_chain": m.busyChain.Snapshot().Count(), "admitted": m.admitted.Snapshot().Count(),
+		"prefix_unsettled": m.prefixUnsettled.Snapshot().Count(), "proof_errors": m.proofErrors.Snapshot().Count(),
+		"other_errors": m.otherErrors.Snapshot().Count(), "work_errors": m.workErrors.Snapshot().Count(),
+	}
+}
+
+func assertStateDomainChangeGuardMetricPartition(t *testing.T, m *stateDomainChangePruneGuardMetrics) {
+	t.Helper()
+	c := stateDomainChangeGuardMetricCounts(m)
+	sum := c["busy_index"] + c["busy_chain"] + c["admitted"] + c["prefix_unsettled"] + c["proof_errors"] + c["other_errors"]
+	if c["attempts"] != sum || c["work_errors"] > c["admitted"] {
+		t.Fatalf("guard metric partition: %+v", c)
+	}
+}
+
+func TestStateDomainChangePruneGuardMetricsClassifyEachAttempt(t *testing.T) {
+	for _, tc := range []struct{ name, outcome string }{
+		{"busy-index", "busy_index"}, {"busy-chain", "busy_chain"}, {"admitted", "admitted"},
+		{"prefix", "prefix_unsettled"}, {"invalid-proof", "proof_errors"}, {"head-behind", "proof_errors"},
+		{"proof-read-error", "proof_errors"}, {"stage-behind", "proof_errors"}, {"stage-hash", "proof_errors"},
+		{"canceled", "other_errors"}, {"canceled-during-proof", "other_errors"}, {"closed", "other_errors"},
+		{"commit-error", "other_errors"}, {"flush-error", "other_errors"}, {"nil-work", "other_errors"},
+		{"nil-db", "other_errors"}, {"work-error", "admitted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPostingPruneGuardFixture(t)
+			observation := newStateDomainChangePruneGuardMetrics(metrics.NewRegistry())
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			through := uint64(2)
+			injected := errors.New("injected guard metrics failure")
+			called := false
+			work := func() error { called = true; return nil }
+			switch tc.name {
+			case "busy-index":
+				f.bc.stateHistoryIndexMu.Lock()
+				defer f.bc.stateHistoryIndexMu.Unlock()
+			case "busy-chain":
+				f.bc.chainmu.Lock()
+				defer f.bc.chainmu.Unlock()
+			case "prefix":
+				f.bc.buffer.BeginBlock(f.blocks[2].Hash(), 2)
+				defer f.bc.buffer.Discard()
+			case "invalid-proof":
+				through = 5
+			case "head-behind":
+				f.bc.currentBlock.Store(f.blocks[3])
+			case "proof-read-error":
+				f.db.readErr = injected
+				defer func() { f.db.readErr = nil }()
+			case "stage-behind":
+				if err := rawdb.WriteStageProgressWithHash(f.db, rawdb.StageFinish, 1, f.blocks[1].Hash()); err != nil {
+					t.Fatal(err)
+				}
+			case "stage-hash":
+				if err := rawdb.WriteStageProgressWithHash(f.db, rawdb.StageStateHistoryIndex, 6, common.Hash{99}); err != nil {
+					t.Fatal(err)
+				}
+			case "canceled":
+				cancel()
+			case "canceled-during-proof":
+				db := &stateDomainChangeGuardReadHookDB{KeyValueStore: f.db, beforeGet: cancel}
+				f.bc.db, f.bc.chaindb = db, rawdb.NewChainDB(db, nil)
+			case "closed":
+				f.bc.closed.Store(true)
+				defer f.bc.closed.Store(false)
+			case "commit-error":
+				f.bc.commitErr.Store(&injected)
+				defer f.bc.commitErr.Store(nil)
+			case "flush-error":
+				f.bc.flushErr.Store(&injected)
+				defer f.bc.flushErr.Store(nil)
+			case "nil-work":
+				work = nil
+			case "nil-db":
+				f.bc.db = nil
+				defer func() { f.bc.db = f.db }()
+			case "work-error":
+				work = func() error { called = true; return injected }
+			}
+			ran, err := f.bc.tryWithStateDomainChangePruneGuard(ctx, through, 4, f.blocks[4].Hash(), work, observation)
+			wantCalled := tc.outcome == "admitted"
+			wantErr := tc.name != "admitted" && tc.outcome != "busy_index" && tc.outcome != "busy_chain"
+			if ran != wantCalled || called != wantCalled || (err != nil) != wantErr {
+				t.Fatalf("semantic result ran=%v called=%v err=%v", ran, called, err)
+			}
+			counts := stateDomainChangeGuardMetricCounts(observation)
+			for name, count := range counts {
+				want := int64(0)
+				if name == "attempts" || name == tc.outcome || name == "work_errors" && tc.name == "work-error" {
+					want = 1
+				}
+				if count != want {
+					t.Fatalf("%s=%d want %d; all=%+v", name, count, want, counts)
+				}
+			}
+			assertStateDomainChangeGuardMetricPartition(t, observation)
+		})
+	}
+}
+
+func TestStateDomainChangePruneGuardMetricsPublishBeforeWorkReturns(t *testing.T) {
+	f := newPostingPruneGuardFixture(t)
+	observation := newStateDomainChangePruneGuardMetrics(metrics.NewRegistry())
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	injected := errors.New("failed work must still be counted")
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.bc.tryWithStateDomainChangePruneGuard(context.Background(), 2, 4, f.blocks[4].Hash(), func() error {
+			close(entered)
+			<-release
+			return injected
+		}, observation)
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("work did not start")
+	}
+	counts := stateDomainChangeGuardMetricCounts(observation)
+	if counts["attempts"] != 1 || counts["admitted"] != 1 || counts["work_errors"] != 0 {
+		t.Fatalf("metrics unavailable until work/pass succeeds: %+v", counts)
+	}
+	unblock()
+	select {
+	case err := <-done:
+		if !errors.Is(err, injected) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("work did not finish")
+	}
+	if observation.workErrors.Snapshot().Count() != 1 {
+		t.Fatal("failed work not counted")
+	}
+	assertStateDomainChangeGuardMetricPartition(t, observation)
+	assertStateDomainChangeGuardUnlocked(t, f)
+}
+
+func TestStateDomainChangePruneGuardMetricsConcurrentAndIsolatedRegistries(t *testing.T) {
+	first, second := newPostingPruneGuardFixture(t), newPostingPruneGuardFixture(t)
+	registry := metrics.NewRegistry()
+	one := newStateDomainChangePruneGuardMetrics(registry)
+	two := newStateDomainChangePruneGuardMetrics(metrics.NewRegistry())
+	first.bc.stateHistoryIndexMu.Lock()
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ran, err := first.bc.tryWithStateDomainChangePruneGuard(context.Background(), 2, 4, first.blocks[4].Hash(), func() error { return nil }, one)
+			if ran || err != nil {
+				t.Errorf("busy guard ran=%v err=%v", ran, err)
+			}
+		}()
+	}
+	wg.Wait()
+	first.bc.stateHistoryIndexMu.Unlock()
+	if one.attempts.Snapshot().Count() != 32 || one.busyIndex.Snapshot().Count() != 32 {
+		t.Fatal(stateDomainChangeGuardMetricCounts(one))
+	}
+	if two.attempts.Snapshot().Count() != 0 {
+		t.Fatal("second registry contaminated")
+	}
+	ran, err := second.bc.tryWithStateDomainChangePruneGuard(context.Background(), 2, 4, second.blocks[4].Hash(), func() error { return nil }, two)
+	if !ran || err != nil || two.admitted.Snapshot().Count() != 1 || one.admitted.Snapshot().Count() != 0 {
+		t.Fatalf("isolated guard ran=%v err=%v", ran, err)
+	}
+	// Re-registering in the same registry retains totals; separate registries
+	// have independent counters even though the exported names are identical.
+	again := newStateDomainChangePruneGuardMetrics(registry)
+	if again.attempts != one.attempts || again.attempts.Snapshot().Count() != 32 {
+		t.Fatal("registration reset totals")
+	}
+	all := registry.GetAll()
+	if len(all) != 14 {
+		t.Fatalf("registered %d metrics, want 14", len(all))
+	}
+	for name, value := range stateDomainChangeGuardMetricCounts(one) {
+		row := all[stateDomainChangePruneGuardMetricPrefix+name]
+		if count, ok := row["count"].(int64); !ok || count != value {
+			t.Fatalf("counter %s JSON export=%+v", name, row)
+		}
+		if _, ok := row["value"]; ok {
+			t.Fatalf("counter %s exported as gauge", name)
+		}
+	}
+	for _, name := range []string{"queued/attempts", "queued/chain_busy", "queued/chain_wait/total_ns", "queued/chain_held/total_ns"} {
+		row := all[stateDomainChangePruneGuardMetricPrefix+name]
+		if value, ok := row["count"].(int64); !ok || value != 0 {
+			t.Fatalf("unused queued counter %s=%+v", name, row)
+		}
+		if _, ok := row["value"]; ok {
+			t.Fatalf("queued counter %s exported as gauge", name)
+		}
+	}
+	for _, name := range []string{"queued/chain_wait/max_ns", "queued/chain_held/max_ns"} {
+		row := all[stateDomainChangePruneGuardMetricPrefix+name]
+		if value, ok := row["value"].(int64); !ok || value != 0 {
+			t.Fatalf("unused queued gauge %s=%+v", name, row)
+		}
+		if _, ok := row["count"]; ok {
+			t.Fatalf("queued gauge %s exported as counter", name)
+		}
+	}
+	assertStateDomainChangeGuardMetricPartition(t, one)
+	assertStateDomainChangeGuardMetricPartition(t, two)
 }

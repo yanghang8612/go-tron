@@ -64,6 +64,10 @@ type historyRangePruneGuardSource interface {
 	TryWithStateDomainChangePruneGuard(context.Context, uint64, uint64, common.Hash, func() error) (bool, error)
 }
 
+type historyRangeQueuedPruneGuardSource interface {
+	WithStateDomainChangePruneGuard(context.Context, uint64, uint64, common.Hash, func() error) (bool, error)
+}
+
 type PrunerConfig struct {
 	Policy Policy
 
@@ -84,6 +88,9 @@ type PrunerConfig struct {
 	DeferStateCodePruneWhileSyncing bool
 	// HistoryRangePrune opts into bounded ranges for already cold-covered history.
 	HistoryRangePrune bool
+	// HistoryRangeQueue allows at most four 64-block queued guard attempts per
+	// pass. The caller must not own a heavy-work lease while invoking a pass.
+	HistoryRangeQueue bool
 	// MetricsNamespace prefixes production prune gauges. Tests may override it
 	// to isolate process-global metric registrations.
 	MetricsNamespace string
@@ -91,6 +98,7 @@ type PrunerConfig struct {
 
 type PrunerStats struct {
 	HistoryRangePruneEnabled           bool
+	HistoryRangeQueueEnabled           bool
 	HistoryDeletes                     rawdb.StateDomainChangeDeleteStats
 	HistoryRangeFallbackBlocks         uint64
 	HistoryRangeGuardDuration          time.Duration
@@ -173,6 +181,7 @@ type Pruner struct {
 
 type prunerMetrics struct {
 	historyRangeEnabled                *metrics.Gauge
+	historyRangeQueueEnabled           *metrics.Gauge
 	historyRangeRuns                   *metrics.Gauge
 	historyRangeRows                   *metrics.Gauge
 	historyRangeBytes                  *metrics.Gauge
@@ -220,6 +229,7 @@ func newPrunerMetrics(namespace string) prunerMetrics {
 	namespace = normalizePrunerMetricNamespace(namespace)
 	return prunerMetrics{
 		historyRangeEnabled:                metrics.GetOrRegisterGauge(namespace+"history/delete/range/enabled", nil),
+		historyRangeQueueEnabled:           metrics.GetOrRegisterGauge(namespace+"history/delete/range/queue/enabled", nil),
 		historyRangeFallbackBlocks:         metrics.GetOrRegisterGauge(namespace+"history/delete/range/fallback_blocks", nil),
 		historyRangeGuardDuration:          metrics.GetOrRegisterGauge(namespace+"history/delete/range/work/total_ns", nil),
 		historyRangeGuardMaxDuration:       metrics.GetOrRegisterGauge(namespace+"history/delete/range/work/max_ns", nil),
@@ -280,6 +290,11 @@ func (m prunerMetrics) update(stats PrunerStats) {
 		enabled = 1
 	}
 	m.historyRangeEnabled.Update(enabled)
+	queued := int64(0)
+	if stats.HistoryRangeQueueEnabled {
+		queued = 1
+	}
+	m.historyRangeQueueEnabled.Update(queued)
 	m.historyRangeRuns.Update(prunerUintGauge(stats.HistoryDeletes.RangeRuns))
 	m.historyRangeRows.Update(prunerUintGauge(stats.HistoryDeletes.RangeRows))
 	m.historyRangeBytes.Update(prunerUintGauge(stats.HistoryDeletes.RangeBytes))
@@ -432,6 +447,7 @@ func (p *Pruner) Stats() PrunerStats {
 	verification := p.coverageVerificationCache.Stats()
 	return PrunerStats{
 		HistoryRangePruneEnabled:     p.cfg.HistoryRangePrune,
+		HistoryRangeQueueEnabled:     p.cfg.HistoryRangeQueue,
 		HistoryRangeFallbackBlocks:   p.historyRangeFallbackBlocks.Load(),
 		HistoryRangeGuardDuration:    time.Duration(p.historyRangeGuardDuration.Load()),
 		HistoryRangeGuardMaxDuration: time.Duration(p.historyRangeGuardMaxDuration.Load()),
@@ -697,6 +713,9 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		}
 		p.updateMetrics()
 	}()
+	if p.cfg.HistoryRangeQueue && !p.cfg.HistoryRangePrune {
+		return Stats{}, errors.New("pruning: history range queue requires range pruning")
+	}
 	solidified := p.chain.LatestSolidifiedBlockNum()
 	if solidified < 0 {
 		solidified = 0
@@ -721,6 +740,7 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		postingProofAvailable = verifyErr == nil && exists && finished >= pruneHead
 	}
 	var rangeGuard func(context.Context, uint64, func() error) (bool, error)
+	var queuedRangeGuard func(context.Context, uint64, func() error) (bool, error)
 	if p.cfg.HistoryRangePrune {
 		source, ok := p.chain.(historyRangePruneGuardSource)
 		if !ok || !pruneHeadHasHash || !postingProofAvailable {
@@ -729,14 +749,24 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		rangeGuard = func(ctx context.Context, through uint64, work func() error) (bool, error) {
 			return source.TryWithStateDomainChangePruneGuard(ctx, through, pruneHead, pruneHeadHash, work)
 		}
+		if p.cfg.HistoryRangeQueue {
+			queued, ok := p.chain.(historyRangeQueuedPruneGuardSource)
+			if !ok {
+				return Stats{}, errors.New("pruning: history range queue requires a queued writer guard")
+			}
+			queuedRangeGuard = func(ctx context.Context, through uint64, work func() error) (bool, error) {
+				return queued.WithStateDomainChangePruneGuard(ctx, through, pruneHead, pruneHeadHash, work)
+			}
+		}
 	}
 	stats, err = Worker{
-		DB:                p.chain.DB(),
-		Policy:            p.cfg.Policy,
-		MaxBlocks:         p.cfg.BatchSize,
-		SnapshotDir:       p.cfg.SnapshotDir,
-		HistoryRangePrune: p.cfg.HistoryRangePrune,
-		HistoryRangeGuard: rangeGuard,
+		DB:                      p.chain.DB(),
+		Policy:                  p.cfg.Policy,
+		MaxBlocks:               p.cfg.BatchSize,
+		SnapshotDir:             p.cfg.SnapshotDir,
+		HistoryRangePrune:       p.cfg.HistoryRangePrune,
+		HistoryRangeGuard:       rangeGuard,
+		HistoryRangeQueuedGuard: queuedRangeGuard,
 		ShouldDeferStateCodePrune: func() bool {
 			return p.cfg.DeferStateCodePruneWhileSyncing && p.syncActive()
 		},

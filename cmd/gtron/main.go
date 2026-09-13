@@ -616,6 +616,10 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	historyRangeQueue, err := historyRangeQueueEnabled(os.Getenv("GTRON_HISTORY_RANGE_QUEUE"), historyRangePrune)
+	if err != nil {
+		return err
+	}
 	if err := validateStoredReplayOptions(ctx); err != nil {
 		return err
 	}
@@ -1297,6 +1301,7 @@ func gtron(ctx *cli.Context) error {
 			},
 			Pruner: statepruning.PrunerConfig{
 				HistoryRangePrune:               historyRangePrune,
+				HistoryRangeQueue:               historyRangeQueue,
 				Policy:                          prunePolicy,
 				SnapshotDir:                     stateSnapshotDir,
 				MaxSyncLag:                      domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),
@@ -1350,6 +1355,7 @@ func gtron(ctx *cli.Context) error {
 			"stateChangeIndexPrune", fullIndexPrune != nil,
 			"postingChunkPrune", postingPrune,
 			"historyRangePrune", historyRangePrune,
+			"historyRangeQueue", historyRangeQueue,
 			"retiredPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,

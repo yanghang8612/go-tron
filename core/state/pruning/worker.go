@@ -33,6 +33,11 @@ type Worker struct {
 	// under the live writer locks. Busy admission retains the original point
 	// deletion path. Proof failures must return an error, never busy admission.
 	HistoryRangeGuard func(context.Context, uint64, func() error) (bool, error)
+	// HistoryRangeQueuedGuard may wait for a chain-lock handoff before applying
+	// the same proof as HistoryRangeGuard. Each pass spends at most 256 selected
+	// blocks in 64-block attempts, including busy admission, across all calls to
+	// its hot-history deleter. Short tails and remaining blocks use the Try guard.
+	HistoryRangeQueuedGuard func(context.Context, uint64, func() error) (bool, error)
 
 	// ShouldDeferStateCodePrune skips the optional full CodeDomain reference
 	// scan when it returns true at the stage boundary. Hot code is immutable and
@@ -78,6 +83,11 @@ const maxPruneBatchValueSize = 32 << 20
 // Limit each optional critical section independently of the adaptive pass size.
 // This bounds rows, not individual storage call latency or unusually large packs.
 const maxHistoryRangeGuardBlocks = 256
+
+const (
+	historyRangeQueuedGuardBlocks      = 64
+	maxHistoryRangeQueuedBlocksPerPass = 256
+)
 
 // pruneBatchStore keeps scans on the committed store while directing writes to
 // bounded batches. Pruning is idempotent and advances progress only after all
@@ -267,58 +277,7 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		if w.HistoryRangeGuard == nil {
 			return Stats{}, errors.New("pruning: history range pruning requires a writer guard")
 		}
-		historyCfg.DeleteHotHistoryBlocks = func(store rawdb.StateKVLatestStore, blocks []uint64) error {
-			for len(blocks) > 0 {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				n := min(len(blocks), maxHistoryRangeGuardBlocks)
-				part := blocks[:n]
-				admitted, err := w.HistoryRangeGuard(ctx, part[n-1], func() error {
-					started := time.Now()
-					defer func() {
-						elapsed := time.Since(started)
-						stats.HistoryRangeGuardDuration += elapsed
-						stats.HistoryRangeGuardMaxDuration = max(stats.HistoryRangeGuardMaxDuration, elapsed)
-					}()
-					deleted, err := rawdb.DeleteStateDomainChangeBlocksWithOptions(store, part, rawdb.StateDomainChangeDeleteOptions{EnableRangeDelete: true})
-					if err != nil {
-						return err
-					}
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := flushHistory(); err != nil {
-						return err
-					}
-					historyDeletes.RangeRuns += deleted.RangeRuns
-					historyDeletes.RangeRows += deleted.RangeRows
-					historyDeletes.RangeBytes += deleted.RangeBytes
-					historyDeletes.PointRows += deleted.PointRows
-					historyDeletes.PointBytes += deleted.PointBytes
-					return nil
-				})
-				if err != nil {
-					return err
-				}
-				if !admitted {
-					// Busy admission is not permission for a range. Preserve the
-					// pre-existing key-only point path without new value reads.
-					if err := rawdb.DeleteStateDomainChangeBlocks(store, part); err != nil {
-						return err
-					}
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := flushHistory(); err != nil {
-						return err
-					}
-					stats.HistoryRangeFallbackBlocks += uint64(n)
-				}
-				blocks = blocks[n:]
-			}
-			return nil
-		}
+		historyCfg.DeleteHotHistoryBlocks = w.historyRangeBlockDeleter(ctx, flushHistory, &stats, &historyDeletes)
 	}
 	metadataStarted = time.Now()
 	hotPruneStartBlock, err := w.hotHistoryPruneStartBlock()
@@ -430,6 +389,72 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, fmt.Errorf("pruning: write snapshot/prune stage progress: %w", err)
 	}
 	return stats, nil
+}
+
+// historyRangeBlockDeleter is created once per pass. Its queue allowance must
+// outlive each callback invocation, since a domain may delete several plans.
+func (w Worker) historyRangeBlockDeleter(ctx context.Context, flushHistory func() error, stats *Stats, historyDeletes *rawdb.StateDomainChangeDeleteStats) func(rawdb.StateKVLatestStore, []uint64) error {
+	queuedBlocksLeft := maxHistoryRangeQueuedBlocksPerPass
+	return func(store rawdb.StateKVLatestStore, blocks []uint64) error {
+		for len(blocks) > 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n := min(len(blocks), maxHistoryRangeGuardBlocks)
+			guard := w.HistoryRangeGuard
+			if w.HistoryRangeQueuedGuard != nil && len(blocks) >= historyRangeQueuedGuardBlocks && queuedBlocksLeft >= historyRangeQueuedGuardBlocks {
+				n = historyRangeQueuedGuardBlocks
+				guard = w.HistoryRangeQueuedGuard
+				// Charge attempts before admission so contention cannot renew the
+				// per-pass wait allowance. The closure owns this shared budget.
+				queuedBlocksLeft -= n
+			}
+			part := blocks[:n]
+			admitted, err := guard(ctx, part[n-1], func() error {
+				started := time.Now()
+				defer func() {
+					elapsed := time.Since(started)
+					stats.HistoryRangeGuardDuration += elapsed
+					stats.HistoryRangeGuardMaxDuration = max(stats.HistoryRangeGuardMaxDuration, elapsed)
+				}()
+				deleted, err := rawdb.DeleteStateDomainChangeBlocksWithOptions(store, part, rawdb.StateDomainChangeDeleteOptions{EnableRangeDelete: true})
+				if err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := flushHistory(); err != nil {
+					return err
+				}
+				historyDeletes.RangeRuns += deleted.RangeRuns
+				historyDeletes.RangeRows += deleted.RangeRows
+				historyDeletes.RangeBytes += deleted.RangeBytes
+				historyDeletes.PointRows += deleted.PointRows
+				historyDeletes.PointBytes += deleted.PointBytes
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if !admitted {
+				// Busy admission is not permission for a range. Preserve the
+				// pre-existing key-only point path without new value reads.
+				if err := rawdb.DeleteStateDomainChangeBlocks(store, part); err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := flushHistory(); err != nil {
+					return err
+				}
+				stats.HistoryRangeFallbackBlocks += uint64(n)
+			}
+			blocks = blocks[n:]
+		}
+		return nil
+	}
 }
 
 func (w Worker) hotHistoryPruneStartBlock() (uint64, error) {
