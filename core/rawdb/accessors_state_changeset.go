@@ -368,8 +368,16 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		return err
 	}
 	uncompressedBytes := rawBuffer.Len()
-	data, compressed := encodeStateDomainChangeBlockStorageWithDedup(rawBuffer.Bytes(), changes, blockDedup)
-	data, shared, err := planAndWriteSharedStateHistory(db, blockNum, rawBuffer.Bytes(), data, changes, sharedEnabled)
+	var chunkWork stateChangeChunkWork
+	var reuse *stateChangeChunkWork
+	if sharedEnabled && uncompressedBytes <= stateDomainChangeBlockMaxDecodedBytes && stateHistorySharedEligible(changes) {
+		if writer, ok := db.(StateHistoryChunkAtomicWriter); ok && writer.StateHistoryChunkWritesAtomic() {
+			reuse = &chunkWork
+		}
+	}
+	data, compressed := encodeStateDomainChangeBlockStorageWithChunkWork(rawBuffer.Bytes(), changes, blockDedup, reuse)
+	data, shared, err := planAndWriteSharedStateHistoryWithChunkWork(db, blockNum, rawBuffer.Bytes(), data, changes, sharedEnabled, reuse)
+	chunkWork = stateChangeChunkWork{} // End all raw-buffer aliases before pool return.
 	if err != nil {
 		if rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
 			stateChangeBlockRawBufferPool.Put(rawBuffer)

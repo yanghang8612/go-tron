@@ -100,6 +100,10 @@ type stateHistoryPlannedChunk struct {
 // then writes missing chunks/metadata to the atomic scope. The caller writes
 // the returned pack LAST and discards the scope on any error.
 func planAndWriteSharedStateHistory(db ethdb.KeyValueWriter, blockNum uint64, raw, baseline []byte, changes []*StateDomainChange, enabled bool) ([]byte, *stateHistorySharedWriteStats, error) {
+	return planAndWriteSharedStateHistoryWithChunkWork(db, blockNum, raw, baseline, changes, enabled, nil)
+}
+
+func planAndWriteSharedStateHistoryWithChunkWork(db ethdb.KeyValueWriter, blockNum uint64, raw, baseline []byte, changes []*StateDomainChange, enabled bool, work *stateChangeChunkWork) ([]byte, *stateHistorySharedWriteStats, error) {
 	if !enabled || !stateHistorySharedEligible(changes) || len(raw) > stateDomainChangeBlockMaxDecodedBytes {
 		return baseline, nil, nil
 	}
@@ -124,10 +128,16 @@ func planAndWriteSharedStateHistory(db ethdb.KeyValueWriter, blockNum uint64, ra
 			return baseline, nil, nil
 		}
 	}
-	var splitter historychunk.Splitter
-	cuts := splitter.Cuts(raw, min(4, runtime.GOMAXPROCS(0)))
-	if len(cuts) == 0 || cuts[len(cuts)-1] != len(raw) {
-		cuts = append(cuts, len(raw))
+	var cuts []int
+	var hashes [][32]byte
+	if work.matches(raw) {
+		cuts, hashes = work.cuts, work.hashes
+	} else {
+		var splitter historychunk.Splitter
+		cuts = splitter.Cuts(raw, min(4, runtime.GOMAXPROCS(0)))
+		if len(cuts) == 0 || cuts[len(cuts)-1] != len(raw) {
+			cuts = append(cuts, len(raw))
+		}
 	}
 	pack := append([]byte(nil), stateDomainChangeBlockEnvelopeMagic[:]...)
 	pack = append(pack, stateDomainChangeBlockSharedVersion)
@@ -140,9 +150,14 @@ func planAndWriteSharedStateHistory(db ethdb.KeyValueWriter, blockNum uint64, ra
 	missing := make([]stateHistoryPlannedChunk, 0, len(cuts))
 	stats := &stateHistorySharedWriteStats{baseline: len(baseline)}
 	start := 0
-	for _, end := range cuts {
+	for index, end := range cuts {
 		chunk := raw[start:end]
-		hash := sha256.Sum256(chunk)
+		var hash [32]byte
+		if hashes != nil {
+			hash = hashes[index]
+		} else {
+			hash = sha256.Sum256(chunk)
+		}
 		pack = binary.AppendUvarint(pack, uint64(len(chunk)))
 		pack = append(pack, hash[:]...)
 		if prior, ok := seen[hash]; ok {

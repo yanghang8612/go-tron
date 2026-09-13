@@ -76,6 +76,41 @@ func encodeStateDomainChangeBlockStorageForChanges(raw []byte, changes []*StateD
 }
 
 func encodeStateDomainChangeBlockStorageWithDedup(raw []byte, changes []*StateDomainChange, enabled bool) ([]byte, bool) {
+	return encodeStateDomainChangeBlockStorageWithChunkWork(raw, changes, enabled, nil)
+}
+
+// stateChangeChunkWork is borrowed by one block publication only. It retains
+// no encoded values or database presence: the v2 encoder may supply the exact
+// cuts and hashes that v3 would otherwise compute again over the same raw RLP.
+// The caller keeps raw immutable until shared planning returns, then discards
+// this metadata before returning the raw buffer to its pool.
+type stateChangeChunkWork struct {
+	rawStart *byte
+	rawLen   int
+	cuts     []int
+	hashes   [][32]byte
+}
+
+func (w *stateChangeChunkWork) matches(raw []byte) bool {
+	if w == nil || len(raw) == 0 || w.rawStart != &raw[0] || w.rawLen != len(raw) ||
+		len(w.cuts) == 0 || len(w.hashes) != len(w.cuts) || len(w.cuts) > len(raw)/historychunk.MinSize+1 {
+		return false
+	}
+	start := 0
+	for index, end := range w.cuts {
+		if end <= start || end > len(raw) || end-start > historychunk.MaxSize ||
+			index+1 < len(w.cuts) && end-start < historychunk.MinSize {
+			return false
+		}
+		start = end
+	}
+	return start == len(raw)
+}
+
+func encodeStateDomainChangeBlockStorageWithChunkWork(raw []byte, changes []*StateDomainChange, enabled bool, work *stateChangeChunkWork) ([]byte, bool) {
+	if work != nil {
+		*work = stateChangeChunkWork{}
+	}
 	if enabled && len(raw) >= stateChangeBlockChunkMinRawBytes && len(raw) <= stateDomainChangeBlockMaxDecodedBytes && stateChangeBlockHasLargeVersions(changes) {
 		baseline, compressed := encodeStateDomainChangeBlockStorage(raw)
 		observeSmall := len(raw) < 2<<20 // Observation boundary, not an encoding gate.
@@ -84,7 +119,7 @@ func encodeStateDomainChangeBlockStorageWithDedup(raw []byte, changes []*StateDo
 			stateChangeSmallChunkAttemptsCounter.Inc(1)
 			started = time.Now()
 		}
-		encoded, useful := encodeStateChangeChunks(raw)
+		encoded, useful := encodeStateChangeChunksWithChunkWork(raw, min(4, runtime.GOMAXPROCS(0)), work)
 		if observeSmall {
 			stateChangeSmallChunkWorkNanosCounter.Inc(time.Since(started).Nanoseconds())
 		}
@@ -111,6 +146,13 @@ func encodeStateChangeChunks(raw []byte) ([]byte, bool) {
 }
 
 func encodeStateChangeChunksWithWorkers(raw []byte, workers int) ([]byte, bool) {
+	return encodeStateChangeChunksWithChunkWork(raw, workers, nil)
+}
+
+func encodeStateChangeChunksWithChunkWork(raw []byte, workers int, work *stateChangeChunkWork) ([]byte, bool) {
+	if work != nil {
+		*work = stateChangeChunkWork{}
+	}
 	out := make([]byte, 0, min(len(raw), 1<<20))
 	out = append(out, stateDomainChangeBlockEnvelopeMagic[:]...)
 	out = append(out, stateDomainChangeBlockChunksVersion)
@@ -122,12 +164,21 @@ func encodeStateChangeChunksWithWorkers(raw []byte, workers int) ([]byte, bool) 
 	if len(raw) > 0 && (len(cuts) == 0 || cuts[len(cuts)-1] != len(raw)) {
 		cuts = append(cuts, len(raw))
 	}
+	var hashes [][32]byte
+	if work != nil && len(raw) > 0 && len(raw) <= stateDomainChangeBlockMaxDecodedBytes {
+		// At most decoded-limit/MinSize+1 entries; allocate only when a
+		// compatible shared writer has explicitly requested per-call reuse.
+		hashes = make([][32]byte, len(cuts))
+	}
 	var scratch []byte
 	offset := 0
 	for index, end := range cuts {
 		n := end - offset
 		chunk := raw[offset : offset+n]
 		digest := sha256.Sum256(chunk)
+		if hashes != nil {
+			hashes[index] = digest
+		}
 		prior, found := anchors[digest]
 		if found && prior.size == n && bytes.Equal(raw[prior.offset:prior.offset+n], chunk) {
 			out = append(out, 2)
@@ -148,6 +199,9 @@ func encodeStateChangeChunksWithWorkers(raw []byte, workers int) ([]byte, bool) 
 			anchors[digest] = stateChangeChunkAnchor{offset, n, index}
 		}
 		offset += n
+	}
+	if hashes != nil {
+		*work = stateChangeChunkWork{rawStart: &raw[0], rawLen: len(raw), cuts: cuts, hashes: hashes}
 	}
 	if len(out)*8 >= len(raw)*7 {
 		return nil, false
