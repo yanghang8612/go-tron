@@ -1,6 +1,7 @@
 # 热历史 Prev 有界检查与编码对比
 
-2026-09-13。用于解释 chaindata 增长的诊断工具；不修改节点写入策略、历史格式或保留范围。
+2026-09-13。记录 chaindata 增长的有界诊断，以及基于实盘证据调整小历史包去重门限的过程。
+诊断命令只读；写入策略修复保持现有历史格式和保留范围。
 增长基线见 [当日采样](sync-chaindata-growth-20260913.md)。
 
 `gtron db inspect-history-prev` 必须在停止节点、释放 Pebble 目录锁后运行。它以固定 seed 在显式高度范围内
@@ -80,7 +81,7 @@ chaindata 的物理大小当作全库精确分布。不同区块中的列表版�
 随后区块推进与运行配置核验通过。`ExecStartPre` 的同类运行状态比较问题也已修复，28 项运维测试通过。
 这次额外停机来自恢复校验缺陷，不能把 1.352 秒检查耗时描述为总停机时间。
 
-恢复后仍运行原 `fdfe8532` 版本，进程 PID **14862**、start ticks **4502991603**，
+本次 inspect 恢复后运行原 `fdfe8532` 版本，进程 PID **14862**、start ticks **4502991603**，
 保持全部五个原开关。10:42:35 UTC 实测 chaindata 分配空间 **447,502,618,624 B / 416.769 GiB**，
 `/data` 可用空间约 **1,586.4 GiB**。上述磁盘值是该时间点的读数。
 
@@ -118,3 +119,71 @@ chaindata 的物理大小当作全库精确分布。不同区块中的列表版�
 这是有限的写入增量优化，已有 SST 不会因门限改变立即缩小。更大的问题仍是热窗口中跨块重复的
 大列表版本。冷格式 V3 已支持单段内跨记录、跨块锚点去重；它不消除进入冷层以前的 WAL/SST 写入。
 后续大幅优化需要在保持逐交易历史查询、原子提交、回滚和锚点回收正确性的前提下，减少这种热历史复制。
+
+## 发布与运行验证
+
+修复已直接提交并推送 master：`b1305f553b5639d90eb2f58c6a5a1b23b9b025b5`。
+服务器使用 GitHub 同一提交在 `/data/gtron/releases/20260913-history-pack-gate/` 隔离构建，
+原 `/data/gtron/go-tron` checkout 和 Rust 子模块工作区未修改。
+
+原生 Sapling 构建与测试通过：完整 rawdb/pebbledb、诊断命令、历史读取/AsOf/Unwind 和快照相关检查。
+候选二进制再次读取同一 128 包导出，全部候选逐字节恢复验证通过；新生产策略总量仍为
+93,258,711 B，符合首次分析。相关原始记录为 `gate-prepared.json`、`native-*-tests.log`、
+`candidate-codecs.json` 和 `candidate-codecs.stderr`。
+
+新增四项 `state/history/changeset/block_pack/small_chunk/` 计数：`attempts`、`selected`、
+`candidate_saved_bytes`、`work_nanos`。只计原 2 MiB 门限以下新接纳的编码尝试；它们在 Put 之前更新，
+可包含失败写入/重试，不能当作持久落盘量或已回收磁盘空间。耗时只覆盖新增 CDC 工作，
+不含 Snappy 基线编码和门限扫描。回退、不重复、关闭开关、旧路径以及失败 Put 的统计语义已测试。
+
+切换事务 `activation-state.json` 为 `active=true`，从 **11:02:23 UTC** 开始，
+**11:03:44 UTC** 完成区块推进及完整健康核验；这是停启和等待恢复同步的事务耗时，
+不是 API 不可用时间。新进程 PID **22687**，进程指标 start unix nano **1789297356925847442**。
+只替换有效 ExecStart 的二进制路径，保留原五个开关、所有参数和磁盘保护。
+部署记录为 `activation-before.json`、`activation-after.json`、`activation-state.json`、
+`rollout-snapshot.json`。本次切换成功，没有走候选失败回滚。
+
+进一步代码核对：legacy delegate/undelegate 会修改关系并将整个 From/ToAccounts 列表写入
+SystemDelegation（`core/state/delegation_cache.go`）。拆分存储的业务路径已存在，但受链上
+AllowDelegateOptimization 控制，不能为了空间提前打开。委托缓存和 domain change journal 已过滤
+重复添加、无效删除和字节相同的 Prev/Next；不能将已有 no-op 过滤当作新优化。
+跨块去重必须保证持久锚点与引用原子有效、重组/repair/prune 不提前回收锚点、完整身份与逐交易
+Prev 可精确恢复，并保持有界随机读取。当前热 CDC 不跨包、冷 V3 不跨文件，均不具备直接扩大
+引用范围所需的全部回收与提交约束。
+
+## 上线后六分钟观察（北京时间 19:03–19:09）
+
+`after-gate` 13 个点、间隔 30 秒，26 个 HTTP 请求全部成功且进程身份一致。首点尚在重启后
+等待 peer，完整窗口为 11:03:32.605655–11:09:32.633221 UTC。另取 11:04:02 起的
+12 点稳定子窗，330 秒内持续 active、没有 paused 或 fetch backpressure。
+本地原始 HTTP 证据和分析在 `build/benchmarks/20260913-history-prev-0952/` 的
+`before-gate/`、`after-gate/`、`live-gate-analysis.json`、`live-gate-analysis.md`。
+
+| 稳定子窗指标 | 开始 | 结束 / 增量 |
+| --- | ---: | ---: |
+| 同步高度 | 30,472,330 | 30,474,276（+1,946） |
+| 状态历史已裁剪水位 | 30,143,384 | 30,146,654 |
+| 状态历史头距 | 328,946 | 327,622（−1,324） |
+| 区块体 / 交易索引冷覆盖水位 | 30,081,024 | 30,081,024 |
+| 区块体 / 交易索引头距 | 391,306 | 393,252（+1,946） |
+| 压实欠账估计 | 85.774 GiB | 82.928 GiB |
+| 小包 CDC 尝试 / 选中 | 0 / 0 | 0 / 0 |
+
+稳定子窗为 **5.8906 blocks/s、1,071.99 TPS、181.98 tx/block**。较上线前 60 秒短基线
+7.4656 blocks/s、853.13 TPS、114.27 tx/block，块速较低、交易处理量较高，交易密度也高
+约 59%。不同高度、负载、后台工作与重启预热，不构成同负载版本性能对照。
+所列 prune/freezer/storage 错误和 write-stall 计数增量为零。状态头距在收敛，
+区块体/交易索引覆盖在本窗未推进，不能笼统描述为所有积压都在下降。
+
+压实欠账在全窗波动于 80.794–90.789 GiB，末值仍高于上线前短基线的 61.737 GiB。
+子窗内回落不代表整体存储压力已经消除。压实输入约 32.75 GB、输出约 29.23 GB，
+说明压实正在进行；两者差额不等于物理空间回收。
+
+**新增四个小包 CDC 指标在全部 13 点均为零。** 当前高度段尚未触发新增路径，不能把历史样本
+2.4611% 的改善说成线上已节省同样比例。稳定窗仍新增约 5.369 GB 编码 pack，
+原始量约 12.986 GB；平均约 2.622 MiB/pack，依然承载很大的有效历史写入。
+
+原生最终读数为 **11:09:02 UTC：chaindata 430.027 GiB，/data 可用 1,571.345 GiB**，
+服务 active、进程与发布一致。磁盘数据来自服务器 `rollout-final.json`，本地
+`observed-gate-rollout.json` 明确标为终端截图人工转录。已有 SST 未因门限调整而立即缩小；
+本轮定位了主要业务来源、上线了有限门限修复，但尚未根治当前高度段跨块大列表历史复制。
