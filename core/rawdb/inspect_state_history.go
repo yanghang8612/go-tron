@@ -28,25 +28,52 @@ const (
 // accompanying report remains useful, but must never be labelled complete.
 var ErrHistoryPrevInspectionPartial = errors.New("state history Prev inspection incomplete")
 
+// InspectStateHistoryPackEncoding identifies a self-contained diagnostic file
+// and validates its decoded-size header without allocating the decoded pack.
+// It does not validate the RLP rows; callers must still run a complete decoder.
+// Shared v3 references are deliberately rejected: they are not standalone files.
+func InspectStateHistoryPackEncoding(encoded []byte) (codec string, decodedBytes uint64, err error) {
+	_, length, compressed, err := stateDomainChangeBlockCompressionPayload(encoded)
+	if err != nil {
+		return "", 0, err
+	}
+	codec = "raw"
+	if !compressed {
+		length = len(encoded)
+	} else if encoded[len(stateDomainChangeBlockEnvelopeMagic)] == stateDomainChangeBlockChunksVersion {
+		codec = "chunks2"
+	} else {
+		codec = "snappy1"
+	}
+	if length <= 0 || length > stateDomainChangeBlockMaxDecodedBytes {
+		return "", 0, errors.New("history diagnostic pack decoded length exceeds limits")
+	}
+	return codec, uint64(length), nil
+}
+
 type HistoryPrevInspectOptions struct {
-	FromBlock       uint64        `json:"from_block"`
-	ToBlock         uint64        `json:"to_block"`
-	Seed            uint64        `json:"seed"`
-	Samples         int           `json:"samples"`
-	MaxEncodedBytes uint64        `json:"max_encoded_bytes"`
-	MaxDecodedBytes uint64        `json:"max_decoded_bytes"`
-	MaxRows         uint64        `json:"max_rows"`
-	MaxDuration     time.Duration `json:"max_duration_ns"`
+	FromBlock         uint64        `json:"from_block"`
+	ToBlock           uint64        `json:"to_block"`
+	Seed              uint64        `json:"seed"`
+	Samples           int           `json:"samples"`
+	MaxEncodedBytes   uint64        `json:"max_encoded_bytes"`
+	MaxChunkReadBytes uint64        `json:"max_chunk_read_bytes"`
+	MaxExportBytes    uint64        `json:"max_export_bytes"`
+	MaxDecodedBytes   uint64        `json:"max_decoded_bytes"`
+	MaxRows           uint64        `json:"max_rows"`
+	MaxDuration       time.Duration `json:"max_duration_ns"`
 	// OnCompletePack is called synchronously only after a full successful decode.
 	// The encoded slice must not be retained or mutated. It enables explicit
-	// diagnostic export without adding any database reads or changing budgets.
+	// diagnostic export. Shared v3 packs are materialized to self-contained raw
+	// RLP; legacy packs keep their original bytes. ExportCodec/ExportBytes describe
+	// this argument, while Codec/EncodedBytes describe the physical source pack.
 	OnCompletePack func(HistoryPrevPackSample, []byte) error `json:"-"`
 }
 
 // DefaultHistoryPrevInspectOptions does not infer a height range from chain
 // state. Callers must select that range explicitly.
 func DefaultHistoryPrevInspectOptions() HistoryPrevInspectOptions {
-	return HistoryPrevInspectOptions{Seed: 20260913, Samples: 256, MaxEncodedBytes: 256 << 20,
+	return HistoryPrevInspectOptions{Seed: 20260913, Samples: 256, MaxEncodedBytes: 256 << 20, MaxChunkReadBytes: 256 << 20, MaxExportBytes: 1 << 30,
 		MaxDecodedBytes: 1 << 30, MaxRows: 2_000_000, MaxDuration: time.Minute}
 }
 
@@ -59,6 +86,9 @@ func (o HistoryPrevInspectOptions) Validate() error {
 	}
 	if o.MaxEncodedBytes == 0 || o.MaxEncodedBytes > 1<<30 || o.MaxDecodedBytes == 0 || o.MaxDecodedBytes > 4<<30 {
 		return errors.New("encoded budget must be in [1,1GiB], decoded budget in [1,4GiB]")
+	}
+	if o.MaxChunkReadBytes > 1<<30 || o.MaxExportBytes > 4<<30 {
+		return errors.New("chunk read budget must be at most 1GiB, export budget at most 4GiB")
 	}
 	if o.MaxRows == 0 || o.MaxRows > 10_000_000 || o.MaxDuration <= 0 || o.MaxDuration > 5*time.Minute {
 		return errors.New("rows budget must be in [1,10000000], duration in (0,5m]")
@@ -139,6 +169,10 @@ type HistoryPrevPackSample struct {
 	Error                         string `json:"error,omitempty"`
 	Codec                         string `json:"codec"`
 	EncodedBytes                  uint64 `json:"encoded_bytes"`
+	ChunkReadBytes                uint64 `json:"chunk_read_bytes"`
+	ChunkReads                    uint64 `json:"chunk_reads"`
+	ExportCodec                   string `json:"export_codec,omitempty"`
+	ExportBytes                   uint64 `json:"export_bytes"`
 	DecodedBytes                  uint64 `json:"decoded_bytes"`
 	Rows                          uint64 `json:"rows"`
 	PrevExists                    uint64 `json:"prev_exists"`
@@ -163,6 +197,10 @@ type HistoryPrevInspection struct {
 	MissingPacks          uint64                    `json:"missing_packs"`
 	EncodedBytesRead      uint64                    `json:"encoded_bytes_read"`
 	EncodedBytesAccepted  uint64                    `json:"encoded_bytes_accepted"`
+	ChunkReadBytes        uint64                    `json:"chunk_read_bytes"`
+	ChunkReads            uint64                    `json:"chunk_reads"`
+	ExportBytesAttempted  uint64                    `json:"export_bytes_attempted"`
+	ExportBytesAccepted   uint64                    `json:"export_bytes_accepted"`
 	DecodedBytesReserved  uint64                    `json:"decoded_bytes_reserved"`
 	Rows                  uint64                    `json:"rows"`
 	PrevBytes             uint64                    `json:"prev_bytes"`
@@ -179,10 +217,18 @@ type HistoryPrevInspection struct {
 }
 
 // InspectStateHistoryPrev performs bounded exact point reads of modern seq=0
-// packs. It never opens an iterator or touches legacy seq>0 rows or ancient.
-// The caller must provide a stable offline reader. Resource checks are
+// packs and their referenced chunks. It never opens an iterator or touches
+// legacy seq>0 rows or ancient. A snapshot is acquired when supported; readers
+// without snapshots support only self-contained packs. Resource checks are
 // cooperative: an individual Get/decompression/row cannot be interrupted.
 func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts HistoryPrevInspectOptions) (report HistoryPrevInspection, resultErr error) {
+	defaults := DefaultHistoryPrevInspectOptions()
+	if opts.MaxChunkReadBytes == 0 {
+		opts.MaxChunkReadBytes = defaults.MaxChunkReadBytes
+	}
+	if opts.MaxExportBytes == 0 {
+		opts.MaxExportBytes = defaults.MaxExportBytes
+	}
 	if err := opts.Validate(); err != nil {
 		return report, err
 	}
@@ -190,13 +236,15 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 		return report, errors.New("nil inspection context or reader")
 	}
 	started := time.Now()
-	report = HistoryPrevInspection{Options: opts, StartedAt: started.UTC(), Scope: "sampled physical state-changeset-v2 seq=0 packs only",
+	report = HistoryPrevInspection{Options: opts, StartedAt: started.UTC(), Scope: "sampled physical state-changeset-v2 seq=0 packs and referenced shared chunks; exports are self-contained diagnostic representations",
 		Histogram: newHistoryPrevHistogram(), Samples: historyPrevSamples(opts),
 		Limitations: []string{
 			"Empty selections are retained without replacement; results are not the full hot retention, cold history, or physical disk usage.",
 			"Legacy seq>0 rows and tx-range/canonical metadata are not read; missing means missing seq=0 pack, not missing block/history.",
 			"Budgets are cooperative between Get/decode/rows. Get must materialize one encoded value before its size is known; encoded_bytes_read includes a rejected value.",
 			"decoded_bytes_reserved includes attempted decodes, including failures; row/domain totals may contain a valid prefix of an incomplete pack.",
+			"encoded_bytes_* count physical pack values only. chunk_read_bytes counts returned stored chunk values, including repeated references and a rejected value; chunk_reads counts resolution attempts, not physical disk I/O. One lookup may include backend presence verification.",
+			"Shared3 exports contain materialized raw RLP. export_bytes_attempted includes failed callbacks; export_bytes_accepted includes successful callbacks only. Export sizes are not original pack/chunk disk occupation or compression savings.",
 			"largest_rows is top20 processed rows; large_keys is top20 among the first4096 identities with Prev>=16KiB, counting only such large rows. Overflow is explicit; it is not a guaranteed global top.",
 			"Large-key grouping uses full identity plus SHA256(key); no value is retained or emitted. No account payload semantics are inferred.",
 			"Chunk gate checks only size and repeated large full identity; it does not prove runtime enablement or the additional codec saving threshold. Capped identity tracking reports unknown when inconclusive.",
@@ -248,6 +296,22 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 		}
 		return "", nil
 	}
+	if reason, err := check(); reason != "" {
+		return stop(reason, err)
+	}
+	view, releaseView, err := AcquireStateHistoryReadView(db)
+	if err != nil {
+		return stop("snapshot_error", err)
+	}
+	defer func() {
+		if err := releaseView(); err != nil {
+			report.Complete = false
+			report.StopReason = "snapshot_close_error"
+			report.Error = err.Error()
+			resultErr = errors.Join(resultErr, ErrHistoryPrevInspectionPartial, err)
+		}
+	}()
+	db = view
 	for i := range report.Samples {
 		sample := &report.Samples[i]
 		if reason, err := check(); reason != "" {
@@ -284,9 +348,17 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 			return stop("encoded_budget", nil)
 		}
 		report.EncodedBytesAccepted += sample.EncodedBytes
-		_, decodedLen, compressed, err := stateDomainChangeBlockCompressionPayload(data)
-		if err == nil && !compressed {
-			decodedLen = len(data)
+		shared := isStateHistorySharedPack(data)
+		decodedLen, compressed := 0, false
+		if shared {
+			// Validate the complete reference header and allocation budget before
+			// issuing any chunk reads. The physical key binds the expected block.
+			_, decodedLen, _, _, err = sharedStateHistoryPackHeader(data, sample.Block)
+		} else {
+			_, decodedLen, compressed, err = stateDomainChangeBlockCompressionPayload(data)
+			if err == nil && !compressed {
+				decodedLen = len(data)
+			}
 		}
 		if err == nil && (decodedLen <= 0 || decodedLen > stateDomainChangeBlockMaxDecodedBytes) {
 			err = fmt.Errorf("decoded pack size %d outside [1,%d]", decodedLen, stateDomainChangeBlockMaxDecodedBytes)
@@ -298,7 +370,9 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 		}
 		sample.DecodedBytes = uint64(decodedLen)
 		sample.Codec = "raw"
-		if compressed {
+		if shared {
+			sample.Codec = "shared3"
+		} else if compressed {
 			sample.Codec = fmt.Sprintf("snappy%d", data[len(stateDomainChangeBlockEnvelopeMagic)])
 			if data[len(stateDomainChangeBlockEnvelopeMagic)] == stateDomainChangeBlockChunksVersion {
 				sample.Codec = "chunks2"
@@ -309,6 +383,18 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 			return stop("decoded_budget", nil)
 		}
 		report.DecodedBytesReserved += sample.DecodedBytes
+		if shared {
+			reader := &historyPrevChunkReader{view: view, check: check, report: &report, sample: sample, limit: opts.MaxChunkReadBytes}
+			data, err = materializeStateHistorySharedPack(data, sample.Block, []ethdb.KeyValueReader{reader})
+			if err != nil {
+				reason := reader.stopReason
+				if reason == "" {
+					reason = "decode_error"
+				}
+				sample.Status, sample.Error = reason, err.Error()
+				return stop(reason, err)
+			}
+		}
 		gate := historyPrevChunkGate{seen: make(map[historyPrevGateIdentity]uint64)}
 		rowStop := ""
 		cont, err := iteratePersistedStateDomainChangeBlockBorrowed(data, sample.Block, func(c *StateDomainChange) (bool, error) {
@@ -399,11 +485,22 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 			return stop(reason, err)
 		}
 		if opts.OnCompletePack != nil {
+			if uint64(len(data)) > opts.MaxExportBytes-report.ExportBytesAttempted {
+				sample.Status = "export_budget"
+				return stop("export_budget", nil)
+			}
+			sample.ExportCodec = sample.Codec
+			if shared {
+				sample.ExportCodec = "raw"
+			}
+			sample.ExportBytes = uint64(len(data))
+			report.ExportBytesAttempted += sample.ExportBytes
 			if err := opts.OnCompletePack(*sample, data); err != nil {
 				sample.Status = "export_error"
 				sample.Error = err.Error()
 				return stop("export_error", err)
 			}
+			report.ExportBytesAccepted += sample.ExportBytes
 			if reason, err := check(); reason != "" {
 				return stop(reason, err)
 			}
@@ -412,6 +509,65 @@ func InspectStateHistoryPrev(ctx context.Context, db ethdb.KeyValueReader, opts 
 	report.Complete = true
 	report.StopReason = "complete"
 	return report, nil
+}
+
+// This adapter keeps the already acquired view and measures each chunk lookup
+// before/after the underlying call. It never creates another snapshot or caches
+// values. As with pack Get, one stored value must be materialized before its
+// actual encoded length is known; that rejected value is still charged.
+type historyPrevChunkReader struct {
+	view       StateHistoryReadView
+	check      func() (string, error)
+	report     *HistoryPrevInspection
+	sample     *HistoryPrevPackSample
+	limit      uint64
+	stopReason string
+}
+
+func (r *historyPrevChunkReader) IsPinnedKeyValueView() bool { return r.view.IsPinnedKeyValueView() }
+
+func (r *historyPrevChunkReader) Has(key []byte) (bool, error) {
+	_, exists, err := r.GetWithPresence(key)
+	return exists, err
+}
+
+func (r *historyPrevChunkReader) Get(key []byte) ([]byte, error) {
+	value, exists, err := r.GetWithPresence(key)
+	if err == nil && !exists {
+		err = errors.New("history inspection: missing shared chunk")
+	}
+	return value, err
+}
+
+func (r *historyPrevChunkReader) GetWithPresence(key []byte) ([]byte, bool, error) {
+	if reason, err := r.check(); reason != "" {
+		r.stopReason = reason
+		if err == nil {
+			err = ErrHistoryPrevInspectionPartial
+		}
+		return nil, false, err
+	}
+	if r.report.ChunkReadBytes >= r.limit {
+		r.stopReason = "chunk_read_budget"
+		return nil, false, ErrHistoryPrevInspectionPartial
+	}
+	r.report.ChunkReads++
+	r.sample.ChunkReads++
+	value, exists, err := readPresentValue(r.view, key, "inspection shared chunk")
+	r.report.ChunkReadBytes += uint64(len(value))
+	r.sample.ChunkReadBytes += uint64(len(value))
+	if reason, checkErr := r.check(); reason != "" {
+		r.stopReason = reason
+		if checkErr == nil {
+			checkErr = ErrHistoryPrevInspectionPartial
+		}
+		return nil, false, errors.Join(err, checkErr)
+	}
+	if r.report.ChunkReadBytes > r.limit {
+		r.stopReason = "chunk_read_budget"
+		return nil, false, errors.Join(err, ErrHistoryPrevInspectionPartial)
+	}
+	return value, exists, err
 }
 
 func historyPrevSamples(o HistoryPrevInspectOptions) []HistoryPrevPackSample {

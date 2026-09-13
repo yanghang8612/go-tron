@@ -3,7 +3,35 @@
 // lets engines implement them without reversing package dependencies.
 package pointread
 
-import "github.com/ethereum/go-ethereum/ethdb"
+import (
+	"errors"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+)
+
+// ErrKeyValueSnapshotUnsupported permits legacy, self-contained history reads
+// on stores without MVCC support. Other factory failures must not fall back to
+// a moving view.
+var ErrKeyValueSnapshotUnsupported = errors.New("pointread: key/value snapshot unsupported")
+
+// PinnedKeyValueView explicitly identifies a coherent point/iterator view.
+// KeyValueSnapshot's structural methods alone cannot distinguish a live DB
+// (which also implements Get, NewIterator and Close) from a pinned snapshot.
+type PinnedKeyValueView interface {
+	IsPinnedKeyValueView() bool
+}
+
+// SupportsKeyValueSnapshots checks a backend's declared capability without
+// opening a snapshot on a write hot path. Wrappers must expose the recursive
+// result when their factory method exists even for an unsupported backend.
+// This is not a liveness check: errors from a supported factory still propagate.
+func SupportsKeyValueSnapshots(source any) bool {
+	if capability, ok := source.(interface{ SupportsKeyValueSnapshots() bool }); ok {
+		return capability.SupportsKeyValueSnapshots()
+	}
+	_, ok := source.(KeyValueSnapshotter)
+	return ok
+}
 
 // BatchPrefetcher warms exact keys without promising a consistent state view.
 // visit is called once per key in an unspecified order, synchronously, with

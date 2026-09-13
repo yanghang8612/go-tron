@@ -15,7 +15,7 @@ func dbInspectHistoryCommand() *cli.Command {
 	return &cli.Command{
 		Name:        "inspect-history-prev",
 		Usage:       "Sample Prev sizes and key identities in offline history block packs (JSON)",
-		Description: "Stop the node first: this command requires the exclusive Pebble directory lock and opens an existing database read-only. It selects one height per non-overlapping stratum in an explicit inclusive range, retains missing packs, and reads only exact modern seq=0 pack keys. No full scan, ancient access, node startup, database writes, or compaction. Optional exports write only to a new diagnostic directory outside chaindata. Partial/budget/error reports are printed as JSON and return a nonzero exit status. Limits are cooperative; a single point read or decode cannot be interrupted.",
+		Description: "Stop the node first: this command requires the exclusive Pebble directory lock and opens an existing database read-only. It selects one height per non-overlapping stratum in an explicit inclusive range, retains missing packs, and reads exact modern seq=0 packs plus their referenced shared chunks through one snapshot. No full scan, ancient access, node startup, database writes, or compaction. Optional exports materialize shared packs to self-contained files in a new diagnostic directory outside chaindata. Partial/budget/error reports are printed as JSON and return a nonzero exit status. Limits are cooperative; a single point read or decode cannot be interrupted.",
 		Flags: []cli.Flag{
 			dataDirFlag, dbCacheFlag, dbHandlesFlag,
 			&cli.Uint64Flag{Name: "from-block", Required: true, Usage: "First sampled stratum height, inclusive"},
@@ -23,6 +23,8 @@ func dbInspectHistoryCommand() *cli.Command {
 			&cli.Uint64Flag{Name: "seed", Value: defaults.Seed, Usage: "Deterministic PCG sampling seed"},
 			&cli.IntFlag{Name: "samples", Value: defaults.Samples, Usage: "Total selected heights (maximum 4096; limited to range width)"},
 			&cli.Uint64Flag{Name: "max-encoded-bytes", Value: defaults.MaxEncodedBytes, Usage: "Cumulative accepted encoded payload budget in bytes (maximum 1GiB)"},
+			&cli.Uint64Flag{Name: "max-chunk-read-bytes", Value: defaults.MaxChunkReadBytes, Usage: "Cumulative stored shared chunk lookup bytes, including repeats (maximum 1GiB)"},
+			&cli.Uint64Flag{Name: "max-export-bytes", Value: defaults.MaxExportBytes, Usage: "Cumulative self-contained export payload bytes (maximum 4GiB)"},
 			&cli.Uint64Flag{Name: "max-decoded-bytes", Value: defaults.MaxDecodedBytes, Usage: "Cumulative decoded allocation budget in bytes (maximum 4GiB; each pack at most 128MiB)"},
 			&cli.Uint64Flag{Name: "max-rows", Value: defaults.MaxRows, Usage: "Maximum processed rows (maximum 10000000)"},
 			&cli.DurationFlag{Name: "max-duration", Value: defaults.MaxDuration, Usage: "Cooperative inspection duration budget, excluding database open/close (maximum 5m)"},
@@ -36,6 +38,7 @@ func dbInspectHistoryCmd(ctx *cli.Context) error {
 	opts := rawdb.HistoryPrevInspectOptions{
 		FromBlock: ctx.Uint64("from-block"), ToBlock: ctx.Uint64("to-block"), Seed: ctx.Uint64("seed"), Samples: ctx.Int("samples"),
 		MaxEncodedBytes: ctx.Uint64("max-encoded-bytes"), MaxDecodedBytes: ctx.Uint64("max-decoded-bytes"), MaxRows: ctx.Uint64("max-rows"), MaxDuration: ctx.Duration("max-duration"),
+		MaxChunkReadBytes: ctx.Uint64("max-chunk-read-bytes"), MaxExportBytes: ctx.Uint64("max-export-bytes"),
 	}
 	if err := opts.Validate(); err != nil {
 		return err

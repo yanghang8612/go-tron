@@ -71,6 +71,13 @@ func IterateStateTxRangesByBlockRangeBorrowed(db ethdb.Iteratee, fromBlock, toBl
 // ErrStateDomainChangeBorrowedLegacyRows; owning history readers retain their
 // compatibility and repair-overwrite behavior for callers that fall back.
 func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if db == nil {
 		return errors.New("rawdb: nil state domain change database")
 	}
@@ -173,8 +180,11 @@ func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBloc
 			continue
 		}
 		value := changeIt.Value()
-		cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, blockNum, &scratch, visit)
+		cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, blockNum, &scratch, visit, historyView)
 		if err != nil {
+			if isStateHistorySharedPack(value) {
+				return err
+			}
 			// Sequence zero was an ordinary row before block packs reserved it.
 			// Probe the owning transition decoder only on this exceptional path
 			// so current-schema corruption remains distinguishable from legacy
@@ -238,17 +248,22 @@ func decodeBorrowedStateTxRange(data []byte, physicalBlock uint64) (common.Hash,
 // iteratePersistedStateDomainChangeBlockBorrowed decodes the current RLP block
 // pack without allocating row structs or copying variable-width byte fields.
 // The returned callback view is invalid as soon as the callback returns.
-func iteratePersistedStateDomainChangeBlockBorrowed(data []byte, blockNum uint64, fn func(*StateDomainChange) (bool, error)) (bool, error) {
+func iteratePersistedStateDomainChangeBlockBorrowed(data []byte, blockNum uint64, fn func(*StateDomainChange) (bool, error), readers ...ethdb.KeyValueReader) (bool, error) {
 	var scratch StateDomainChange
-	return iteratePersistedStateDomainChangeBlockBorrowedWithScratch(data, blockNum, &scratch, fn)
+	return iteratePersistedStateDomainChangeBlockBorrowedWithScratch(data, blockNum, &scratch, fn, readers...)
 }
 
-func iteratePersistedStateDomainChangeBlockBorrowedWithScratch(data []byte, blockNum uint64, scratch *StateDomainChange, fn func(*StateDomainChange) (bool, error)) (bool, error) {
+func iteratePersistedStateDomainChangeBlockBorrowedWithScratch(data []byte, blockNum uint64, scratch *StateDomainChange, fn func(*StateDomainChange) (bool, error), readers ...ethdb.KeyValueReader) (bool, error) {
 	if scratch == nil {
 		return false, errors.New("rawdb: nil borrowed state domain change scratch")
 	}
 	if fn == nil {
 		return false, errors.New("rawdb: nil borrowed state domain change block callback")
+	}
+	var materializeErr error
+	data, materializeErr = materializeStateHistorySharedPack(data, blockNum, readers)
+	if materializeErr != nil {
+		return false, materializeErr
 	}
 	decoded, pooled, err := borrowStateDomainChangeBlockPayload(data)
 	if err != nil {

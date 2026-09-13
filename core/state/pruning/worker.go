@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
@@ -38,6 +39,10 @@ type Worker struct {
 	// blocks in 64-block attempts, including busy admission, across all calls to
 	// its hot-history deleter. Short tails and remaining blocks use the Try guard.
 	HistoryRangeQueuedGuard func(context.Context, uint64, func() error) (bool, error)
+	// HistorySharedChunkGC retires only empty, entirely cold-covered v3 buckets.
+	// It remains useful when shared writing is disabled on a reader bridge.
+	HistorySharedChunkGC bool
+	historyChunkGC       *historyChunkGCState
 
 	// ShouldDeferStateCodePrune skips the optional full CodeDomain reference
 	// scan when it returns true at the stage boundary. Hot code is immutable and
@@ -76,6 +81,7 @@ type Stats struct {
 	HistoryRangeFallbackBlocks   uint64
 	HistoryRangeGuardDuration    time.Duration
 	HistoryRangeGuardMaxDuration time.Duration
+	HistoryChunkGC               HistorySharedChunkGCStats
 }
 
 const maxPruneBatchValueSize = 32 << 20
@@ -131,6 +137,18 @@ func (s pruneBatchStore) GetWithPresence(key []byte) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	return value, true, nil
+}
+
+func (s pruneBatchStore) NewKeyValueSnapshot() (pointread.KeyValueSnapshot, error) {
+	if factory, ok := s.KeyValueReader.(pointread.KeyValueSnapshotter); ok {
+		return factory.NewKeyValueSnapshot()
+	}
+	return nil, pointread.ErrKeyValueSnapshotUnsupported
+}
+
+func (s pruneBatchStore) IsPinnedKeyValueView() bool {
+	view, ok := s.KeyValueReader.(pointread.PinnedKeyValueView)
+	return ok && view.IsPinnedKeyValueView()
 }
 
 func newPruneBatchStore(store Store) (Store, func() error) {
@@ -240,6 +258,9 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 	if err := w.Policy.Validate(); err != nil {
 		return Stats{}, err
 	}
+	if w.HistorySharedChunkGC && (w.Policy.Mode != ModeSnap || w.SnapshotDir == "" || w.HistoryRangeGuard == nil) {
+		return Stats{}, errors.New("pruning: shared chunk GC requires snap mode, cold snapshots and a writer guard")
+	}
 	if w.Policy.Mode == ModeArchive && w.Policy.HistoryWindow == 0 {
 		return Stats{}, nil
 	}
@@ -312,15 +333,21 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 			return snapshots.HotHistoryPruneDecision{}, nil
 		},
 	})
-	if coverageDone != nil {
-		coverageDone()
-		coverageDone = nil
-	}
 	if err != nil {
 		return Stats{}, err
 	}
 	if err := flushHistory(); err != nil {
 		return Stats{}, fmt.Errorf("pruning: flush hot history delete batch: %w", err)
+	}
+	if w.HistorySharedChunkGC {
+		stats.HistoryChunkGC = w.pruneHistorySharedChunks(ctx, coverage, headNum)
+		if err := ctx.Err(); err != nil {
+			return Stats{}, err
+		}
+	}
+	if coverageDone != nil {
+		coverageDone()
+		coverageDone = nil
 	}
 	stats.HistoryDeletes = historyDeletes
 	stats.DeletedTxRanges = hotStats.DeletedTxRanges

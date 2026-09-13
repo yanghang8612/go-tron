@@ -451,6 +451,7 @@ var app = &cli.App{
 		pruneModeFlag,
 		historyEnabledFlag,
 		historyBlockDedupFlag,
+		historyCrossBlockDedupFlag,
 		historyCompressionFormatFlag,
 		historyCatchupModeFlag,
 		historyPressureHotFlag,
@@ -645,6 +646,8 @@ func gtron(ctx *cli.Context) error {
 	}
 	log.Info("History catch-up scheduling configured", "mode", historyCatchupMode)
 	rawdb.SetStateHistoryBlockDedup(ctx.Bool(historyBlockDedupFlag.Name))
+	rawdb.SetStateHistoryCrossBlockDedup(ctx.Bool(historyCrossBlockDedupFlag.Name))
+	log.Info("Hot history cross-block dedup configured", "enabled", ctx.Bool(historyCrossBlockDedupFlag.Name), "bucketBlocks", rawdb.StateHistoryChunkBucketBlocks)
 	log.Info("Hot history block dedup configured", "enabled", ctx.Bool(historyBlockDedupFlag.Name))
 	if err := validateSyncImportBatch(cfg.SyncImportBatch); err != nil {
 		return err
@@ -1302,6 +1305,7 @@ func gtron(ctx *cli.Context) error {
 			Pruner: statepruning.PrunerConfig{
 				HistoryRangePrune:               historyRangePrune,
 				HistoryRangeQueue:               historyRangeQueue,
+				HistorySharedChunkGC:            chainConfig.HistoryEnabled && prunePolicy.Mode == statepruning.ModeSnap,
 				Policy:                          prunePolicy,
 				SnapshotDir:                     stateSnapshotDir,
 				MaxSyncLag:                      domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),

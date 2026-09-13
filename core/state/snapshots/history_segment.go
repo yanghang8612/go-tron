@@ -69,6 +69,12 @@ func BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(db ethdb.Iteratee, 
 }
 
 func buildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string, blockRange *stateDomainChangeHistoryBlockRange) ([]SegmentRef, error) {
+	historyView, releaseHistoryView, viewErr := rawdb.AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
 	if db == nil {
 		return nil, errors.New("snapshots: nil database")
 	}

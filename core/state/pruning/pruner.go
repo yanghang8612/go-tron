@@ -91,12 +91,16 @@ type PrunerConfig struct {
 	// HistoryRangeQueue allows at most four 64-block queued guard attempts per
 	// pass. The caller must not own a heavy-work lease while invoking a pass.
 	HistoryRangeQueue bool
+	// HistorySharedChunkGC retires empty v3 buckets independently of writer mode.
+	HistorySharedChunkGC bool
 	// MetricsNamespace prefixes production prune gauges. Tests may override it
 	// to isolate process-global metric registrations.
 	MetricsNamespace string
 }
 
 type PrunerStats struct {
+	HistorySharedChunkGCEnabled        bool
+	HistoryChunkGC                     HistorySharedChunkGCStats
 	HistoryRangePruneEnabled           bool
 	HistoryRangeQueueEnabled           bool
 	HistoryDeletes                     rawdb.StateDomainChangeDeleteStats
@@ -143,6 +147,7 @@ type Pruner struct {
 	cfg                       PrunerConfig
 	metrics                   prunerMetrics
 	coverageVerificationCache *snapshotCoverageVerificationCache
+	historyChunkGC            historyChunkGCState
 
 	quit chan struct{}
 	done chan struct{}
@@ -180,6 +185,7 @@ type Pruner struct {
 }
 
 type prunerMetrics struct {
+	historyChunkGC                     map[string]*metrics.Gauge
 	historyRangeEnabled                *metrics.Gauge
 	historyRangeQueueEnabled           *metrics.Gauge
 	historyRangeRuns                   *metrics.Gauge
@@ -228,6 +234,7 @@ type prunerMetrics struct {
 func newPrunerMetrics(namespace string) prunerMetrics {
 	namespace = normalizePrunerMetricNamespace(namespace)
 	return prunerMetrics{
+		historyChunkGC:                     newHistoryChunkGCMetrics(namespace),
 		historyRangeEnabled:                metrics.GetOrRegisterGauge(namespace+"history/delete/range/enabled", nil),
 		historyRangeQueueEnabled:           metrics.GetOrRegisterGauge(namespace+"history/delete/range/queue/enabled", nil),
 		historyRangeFallbackBlocks:         metrics.GetOrRegisterGauge(namespace+"history/delete/range/fallback_blocks", nil),
@@ -285,6 +292,7 @@ func normalizePrunerMetricNamespace(namespace string) string {
 }
 
 func (m prunerMetrics) update(stats PrunerStats) {
+	updateHistoryChunkGCMetrics(m.historyChunkGC, stats.HistorySharedChunkGCEnabled, stats.HistoryChunkGC)
 	var enabled int64
 	if stats.HistoryRangePruneEnabled {
 		enabled = 1
@@ -446,6 +454,8 @@ func (p *Pruner) Stats() PrunerStats {
 	}
 	verification := p.coverageVerificationCache.Stats()
 	return PrunerStats{
+		HistorySharedChunkGCEnabled:  p.cfg.HistorySharedChunkGC,
+		HistoryChunkGC:               p.historyChunkGC.stats(),
 		HistoryRangePruneEnabled:     p.cfg.HistoryRangePrune,
 		HistoryRangeQueueEnabled:     p.cfg.HistoryRangeQueue,
 		HistoryRangeFallbackBlocks:   p.historyRangeFallbackBlocks.Load(),
@@ -741,7 +751,7 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	}
 	var rangeGuard func(context.Context, uint64, func() error) (bool, error)
 	var queuedRangeGuard func(context.Context, uint64, func() error) (bool, error)
-	if p.cfg.HistoryRangePrune {
+	if p.cfg.HistoryRangePrune || p.cfg.HistorySharedChunkGC {
 		source, ok := p.chain.(historyRangePruneGuardSource)
 		if !ok || !pruneHeadHasHash || !postingProofAvailable {
 			return Stats{}, errors.New("pruning: history range pruning requires a live writer guard and durable canonical proof")
@@ -767,6 +777,8 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		HistoryRangePrune:       p.cfg.HistoryRangePrune,
 		HistoryRangeGuard:       rangeGuard,
 		HistoryRangeQueuedGuard: queuedRangeGuard,
+		HistorySharedChunkGC:    p.cfg.HistorySharedChunkGC,
+		historyChunkGC:          &p.historyChunkGC,
 		ShouldDeferStateCodePrune: func() bool {
 			return p.cfg.DeferStateCodePruneWhileSyncing && p.syncActive()
 		},

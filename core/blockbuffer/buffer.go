@@ -780,6 +780,12 @@ func (b *Buffer) newReadSnapshot(maxBlock *uint64) (*ReadSnapshot, error) {
 	if err != nil {
 		b.mu.RUnlock()
 		b.flushMu.Unlock()
+		// Wrappers may expose the optional factory even when their underlying
+		// store cannot pin a view. Preserve the existing locked-read fallback
+		// only for that explicit capability error, never for a real failure.
+		if errors.Is(err, pointread.ErrKeyValueSnapshotUnsupported) {
+			return nil, errors.Join(ErrReadSnapshotUnsupported, err)
+		}
 		return nil, err
 	}
 	view := b.readView.Load()

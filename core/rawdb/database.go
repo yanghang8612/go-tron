@@ -73,5 +73,5 @@ func NewMemoryChainDB() *ChainDB {
 
 // WrapKeyValueStore wraps an ethdb.KeyValueStore into a full ethdb.Database.
 func WrapKeyValueStore(db ethdb.KeyValueStore) ethdb.Database {
-	return ethrawdb.NewDatabase(db)
+	return &stateHistorySnapshotDatabase{Database: ethrawdb.NewDatabase(db), source: db}
 }

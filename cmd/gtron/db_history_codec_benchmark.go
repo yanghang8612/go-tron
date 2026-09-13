@@ -39,6 +39,8 @@ type historyCodecBenchmarkReport struct {
 	Error                    string                              `json:"error,omitempty"`
 	ExportInspectionComplete bool                                `json:"export_inspection_complete"`
 	ManifestSHA256           string                              `json:"manifest_sha256"`
+	ManifestVersion          int                                 `json:"manifest_version"`
+	MaterializedPacks        int                                 `json:"materialized_packs"`
 	PlannedPacks             int                                 `json:"planned_packs"`
 	ElapsedSeconds           float64                             `json:"elapsed_seconds"`
 	Stats                    rawdb.HistoryCodecBenchmarkStats    `json:"stats"`
@@ -80,7 +82,7 @@ func readHistoryDiagnosticFile(path string, limit int64) ([]byte, error) {
 
 func benchmarkHistoryExport(ctx context.Context, directory string) (report historyCodecBenchmarkReport, resultErr error) {
 	started := time.Now()
-	report.Scope = "exported physical seq=0 packs only; totals include completed samples only; timings are standalone wall and whole-process CPU, not online import throughput; zstd is an experiment, not a production format"
+	report.Scope = "self-contained exports of seq=0 samples only; existing candidate measures the exported representation, not original shared pack/chunk storage; totals include completed samples only; timings are standalone wall and whole-process CPU, not online import throughput; zstd is an experiment, not a production format"
 	defer func() {
 		report.ElapsedSeconds = time.Since(started).Seconds()
 		if resultErr != nil {
@@ -98,13 +100,20 @@ func benchmarkHistoryExport(ctx context.Context, directory string) (report histo
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return report, err
 	}
-	if manifest.Version != 1 || len(manifest.Entries) == 0 || len(manifest.Entries) > 256 {
-		return report, errors.New("expected version1 export with 1..256 complete pack entries")
+	if manifest.Version != 1 && manifest.Version != 2 || len(manifest.Entries) == 0 || len(manifest.Entries) > 256 {
+		return report, errors.New("expected version1 or version2 export with 1..256 complete pack entries")
 	}
+	report.ManifestVersion = manifest.Version
 	report.ExportInspectionComplete = manifest.Complete
 	report.PlannedPacks = len(manifest.Entries)
 	var totalEncoded, totalDecoded uint64
 	for i, entry := range manifest.Entries {
+		if err := validateHistoryPackExportEntry(manifest.Version, entry); err != nil {
+			return report, err
+		}
+		if entry.Materialized {
+			report.MaterializedPacks++
+		}
 		if entry.File != fmt.Sprintf("%020d.pack", entry.Block) || (i > 0 && entry.Block <= manifest.Entries[i-1].Block) {
 			return report, errors.New("export entries must have exact filenames and unique ascending heights")
 		}
@@ -133,6 +142,10 @@ func benchmarkHistoryExport(ctx context.Context, directory string) (report histo
 		digest := sha256.Sum256(encoded)
 		if uint64(len(encoded)) != entry.EncodedBytes || hex.EncodeToString(digest[:]) != entry.SHA256 {
 			return report, fmt.Errorf("export pack %d checksum or length differs", entry.Block)
+		}
+		codec, decodedBytes, err := rawdb.InspectStateHistoryPackEncoding(encoded)
+		if err != nil || codec != entry.Codec || decodedBytes != entry.DecodedBytes {
+			return report, fmt.Errorf("export pack %d codec or decoded length differs: %w", entry.Block, errors.Join(err, errors.New("export encoding metadata mismatch")))
 		}
 		sample, err := benchmark.BenchmarkPack(ctx, entry.Block, encoded)
 		report.Samples = append(report.Samples, sample)

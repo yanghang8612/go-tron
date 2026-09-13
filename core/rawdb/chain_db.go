@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -42,6 +43,29 @@ type ChainDBReadView struct {
 	reader   ethdb.KeyValueReader
 	iteratee ethdb.Iteratee
 	AncientReader
+}
+
+// NewKeyValueSnapshot forwards the optional hot-store capability, which is
+// otherwise hidden by embedding the narrower ethdb.KeyValueStore interface.
+func (db *ChainDB) NewKeyValueSnapshot() (pointread.KeyValueSnapshot, error) {
+	if db != nil {
+		if factory, ok := db.KeyValueStore.(pointread.KeyValueSnapshotter); ok {
+			return factory.NewKeyValueSnapshot()
+		}
+	}
+	return nil, pointread.ErrKeyValueSnapshotUnsupported
+}
+
+func (db *ChainDB) SupportsKeyValueSnapshots() bool {
+	return db != nil && pointread.SupportsKeyValueSnapshots(db.KeyValueStore)
+}
+
+func (db *ChainDBReadView) IsPinnedKeyValueView() bool {
+	if db == nil {
+		return false
+	}
+	marker, ok := db.reader.(pointread.PinnedKeyValueView)
+	return ok && marker.IsPinnedKeyValueView()
 }
 
 // NewChainDBReadView binds one immutable key/value view to an ancient reader.

@@ -51,6 +51,14 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContext(ctx context.C
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
+	// Dictionary, records and tx-range tables must observe one sequence even if
+	// an independent hot-history GC removes their shared chunks during the build.
+	historyView, releaseHistoryView, viewErr := rawdb.AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return result, viewErr
+	}
+	defer func() { err = errors.Join(err, releaseHistoryView()) }()
+	db = historyView
 	if ref.Kind == "" {
 		ref.Kind = SegmentHistory
 	}

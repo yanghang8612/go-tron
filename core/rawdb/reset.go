@@ -17,6 +17,13 @@ func ResetMutableState(db ethdb.KeyValueStore) error {
 	if db == nil {
 		return errors.New("reset mutable state: nil database")
 	}
+	// Shared packs, their chunks, and both active/retired bucket metadata form
+	// one reference graph. Drop all three atomically before other state resets:
+	// a crash must not leave a live pack whose chunk or retirement fence vanished.
+	// Application format/capability markers are deliberately not downgraded.
+	if err := resetMutableHistoryReferences(db); err != nil {
+		return err
+	}
 	for _, prefix := range resetMutablePrefixes {
 		if err := deletePrefix(db, prefix); err != nil {
 			return fmt.Errorf("delete prefix %q: %w", prefix, err)
@@ -63,7 +70,6 @@ var resetMutablePrefixes = [][]byte{
 	stageProgressPrefix,
 	syncStagedBlockPrefix,
 	stateTxRangePrefix,
-	stateChangeSetPrefix,
 	stateChangePostingPrefix,
 	stateChangeKeyDirectoryPrefix,
 	stateCommitmentBranchPrefix,
@@ -78,6 +84,25 @@ var resetMutablePrefixes = [][]byte{
 	taposPrefix,
 	drAccIdxPrefix,
 	checkPointV2Prefix,
+}
+
+func resetMutableHistoryReferences(db ethdb.KeyValueStore) error {
+	batch := db.NewBatch()
+	defer func() {
+		batch.Reset()
+		if closer, ok := batch.(interface{ Close() }); ok {
+			closer.Close()
+		}
+	}()
+	for _, prefix := range [][]byte{stateChangeSetPrefix, stateHistorySharedChunkPrefix, stateHistorySharedBucketPrefix} {
+		if err := batch.DeleteRange(prefix, prefixUpperBound(prefix)); err != nil {
+			return fmt.Errorf("reset mutable history reference graph: %w", err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		return fmt.Errorf("reset mutable history reference graph: %w", err)
+	}
+	return nil
 }
 
 var resetMutableSingletons = [][]byte{

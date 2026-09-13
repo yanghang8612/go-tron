@@ -72,7 +72,11 @@ func stateChangeBlockHasLargeVersions(changes []*StateDomainChange) bool {
 }
 
 func encodeStateDomainChangeBlockStorageForChanges(raw []byte, changes []*StateDomainChange) ([]byte, bool) {
-	if stateChangeBlockChunkEncoding.Load() && len(raw) >= stateChangeBlockChunkMinRawBytes && len(raw) <= stateDomainChangeBlockMaxDecodedBytes && stateChangeBlockHasLargeVersions(changes) {
+	return encodeStateDomainChangeBlockStorageWithDedup(raw, changes, stateChangeBlockChunkEncoding.Load())
+}
+
+func encodeStateDomainChangeBlockStorageWithDedup(raw []byte, changes []*StateDomainChange, enabled bool) ([]byte, bool) {
+	if enabled && len(raw) >= stateChangeBlockChunkMinRawBytes && len(raw) <= stateDomainChangeBlockMaxDecodedBytes && stateChangeBlockHasLargeVersions(changes) {
 		baseline, compressed := encodeStateDomainChangeBlockStorage(raw)
 		observeSmall := len(raw) < 2<<20 // Observation boundary, not an encoding gate.
 		var started time.Time

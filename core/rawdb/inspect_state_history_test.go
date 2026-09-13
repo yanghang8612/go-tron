@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/internal/historychunk"
 )
@@ -21,6 +23,181 @@ type historyPrevTestReader struct {
 	reads     [][]byte
 	err       error
 	afterRead func()
+}
+
+func TestInspectStateHistoryPrevSharedMaterializationAndAccounting(t *testing.T) {
+	f, _ := newHistoryReadViewFixture(t)
+	writeHistoryReadViewSharedFixture(t, f.KeyValueStore, 10)
+	physical, err := f.KeyValueStore.Get(stateChangeSetKey(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawLen, count, _, err := sharedStateHistoryPackHeader(physical, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkBytes := uint64(0)
+	prefix := stateHistoryChunkBucketPrefix(stateHistoryChunkBucket(10))
+	it := f.KeyValueStore.NewIterator(prefix, nil)
+	for it.Next() {
+		chunkBytes += uint64(len(it.Value()))
+	}
+	iterErr := it.Error()
+	it.Release()
+	if iterErr != nil {
+		t.Fatal(iterErr)
+	}
+	// Delete the source immediately after snapshot capture. Inspect must retain
+	// both the reference pack and all chunks, and open only that one snapshot.
+	f.afterCapture = func() {
+		if err := f.KeyValueStore.Delete(stateChangeSetKey(10, 0)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.KeyValueStore.DeleteRange(prefix, prefixUpperBound(prefix)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := historyPrevTestOptions(10, 10)
+	exports := 0
+	o.OnCompletePack = func(sample HistoryPrevPackSample, data []byte) error {
+		codec, size, err := InspectStateHistoryPackEncoding(data)
+		if err != nil || codec != "raw" || size != uint64(rawLen) || isStateHistorySharedPack(data) {
+			t.Fatalf("export is not self-contained raw: %q/%d %v", codec, size, err)
+		}
+		if sample.Codec != "shared3" || sample.EncodedBytes != uint64(len(physical)) || sample.ExportCodec != "raw" || sample.ExportBytes != uint64(rawLen) {
+			t.Fatalf("physical/export metadata mixed: %+v", sample)
+		}
+		rows, err := decodePersistedStateDomainChangeBlock(data, 10)
+		if err != nil || len(rows) != 1 || !bytes.Equal(rows[0].Prev, []byte{10}) {
+			t.Fatalf("exported rows=%v err=%v", rows, err)
+		}
+		exports++
+		return nil
+	}
+	report, err := InspectStateHistoryPrev(context.Background(), f, o)
+	if err != nil || !report.Complete || exports != 1 || f.opened != 1 || f.closed != 1 {
+		t.Fatalf("shared inspect/export=%d snapshots=%d/%d report=%+v err=%v", exports, f.opened, f.closed, report, err)
+	}
+	if report.EncodedBytesRead != uint64(len(physical)) || report.ChunkReadBytes != chunkBytes || report.ChunkReads != uint64(count) || report.DecodedBytesReserved != uint64(rawLen) || report.ExportBytesAttempted != uint64(rawLen) || report.ExportBytesAccepted != uint64(rawLen) {
+		t.Fatalf("byte ledgers mixed: %+v", report)
+	}
+}
+
+func TestInspectStateHistoryPrevSharedBudgetsBeforeReadsAndExport(t *testing.T) {
+	for _, mode := range []string{"decoded", "chunk", "export", "unpinned", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			f, _ := newHistoryReadViewFixture(t)
+			writeHistoryReadViewSharedFixture(t, f.KeyValueStore, 10)
+			pack, err := f.KeyValueStore.Get(stateChangeSetKey(10, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, size, _, _, err := sharedStateHistoryPackHeader(pack, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := historyPrevTestOptions(10, 11)
+			exported := 0
+			o.OnCompletePack = func(HistoryPrevPackSample, []byte) error { exported++; return nil }
+			wantReason := "decode_error"
+			switch mode {
+			case "decoded":
+				o.MaxDecodedBytes, wantReason = uint64(size-1), "decoded_budget"
+			case "chunk":
+				o.MaxChunkReadBytes, wantReason = 1, "chunk_read_budget"
+			case "export":
+				o.MaxExportBytes, wantReason = uint64(size-1), "export_budget"
+			case "unpinned":
+				f.factoryErr = pointread.ErrKeyValueSnapshotUnsupported
+			case "missing":
+				prefix := stateHistoryChunkBucketPrefix(stateHistoryChunkBucket(10))
+				if err := f.KeyValueStore.DeleteRange(prefix, prefixUpperBound(prefix)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report, err := InspectStateHistoryPrev(context.Background(), f, o)
+			if !errors.Is(err, ErrHistoryPrevInspectionPartial) || report.Complete || report.StopReason != wantReason || exported != 0 || report.ExportBytesAccepted != 0 || report.Samples[1].Status != "not_visited" {
+				t.Fatalf("partial mode=%s export=%d report=%+v err=%v", mode, exported, report, err)
+			}
+			if mode == "decoded" && (report.DecodedBytesReserved != 0 || report.ChunkReads != 0) {
+				t.Fatal("decoded budget checked after allocation or chunk I/O")
+			}
+			if mode == "unpinned" && (!errors.Is(err, ErrStateHistoryReadViewUnpinned) || report.ChunkReads != 0) {
+				t.Fatal("unpinned source performed chunk I/O")
+			}
+			if mode == "chunk" && (report.ChunkReads != 1 || report.ChunkReadBytes <= 1 || report.Rows != 0) {
+				t.Fatal("rejected chunk not charged or decoded beyond budget")
+			}
+		})
+	}
+}
+
+type historyPrevCancelChunkView struct {
+	StateHistoryReadView
+	prefix []byte
+	cancel context.CancelFunc
+}
+
+func (v historyPrevCancelChunkView) GetWithPresence(key []byte) ([]byte, bool, error) {
+	value, exists, err := readPresentValue(v.StateHistoryReadView, key, "cancellation fixture")
+	if bytes.HasPrefix(key, v.prefix) {
+		v.cancel()
+	}
+	return value, exists, err
+}
+
+func TestInspectStateHistoryPrevSharedCancellationAfterChunkRead(t *testing.T) {
+	f, _ := newHistoryReadViewFixture(t)
+	writeHistoryReadViewSharedFixture(t, f.KeyValueStore, 10)
+	view, release, err := AcquireStateHistoryReadView(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := historyPrevCancelChunkView{StateHistoryReadView: view, prefix: stateHistoryChunkBucketPrefix(stateHistoryChunkBucket(10)), cancel: cancel}
+	report, err := InspectStateHistoryPrev(ctx, source, historyPrevTestOptions(10, 11))
+	if !errors.Is(err, context.Canceled) || report.StopReason != "context" || report.ChunkReads != 1 || report.ChunkReadBytes == 0 || report.Rows != 0 || report.Samples[1].Status != "not_visited" {
+		t.Fatalf("chunk cancellation accounting report=%+v err=%v", report, err)
+	}
+	if f.closed != 0 {
+		t.Fatal("inspection closed its caller-owned snapshot")
+	}
+}
+
+func TestInspectStateHistoryPrevSharedRepeatedChunksChargeEveryLookup(t *testing.T) {
+	const block = uint64(20)
+	raw := encodeBorrowedStateDomainChangeTestBlock(t, []*StateDomainChange{historyPrevTestRow(block, 1, 40<<10)})
+	digest := sha256.Sum256(raw)
+	count := (len(raw) + historychunk.MinSize - 1) / historychunk.MinSize
+	pack := append(bytes.Clone(stateDomainChangeBlockEnvelopeMagic[:]), stateDomainChangeBlockSharedVersion)
+	pack = binary.AppendUvarint(pack, block)
+	pack = binary.AppendUvarint(pack, uint64(len(raw)))
+	pack = append(pack, digest[:]...)
+	pack = binary.AppendUvarint(pack, uint64(count))
+	values := make(map[string][]byte)
+	var expectedReadBytes uint64
+	for start := 0; start < len(raw); start += historychunk.MinSize {
+		chunk := raw[start:min(start+historychunk.MinSize, len(raw))]
+		hash := sha256.Sum256(chunk)
+		encoded := encodeStateHistorySharedChunk(chunk)
+		values[string(stateHistoryChunkKey(stateHistoryChunkBucket(block), hash))] = encoded
+		expectedReadBytes += uint64(len(encoded))
+		pack = binary.AppendUvarint(pack, uint64(len(chunk)))
+		pack = append(pack, hash[:]...)
+	}
+	if len(values) >= count {
+		t.Fatal("fixture has no repeated chunks")
+	}
+	values[string(stateChangeSetKey(block, 0))] = pack
+	source := &historyPrevTestReader{values: values}
+	// This immutable test source needs only Get; inspection never iterates it.
+	view := &stateHistoryReadView{reader: source, pinned: true}
+	report, err := InspectStateHistoryPrev(context.Background(), view, historyPrevTestOptions(block, block))
+	if err != nil || !report.Complete || report.ChunkReads != uint64(count) || report.ChunkReadBytes != expectedReadBytes || len(source.reads) != count+1 {
+		t.Fatalf("repeat lookup accounting reads=%d report=%+v err=%v", len(source.reads), report, err)
+	}
 }
 
 func (r *historyPrevTestReader) Has([]byte) (bool, error) {

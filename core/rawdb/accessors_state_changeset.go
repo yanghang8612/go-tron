@@ -41,6 +41,7 @@ var (
 	stateChangeBlockPackKeyBytesAvoidedCounter  = metrics.NewRegisteredCounter("state/history/changeset/block_pack/key_bytes_avoided", nil)
 	stateChangeBlockPackUncompressedCounter     = metrics.NewRegisteredCounter("state/history/changeset/block_pack/uncompressed_bytes", nil)
 	stateChangeBlockPackCompressionSavedCounter = metrics.NewRegisteredCounter("state/history/changeset/block_pack/compression_saved_bytes", nil)
+	stateChangeBlockPackExpansionCounter        = metrics.NewRegisteredCounter("state/history/changeset/block_pack/encoding_expansion_bytes", nil)
 	stateChangeBlockPackCompressedCounter       = metrics.NewRegisteredCounter("state/history/changeset/block_pack/compressed_blocks", nil)
 	stateChangeBlockPackRawCounter              = metrics.NewRegisteredCounter("state/history/changeset/block_pack/raw_blocks", nil)
 	stateChangeBlockRawBufferPool               = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -306,6 +307,10 @@ func WriteStateDomainChangeRow(db ethdb.KeyValueWriter, change *StateDomainChang
 // block-final mutation has succeeded, so no reader can observe a partial pack.
 // Positive-sequence single rows remain readable for restart/repair compatibility.
 func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDomainChange) error {
+	return writeStateDomainChangeBlockRows(db, changes, stateChangeBlockChunkEncoding.Load(), stateHistoryCrossBlockDedup.Load())
+}
+
+func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDomainChange, blockDedup, sharedEnabled bool) error {
 	if len(changes) == 0 {
 		return nil
 	}
@@ -363,7 +368,17 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		return err
 	}
 	uncompressedBytes := rawBuffer.Len()
-	data, compressed := encodeStateDomainChangeBlockStorageForChanges(rawBuffer.Bytes(), changes)
+	data, compressed := encodeStateDomainChangeBlockStorageWithDedup(rawBuffer.Bytes(), changes, blockDedup)
+	data, shared, err := planAndWriteSharedStateHistory(db, blockNum, rawBuffer.Bytes(), data, changes, sharedEnabled)
+	if err != nil {
+		if rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
+			stateChangeBlockRawBufferPool.Put(rawBuffer)
+		}
+		return err
+	}
+	if shared != nil {
+		compressed = true
+	}
 	if compressed && rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
 		stateChangeBlockRawBufferPool.Put(rawBuffer)
 	}
@@ -371,14 +386,25 @@ func WriteStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 	if err := db.Put(physicalKey, data); err != nil {
 		return err
 	}
+	shared.observe()
+	// Include newly stored out-of-line chunk values in encoding accounting;
+	// counting only tiny reference packs would falsely report near-total
+	// savings on the bucket's first, full-content seed. Keys/metadata belong
+	// to logical KV bytes; these remain staged counters, not fsync receipts.
+	encodedBytes, extraKeyBytes := len(data), 0
+	if shared != nil {
+		encodedBytes += shared.chunks
+		extraKeyBytes = shared.chunkKeys + shared.metadata
+	}
 	stateChangeBlockPackBlocksCounter.Inc(1)
 	stateChangeBlockPackRowsCounter.Inc(int64(len(changes)))
-	stateChangeBlockPackEncodedBytesCounter.Inc(int64(len(data)))
-	stateChangeBlockPackLogicalBytesCounter.Inc(int64(len(physicalKey) + len(data)))
+	stateChangeBlockPackEncodedBytesCounter.Inc(int64(encodedBytes))
+	stateChangeBlockPackLogicalBytesCounter.Inc(int64(len(physicalKey) + encodedBytes + extraKeyBytes))
 	stateChangeBlockPackUncompressedCounter.Inc(int64(uncompressedBytes))
 	if compressed {
 		stateChangeBlockPackCompressedCounter.Inc(1)
-		stateChangeBlockPackCompressionSavedCounter.Inc(int64(uncompressedBytes - len(data)))
+		stateChangeBlockPackCompressionSavedCounter.Inc(int64(max(0, uncompressedBytes-encodedBytes)))
+		stateChangeBlockPackExpansionCounter.Inc(int64(max(0, encodedBytes-uncompressedBytes)))
 	} else {
 		stateChangeBlockPackRawCounter.Inc(1)
 	}
@@ -554,7 +580,12 @@ func decodePersistedStateDomainChange(data []byte, blockNum, seq uint64) (*State
 	return cloneStateDomainChange(&legacy), nil
 }
 
-func decodePersistedStateDomainChangeBlock(data []byte, blockNum uint64) ([]*StateDomainChange, error) {
+func decodePersistedStateDomainChangeBlock(data []byte, blockNum uint64, readers ...ethdb.KeyValueReader) ([]*StateDomainChange, error) {
+	var materializeErr error
+	data, materializeErr = materializeStateHistorySharedPack(data, blockNum, readers)
+	if materializeErr != nil {
+		return nil, materializeErr
+	}
 	payload, decodedLen, compressed, err := stateDomainChangeBlockCompressionPayload(data)
 	if err != nil {
 		return nil, err
@@ -655,6 +686,13 @@ func validateStateDomainChange(change *StateDomainChange) error {
 }
 
 func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	// A positive-sequence repair/transition row has the same overwrite
 	// precedence it had before block packs existed.
 	if seq != 0 {
@@ -675,13 +713,16 @@ func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*Stat
 		return nil, false, err
 	}
 	if packedOK {
-		changes, err := decodePersistedStateDomainChangeBlock(packed, blockNum)
+		changes, err := decodePersistedStateDomainChangeBlock(packed, blockNum, historyView)
 		if err == nil {
 			firstSeq := changes[0].Seq
 			if seq >= firstSeq && seq-firstSeq < uint64(len(changes)) {
 				return changes[seq-firstSeq], true, nil
 			}
 			return nil, false, nil
+		}
+		if isStateHistorySharedPack(packed) {
+			return nil, false, err
 		}
 		// Sequence zero was not reserved by the legacy schema. A few repair
 		// and fixture writers used it for an ordinary row, so only treat the
@@ -705,6 +746,19 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 // reads which may encounter large packed changesets while reconstructing one
 // historical state request.
 func IterateStateDomainChangesContext(ctx context.Context, db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	if ctx != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+	}
+
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -732,10 +786,13 @@ func IterateStateDomainChangesContext(ctx context.Context, db ethdb.Iteratee, bl
 		}
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		if seq == 0 {
-			changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum)
+			changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum, historyView)
 			if err == nil {
 				packed = changes
 				continue
+			}
+			if isStateHistorySharedPack(it.Value()) {
+				return err
 			}
 			row, legacyErr := decodePersistedStateDomainChange(it.Value(), blockNum, 0)
 			if legacyErr != nil {
@@ -810,6 +867,19 @@ func IterateStateDomainChangesByBlockRange(db ethdb.Iteratee, fromBlock, toBlock
 // and while flushing packed rows so a range containing no matching logical key
 // cannot keep an obsolete RPC alive.
 func IterateStateDomainChangesByBlockRangeContext(ctx context.Context, db ethdb.Iteratee, fromBlock, toBlock uint64, fn func(*StateDomainChange) (bool, error)) error {
+	if ctx != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+	}
+
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -883,10 +953,13 @@ func IterateStateDomainChangesByBlockRangeContext(ctx context.Context, db ethdb.
 
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		if seq == 0 {
-			changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum)
+			changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum, historyView)
 			if err == nil {
 				packed = changes
 				continue
+			}
+			if isStateHistorySharedPack(it.Value()) {
+				return err
 			}
 			row, legacyErr := decodePersistedStateDomainChange(it.Value(), blockNum, 0)
 			if legacyErr != nil {
@@ -934,6 +1007,13 @@ func IterateStateDomainChangesByBlockRangeContext(ctx context.Context, db ethdb.
 // pack and positive-sequence repair representation. Logical readers use the
 // overwrite view above; deletion needs the union so no live posting survives.
 func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	prefix := stateChangeSetBlockPrefix(blockNum)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
@@ -944,7 +1024,7 @@ func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn fu
 		}
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		if seq == 0 {
-			if changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum); err == nil {
+			if changes, err := decodePersistedStateDomainChangeBlock(it.Value(), blockNum, historyView); err == nil {
 				for _, change := range changes {
 					cont, err := fn(change)
 					if err != nil || !cont {
@@ -952,6 +1032,8 @@ func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn fu
 					}
 				}
 				continue
+			} else if isStateHistorySharedPack(it.Value()) {
+				return err
 			}
 		}
 		change, err := decodePersistedStateDomainChange(it.Value(), blockNum, seq)
@@ -972,6 +1054,13 @@ func iteratePhysicalStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn fu
 // Retired standalone rows still take the owning transition decoder so restart
 // compatibility and repair-row union semantics remain unchanged.
 func iteratePhysicalStateDomainChangesBorrowed(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	prefix := stateChangeSetBlockPrefix(blockNum)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
@@ -990,7 +1079,7 @@ func iteratePhysicalStateDomainChangesBorrowed(db ethdb.Iteratee, blockNum uint6
 				var keepGoing bool
 				keepGoing, callbackErr = fn(change)
 				return keepGoing, callbackErr
-			})
+			}, historyView)
 			if callbackErr != nil {
 				return callbackErr
 			}
@@ -1003,7 +1092,7 @@ func iteratePhysicalStateDomainChangesBorrowed(db ethdb.Iteratee, blockNum uint6
 			// A malformed pack must not be reinterpreted after callbacks have
 			// observed any of its rows. Before the first row, sequence zero may
 			// still be an ordinary row written by the transition schema.
-			if sawPackRow {
+			if sawPackRow || isStateHistorySharedPack(it.Value()) {
 				return packErr
 			}
 			change, legacyErr := decodePersistedStateDomainChange(it.Value(), blockNum, 0)
@@ -1033,6 +1122,13 @@ func iteratePhysicalStateDomainChangesBorrowed(db ethdb.Iteratee, blockNum uint6
 // txNum mapping, so callers can build txNum-native history files without
 // scanning unrelated blocks.
 func IterateStateDomainChangesByTxRange(db ethdb.Iteratee, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if toTxNum < fromTxNum {
 		return fmt.Errorf("rawdb: inverted state domain change tx range [%d,%d]", fromTxNum, toTxNum)
 	}
@@ -1048,6 +1144,13 @@ func IterateStateDomainChangesByTxRange(db ethdb.Iteratee, fromTxNum, toTxNum ui
 // IterateStateDomainChangesByTxRange. It seeks to fromBlock instead of walking
 // the monotonically growing StateTxRange prefix from genesis on every build.
 func IterateStateDomainChangesByBlockTxRange(db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if toTxNum < fromTxNum {
 		return fmt.Errorf("rawdb: inverted state domain change tx range [%d,%d]", fromTxNum, toTxNum)
 	}
@@ -1180,9 +1283,15 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 }
 
 func deleteStateDomainChangeBlocksScan(db stateKVLatestStore, blockNums []uint64, indexedHead uint64, staged bool, deletes *stateDomainChangeRangeDeleter) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+
 	var start [8]byte
 	binary.BigEndian.PutUint64(start[:], blockNums[0])
-	it := db.NewIterator(stateChangeSetPrefix, start[:])
+	it := historyView.NewIterator(stateChangeSetPrefix, start[:])
 	defer it.Release()
 	var (
 		blockIndex        int
@@ -1277,7 +1386,7 @@ func deleteStateDomainChangeBlocksScan(db stateKVLatestStore, blockNums []uint64
 				var keepGoing bool
 				keepGoing, callbackErr = deletePosting(change)
 				return keepGoing, callbackErr
-			})
+			}, historyView)
 			if callbackErr != nil {
 				return callbackErr
 			}
@@ -1294,7 +1403,7 @@ func deleteStateDomainChangeBlocksScan(db stateKVLatestStore, blockNums []uint64
 				}
 				continue
 			}
-			if sawPackRow {
+			if sawPackRow || isStateHistorySharedPack(value) {
 				return packErr
 			}
 			row, legacyErr := decodePersistedStateDomainChange(value, blockNum, 0)
@@ -1370,6 +1479,19 @@ func ReadFirstStateDomainChangeByKeyBlockRange(db StateKVHistoryReader, targetBl
 // ReadFirstStateDomainChangeByKeyBlockRangeContext is the cancellable form
 // used by request-scoped archive reads.
 func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*StateDomainChange, error) {
+	if ctx != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+	}
+
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1449,6 +1571,19 @@ func ReadFirstStateKVChangesByKeysBlockRange(db StateKVHistoryReader, targetBloc
 // ReadFirstStateKVChangesByKeysBlockRangeContext is the cancellable form used
 // by historical dynamic-property batch reads.
 func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte) (map[string]*StateDomainChange, error) {
+	if ctx != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+	}
+
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	first := make(map[string]*StateDomainChange, len(keys))
 	if ctx == nil {
 		ctx = context.Background()
@@ -1564,6 +1699,19 @@ func iterateStateDomainChangePostingBlocks(db ethdb.Iteratee, latestKey []byte, 
 }
 
 func iterateStateDomainChangePostingBlocksContext(ctx context.Context, db ethdb.Iteratee, latestKey []byte, fromBlock, toBlock uint64, fn func(uint64) (bool, error)) error {
+	if ctx != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+	}
+
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	return iterateStateChangePostingCandidatesContext(ctx, db, latestKey, fromBlock, toBlock, func(blockNum uint64) (bool, error) {
 		// SHA-256 is only a candidate selector. The changeset's reconstructed
 		// original latest key is the authoritative collision check.
@@ -1608,6 +1756,13 @@ func IterateStateDomainChangesByKeyBlockRange(db StateKVHistoryReader, targetBlo
 }
 
 func iterateStateDomainChangesByKey(db StateKVHistoryReader, fromBlock, toBlock uint64, bounded bool, targetTxNum, headTxNum uint64, flatDomain StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if targetTxNum >= headTxNum {
 		return nil
 	}
@@ -1715,6 +1870,13 @@ func IterateStateDomainChangesByPrefixBlockRange(db StateKVHistoryReader, target
 }
 
 func iterateStateDomainChangesByPrefix(db StateKVHistoryReader, fromBlock, toBlock uint64, bounded bool, targetTxNum, headTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*StateDomainChange) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if targetTxNum >= headTxNum {
 		return nil
 	}
@@ -1814,6 +1976,13 @@ func stateDomainChangeMatchesKey(change *StateDomainChange, flatDomain StateFlat
 }
 
 func IterateStateDomainChangeBlocksByPrefix(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, keyPrefix []byte, fn func(blockNum uint64) (bool, error)) error {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	latestPrefix := StateKVLatestCommitmentKey(owner, generation, domain, keyPrefix)
 	seen := make(map[uint64]struct{})
 	stopped := false
@@ -1973,6 +2142,13 @@ func stateBlockIntersectsTxWindow(db ethdb.KeyValueReader, blockNum, targetTxNum
 // The first subsequent mutation contains that value in Prev; if there is no
 // subsequent mutation, the current latest row is still valid at targetBlock.
 func ReadStateKVAsOf(db stateKVHistoryReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	targetTxNum, err := StateTxNumAtBlockEnd(db, targetBlock)
 	if err != nil {
 		return nil, false, err
@@ -1985,6 +2161,13 @@ func ReadStateKVAsOf(db stateKVHistoryReader, owner common.Address, generation u
 }
 
 func ReadStateAccountLatestAsOf(db stateKVHistoryReader, owner common.Address, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	targetTxNum, err := StateTxNumAtBlockEnd(db, targetBlock)
 	if err != nil {
 		return nil, false, err
@@ -1997,6 +2180,13 @@ func ReadStateAccountLatestAsOf(db stateKVHistoryReader, owner common.Address, t
 }
 
 func ReadStateAccountLatestAsOfTxNum(db stateKVHistoryReader, owner common.Address, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if targetTxNum < headTxNum {
 		change, err := firstStateDomainChangeByKey(db, targetTxNum, headTxNum, StateFlatDomainAccountLatest, owner, 0, 0, nil)
 		if err != nil {
@@ -2019,6 +2209,13 @@ func ReadStateAccountLatestAsOfTxNum(db stateKVHistoryReader, owner common.Addre
 // ReadStateKVAsOfTxNum reconstructs one account-KV value at targetTxNum by
 // seeking the first mutation in (targetTxNum, headTxNum].
 func ReadStateKVAsOfTxNum(db stateKVHistoryReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return nil, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if targetTxNum < headTxNum {
 		change, err := firstStateDomainChangeByKey(db, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
 		if err != nil {
@@ -2039,6 +2236,13 @@ func ReadStateKVAsOfTxNum(db stateKVHistoryReader, owner common.Address, generat
 }
 
 func ReadStateKVGenerationAsOf(db stateKVHistoryReader, owner common.Address, targetBlock, headBlock uint64) (uint64, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return 0, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	targetTxNum, err := StateTxNumAtBlockEnd(db, targetBlock)
 	if err != nil {
 		return 0, false, err
@@ -2051,6 +2255,13 @@ func ReadStateKVGenerationAsOf(db stateKVHistoryReader, owner common.Address, ta
 }
 
 func ReadStateKVGenerationAsOfTxNum(db stateKVHistoryReader, owner common.Address, targetTxNum, headTxNum uint64) (uint64, bool, error) {
+	historyView, releaseHistoryView, viewErr := AcquireStateHistoryReadView(db)
+	if viewErr != nil {
+		return 0, false, viewErr
+	}
+	defer func() { _ = releaseHistoryView() }()
+	db = historyView
+
 	if targetTxNum < headTxNum {
 		change, err := firstStateDomainChangeByKey(db, targetTxNum, headTxNum, StateFlatDomainKVGeneration, owner, 0, 0, nil)
 		if err != nil {

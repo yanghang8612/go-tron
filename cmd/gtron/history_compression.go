@@ -9,6 +9,8 @@ import (
 
 var historyBlockDedupFlag = &cli.BoolFlag{Name: "history.block-dedup", Usage: "Deduplicate repeated large values within each hot history block pack (adds foreground CPU; benchmark representative replay before enabling)"}
 
+var historyCrossBlockDedupFlag = &cli.BoolFlag{Name: "history.cross-block-dedup", Usage: "Share persistent chunks across hot history blocks in fixed buckets; requires a reader-compatible rollback binary"}
+
 var historyCompressionFormatFlag = &cli.StringFlag{
 	Name:    "history.compression-format",
 	Value:   "auto",

@@ -379,6 +379,10 @@ type keyValueSnapshot struct {
 	snapshot *pebble.Snapshot
 }
 
+func (s *keyValueSnapshot) IsPinnedKeyValueView() bool {
+	return s != nil && s.snapshot != nil
+}
+
 type pointReadCursor struct {
 	iter                                   *pebble.Iterator
 	unbounded                              bool

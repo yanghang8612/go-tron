@@ -5,10 +5,12 @@
 增长基线见 [当日采样](sync-chaindata-growth-20260913.md)。
 
 `gtron db inspect-history-prev` 必须在停止节点、释放 Pebble 目录锁后运行。它以固定 seed 在显式高度范围内
-分层选点，只读取现代 `state-changeset-v2` 的 seq=0 物理 pack。每个分层只选一个高度，空值保留、不补选。
+分层选点，读取现代 `state-changeset-v2` 的 seq=0 物理 pack；支持共享 v3 的诊断版本还会读取该包引用的 chunk。
+全部读取固定在同一个快照。每个分层只选一个高度，空值保留、不补选。
 这不是包含 repair 的完整有效历史视图，也不是 SST 物理字节或全库业务占比。
 
-默认检查 256 个高度，编码值累计上限 256 MiB、解码累计上限 1 GiB、单包解码上限 128 MiB、200 万行、
+默认检查 256 个高度，物理 pack 编码值累计上限 256 MiB、chunk 读取累计上限 256 MiB、导出累计上限 1 GiB、
+解码累计上限 1 GiB、单包解码上限 128 MiB、200 万行、
 60 秒工作时间。时间检查在读取、解码和各行之间协作执行；单次 Get 必须先取得值才能知道编码大小，
 所以报告分别计量读取字节与预算接受字节。进程外层超时须同时覆盖数据库 Open/Close。
 不完整、损坏、取消或超预算均输出明确状态并返回非零，不能把已处理前缀当成完整样本。
@@ -26,7 +28,7 @@ gtron db inspect-history-prev --datadir /path/to/datadir \
 
 高度和路径是示例，运行时应从当次水位选择。可选导出目录必须是 chaindata 以外的新目录，父目录预先存在。
 目录权限 0700、文件 0600，拒绝覆盖；仅完整解码验证通过的 pack 才导出。manifest 包含高度、编码/解码长度和
-编码值 SHA256。它不包含 canonical block hash、repair 或 ancient，不能当作备份。
+文件 SHA256。它不包含 canonical block hash、repair 或 ancient，不能当作备份。
 
 恢复服务后可直接在导出文件上运行：
 
@@ -38,6 +40,33 @@ gtron db benchmark-history-codecs --export-packs /private/diagnostics/new-packs 
 这个命令不打开数据库。它验证 manifest、固定文件名、长度和 SHA256，逐包比较现有表示、生产 Snappy 基线、
 忽略前置门限的生产 CDC、独立 zstd frame。每项都逐字节验证恢复结果；zstd 只用于实验，没有接入生产格式。
 统计同时包含墙钟与进程 CPU，不能当作线上导入吞吐。汇总仅包含所有候选都完成的样本，保留取消/失败信息。
+
+## 共享 v3 的诊断与导出合同
+
+后续共享格式实现配套扩展诊断命令；以下描述新代码能力，不改变下方已经完成的旧版本实盘采样结论。
+新 pack 先验证物理块号、完整引用表和解码长度预算，再从同一固定读视图解析 chunk。
+缺失/损坏 chunk、无法取得固定视图、取消或预算不足都返回明确 partial；不能回退为 legacy 或 missing。
+不具备快照的旧 reader 仍可读取自包含 raw/Snappy/v2 数据。
+
+`--max-chunk-read-bytes` 与 `--max-export-bytes` 分别限制 chunk 返回字节和导出候选字节，最大值为
+1 GiB 与 4 GiB；新增选项的零值采用默认值。chunk 每次读取前后检查时间/取消/字节预算。
+单个存储值的大小须在 Get 返回后才能确定，因此最后一个被拒绝值仍计入读取量；不会继续读取下一片。
+
+| 计量 | 含义 |
+| --- | --- |
+| `encoded_bytes_read` / `encoded_bytes_accepted` | 物理 seq=0 pack 值的读取量 / 预算接受量，不含 chunk |
+| `chunk_read_bytes` / `chunk_reads` | 实际返回的 chunk 编码值字节 / 引用解析请求数；重复引用重复计量，非唯一存量或磁盘 I/O 次数 |
+| `decoded_bytes_reserved` | 完整原始 RLP 的预算预约，含失败尝试 |
+| `export_bytes_attempted` / `export_bytes_accepted` | 调用导出回调的候选字节 / 回调成功字节；失败回调不证明文件完全未写 |
+
+新导出 manifest 为 **version 2**。每条 `codec`、`encoded_bytes`、`decoded_bytes`、`sha256` 描述实际文件；
+`source_codec`、`source_pack_bytes`、`source_chunk_read_bytes`、`source_chunk_reads` 单独保留来源口径。
+原 source 为 `shared3` 时，`materialized=true`，导出文件为 **raw RLP**；它不再依赖 chunk 数据库。
+旧格式仍复制原自包含表示。仅完整解码的 pack 可以进入 manifest，未完成采样不会伪装成完整导出。
+
+`benchmark-history-codecs` 同时接受旧 version 1 与新 version 2，校验实际文件的编码类型、大小和 SHA256。
+其 `existing` 候选始终表示**导出文件中的表示**：对物化的 v3 样本，它是 raw RLP，不是原共享存储占用。
+不能用它推算共享格式节省；来源 chunk 读取字节也不能当作唯一 chunk 存量。
 
 运维脚本 `scripts/inspect_history_prev_20260913.py` 分 prepare 和 inspect。prepare 从 GitHub 已取回的完整提交
 归档到隔离目录，执行原生构建和相关测试。inspect 持有 start.lock，校验原进程、二进制、配置与磁盘保护，

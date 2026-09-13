@@ -562,7 +562,37 @@ var (
 	// Value: aggregate stores Account + FromAccounts/ToAccounts;
 	//        directional stores Account=counterparty + Timestamp.
 	drAccIdxPrefix = []byte("drax-")
+
+	// Shared hot-history chunks are immutable within one fixed block bucket.
+	// Buckets have an explicit retirement marker so a rewind/repair cannot
+	// publish new external references after their chunks have been reclaimed.
+	stateHistorySharedChunkPrefix  = []byte("state-history-chunk-v1-")
+	stateHistorySharedBucketPrefix = []byte("state-history-chunk-bucket-v1-")
 )
+
+// StateHistoryChunkBucketBlocks is part of the shared history v3 format. A
+// different width requires a new format, never a runtime tuning change.
+const StateHistoryChunkBucketBlocks = uint64(1024)
+
+func stateHistoryChunkBucket(blockNum uint64) uint64 { return blockNum / StateHistoryChunkBucketBlocks }
+
+func stateHistoryChunkBucketPrefix(bucket uint64) []byte {
+	k := append([]byte(nil), stateHistorySharedChunkPrefix...)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func stateHistoryChunkKey(bucket uint64, digest [32]byte) []byte {
+	return append(stateHistoryChunkBucketPrefix(bucket), digest[:]...)
+}
+
+func stateHistoryChunkBucketKey(bucket uint64) []byte {
+	k := append([]byte(nil), stateHistorySharedBucketPrefix...)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func stateHistoryChunkBucketMetaPrefix() []byte {
+	return append([]byte(nil), stateHistorySharedBucketPrefix...)
+}
 
 // DrAccIdxDirection enumerates the four sub-indices of
 // DelegatedResourceAccountIndexStore, matching java-tron's 0x01..0x04
