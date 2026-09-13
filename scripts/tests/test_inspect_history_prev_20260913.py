@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('inspection_ops', ROOT / 'scripts/inspect_history_prev_20260913.py')
@@ -196,6 +196,29 @@ class ContractTests(unittest.TestCase):
             if child.poll() is None:
                 child.kill()
                 child.wait(timeout=5)
+
+    def test_natural_exit_racing_term_still_reaps(self):
+        child = Mock(pid=9876)
+        child.poll.return_value = None
+        child.wait.return_value = 0
+        ops = m.LiveOps(None, self.args())
+        ops.child = child
+        with patch.object(m.os, 'killpg', side_effect=ProcessLookupError):
+            ops.cancel_probe()
+        child.wait.assert_called_once_with(timeout=5)
+        self.assertIsNone(ops.child)
+
+    def test_natural_exit_racing_kill_still_reaps(self):
+        child = Mock(pid=9876)
+        child.poll.return_value = None
+        child.wait.side_effect = [subprocess.TimeoutExpired('probe', 5), 0]
+        ops = m.LiveOps(None, self.args())
+        ops.child = child
+        with patch.object(m.os, 'killpg', side_effect=[None, ProcessLookupError]) as kill:
+            ops.cancel_probe()
+        self.assertEqual(kill.call_count, 2)
+        self.assertEqual(child.wait.call_args_list[-1][1], {'timeout': 10})
+        self.assertIsNone(ops.child)
 
 
 if __name__ == '__main__':
