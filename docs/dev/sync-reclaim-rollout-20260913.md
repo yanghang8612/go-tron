@@ -26,7 +26,12 @@
 | 旧精确 metrics 进程身份 | `1789188149990537883` |
 | 新 PID / start ticks | `20101` / `4499354749` |
 | 新精确 metrics 进程身份 | `1789259053976239426` |
-| 新 binary SHA256 | `b47a0920272cc54fdd0c355663e2c9d477bd5c912d99bc689df7ee99c3e4d868` |
+| 新 binary SHA256 | `b47a0920272cc54fdd0c355663e2c9d477bd5c912d99bc689df7ee99a3e4d868` |
+
+09/13 01:28 UTC 后续部署核验纠正此处 SHA 的截图转录错误：零起始位置 56 的
+`a` 曾误写为 `c`。现场 `/proc/20101/exe` 哈希与本 release 原始 `prepared.json`
+完全一致，二进制没有变化；错误清单被下一轮 prepare 拒绝，未发生服务切换。
+证据见 [核验记录](../../build/benchmarks/20260913-range-scheduling/observed-old-sha-correction.json)。
 
 源码和 ops 经 master 推送，服务器隔离 release 使用 Go 1.25.5 Linux amd64、
 CGO/Sapling 原生构建，prepare 在本次前测全部结束后约 00:15 启动。
