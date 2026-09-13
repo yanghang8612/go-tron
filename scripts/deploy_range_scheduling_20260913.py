@@ -31,7 +31,7 @@ SOURCE = RELEASE / 'source'
 BINARY = RELEASE / 'gtron'
 OLD_EXE = '/data/gtron/releases/20260912-reclaim-optimization/gtron'
 # Last recorded binary; the operator must freshly verify all old identity pins.
-OLD_SHA = 'b47a0920272cc54fdd0c355663e2c9d477bd5c912d99bc689df7ee99c3e4d868'
+OLD_SHA = 'b47a0920272cc54fdd0c355663e2c9d477bd5c912d99bc689df7ee99a3e4d868'
 # Freshly verified 2026-09-13T01:12:10.560636Z from the native terminal screenshot.
 OLD_PID = 20101
 OLD_START_TICKS = 4499354749
