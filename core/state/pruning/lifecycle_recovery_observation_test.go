@@ -72,6 +72,7 @@ func TestSnapshotLifecycleRecoveryObservationKeepsOriginalScheduling(t *testing.
 }
 
 func TestSnapshotLifecycleRecoveryObservationDoesNotRepeatMaintenance(t *testing.T) {
+	prepareLifecycleObservationCodec(t)
 	synctest.Test(t, func(t *testing.T) {
 		db := rawdb.NewMemoryDatabase()
 		defer db.Close()
@@ -119,4 +120,30 @@ func TestSnapshotLifecycleRecoveryObservationDoesNotRepeatMaintenance(t *testing
 			t.Fatal("original full-pass retry did not recheck ordinary admission")
 		}
 	})
+}
+
+// Compression keeps a process-wide codec whose internal worker channel is
+// lazily created by its first EncodeAll. Initialize it in the outer test
+// goroutine so distinct synctest bubbles never own each other's channels.
+// Both real-build observation tests call this; test ordering is irrelevant.
+func prepareLifecycleObservationCodec(t *testing.T) {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	defer db.Close()
+	writeSnapPruningChange(t, db, 1, 1, 1)
+	dir := t.TempDir()
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(db, dir, 1, 1, 1, 1, "state-domain-change-codec-init.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("codec initialization did not build the binary history trio: %d refs", len(refs))
+	}
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentHistory {
+			if err := snapshots.CheckStateDomainChangeSegment(dir, ref); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }

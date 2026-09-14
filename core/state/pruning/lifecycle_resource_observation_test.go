@@ -333,6 +333,7 @@ func TestSnapshotLifecycleResourceObservationStop(t *testing.T) {
 // Exercise the production OnePass and Runner together: the five-second path
 // refreshes resources without repeating any ordered maintenance callback.
 func TestSnapshotLifecycleResourceObservationDoesNotRepeatMaintenance(t *testing.T) {
+	prepareLifecycleObservationCodec(t)
 	synctest.Test(t, func(t *testing.T) {
 		db := rawdb.NewMemoryDatabase()
 		defer func() {
