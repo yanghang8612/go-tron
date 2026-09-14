@@ -251,7 +251,11 @@ func (m *Manifest) Validate() error {
 	// entire catalog for each history/index/accessor triple is quadratic in
 	// the number of cold segments and competes with import on every load.
 	seenPath := make(map[string]*SegmentRef, len(m.Segments))
-	byFamily := make(map[segmentFamily][]SegmentRef)
+	// Overlap validation needs only bounds, not owned copies of every path,
+	// checksum and other identity field. Full refs are still checked below and
+	// retained in seenPath for companion validation.
+	type validationRange struct{ from, to uint64 }
+	byFamily := make(map[segmentFamily][]validationRange)
 	for i := range m.Segments {
 		seg := &m.Segments[i]
 		if err := validateActiveSegment(*seg, m.VisibleTxStart, m.VisibleTxEnd); err != nil {
@@ -262,21 +266,21 @@ func (m *Manifest) Validate() error {
 		}
 		seenPath[seg.Path] = seg
 		fam := segmentFamily{dataset: seg.normalizedDataset(), domain: seg.Domain, kind: seg.Kind}
-		byFamily[fam] = append(byFamily[fam], *seg)
+		byFamily[fam] = append(byFamily[fam], validationRange{seg.FromTxNum, seg.ToTxNum})
 	}
 	for family, segments := range byFamily {
 		sort.Slice(segments, func(i, j int) bool {
-			if segments[i].FromTxNum == segments[j].FromTxNum {
-				return segments[i].ToTxNum < segments[j].ToTxNum
+			if segments[i].from == segments[j].from {
+				return segments[i].to < segments[j].to
 			}
-			return segments[i].FromTxNum < segments[j].FromTxNum
+			return segments[i].from < segments[j].from
 		})
 		for i := 1; i < len(segments); i++ {
-			if segments[i].FromTxNum <= segments[i-1].ToTxNum {
+			if segments[i].from <= segments[i-1].to {
 				return fmt.Errorf("snapshots: overlapping %s segments for domain %#04x: [%d,%d] and [%d,%d]",
 					family.kind, uint16(family.domain),
-					segments[i-1].FromTxNum, segments[i-1].ToTxNum,
-					segments[i].FromTxNum, segments[i].ToTxNum)
+					segments[i-1].from, segments[i-1].to,
+					segments[i].from, segments[i].to)
 			}
 		}
 	}
@@ -445,29 +449,37 @@ func validateHistoryBinaryCompanionTriples(manifest *Manifest, byPath map[string
 			ref.Kind == kind && ref.FromTxNum == history.FromTxNum && ref.ToTxNum == history.ToTxNum &&
 			ref.effectiveAggregationSteps() == history.effectiveAggregationSteps()
 	}
-	for _, ref := range manifest.Segments {
-		cfg, ok := registry.ConfigForRef(ref)
-		if !ok || ref.Kind != SegmentHistory || !cfg.IsHistoryBinarySegmentPath(ref.Path) {
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.Kind != SegmentHistory {
+			continue
+		}
+		cfg, ok := registry.ConfigForRef(*ref)
+		if !ok || !cfg.IsHistoryBinarySegmentPath(ref.Path) {
 			continue
 		}
 		if cfg.HasHistoryInvertedIndex {
-			idxRef, ok := companion(cfg, ref, SegmentInverted, cfg.HistoryIndexPathFor(ref.Path))
+			idxRef, ok := companion(cfg, *ref, SegmentInverted, cfg.HistoryIndexPathFor(ref.Path))
 			if !ok {
 				return fmt.Errorf("snapshots: binary %s history %q missing required index %q", cfg.Dataset, ref.Path, cfg.HistoryIndexPathFor(ref.Path))
 			}
 			historyByCompanion[idxRef.Path] = struct{}{}
 		}
 		if cfg.HasHistoryAccessor {
-			accessorRef, ok := companion(cfg, ref, SegmentAccessor, cfg.HistoryAccessorPathFor(ref.Path))
+			accessorRef, ok := companion(cfg, *ref, SegmentAccessor, cfg.HistoryAccessorPathFor(ref.Path))
 			if !ok {
 				return fmt.Errorf("snapshots: binary %s history %q missing required accessor %q", cfg.Dataset, ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
 			}
 			historyByCompanion[accessorRef.Path] = struct{}{}
 		}
 	}
-	for _, ref := range manifest.Segments {
-		cfg, ok := registry.ConfigForRef(ref)
-		if !ok || !cfg.HasHistory || (ref.Kind != SegmentInverted && ref.Kind != SegmentAccessor) {
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.Kind != SegmentInverted && ref.Kind != SegmentAccessor {
+			continue
+		}
+		cfg, ok := registry.ConfigForRef(*ref)
+		if !ok || !cfg.HasHistory {
 			continue
 		}
 		if _, ok := historyByCompanion[ref.Path]; !ok && cfg.IsHistoryBinaryCompanionPath(ref.Path) {
@@ -483,30 +495,35 @@ func validateLatestBinaryCompanionTriples(manifest *Manifest) error {
 	}
 	registry := DefaultDomainRegistry()
 	companionByLatest := make(map[string]struct{})
-	for _, ref := range manifest.Segments {
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
 		if ref.Kind != SegmentLatest || !isLatestBinarySegmentPath(ref.Path) {
 			continue
 		}
-		cfg, ok := registry.ConfigForRef(ref)
+		cfg, ok := registry.ConfigForRef(*ref)
 		if !ok || !cfg.HasLatest {
 			continue
 		}
 		if cfg.HasLatestAccessor {
-			accessorRef, ok := latestBinaryAccessorRef(manifest, ref)
+			accessorRef, ok := latestBinaryAccessorRef(manifest, *ref)
 			if ok {
 				companionByLatest[accessorRef.Path] = struct{}{}
 			}
 		}
 		if cfg.HasLatestBTree {
-			btreeRef, ok := latestBinaryBTreeRef(manifest, ref)
+			btreeRef, ok := latestBinaryBTreeRef(manifest, *ref)
 			if !ok {
 				return fmt.Errorf("snapshots: binary latest %q missing required btree %q", ref.Path, latestBinaryBTreePath(ref.Path))
 			}
 			companionByLatest[btreeRef.Path] = struct{}{}
 		}
 	}
-	for _, ref := range manifest.Segments {
-		cfg, ok := registry.ConfigForRef(ref)
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.Kind != SegmentAccessor && ref.Kind != SegmentBTree {
+			continue
+		}
+		cfg, ok := registry.ConfigForRef(*ref)
 		if !ok || !cfg.HasLatest {
 			continue
 		}
@@ -529,9 +546,13 @@ func validateProductionHistorySegments(manifest *Manifest) error {
 		return nil
 	}
 	registry := DefaultDomainRegistry()
-	for _, ref := range manifest.Segments {
-		cfg, ok := registry.ConfigForRef(ref)
-		if !ok || !cfg.HasHistory || ref.Kind != SegmentHistory {
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.Kind != SegmentHistory {
+			continue
+		}
+		cfg, ok := registry.ConfigForRef(*ref)
+		if !ok || !cfg.HasHistory {
 			continue
 		}
 		if !cfg.IsHistoryBinarySegmentPath(ref.Path) {

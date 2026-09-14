@@ -25,6 +25,61 @@ const (
 	maxSnapshotVerificationCacheEntries      = 1_000_000
 )
 
+type trustedSnapshotActiveRefs struct {
+	candidates map[snapshots.SegmentRef]bool
+	catalog    map[snapshots.SegmentRef]struct{}
+}
+
+func (a trustedSnapshotActiveRefs) contains(ref snapshots.SegmentRef) bool {
+	if a.candidates != nil {
+		return a.candidates[ref]
+	}
+	_, found := a.catalog[ref]
+	return found
+}
+
+// activeTrustedSnapshotRefs limits membership metadata to the smaller of the
+// supplied state-history candidates and the active catalog. It does not grant
+// trust: callers still process refs in their original order, with fresh file
+// identities and the existing verification-cache checks. In particular, a
+// duplicate input must still be recorded again and errors must retain the same
+// already-recorded prefix.
+func activeTrustedSnapshotRefs(active, refs []snapshots.SegmentRef) trustedSnapshotActiveRefs {
+	candidates := 0
+	for _, ref := range refs {
+		if ref.NormalizedDataset() == snapshots.SegmentDatasetStateDomainChange && ref.Kind == snapshots.SegmentHistory {
+			candidates++
+			if candidates > len(active) {
+				// Large batches retain the original catalog-map strategy, so
+				// duplicate or unrelated input cannot grow a larger mapping.
+				found := make(map[snapshots.SegmentRef]struct{}, len(active))
+				for _, ref := range active {
+					found[ref] = struct{}{}
+				}
+				return trustedSnapshotActiveRefs{catalog: found}
+			}
+		}
+	}
+	if candidates == 0 {
+		return trustedSnapshotActiveRefs{}
+	}
+	found := make(map[snapshots.SegmentRef]bool, candidates)
+	for _, ref := range refs {
+		if ref.NormalizedDataset() == snapshots.SegmentDatasetStateDomainChange && ref.Kind == snapshots.SegmentHistory {
+			found[ref] = false
+		}
+	}
+	for _, ref := range active {
+		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
+			continue
+		}
+		if _, candidate := found[ref]; candidate {
+			found[ref] = true
+		}
+	}
+	return trustedSnapshotActiveRefs{candidates: found}
+}
+
 type snapshotFileIdentity struct {
 	size        int64
 	modUnixNano int64

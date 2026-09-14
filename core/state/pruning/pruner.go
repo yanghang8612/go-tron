@@ -541,15 +541,12 @@ func (p *Pruner) RecordTrustedSnapshotSegments(refs []snapshots.SegmentRef) erro
 	if err != nil {
 		return err
 	}
-	active := make(map[snapshots.SegmentRef]struct{}, len(manifest.Segments))
-	for _, ref := range manifest.Segments {
-		active[ref] = struct{}{}
-	}
+	active := activeTrustedSnapshotRefs(manifest.Segments, refs)
 	for _, ref := range refs {
 		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
 			continue
 		}
-		if _, ok := active[ref]; !ok {
+		if !active.contains(ref) {
 			continue
 		}
 		key, err := snapshotHistoryVerificationKeyFor(p.cfg.SnapshotDir, manifest, ref)
