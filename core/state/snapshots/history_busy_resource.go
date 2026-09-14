@@ -30,17 +30,22 @@ func (r *Runner) armBusyHistoryObservation(result *PassResult, now time.Time) {
 	if !r.busyHistoryObservationEnabled() {
 		return
 	}
+	r.armHistoryObservation(result, now, false)
+	result.HistoryBusyResourceDeferred = true
+}
+
+func (r *Runner) armHistoryObservation(result *PassResult, now time.Time, recovery bool) {
 	r.busyHistoryObservationSerial++
 	if r.busyHistoryObservationSerial == 0 {
 		r.busyHistoryObservationSerial++
 	}
 	result.historyBusyObservationID = r.busyHistoryObservationSerial
-	result.HistoryBusyResourceDeferred = true
+	r.historyObservationRecovery = recovery
 	r.nextBusyHistoryObservation = now.Add(BusyHistoryObservationInterval)
 	r.busyHistoryObservationPending.Store(result.historyBusyObservationID)
 }
 
-// CancelBusyHistoryObservation invalidates a resource observation opportunity.
+// CancelBusyHistoryObservation invalidates either resource observation mode.
 // Full lifecycle callers must cancel before preflight and on outer failure,
 // including failures which occur before the Runner itself is entered.
 func (r *Runner) CancelBusyHistoryObservation() {
@@ -53,6 +58,7 @@ func (r *Runner) cancelResultBusyHistoryObservation(result *PassResult) {
 	if result.historyBusyObservationID != 0 {
 		r.busyHistoryObservationPending.CompareAndSwap(result.historyBusyObservationID, 0)
 		result.HistoryBusyResourceDeferred = false
+		result.HistoryRecoveryObservation = false
 	}
 }
 
@@ -60,7 +66,8 @@ func (r *Runner) cancelResultBusyHistoryObservation(result *PassResult) {
 // It never acquires a maintenance lease, reads history/manifest/catalog files,
 // records a pass or density, or changes a maintenance deadline. A true wake is
 // consumed once and only requests a normal full pass; that pass must revalidate
-// its current watermarks, space, storage and shared-gate admission.
+// its current watermarks, space, storage and shared-gate admission. Recovery-only
+// observations use a separate metadata-only probe and can never emit that wake.
 func (r *Runner) ObserveBusyHistoryResources(ctx context.Context) (wake bool, retryAfter time.Duration) {
 	if r == nil {
 		return false, 0
@@ -89,7 +96,11 @@ func (r *Runner) ObserveBusyHistoryResources(ctx context.Context) (wake bool, re
 		return false, BusyHistoryObservationInterval
 	}
 	source, ok := r.chain.(syncRemainingSource)
-	if !r.busyHistoryObservationEnabled() || !r.cfg.DeferHistoryBuildWhileSyncing || !ok {
+	enabled := r.busyHistoryObservationEnabled()
+	if r.historyObservationRecovery {
+		enabled = r.historyRecoveryObservationEnabled()
+	}
+	if !enabled || !r.cfg.DeferHistoryBuildWhileSyncing || !ok {
 		r.busyHistoryObservationPending.CompareAndSwap(id, 0)
 		return false, 0
 	}
@@ -98,8 +109,15 @@ func (r *Runner) ObserveBusyHistoryResources(ctx context.Context) (wake bool, re
 		return false, 0
 	}
 	now := time.Now()
+	if r.historyObservationRecovery && r.historyNotBefore.Load() <= now.UnixNano() {
+		r.busyHistoryObservationPending.CompareAndSwap(id, 0)
+		return false, 0
+	}
 	if now.Before(r.nextBusyHistoryObservation) {
 		return false, r.nextBusyHistoryObservation.Sub(now)
+	}
+	if r.historyObservationRecovery {
+		return false, r.observeHistoryRecoveryResources(ctx, id, now)
 	}
 	started := now
 	r.busyHistoryObservationMetrics.checks.Inc(1)

@@ -1265,6 +1265,7 @@ func gtron(ctx *cli.Context) error {
 				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
 				HistoryCatchupMode:          historyCatchupMode,
 				HistoryLoadProbe:            historyLoadProbe,
+				HistoryRecoveryLoadProbe:    historyResources.postingPressure,
 				ParallelHistoryEventReady:   historyParallelReady,
 				BusyHistoryBuildReady:       historyParallelReady,
 				CatchupUnthrottledLagBlocks: prunePolicy.HistoryWindow,

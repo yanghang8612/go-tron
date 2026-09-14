@@ -610,7 +610,7 @@ func (l *SnapshotLifecycle) runLoop(pass func() (SnapshotLifecyclePass, error), 
 			return
 		}
 		l.logPassRecovery(time.Now())
-		if observer != nil && result.Snapshot.HistoryBusyResourceDeferred {
+		if observer != nil && (result.Snapshot.HistoryBusyResourceDeferred || result.Snapshot.HistoryRecoveryObservation) {
 			scheduleObservation(snapshots.BusyHistoryObservationInterval)
 		}
 		// Erigon's background aggregator drains every ready immutable step in

@@ -104,6 +104,11 @@ type Config struct {
 	// application rows. Throughput uses it to size online work by observed
 	// density; hard write pressure also protects all other cold build paths.
 	HistoryLoadProbe func() maintenance.StoragePressure
+	// HistoryRecoveryLoadProbe is an optional metadata-only observation: cached
+	// device state plus current engine pressure, without proc/device refresh.
+	// It may update pressure during an existing recovery deadline, never grant
+	// admission or shorten that deadline. Nil disables recovery observation.
+	HistoryRecoveryLoadProbe func() maintenance.StoragePressure
 	// ParallelHistoryEventReady permits two independent builders only when a
 	// bounded, concurrency-safe probe observes fresh CPU and memory headroom.
 	// Nil preserves serial construction. Storage, sync and shared-lease checks
@@ -272,7 +277,10 @@ type PassResult struct {
 	// observation after BusyHistoryObservationInterval, never a full pass or a
 	// replacement for an existing maintenance recovery deadline.
 	HistoryBusyResourceDeferred bool
-	historyBusyObservationID    uint64
+	// HistoryRecoveryObservation requests the same short timer in observation-
+	// only mode. This mode cannot request a full pass, even after recovery.
+	HistoryRecoveryObservation bool
+	historyBusyObservationID   uint64
 	// HistoryAdmissionChecked and HistoryAdmissionReady expose the importer
 	// capacity decision independently from the busy-watermark override.
 	HistoryAdmissionChecked bool
@@ -710,8 +718,10 @@ type Runner struct {
 	historyEventMetrics           historyEventBuildMetrics
 	busyHistoryObservationPending atomic.Uint64 // generation; zero means canceled/consumed
 	busyHistoryObservationSerial  uint64        // guarded by passMu
+	historyObservationRecovery    bool          // guarded by passMu; never emits a full-pass wake
 	nextBusyHistoryObservation    time.Time     // guarded by passMu; observation cadence only
 	busyHistoryObservationMetrics busyHistoryObservationMetrics
+	historyRecoveryMetrics        historyRecoveryObservationMetrics
 	compactionBudget              historyCompactionBudgetState
 
 	lastSuccessfulForcedAt        atomic.Int64
@@ -740,6 +750,7 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 		metrics:                       newColdRunnerMetrics(cfg.MetricsNamespace),
 		historyEventMetrics:           newHistoryEventBuildMetrics(cfg.MetricsNamespace),
 		busyHistoryObservationMetrics: newBusyHistoryObservationMetrics(cfg.MetricsNamespace),
+		historyRecoveryMetrics:        newHistoryRecoveryObservationMetrics(cfg.MetricsNamespace),
 		quit:                          make(chan struct{}),
 		done:                          make(chan struct{}),
 		ctx:                           ctx,
@@ -1179,6 +1190,8 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	}
 	if err != nil {
 		r.cancelResultBusyHistoryObservation(&result)
+	} else {
+		r.armHistoryRecoveryObservation(&result, time.Now())
 	}
 	return result, err
 }
@@ -3307,7 +3320,7 @@ func (r *Runner) loop() {
 		}
 	}()
 	scheduleCatchup := func(result PassResult, err error) {
-		if err == nil && result.HistoryBusyResourceDeferred {
+		if err == nil && (result.HistoryBusyResourceDeferred || result.HistoryRecoveryObservation) {
 			scheduleObservation(BusyHistoryObservationInterval)
 		}
 		if err == nil && result.NeedsCatchup() {

@@ -120,14 +120,18 @@ func freshHistoryLoad(sampled, now time.Time) bool {
 }
 
 func (r *Runner) refreshHistoryLoad(now time.Time) {
+	r.refreshHistoryLoadFromProbe(now, r.cfg.HistoryLoadProbe)
+}
+
+func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() maintenance.StoragePressure) {
 	if r.syncActive() {
 		r.historyLoad.syncSeenAt = now
 	}
-	if r.cfg.HistoryLoadProbe == nil {
+	if probe == nil {
 		return
 	}
 	s := &r.historyLoad
-	p := r.cfg.HistoryLoadProbe()
+	p := probe()
 	s.sample = p
 	previousHard := s.hard
 	s.hard = p.HardLimitReached(now)
