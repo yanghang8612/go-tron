@@ -330,7 +330,7 @@ func (ctx *commitmentParentReadContext) consume(value []byte) error {
 	s := ctx.session
 	if ctx.cacheFillAllowed(ctx.cacheable) {
 		if ctx.prefetch {
-			s.cache.prefetchIfEpoch(ctx.key, value, ctx.epoch)
+			s.cache.storePrefetchIfEpoch(ctx.key, value, ctx.epoch)
 		} else {
 			s.cache.storeIfEpoch(ctx.key, value, ctx.epoch)
 		}
@@ -682,7 +682,7 @@ func (s *commitmentParentReadSession) prefetchKey(reader int, keyPrefix, key []b
 			ctx.recordCacheMiss(canStore, depth, true)
 			if ctx.cacheFillAllowed(canStore) {
 				if found {
-					s.cache.prefetchIfEpoch(key, value, epoch)
+					s.cache.storePrefetchIfEpoch(key, value, epoch)
 				} else {
 					s.cache.prefetchMissingIfEpoch(key, epoch)
 				}

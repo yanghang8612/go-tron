@@ -669,6 +669,15 @@ func (c *baseReadCache) prefetchIfEpoch(key, value []byte, epoch baseReadCacheEp
 	return c.setEntryIfEpoch(key, value, false, true, true, epoch)
 }
 
+// storePrefetchIfEpoch preserves force-admission and prefetch credit without
+// exposing the cache's backing. Presence-only session prefetch consumes the
+// cursor value inside its callback; later scoped reads and flushes may safely
+// reuse this private storage under the existing shard lock.
+func (c *baseReadCache) storePrefetchIfEpoch(key, value []byte, epoch baseReadCacheEpoch) bool {
+	_, stored := c.setEntryIfEpoch(key, value, false, false, true, epoch)
+	return stored
+}
+
 func (c *baseReadCache) prefetchMissingIfEpoch(key []byte, epoch baseReadCacheEpoch) bool {
 	_, stored := c.setEntryIfEpoch(key, nil, true, false, true, epoch)
 	return stored

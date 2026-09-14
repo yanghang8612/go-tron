@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -812,16 +813,78 @@ func writeManifestProgressStages(store stageProgressStore, progress *Progress) e
 }
 
 func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
-	refs := eventLogRefs(manifest)
-	if len(refs) == 0 {
+	if manifest == nil {
 		return 0, false
 	}
-	block, ok := eventLogCoverageBlockFromRefs(refs, 1)
+	var eventCount, indexCount int
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if (ref.Kind != SegmentEventLog && ref.Kind != SegmentEventLogIndex) || ref.normalizedDataset() != SegmentDatasetEventLog {
+			continue
+		}
+		if ref.Kind == SegmentEventLog {
+			eventCount++
+		} else {
+			indexCount++
+		}
+	}
+	if eventCount == 0 || indexCount == 0 {
+		return 0, false
+	}
+	// Frontier computation uses only bounds. Keep these ranges private to this
+	// call; full references, including their path ordering, remain unchanged.
+	// The combined count cannot exceed len(manifest.Segments).
+	type blockRange struct{ from, to uint64 }
+	ranges := make([]blockRange, eventCount+indexCount)
+	events, indexes := ranges[:eventCount:eventCount], ranges[eventCount:]
+	var eventPos, indexPos int
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if (ref.Kind != SegmentEventLog && ref.Kind != SegmentEventLogIndex) || ref.normalizedDataset() != SegmentDatasetEventLog {
+			continue
+		}
+		bounds := blockRange{from: ref.FromTxNum, to: ref.ToTxNum}
+		if ref.Kind == SegmentEventLog {
+			events[eventPos] = bounds
+			eventPos++
+		} else {
+			indexes[indexPos] = bounds
+			indexPos++
+		}
+	}
+	continuous := func(refs []blockRange, limit uint64) (uint64, bool) {
+		slices.SortFunc(refs, func(a, b blockRange) int {
+			if a.from < b.from || (a.from == b.from && a.to < b.to) {
+				return -1
+			}
+			if a == b {
+				return 0
+			}
+			return 1
+		})
+		next := uint64(1)
+		for _, ref := range refs {
+			if ref.to < next {
+				continue
+			}
+			if ref.from > next {
+				break
+			}
+			if ref.to >= limit {
+				return limit, true // includes MaxUint64 without overflowing next
+			}
+			next = ref.to + 1
+		}
+		if next == 1 {
+			return 0, false
+		}
+		return next - 1, true
+	}
+	block, ok := continuous(events, ^uint64(0))
 	if !ok {
 		return 0, false
 	}
-	indexedBlock, indexed := eventLogIndexedCoverageBlockFromRefs(eventLogIndexRefs(manifest), 1, block)
-	return indexedBlock, indexed
+	return continuous(indexes, block)
 }
 
 func eventLogCoverageBlockFromRefs(refs []SegmentRef, fromBlock uint64) (uint64, bool) {
