@@ -38,6 +38,8 @@ type Worker struct {
 	// the same proof as HistoryRangeGuard. Each pass spends at most 256 selected
 	// blocks in 64-block attempts, including busy admission, across all calls to
 	// its hot-history deleter. Short tails and remaining blocks use the Try guard.
+	// Shared-chunk GC may separately spend one attempt on a fully covered bucket
+	// after the hot-history flush; the other GC candidates remain opportunistic.
 	HistoryRangeQueuedGuard func(context.Context, uint64, func() error) (bool, error)
 	// HistorySharedChunkGC retires only empty, entirely cold-covered v3 buckets.
 	// It remains useful when shared writing is disabled on a reader bridge.

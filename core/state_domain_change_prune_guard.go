@@ -38,8 +38,10 @@ func (bc *BlockChain) TryWithStateDomainChangePruneGuard(ctx context.Context, th
 // WithStateDomainChangePruneGuard queues for the chain lock after opportunistic
 // index admission. Its caller must not hold a maintenance lease or either lock.
 // The live hot-pruner calls it synchronously after the cold-builder lease has
-// been released, with at most four 64-block attempts per pass. Its coverage
-// objects and lifecycle serialization remain alive until work returns.
+// been released, with at most four 64-block hot-delete attempts and one shared
+// chunk-bucket retirement attempt per pass. Its coverage objects and lifecycle
+// serialization remain alive until work returns. Bucket coverage is checked
+// before admission; retirement still checks the fresh physical range under lock.
 //
 // Only index contention returns (false, nil). Proof and cancellation errors
 // retain the Try entry point's fail-closed behavior. Mutex waiting cannot be

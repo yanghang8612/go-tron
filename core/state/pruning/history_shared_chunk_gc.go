@@ -23,6 +23,12 @@ const (
 type HistorySharedChunkGCStats struct {
 	Scanned, Candidates, Retired, NonEmpty, NotCovered, Busy, Errors uint64
 	LastError                                                        string
+	// Queued admission is a subset of the ordinary bucket outcomes. Errors
+	// include work failures after admission, so they can overlap Admitted.
+	// Work duration covers only the synchronous retirement callback, not lock
+	// wait, canonical proof, compaction, or total CPU time.
+	QueuedAttempts, QueuedAdmitted, QueuedBusy, QueuedErrors uint64
+	QueuedWorkNanos, QueuedWorkMaxNanos                      uint64
 }
 
 type historyChunkGCState struct {
@@ -45,7 +51,7 @@ func newHistoryChunkGCMetrics(namespace string) map[string]*metrics.Gauge {
 		prefix = "state/history/shared/gc/"
 	}
 	out := make(map[string]*metrics.Gauge)
-	for _, name := range []string{"enabled", "scanned_meta", "candidates", "retired", "nonempty", "deferred_coverage", "deferred_busy", "errors"} {
+	for _, name := range []string{"enabled", "scanned_meta", "candidates", "retired", "nonempty", "deferred_coverage", "deferred_busy", "errors", "queued_attempts", "queued_admitted", "queued_busy", "queued_errors", "queued_work_total_ns", "queued_work_max_ns"} {
 		out[name] = metrics.GetOrRegisterGauge(prefix+name, nil)
 	}
 	return out
@@ -53,6 +59,9 @@ func newHistoryChunkGCMetrics(namespace string) map[string]*metrics.Gauge {
 
 func updateHistoryChunkGCMetrics(gauges map[string]*metrics.Gauge, enabled bool, stats HistorySharedChunkGCStats) {
 	values := map[string]uint64{"scanned_meta": stats.Scanned, "candidates": stats.Candidates, "retired": stats.Retired, "nonempty": stats.NonEmpty, "deferred_coverage": stats.NotCovered, "deferred_busy": stats.Busy, "errors": stats.Errors}
+	values["queued_attempts"], values["queued_admitted"] = stats.QueuedAttempts, stats.QueuedAdmitted
+	values["queued_busy"], values["queued_errors"] = stats.QueuedBusy, stats.QueuedErrors
+	values["queued_work_total_ns"], values["queued_work_max_ns"] = stats.QueuedWorkNanos, stats.QueuedWorkMaxNanos
 	if enabled {
 		values["enabled"] = 1
 	} else {
@@ -70,8 +79,10 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 	if state == nil {
 		state = &historyChunkGCState{}
 	}
-	// Only this bounded optional phase is serialized. There is no maintenance
-	// lease and the chain guard is opportunistic, never queued while holding mu.
+	// Only this bounded optional phase is serialized. Its private sweep mutex
+	// has no chain/index/maintenance-lease reverse dependency. The caller holds
+	// no maintenance lease; the same inline lifecycle that pins coverage for
+	// hot pruning remains alive throughout any queued guard handoff.
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	defer func() {
@@ -84,6 +95,12 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 		state.total.NotCovered += stats.NotCovered
 		state.total.Busy += stats.Busy
 		state.total.Errors += stats.Errors
+		state.total.QueuedAttempts += stats.QueuedAttempts
+		state.total.QueuedAdmitted += stats.QueuedAdmitted
+		state.total.QueuedBusy += stats.QueuedBusy
+		state.total.QueuedErrors += stats.QueuedErrors
+		state.total.QueuedWorkNanos += stats.QueuedWorkNanos
+		state.total.QueuedWorkMaxNanos = max(state.total.QueuedWorkMaxNanos, stats.QueuedWorkMaxNanos)
 		if stats.LastError != "" {
 			state.total.LastError = stats.LastError
 		}
@@ -121,7 +138,28 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 			continue
 		}
 		var result rawdb.StateHistoryChunkRetirement
-		admitted, err := w.HistoryRangeGuard(ctx, last, func() error {
+		guard := w.HistoryRangeGuard
+		// Give at most one completely covered bucket a fair chain-lock
+		// handoff per pass. Consume admission before calling the guard, even
+		// when its index TryLock is busy or a proof fails. All remaining
+		// candidates retain the opportunistic path. The existing queue
+		// configuration controls this capability; no new lock protocol is
+		// introduced. This is a count bound, not a wall-clock I/O timeout:
+		// the guard checks cancellation as soon as its mutex handoff completes.
+		queued := w.HistoryRangeQueuedGuard != nil && stats.QueuedAttempts == 0
+		if queued {
+			guard = w.HistoryRangeQueuedGuard
+			stats.QueuedAttempts++
+		}
+		admitted, err := guard(ctx, last, func() error {
+			if queued {
+				started := time.Now()
+				defer func() {
+					elapsed := uint64(time.Since(started).Nanoseconds())
+					stats.QueuedWorkNanos += elapsed
+					stats.QueuedWorkMaxNanos = max(stats.QueuedWorkMaxNanos, elapsed)
+				}()
+			}
 			var retireErr error
 			// w.DB is the fresh committed store. The hot prune's bounded batch
 			// was flushed before this phase, and all checks/writes below remain
@@ -129,6 +167,16 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 			result, retireErr = rawdb.RetireStateHistoryChunkBucket(ctx, w.DB, bucket)
 			return retireErr
 		})
+		if queued {
+			if admitted {
+				stats.QueuedAdmitted++
+			} else if err == nil {
+				stats.QueuedBusy++
+			}
+			if err != nil {
+				stats.QueuedErrors++
+			}
+		}
 		if err != nil {
 			reportError(err)
 			return stats
