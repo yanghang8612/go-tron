@@ -240,7 +240,11 @@ func encodeStateHistorySharedChunk(raw []byte) []byte {
 }
 
 func decodeStateHistorySharedChunk(data []byte, want int, hash [32]byte) ([]byte, error) {
-	raw, err := decodeStateHistorySharedChunkPayload(data, want)
+	return decodeStateHistorySharedChunkInto(nil, data, want, hash)
+}
+
+func decodeStateHistorySharedChunkInto(dst, data []byte, want int, hash [32]byte) ([]byte, error) {
+	raw, err := decodeStateHistorySharedChunkPayloadInto(dst, data, want)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +259,14 @@ func decodeStateHistorySharedChunk(data []byte, want int, hash [32]byte) ([]byte
 // use decodeStateHistorySharedChunk, and the writer must compare with its exact
 // already-hashed candidate bytes before treating an existing chunk as reusable.
 func decodeStateHistorySharedChunkPayload(data []byte, want int) ([]byte, error) {
+	return decodeStateHistorySharedChunkPayloadInto(nil, data, want)
+}
+
+// A non-nil dst is the pack's private output range, sized to want and disjoint
+// from data. Neither that range nor a partially decoded pack is published until
+// all chunk hashes and the complete pack hash pass. A nil dst preserves the
+// standalone decoder's ownership: raw bytes alias data, Snappy bytes are owned.
+func decodeStateHistorySharedChunkPayloadInto(dst, data []byte, want int) ([]byte, error) {
 	if want <= 0 || want > historychunk.MaxSize || len(data) < 3 || len(data) > historychunk.MaxSize+binary.MaxVarintLen64+2 || data[0] != 1 || data[1] > 1 {
 		return nil, fmt.Errorf("rawdb: invalid shared history chunk envelope")
 	}
@@ -269,13 +281,17 @@ func decodeStateHistorySharedChunkPayload(data []byte, want int) ([]byte, error)
 			return nil, fmt.Errorf("rawdb: truncated shared history raw chunk")
 		}
 		raw = payload
+		if dst != nil {
+			raw = dst[:want]
+			copy(raw, payload)
+		}
 	} else {
 		decodedLen, err := snappy.DecodedLen(payload)
 		if err != nil || decodedLen != want {
 			return nil, fmt.Errorf("rawdb: invalid shared history Snappy size")
 		}
 		var errDecode error
-		raw, errDecode = snappy.Decode(nil, payload)
+		raw, errDecode = snappy.Decode(dst, payload)
 		if errDecode != nil {
 			return nil, fmt.Errorf("rawdb: corrupt shared history chunk: %w", errDecode)
 		}
@@ -348,7 +364,8 @@ func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum
 		return nil, err
 	}
 	bucket := stateHistoryChunkBucket(blockNum)
-	decoded := make([]byte, 0, length)
+	decoded := make([]byte, length)
+	offset := 0
 	for i := 0; i < count; i++ {
 		size, n := binary.Uvarint(refs)
 		var hash [32]byte
@@ -361,11 +378,12 @@ func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum
 		if !exists {
 			return nil, fmt.Errorf("rawdb: missing shared history chunk in bucket %d", bucket)
 		}
-		raw, err := decodeStateHistorySharedChunk(data, int(size), hash)
+		end := offset + int(size)
+		_, err = decodeStateHistorySharedChunkInto(decoded[offset:end:end], data, int(size), hash)
 		if err != nil {
 			return nil, err
 		}
-		decoded = append(decoded, raw...)
+		offset = end
 	}
 	if sha256.Sum256(decoded) != digest {
 		return nil, fmt.Errorf("rawdb: shared history pack hash mismatch")
