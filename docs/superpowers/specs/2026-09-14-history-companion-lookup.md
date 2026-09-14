@@ -1,7 +1,7 @@
 # 热历史覆盖检查的局部 companion 索引
 
-2026-09-14，实施中。沿用 master → GitHub → 原生构建部署流程。当前线上业务
-`af989753`，共享写入与 GC 排队已启用；本轮只优化 coverage gate 元数据查找。
+2026-09-14，已实施并完成上线验收。沿用 master → GitHub → 原生构建部署流程。本轮从业务
+`af989753` 升级至 `8a0681d3`，共享写入与 GC 排队保持启用；只优化 coverage gate 元数据查找。
 
 ## 定位
 
@@ -51,3 +51,13 @@ PreparedOps 重复排序/校验占比很小，buildOps 大部分为必需哈希�
 commitment parent durable read 累计 16.08 秒，底层 block-cache 淘汰值得后续分析。
 `runHandCold` 15.62 秒平 CPU 主要来自 commitment 预取/前台点读；冷 builder 顺序扫读
 仅占 0.09 秒，不能据此归咎冷存扫描，也不盲目提高缓存或并发预算。调用链嵌套不相加。
+
+
+## 验收结果
+
+本地 snapshots/pruning 全包及相关race、44项联合部署恢复测试、原生Sapling与历史
+兼容测试通过。原生固定manifest companion回放中位数1.721秒→26.576毫秒；额外临时
+分配7,594,288B。线上45秒profile完整gate CPU 7.50→0.29秒，包含新增view 0.08秒。
+完整六分钟窗口17.158blocks/s、3426.37TPS，所检70项错误指标全部为零；跨窗口负载
+和缓存预热不同，不作精确因果吞吐结论。物理chaindata末次241.598GB，state头距
+464,101块。详情见 `docs/dev/history-companion-lookup-20260914.md`。
