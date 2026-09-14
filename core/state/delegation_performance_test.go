@@ -259,7 +259,7 @@ func BenchmarkLegacyDelegationHistoryFlush(b *testing.B) {
 
 func TestLegacyDelegationReferenceBytesHistoryRootAndRollback(t *testing.T) {
 	from, to, spare := legacyBenchmarkAddress(501), legacyBenchmarkAddress(502), legacyBenchmarkAddress(503)
-	for _, scenario := range []string{"missing-both", "from-only", "to-only", "asymmetric-lists", "duplicate-entries", "self"} {
+	for _, scenario := range []string{"missing-both", "from-only", "to-only", "asymmetric-lists", "duplicate-entries", "arena-membership", "self"} {
 		t.Run(scenario, func(t *testing.T) {
 			anchor, peer := from, to
 			if scenario == "self" {
@@ -295,6 +295,16 @@ func TestLegacyDelegationReferenceBytesHistoryRootAndRollback(t *testing.T) {
 				case "duplicate-entries":
 					seed(anchor, &corepb.DelegatedResourceAccountIndex{Account: anchor, ToAccounts: [][]byte{peer, spare, peer, nil}})
 					seed(peer, &corepb.DelegatedResourceAccountIndex{Account: peer, FromAccounts: [][]byte{anchor, spare, anchor}})
+				case "arena-membership":
+					// Above the resident membership threshold, with unusual but
+					// accepted byte strings, empty entries and duplicate endpoints.
+					// The same history/as-of/root/rollback oracle below applies.
+					list := make([][]byte, 32)
+					for i := range list {
+						list[i] = bytes.Repeat([]byte{byte(i), 0xff}, i%23)
+					}
+					seed(anchor, &corepb.DelegatedResourceAccountIndex{Account: anchor, FromAccounts: list, ToAccounts: append(append([][]byte(nil), list...), peer, spare, peer), Timestamp: -99})
+					seed(peer, &corepb.DelegatedResourceAccountIndex{Account: peer, FromAccounts: append(append([][]byte(nil), list...), anchor, spare, anchor), ToAccounts: list})
 				case "self":
 					seed(anchor, &corepb.DelegatedResourceAccountIndex{Account: anchor, FromAccounts: [][]byte{spare}, ToAccounts: [][]byte{spare}})
 				}

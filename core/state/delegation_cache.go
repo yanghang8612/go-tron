@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -155,9 +156,36 @@ func legacyDelegationMembership(list [][]byte) map[string]struct{} {
 	if len(list) < legacyDelegationSetMinimum {
 		return nil
 	}
-	set := make(map[string]struct{}, len(list))
+	// Own the immutable keys in one arena instead of allocating a string for
+	// every address. The builder is never written after String, so no map key
+	// borrows mutable record bytes. Existing per-address accounting covers the
+	// whole arena even after deletions, including keys retained by duplicates.
+	var keys strings.Builder
+	var size int
 	for _, addr := range list {
-		set[string(addr)] = struct{}{}
+		if len(addr) > legacyDelegationCacheBytes-size {
+			// Resident entries have already passed the smaller complete-row
+			// budget. Preserve the original allocation path for any other
+			// caller, and avoid overflowing the arena length before Grow.
+			set := make(map[string]struct{}, len(list))
+			for _, addr := range list {
+				set[string(addr)] = struct{}{}
+			}
+			return set
+		}
+		size += len(addr)
+	}
+	keys.Grow(size)
+	for _, addr := range list {
+		keys.Write(addr)
+	}
+	arena := keys.String()
+	set := make(map[string]struct{}, len(list))
+	offset := 0
+	for _, addr := range list {
+		end := offset + len(addr)
+		set[arena[offset:end]] = struct{}{}
+		offset = end
 	}
 	return set
 }

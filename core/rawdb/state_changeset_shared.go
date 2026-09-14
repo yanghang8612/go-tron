@@ -175,11 +175,19 @@ func planAndWriteSharedStateHistoryWithChunkWork(db ethdb.KeyValueWriter, blockN
 		}
 		entry := stateHistoryPlannedChunk{key: key, start: start, end: end}
 		if found {
-			decoded, err := decodeStateHistorySharedChunk(stored, len(chunk), hash)
+			decoded, err := decodeStateHistorySharedChunkPayload(stored, len(chunk))
 			if err != nil {
 				return nil, nil, err
 			}
 			if !bytes.Equal(decoded, chunk) {
+				// Preserve the decoder's hash-mismatch error before reporting
+				// a collision. Equal bytes already have the candidate's SHA256,
+				// computed above or borrowed from this immutable RLP's v2 work.
+				// This proof is local to this comparison: every existing value
+				// is still read and fully decoded, with no presence/trust cache.
+				if sha256.Sum256(decoded) != hash {
+					return nil, nil, fmt.Errorf("rawdb: shared history chunk hash mismatch")
+				}
 				return nil, nil, fmt.Errorf("rawdb: shared history digest collision")
 			}
 			stats.reused += len(chunk)
@@ -232,6 +240,21 @@ func encodeStateHistorySharedChunk(raw []byte) []byte {
 }
 
 func decodeStateHistorySharedChunk(data []byte, want int, hash [32]byte) ([]byte, error) {
+	raw, err := decodeStateHistorySharedChunkPayload(data, want)
+	if err != nil {
+		return nil, err
+	}
+	if sha256.Sum256(raw) != hash {
+		return nil, fmt.Errorf("rawdb: shared history chunk hash mismatch")
+	}
+	return raw, nil
+}
+
+// decodeStateHistorySharedChunkPayload checks the complete storage envelope and
+// decodes its bounded payload. It does not authenticate content: readers must
+// use decodeStateHistorySharedChunk, and the writer must compare with its exact
+// already-hashed candidate bytes before treating an existing chunk as reusable.
+func decodeStateHistorySharedChunkPayload(data []byte, want int) ([]byte, error) {
 	if want <= 0 || want > historychunk.MaxSize || len(data) < 3 || len(data) > historychunk.MaxSize+binary.MaxVarintLen64+2 || data[0] != 1 || data[1] > 1 {
 		return nil, fmt.Errorf("rawdb: invalid shared history chunk envelope")
 	}
@@ -256,9 +279,6 @@ func decodeStateHistorySharedChunk(data []byte, want int, hash [32]byte) ([]byte
 		if errDecode != nil {
 			return nil, fmt.Errorf("rawdb: corrupt shared history chunk: %w", errDecode)
 		}
-	}
-	if sha256.Sum256(raw) != hash {
-		return nil, fmt.Errorf("rawdb: shared history chunk hash mismatch")
 	}
 	return raw, nil
 }
