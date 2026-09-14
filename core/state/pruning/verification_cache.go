@@ -623,6 +623,12 @@ func validSnapshotVerificationChecksum(checksum string) bool {
 }
 
 func snapshotHistoryVerificationKeyFor(dir string, manifest *snapshots.Manifest, history snapshots.SegmentRef) (snapshotHistoryVerificationKey, error) {
+	return snapshotHistoryVerificationKeyForView(dir, manifest, history, nil)
+}
+
+// The optional view accelerates companion identity lookup only. Every call
+// still obtains fresh file size and mtime, including when a view is reused.
+func snapshotHistoryVerificationKeyForView(dir string, manifest *snapshots.Manifest, history snapshots.SegmentRef, companions *snapshots.HistoryCompanionView) (snapshotHistoryVerificationKey, error) {
 	key := snapshotHistoryVerificationKey{history: history}
 	var err error
 	if key.historyFile, err = snapshotVerificationFileIdentity(dir, history); err != nil {
@@ -634,7 +640,11 @@ func snapshotHistoryVerificationKeyFor(dir string, manifest *snapshots.Manifest,
 	}
 	if cfg.HasHistoryInvertedIndex {
 		var found bool
-		key.index, found = cfg.HistoryIndexRef(manifest, history)
+		if companions != nil {
+			key.index, found = companions.HistoryIndexRef(cfg, history)
+		} else {
+			key.index, found = cfg.HistoryIndexRef(manifest, history)
+		}
 		if !found {
 			return snapshotHistoryVerificationKey{}, errors.New("missing history index companion")
 		}
@@ -644,7 +654,11 @@ func snapshotHistoryVerificationKeyFor(dir string, manifest *snapshots.Manifest,
 	}
 	if cfg.HasHistoryAccessor {
 		var found bool
-		key.accessor, found = cfg.HistoryAccessorRef(manifest, history)
+		if companions != nil {
+			key.accessor, found = companions.HistoryAccessorRef(cfg, history)
+		} else {
+			key.accessor, found = cfg.HistoryAccessorRef(manifest, history)
+		}
 		if !found {
 			return snapshotHistoryVerificationKey{}, errors.New("missing history accessor companion")
 		}

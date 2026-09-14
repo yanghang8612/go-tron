@@ -759,6 +759,10 @@ func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*
 		return nil, err
 	}
 	gate.manifest = manifest
+	// Only the bulk key-construction pass needs an index. Keep the detached
+	// view local; the gate retains the original mutable-loader contract and
+	// lazy verification still resolves companions and Stats files afresh.
+	companions := snapshots.NewHistoryCompanionView(manifest)
 	activeCacheKeys := make(map[snapshotHistoryVerificationKey]struct{})
 	for _, ref := range manifest.Segments {
 		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
@@ -767,7 +771,7 @@ func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cacheKey, err := snapshotHistoryVerificationKeyFor(w.SnapshotDir, manifest, ref)
+		cacheKey, err := snapshotHistoryVerificationKeyForView(w.SnapshotDir, manifest, ref, companions)
 		if err != nil {
 			return nil, fmt.Errorf("hot prune coverage: identify state-domain history %q: %w", ref.Path, err)
 		}
