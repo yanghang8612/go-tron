@@ -499,6 +499,9 @@ func openBusinessSampleFile(dir string, ref SegmentRef, budget *businessSampleBu
 	if _, err = out.ReadAt(magic[:], 0); err != nil {
 		return nil, err
 	}
+	if string(magic[:]) == historyReferenceMagic {
+		return nil, errors.New("snapshots: fixed-block business sampling does not support reference containers")
+	}
 	if string(magic[:]) != compressedBlockMagic {
 		ok = true
 		return out, nil

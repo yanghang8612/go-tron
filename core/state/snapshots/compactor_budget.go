@@ -169,6 +169,17 @@ func readHistoryCompactionLogicalBytes(ctx context.Context, dir string, ref Segm
 	if magic == stateDomainChangeBinarySegmentMagic {
 		return size, nil
 	}
+	if string(magic[:]) == historyReferenceMagic {
+		var header [historyReferenceHeaderSize]byte
+		if _, err := reader.ReadAt(header[:], 0); err != nil {
+			return 0, err
+		}
+		h, err := decodeHistoryReferenceHeader(header[:], size)
+		if err != nil {
+			return 0, err
+		}
+		return h.logical, nil
+	}
 	if string(magic[:]) != compressedBlockMagic {
 		return 0, errors.New("snapshots: unknown compaction history magic")
 	}

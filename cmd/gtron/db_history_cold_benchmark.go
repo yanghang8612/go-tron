@@ -35,6 +35,7 @@ type historyColdBenchmarkOptions struct {
 	SharedReadWorkers     int           `json:"shared_read_workers"`
 	SharedChunkCache      bool          `json:"shared_chunk_cache"`
 	CDCCompressionWorkers int           `json:"cdc_compression_workers"`
+	ReferenceContainer    bool          `json:"reference_container"`
 }
 
 type historyColdBenchmarkIteration struct {
@@ -51,6 +52,7 @@ type historyColdBenchmarkIteration struct {
 	Error                       string                                 `json:"error,omitempty"`
 	SharedChunkCacheBeforeClose *rawdb.StateHistoryChunkCacheStats     `json:"shared_chunk_cache_before_close,omitempty"`
 	SharedChunkCacheAfterClose  *rawdb.StateHistoryChunkCacheStats     `json:"shared_chunk_cache_after_close,omitempty"`
+	ReferenceBuild              *snapshots.HistoryReferenceBuildStats  `json:"reference_build,omitempty"`
 }
 
 type historyColdBenchmarkReport struct {
@@ -88,11 +90,12 @@ func dbHistoryColdBenchmarkCommand() *cli.Command {
 			&cli.IntFlag{Name: "shared-read-workers", Value: 2, Usage: "Offline authentication slots: 2, 4 or 8; shared 256MiB output budget, pipeline=false requires 2"},
 			&cli.BoolFlag{Name: "shared-chunk-cache", Usage: "Offline-only per-trio authenticated chunk reuse: 64MiB payload/4096 entries; requires owned immutable view, always retains whole-pack SHA"},
 			&cli.IntFlag{Name: "cdc-compression-workers", Value: 0, Usage: "Local CDC task setting: 0 keeps automatic workers; 1 limits this diagnostic trio without changing environment"},
+			&cli.BoolFlag{Name: "reference-container", Usage: "Experimental self-contained reference container with one authenticated source pass; owned mode, no read pipeline or CDC worker override; never publishes to a live manifest"},
 		}, Action: dbHistoryColdBenchmarkCmd}
 }
 
 func dbHistoryColdBenchmarkCmd(ctx *cli.Context) error {
-	opts := historyColdBenchmarkOptions{InputDir: ctx.String("input-dir"), OutputDir: ctx.String("output-dir"), Iterations: ctx.Int("iterations"), MaxDuration: ctx.Duration("max-duration"), CopyMode: ctx.String("copy-mode"), CPUProfile: ctx.Bool("cpu-profile"), CompressionFormat: ctx.String("compression-format"), SharedReadPipeline: ctx.Bool("shared-read-pipeline"), SharedReadWorkers: ctx.Int("shared-read-workers"), SharedChunkCache: ctx.Bool("shared-chunk-cache"), CDCCompressionWorkers: ctx.Int("cdc-compression-workers")}
+	opts := historyColdBenchmarkOptions{InputDir: ctx.String("input-dir"), OutputDir: ctx.String("output-dir"), Iterations: ctx.Int("iterations"), MaxDuration: ctx.Duration("max-duration"), CopyMode: ctx.String("copy-mode"), CPUProfile: ctx.Bool("cpu-profile"), CompressionFormat: ctx.String("compression-format"), SharedReadPipeline: ctx.Bool("shared-read-pipeline"), SharedReadWorkers: ctx.Int("shared-read-workers"), SharedChunkCache: ctx.Bool("shared-chunk-cache"), CDCCompressionWorkers: ctx.Int("cdc-compression-workers"), ReferenceContainer: ctx.Bool("reference-container")}
 	report, err := benchmarkHistoryCold(ctx.Context, opts)
 	writer := ctx.App.Writer
 	if writer == nil {
@@ -112,6 +115,9 @@ func (historyColdDiscardWriter) Delete([]byte) error {
 }
 
 func validateHistoryColdOptions(opts historyColdBenchmarkOptions) error {
+	if opts.ReferenceContainer && (opts.CopyMode != "owned" || opts.SharedReadPipeline || opts.CDCCompressionWorkers != 0 || opts.CompressionFormat != "auto") {
+		return errors.New("reference-container requires owned mode, default auto policy, no read pipeline or CDC worker override")
+	}
 	if opts.CDCCompressionWorkers != 0 && opts.CDCCompressionWorkers != 1 {
 		return errors.New("cdc-compression-workers must be 0 (automatic) or 1")
 	}
@@ -301,6 +307,9 @@ func openHistoryColdInput(inputDir, outputDir string) (opened historyColdInput, 
 func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptions) (report historyColdBenchmarkReport, resultErr error) {
 	start := time.Now()
 	report = historyColdBenchmarkReport{Version: 1, StartedUTC: start.UTC().Format(time.RFC3339Nano), Options: opts, GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GOMAXPROCS: runtime.GOMAXPROCS(0), CompressionFormat: opts.CompressionFormat}
+	if opts.ReferenceContainer {
+		report.CompressionFormat = "reference-v1"
+	}
 	var output string
 	defer func() {
 		report.ElapsedNanos = time.Since(start).Nanoseconds()
@@ -352,7 +361,11 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 	report.PhysicalVerified = true
 	verifyStart := time.Now()
 	e := manifest.Export
-	report.SourceDigest, err = snapshots.DigestHotStateHistoryContext(ctx, view, filepath.Join(output, "source-etl"), e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, rawdb.StateHistoryRangeExportMaxDecodedBytes)
+	if opts.ReferenceContainer {
+		report.SourceDigest, err = snapshots.DigestHotStateHistoryCompatibilityContext(ctx, view, filepath.Join(output, "source-etl"), e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, rawdb.StateHistoryRangeExportMaxDecodedBytes)
+	} else {
+		report.SourceDigest, err = snapshots.DigestHotStateHistoryContext(ctx, view, filepath.Join(output, "source-etl"), e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, rawdb.StateHistoryRangeExportMaxDecodedBytes)
+	}
 	report.SourceVerificationWallNanos = time.Since(verifyStart).Nanoseconds()
 	if err != nil {
 		return report, err
@@ -365,7 +378,7 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 		if err := os.Mkdir(runDir, 0700); err != nil {
 			return report, err
 		}
-		iteration, err := runHistoryColdIterationWithChunkCache(ctx, view, runDir, e, n, opts.CPUProfile && n == 1, filepath.Join(output, "cpu.pprof"), opts.CompressionFormat, opts.SharedReadPipeline, opts.SharedReadWorkers, opts.SharedChunkCache, opts.CDCCompressionWorkers)
+		iteration, err := runHistoryColdIterationWithBuildMode(ctx, view, runDir, e, n, opts.CPUProfile && n == 1, filepath.Join(output, "cpu.pprof"), opts.CompressionFormat, opts.SharedReadPipeline, opts.SharedReadWorkers, opts.SharedChunkCache, opts.CDCCompressionWorkers, opts.ReferenceContainer)
 		if err == nil && iteration.Digest != report.SourceDigest {
 			err = errors.New("complete hot/cold logical row or tx-range digest mismatch")
 		}
@@ -380,6 +393,9 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 				digest := sha256.Sum256(profile)
 				report.CPUProfileSHA256 = hex.EncodeToString(digest[:])
 				report.CPUProfileScope = "iteration 1 production trio build only; process-wide; excludes physical/source/cold verification"
+				if opts.ReferenceContainer {
+					report.CPUProfileScope = "iteration 1 experimental reference trio build only; process-wide; excludes physical/source/cold verification"
+				}
 			}
 			err = errors.Join(err, readErr)
 		}
@@ -403,6 +419,10 @@ func runHistoryColdIterationWithReadWorkers(ctx context.Context, view rawdb.Stat
 }
 
 func runHistoryColdIterationWithChunkCache(ctx context.Context, view rawdb.StateHistoryReadView, dir string, e rawdb.StateHistoryRangeExportReport, n int, profile bool, profilePath, format string, pipeline bool, workers int, cacheEnabled bool, compressionWorkers int) (out historyColdBenchmarkIteration, resultErr error) {
+	return runHistoryColdIterationWithBuildMode(ctx, view, dir, e, n, profile, profilePath, format, pipeline, workers, cacheEnabled, compressionWorkers, false)
+}
+
+func runHistoryColdIterationWithBuildMode(ctx context.Context, view rawdb.StateHistoryReadView, dir string, e rawdb.StateHistoryRangeExportReport, n int, profile bool, profilePath, format string, pipeline bool, workers int, cacheEnabled bool, compressionWorkers int, reference bool) (out historyColdBenchmarkIteration, resultErr error) {
 	out.Iteration = n
 	var profileFile *os.File
 	if profile {
@@ -428,7 +448,13 @@ func runHistoryColdIterationWithChunkCache(ctx context.Context, view rawdb.State
 		}
 	}
 	if err == nil {
-		refs, err = snapshots.BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", format, etl.Options{}, pipeline, workers, compressionWorkers)
+		if reference {
+			var stats snapshots.HistoryReferenceBuildStats
+			refs, stats, err = snapshots.BuildDiagnosticStateHistoryReferenceTrioContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", etl.Options{})
+			out.ReferenceBuild = &stats
+		} else {
+			refs, err = snapshots.BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", format, etl.Options{}, pipeline, workers, compressionWorkers)
+		}
 	}
 	if cache != nil {
 		prior := cache.Stats()

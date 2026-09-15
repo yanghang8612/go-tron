@@ -662,6 +662,9 @@ func inspectHistorySpaceHeaders(dir string, trio historySpaceTrio) (historySpace
 	if _, err := io.ReadFull(history, compressedHeader[:]); err != nil {
 		return out, err
 	}
+	if string(compressedHeader[:8]) == historyReferenceMagic {
+		return out, fmt.Errorf("snapshots: history-space fixed-block projections are unsupported for reference history %q", trio.history.Path)
+	}
 	if string(compressedHeader[:8]) == compressedBlockMagic {
 		// CDC references share physical anchors, so the fixed-block sample's
 		// compressed-length sum is not a valid denominator. Reject before any

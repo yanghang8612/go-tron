@@ -233,6 +233,9 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 	if closeErr != nil {
 		return false, closeErr
 	}
+	if string(header[:8]) == historyReferenceMagic {
+		return false, errors.New("snapshots: reference history requires an explicit reference-aware migration; legacy V7 migration cannot rewrite it")
+	}
 	if string(header[:8]) != compressedBlockMagic {
 		return false, nil
 	}

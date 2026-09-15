@@ -175,6 +175,17 @@ func historyDiagnosticRange(h hash.Hash, row *rawdb.StateTxRange) {
 // silently selecting a different reader. It retains no batch of decoded values.
 // ETL and one source pack bound memory; scratch scales with the exported input.
 func DigestHotStateHistoryContext(ctx context.Context, db ethdb.Iteratee, scratch string, fromTx, toTx, fromBlock, toBlock, maxPayload uint64) (out StateHistoryDiagnosticDigest, err error) {
+	return digestHotStateHistoryContext(ctx, db, scratch, fromTx, toTx, fromBlock, toBlock, maxPayload, false)
+}
+
+// DigestHotStateHistoryCompatibilityContext explicitly uses the established
+// owning reader as an independent legacy/repair oracle. It does not weaken the
+// regular diagnostic's borrowed-reader contract or alter production selection.
+func DigestHotStateHistoryCompatibilityContext(ctx context.Context, db ethdb.Iteratee, scratch string, fromTx, toTx, fromBlock, toBlock, maxPayload uint64) (StateHistoryDiagnosticDigest, error) {
+	return digestHotStateHistoryContext(ctx, db, scratch, fromTx, toTx, fromBlock, toBlock, maxPayload, true)
+}
+
+func digestHotStateHistoryContext(ctx context.Context, db ethdb.Iteratee, scratch string, fromTx, toTx, fromBlock, toBlock, maxPayload uint64, compatibility bool) (out StateHistoryDiagnosticDigest, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -189,6 +200,9 @@ func DigestHotStateHistoryContext(ctx context.Context, db ethdb.Iteratee, scratc
 	}
 	defer collector.Close()
 	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if compatibility {
+		cfg.IterateHotHistoryBlockTxBorrowed = nil
+	}
 	br := &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}
 	err = iterateStateDomainChangeHistoryChanges(view, cfg, fromTx, toTx, br, func(row *rawdb.StateDomainChange) (bool, error) {
 		if err := ctx.Err(); err != nil {

@@ -3803,6 +3803,18 @@ func openHistorySegmentForReadWithCacheLimit(dir string, ref SegmentRef, compres
 		}
 		reader = cr
 		logicalSize = cr.UncompressedSize()
+	} else if string(magic[:]) == historyReferenceMagic {
+		_ = file.Close()
+		// Reference files retain V6 virtual offsets and own all chunk data.
+		// The reader authenticates the complete bounded metadata directory
+		// before resolving any virtual offset, then checks each decoded chunk.
+		cacheBytes := max(0, min(compressedCacheLimit, cbCacheBlocks)) * historyReferenceMaxChunk
+		rr, err := openHistoryReferenceReader(context.Background(), path, cacheBytes)
+		if err != nil {
+			return nil, 0, stateDomainChangeBinaryHeader{}, err
+		}
+		reader = rr
+		logicalSize = rr.UncompressedSize()
 	}
 
 	header, err := readStateDomainChangeBinaryHeaderAt(reader, stateDomainChangeBinarySegmentMagic)
