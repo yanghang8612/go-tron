@@ -187,3 +187,61 @@ reads and complete joining. Full diagnostic output refs/bytes/digests must equal
 serial on the same private input; only a real complete-trio replay can establish
 throughput benefit. The options JSON explicitly reports `shared_read_pipeline: false` by default;
 source identity, refs, full digests and other report fields retain their contract.
+
+The subsequent offline experiment adds explicit `--shared-read-workers=2|4|8`.
+Existing no-argument pipeline APIs and the CLI default retain two slots. A
+disabled pipeline accepts only the default two-worker setting, and every report
+records `shared_read_workers`; no production scheduler enables any setting.
+All selected slots (running or awaiting ordered consumption) share the same
+256 MiB declared shared-output budget. A maximum 128 MiB pack remains exclusive.
+Admission distinguishes an actual exclusive pack from the cumulative size of
+several small packs: four/eight smaller packs may use the full shared budget.
+Encoded envelopes, active chunk Get buffers and runtime/goroutine overhead may
+increase with workers; the budget remains distinct from total heap/RSS, and the
+same inner-Snappy compatibility allowance applies. Queue ordering, immutable
+snapshot, complete authentication, callback-first errors and cancel/join remain
+unchanged. Deterministic 2/4/8 tests exercise slot occupancy, ordered errors and
+join-before-Close; complete same-input trios must remain byte-identical.
+
+## CDC digest reuse after complete byte equality
+
+The CDC writer already owns an immutable copy of each active deduplication
+anchor. Its SHA256 dictionary remains the authority for anchor selection, LRU
+order and eviction. Add a secondary `(seeded fast fingerprint, length)` index
+with at most one candidate per key and no collision chain. A hit must still name
+the current primary dictionary element and pass a full `bytes.Equal` comparison
+against the producer chunk. Only that equality proof permits reuse of the
+existing SHA256. Unequal bytes, fingerprint collisions, absent/retired candidates
+and misses use the original complete SHA256 calculation and primary lookup.
+The original primary lookup also performs its existing equality check.
+
+The secondary index borrows only primary dictionary identities, never byte
+slices from callers, iterators or worker outputs. It is maintained on the same
+single writer as the dictionary; entry removal deletes the secondary candidate
+only when it still names that exact element. It adds at most one map entry per
+active primary entry (maximum 8192), plus a fingerprint in each primary entry,
+and no additional retained payload. The existing 64 MiB payload bound and
+pending compression budget remain unchanged; neither is a total heap/RSS bound.
+Abort, Finish and Reset discard the secondary index. A randomized fingerprint
+seed can affect only cache misses and computation, never serialized output.
+
+This is not an input authentication cache. Every original shared-chunk and full
+pack authentication, both history scans, CDC split boundary, primary dictionary
+choice, compressed bytes, literal/reference distance and complete file checksum
+remain unchanged. Full equality establishes that the existing digest is exactly
+the SHA256 of the current bytes. Primary dictionary hash-collision behavior also
+remains unchanged, because candidates must still be the live primary identity.
+No fingerprint is persisted or accepted as an integrity proof.
+
+Acceptance compares complete files and their full decompressed contents against
+writer and writer-owned pipeline methods frozen from commit
+`e913c72d274d3f76f07b61f1d44ae1df986cbee9`. Tests cover worker counts 1/2/4/8,
+encoder configurations, variable Write partitioning and retained-prefix edits,
+forced fingerprint collisions and differing lengths, caller ownership, both
+primary eviction limits, reentry, page-spanning references and the uint32 anchor
+sentinel. The complete writer benchmark includes file finalization/checksum and
+uses deterministic native-codec legacy delegation aggregates with small list
+insertions, alongside low-reuse data. It reports avoided SHA bytes and unchanged
+output size; these synthetic timings are not production throughput. A separate
+native fixed-input full-trio comparison and online complete maintenance rate
+remain necessary before claiming this change clears the backlog.

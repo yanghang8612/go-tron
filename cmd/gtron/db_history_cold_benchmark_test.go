@@ -103,7 +103,7 @@ func coldBenchmarkFixture(t *testing.T, repairs bool) (string, string, historyRa
 }
 
 func coldBenchmarkOptions(input, output string) historyColdBenchmarkOptions {
-	return historyColdBenchmarkOptions{InputDir: input, OutputDir: output, Iterations: 1, MaxDuration: time.Minute, CopyMode: "owned", CompressionFormat: "auto"}
+	return historyColdBenchmarkOptions{InputDir: input, OutputDir: output, Iterations: 1, MaxDuration: time.Minute, CopyMode: "owned", CompressionFormat: "auto", SharedReadWorkers: 2}
 }
 
 func TestDBHistoryColdBenchmarkCompleteModesAndReadOnly(t *testing.T) {

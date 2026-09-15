@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,12 +24,27 @@ func TestDBHistorySharedPipelineFullTrioByteEquivalence(t *testing.T) {
 		t.Run(format, func(t *testing.T) {
 			var serial historyColdBenchmarkReport
 			var files [][]byte
-			for _, pipeline := range []bool{false, true} {
+			settings := []struct {
+				pipeline bool
+				workers  int
+			}{{false, 2}, {true, 2}}
+			if format == "auto" {
+				settings = append(settings, struct {
+					pipeline bool
+					workers  int
+				}{true, 4}, struct {
+					pipeline bool
+					workers  int
+				}{true, 8})
+			}
+			for _, setting := range settings {
+				pipeline := setting.pipeline
 				opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), "out"))
 				opts.SharedReadPipeline = pipeline
+				opts.SharedReadWorkers = setting.workers
 				opts.CompressionFormat = format
 				report, err := benchmarkHistoryCold(context.Background(), opts)
-				if err != nil || !report.Complete || !report.PhysicalVerified || len(report.Iterations) != 1 || !report.Iterations[0].Equivalent || len(report.Iterations[0].Refs) != 3 || report.SourceDigest.Rows != 56 {
+				if err != nil || !report.Complete || !report.PhysicalVerified || len(report.Iterations) != 1 || !report.Iterations[0].Equivalent || len(report.Iterations[0].Refs) != 3 || report.SourceDigest.Rows != 56 || report.Options.SharedReadWorkers != setting.workers {
 					t.Fatalf("pipeline=%v report=%+v err=%v", pipeline, report, err)
 				}
 				var current [][]byte
@@ -63,7 +79,7 @@ func TestDBHistorySharedPipelineFlagCapabilityAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var report historyColdBenchmarkReport
-	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || !report.Options.SharedReadPipeline || !report.Complete {
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || !report.Options.SharedReadPipeline || report.Options.SharedReadWorkers != 2 || !report.Complete {
 		t.Fatalf("CLI report: %v %+v", err, report)
 	}
 	encoded, err := json.Marshal(historyColdBenchmarkOptions{})
@@ -97,5 +113,40 @@ func TestDBHistorySharedPipelineFlagCapabilityAndCancellation(t *testing.T) {
 	cancel()
 	if refs, err := build(ctx, view); !errors.Is(err, context.Canceled) || len(refs) != 0 {
 		t.Fatalf("canceled build refs=%v err=%v", refs, err)
+	}
+}
+
+func TestDBHistorySharedPipelineWorkersCLIAndBounds(t *testing.T) {
+	_, input, _ := coldBenchmarkFixture(t, false)
+	for _, workers := range []int{4, 8} {
+		var stdout bytes.Buffer
+		app := &cli.App{Writer: &stdout, Commands: []*cli.Command{dbHistoryColdBenchmarkCommand()}}
+		if err := app.Run([]string{"gtron", "benchmark-history-cold", "--input-dir", input, "--output-dir", filepath.Join(t.TempDir(), "out"), "--iterations", "1", "--shared-read-pipeline=true", fmt.Sprintf("--shared-read-workers=%d", workers)}); err != nil {
+			t.Fatal(err)
+		}
+		var report historyColdBenchmarkReport
+		if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || !report.Complete || report.Options.SharedReadWorkers != workers || !report.Options.SharedReadPipeline {
+			t.Fatalf("report=%+v err=%v", report, err)
+		}
+	}
+	for _, pipeline := range []bool{false, true} {
+		for _, workers := range []int{-1, 0, 1, 2, 3, 4, 8, 9} {
+			opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), "out"))
+			opts.SharedReadPipeline = pipeline
+			opts.SharedReadWorkers = workers
+			err := validateHistoryColdOptions(opts)
+			valid := workers == 2 || pipeline && (workers == 4 || workers == 8)
+			if (err == nil) != valid {
+				t.Fatalf("pipeline=%v workers=%d valid=%v err=%v", pipeline, workers, valid, err)
+			}
+			if !valid {
+				if report, err := benchmarkHistoryCold(context.Background(), opts); err == nil || report.Complete || report.PhysicalVerified || len(report.Iterations) != 0 {
+					t.Fatalf("invalid options started work: %+v err=%v", report, err)
+				}
+				if _, err := os.Stat(opts.OutputDir); !os.IsNotExist(err) {
+					t.Fatal("invalid options created output")
+				}
+			}
+		}
 	}
 }

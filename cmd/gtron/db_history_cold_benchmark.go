@@ -32,6 +32,7 @@ type historyColdBenchmarkOptions struct {
 	CompressionFormat  string        `json:"compression_format"`
 	CPUProfile         bool          `json:"cpu_profile"`
 	SharedReadPipeline bool          `json:"shared_read_pipeline"`
+	SharedReadWorkers  int           `json:"shared_read_workers"`
 }
 
 type historyColdBenchmarkIteration struct {
@@ -79,12 +80,13 @@ func dbHistoryColdBenchmarkCommand() *cli.Command {
 			&cli.StringFlag{Name: "copy-mode", Value: "owned", Usage: "owned or defensive; only private snapshot Get ownership capability differs"},
 			&cli.StringFlag{Name: "compression-format", Value: "auto", Usage: "Production compression policy: auto, 2 or 3; explicit without changing environment"},
 			&cli.BoolFlag{Name: "cpu-profile", Usage: "Write output-dir/cpu.pprof for the first complete build only"},
-			&cli.BoolFlag{Name: "shared-read-pipeline", Usage: "Offline-only two-block shared authentication pipeline; requires owned copy mode, preserves one trio"},
+			&cli.BoolFlag{Name: "shared-read-pipeline", Usage: "Offline-only shared authentication pipeline; requires owned copy mode, preserves one trio"},
+			&cli.IntFlag{Name: "shared-read-workers", Value: 2, Usage: "Offline authentication slots: 2, 4 or 8; shared 256MiB output budget, pipeline=false requires 2"},
 		}, Action: dbHistoryColdBenchmarkCmd}
 }
 
 func dbHistoryColdBenchmarkCmd(ctx *cli.Context) error {
-	opts := historyColdBenchmarkOptions{InputDir: ctx.String("input-dir"), OutputDir: ctx.String("output-dir"), Iterations: ctx.Int("iterations"), MaxDuration: ctx.Duration("max-duration"), CopyMode: ctx.String("copy-mode"), CPUProfile: ctx.Bool("cpu-profile"), CompressionFormat: ctx.String("compression-format"), SharedReadPipeline: ctx.Bool("shared-read-pipeline")}
+	opts := historyColdBenchmarkOptions{InputDir: ctx.String("input-dir"), OutputDir: ctx.String("output-dir"), Iterations: ctx.Int("iterations"), MaxDuration: ctx.Duration("max-duration"), CopyMode: ctx.String("copy-mode"), CPUProfile: ctx.Bool("cpu-profile"), CompressionFormat: ctx.String("compression-format"), SharedReadPipeline: ctx.Bool("shared-read-pipeline"), SharedReadWorkers: ctx.Int("shared-read-workers")}
 	report, err := benchmarkHistoryCold(ctx.Context, opts)
 	writer := ctx.App.Writer
 	if writer == nil {
@@ -104,6 +106,9 @@ func (historyColdDiscardWriter) Delete([]byte) error {
 }
 
 func validateHistoryColdOptions(opts historyColdBenchmarkOptions) error {
+	if opts.SharedReadWorkers != 2 && opts.SharedReadWorkers != 4 && opts.SharedReadWorkers != 8 || !opts.SharedReadPipeline && opts.SharedReadWorkers != 2 {
+		return errors.New("shared-read-workers must be 2, 4 or 8; disabled pipeline requires default 2")
+	}
 	if opts.SharedReadPipeline && opts.CopyMode != "owned" {
 		return errors.New("history read pipeline requires explicit owned copy mode")
 	}
@@ -348,7 +353,7 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 		if err := os.Mkdir(runDir, 0700); err != nil {
 			return report, err
 		}
-		iteration, err := runHistoryColdIterationWithReadPipeline(ctx, view, runDir, e, n, opts.CPUProfile && n == 1, filepath.Join(output, "cpu.pprof"), opts.CompressionFormat, opts.SharedReadPipeline)
+		iteration, err := runHistoryColdIterationWithReadWorkers(ctx, view, runDir, e, n, opts.CPUProfile && n == 1, filepath.Join(output, "cpu.pprof"), opts.CompressionFormat, opts.SharedReadPipeline, opts.SharedReadWorkers)
 		if err == nil && iteration.Digest != report.SourceDigest {
 			err = errors.New("complete hot/cold logical row or tx-range digest mismatch")
 		}
@@ -378,6 +383,10 @@ func runHistoryColdIteration(ctx context.Context, view rawdb.StateHistoryReadVie
 }
 
 func runHistoryColdIterationWithReadPipeline(ctx context.Context, view rawdb.StateHistoryReadView, dir string, e rawdb.StateHistoryRangeExportReport, n int, profile bool, profilePath, format string, pipeline bool) (out historyColdBenchmarkIteration, resultErr error) {
+	return runHistoryColdIterationWithReadWorkers(ctx, view, dir, e, n, profile, profilePath, format, pipeline, 2)
+}
+
+func runHistoryColdIterationWithReadWorkers(ctx context.Context, view rawdb.StateHistoryReadView, dir string, e rawdb.StateHistoryRangeExportReport, n int, profile bool, profilePath, format string, pipeline bool, workers int) (out historyColdBenchmarkIteration, resultErr error) {
 	out.Iteration = n
 	var profileFile *os.File
 	if profile {
@@ -393,7 +402,7 @@ func runHistoryColdIterationWithReadPipeline(ctx context.Context, view rawdb.Sta
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
-	refs, err := snapshots.BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", format, etl.Options{}, pipeline)
+	refs, err := snapshots.BuildDiagnosticStateHistoryTrioWithReadWorkersContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", format, etl.Options{}, pipeline, workers)
 	out.BuildWallNanos = time.Since(start).Nanoseconds()
 	runtime.ReadMemStats(&after)
 	out.BuildAllocatedBytes = after.TotalAlloc - before.TotalAlloc

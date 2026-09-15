@@ -411,7 +411,7 @@ func TestStateHistoryPipelineBudgetAndOverflow(t *testing.T) {
 		{0, 0, 0, 256, false}, {0, 2, 1, 256, false}, {0, -1, 1, 256, false}, {257, 1, 1, 256, false}, {255, 1, 2, 256, false},
 		{math.MaxUint64, 1, 1, math.MaxUint64, false}, {1, 1, math.MaxUint64, math.MaxUint64, false},
 	} {
-		if got := historyPipelineCanAdmit(tt.used, tt.count, tt.next, tt.budget); got != tt.want {
+		if got := historyPipelineCanAdmit(tt.used, tt.count, tt.next, tt.budget, 2, tt.used >= tt.budget/2); got != tt.want {
 			t.Fatalf("%+v got %v", tt, got)
 		}
 	}
@@ -422,7 +422,7 @@ func TestStateHistoryPipelineBudgetAndOverflow(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	queue := []*historyPipelineBlock{{done: done, decoded: 128}}
-	if historyPipelineKnownFailure(queue) || historyPipelineCanAdmit(queue[0].decoded, len(queue), 1, 256) {
+	if historyPipelineKnownFailure(queue) || historyPipelineCanAdmit(queue[0].decoded, len(queue), 1, 256, 2, true) {
 		t.Fatal("ready result released before consumption")
 	}
 }

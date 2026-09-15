@@ -16,6 +16,7 @@ const StateHistoryPipelineDecodedBudget = uint64(256 << 20)
 const stateHistoryPipelineSlots = 2
 
 var ErrStateHistoryPipelineView = errors.New("rawdb: history pipeline requires explicit concurrent pinned owned reads")
+var ErrStateHistoryPipelineWorkers = errors.New("rawdb: history pipeline workers must be 2, 4 or 8")
 
 // IterateStateDomainChangesByBlockTxRangePipelined is an opt-in cold-build
 // experiment. Default public readers remain serial. Only shared-pack byte
@@ -31,11 +32,23 @@ var ErrStateHistoryPipelineView = errors.New("rawdb: history pipeline requires e
 // consumption. Encoded envelopes, per-read chunk bytes and runtime overhead are
 // extra; this is not a total heap/RSS cap. Non-shared inputs retain serial semantics.
 func IterateStateDomainChangesByBlockTxRangePipelined(ctx context.Context, db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, fn func(*StateDomainChange) (bool, error)) (resultErr error) {
+	return IterateStateDomainChangesByBlockTxRangePipelinedWithWorkers(ctx, db, fromBlock, toBlock, fromTxNum, toTxNum, stateHistoryPipelineSlots, fn)
+}
+
+// IterateStateDomainChangesByBlockTxRangePipelinedWithWorkers is the explicit
+// offline 2/4/8-slot variant. The default wrapper remains two slots. All slots,
+// including results waiting for ordered consumption, share the same 256MiB
+// declared-output budget. Increasing slots permits more speculative reads;
+// chunk/encoded/runtime memory is additional. It adds no production enablement.
+func IterateStateDomainChangesByBlockTxRangePipelinedWithWorkers(ctx context.Context, db ethdb.Iteratee, fromBlock, toBlock, fromTxNum, toTxNum uint64, workers int, fn func(*StateDomainChange) (bool, error)) (resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if workers != 2 && workers != 4 && workers != 8 {
+		return ErrStateHistoryPipelineWorkers
 	}
 	view, release, err := AcquireStateHistoryReadView(db)
 	if err != nil {
@@ -81,6 +94,7 @@ func IterateStateDomainChangesByBlockTxRangePipelined(ctx context.Context, db et
 		}
 	}()
 	var retained uint64
+	var exclusive bool
 	var pending *historyPipelineBlock
 	var sourceErr error
 	var ended bool
@@ -127,7 +141,7 @@ func IterateStateDomainChangesByBlockTxRangePipelined(ctx context.Context, db et
 		}
 		// Only this goroutine touches source iterators. A pending serial block
 		// borrows its iterator bytes without advancing until earlier work drains.
-		for len(queue) < stateHistoryPipelineSlots && !ended && !historyPipelineKnownFailure(queue) {
+		for len(queue) < workers && !ended && !historyPipelineKnownFailure(queue) {
 			if pending == nil {
 				pending, sourceErr = source.next()
 				if pending == nil {
@@ -135,13 +149,14 @@ func IterateStateDomainChangesByBlockTxRangePipelined(ctx context.Context, db et
 					break
 				}
 			}
-			if !pending.shared || !historyPipelineCanAdmit(retained, len(queue), pending.decoded, StateHistoryPipelineDecodedBudget) {
+			if !pending.shared || !historyPipelineCanAdmit(retained, len(queue), pending.decoded, StateHistoryPipelineDecodedBudget, workers, exclusive) {
 				break
 			}
 			job := pending
 			job.encoded = bytes.Clone(job.encoded)
 			job.done = make(chan struct{})
 			retained += job.decoded
+			exclusive = job.decoded >= StateHistoryPipelineDecodedBudget/2
 			queue = append(queue, job)
 			pending = nil
 			go func() {
@@ -166,6 +181,11 @@ func IterateStateDomainChangesByBlockTxRangePipelined(ctx context.Context, db et
 			scratch = StateDomainChange{}
 			job.raw = nil
 			retained -= job.decoded
+			// A maximum-sized job is admitted only to an empty queue, so
+			// consuming it is the only way an exclusive reservation ends.
+			if job.decoded >= StateHistoryPipelineDecodedBudget/2 {
+				exclusive = false
+			}
 			queue[0] = nil
 			queue = queue[1:]
 			if err != nil || !cont {
@@ -190,13 +210,13 @@ func IterateStateDomainChangesByBlockTxRangePipelined(ctx context.Context, db et
 	}
 }
 
-func historyPipelineCanAdmit(retained uint64, count int, next, budget uint64) bool {
-	if count < 0 || count >= stateHistoryPipelineSlots || retained > budget || next == 0 || next > budget-retained {
+func historyPipelineCanAdmit(retained uint64, count int, next, budget uint64, workers int, exclusive bool) bool {
+	if count < 0 || count >= workers || retained > budget || next == 0 || next > budget/2 || next > budget-retained {
 		return false
 	}
 	// Do not overlap either side of a large-block admission. The normal 128MiB
 	// format maximum is half the fixed 256MiB output budget.
-	return count == 0 || retained < budget/2 && next < budget/2
+	return count == 0 || !exclusive && next < budget/2
 }
 
 type historyPipelineBlock struct {

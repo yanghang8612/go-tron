@@ -37,11 +37,21 @@ func BuildDiagnosticStateHistoryTrioWithETLContext(ctx context.Context, db ethdb
 // true requires an audited concurrent pinned owned view and never falls back
 // silently. No production Runner enables this option.
 func BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options, pipeline bool) ([]SegmentRef, error) {
+	return BuildDiagnosticStateHistoryTrioWithReadWorkersContext(ctx, db, dir, fromTx, toTx, fromBlock, toBlock, path, format, opts, pipeline, 2)
+}
+
+// BuildDiagnosticStateHistoryTrioWithReadWorkersContext explicitly selects
+// 2/4/8 offline authentication slots, keeping the shared output budget fixed.
+// Pipeline disabled permits only the default two-slot setting (unused).
+func BuildDiagnosticStateHistoryTrioWithReadWorkersContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options, pipeline bool, workers int) ([]SegmentRef, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if workers != 2 && workers != 4 && workers != 8 || !pipeline && workers != 2 {
+		return nil, rawdb.ErrStateHistoryPipelineWorkers
 	}
 	if format != "auto" && format != "2" && format != "3" {
 		return nil, errors.New("snapshots: diagnostic compression policy must be auto, 2 or 3")
@@ -56,7 +66,7 @@ func BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx context.Context,
 	changes := cfg.IterateHotHistoryBlockTxBorrowed
 	if pipeline {
 		changes = func(db ethdb.Iteratee, fromBlock, toBlock, fromTx, toTx uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
-			return rawdb.IterateStateDomainChangesByBlockTxRangePipelined(ctx, db, fromBlock, toBlock, fromTx, toTx, fn)
+			return rawdb.IterateStateDomainChangesByBlockTxRangePipelinedWithWorkers(ctx, db, fromBlock, toBlock, fromTx, toTx, workers, fn)
 		}
 	}
 	cfg.IterateHotHistoryBlockTxBorrowed = func(db ethdb.Iteratee, fromBlock, toBlock, fromTx, toTx uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
