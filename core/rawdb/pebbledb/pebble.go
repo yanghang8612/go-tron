@@ -501,6 +501,11 @@ func (s *keyValueSnapshot) Has(key []byte) (bool, error) {
 // its closer, so consumers need not copy the caller-owned bytes a second time.
 func (s *keyValueSnapshot) GetReturnsOwnedBytes() bool { return true }
 
+// ConcurrentOwnedHistoryReads applies only to this immutable Pebble snapshot.
+// Each Get copies its value and each NewIterator owns a separate engine iterator;
+// users must join all reads before closing the snapshot.
+func (s *keyValueSnapshot) ConcurrentOwnedHistoryReads() bool { return s != nil && s.snapshot != nil }
+
 func (s *keyValueSnapshot) Get(key []byte) ([]byte, error) {
 	if s == nil || s.snapshot == nil {
 		return nil, pebble.ErrClosed

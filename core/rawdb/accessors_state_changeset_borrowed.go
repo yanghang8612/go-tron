@@ -265,6 +265,13 @@ func iteratePersistedStateDomainChangeBlockBorrowedWithScratch(data []byte, bloc
 	if materializeErr != nil {
 		return false, materializeErr
 	}
+	return iterateMaterializedStateHistoryBlock(data, blockNum, scratch, fn)
+}
+
+// The payload must come from this operation's completed materializer. In
+// particular it must not re-enter envelope recognition: an invalid nested
+// shared envelope must not trigger a second set of chunk reads.
+func iterateMaterializedStateHistoryBlock(data []byte, blockNum uint64, scratch *StateDomainChange, fn func(*StateDomainChange) (bool, error)) (bool, error) {
 	decoded, pooled, err := borrowStateDomainChangeBlockPayload(data)
 	if err != nil {
 		return false, err

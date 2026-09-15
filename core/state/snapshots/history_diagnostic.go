@@ -28,6 +28,15 @@ func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iterat
 // A parallel diagnostic must divide its aggregate threshold across workers and
 // both key/posting collectors. The ordinary diagnostic defaults are unchanged.
 func BuildDiagnosticStateHistoryTrioWithETLContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options) ([]SegmentRef, error) {
+	return BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx, db, dir, fromTx, toTx, fromBlock, toBlock, path, format, opts, false)
+}
+
+// BuildDiagnosticStateHistoryTrioWithReadPipelineContext enables only the
+// explicit offline shared-block authentication experiment. It preserves both
+// ordered passes and one output trio. False retains the normal serial reader;
+// true requires an audited concurrent pinned owned view and never falls back
+// silently. No production Runner enables this option.
+func BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options, pipeline bool) ([]SegmentRef, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -45,6 +54,11 @@ func BuildDiagnosticStateHistoryTrioWithETLContext(ctx context.Context, db ethdb
 	}
 	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
 	changes := cfg.IterateHotHistoryBlockTxBorrowed
+	if pipeline {
+		changes = func(db ethdb.Iteratee, fromBlock, toBlock, fromTx, toTx uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+			return rawdb.IterateStateDomainChangesByBlockTxRangePipelined(ctx, db, fromBlock, toBlock, fromTx, toTx, fn)
+		}
+	}
 	cfg.IterateHotHistoryBlockTxBorrowed = func(db ethdb.Iteratee, fromBlock, toBlock, fromTx, toTx uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
 		return changes(db, fromBlock, toBlock, fromTx, toTx, func(row *rawdb.StateDomainChange) (bool, error) {
 			if err := ctx.Err(); err != nil {

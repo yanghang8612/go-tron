@@ -133,3 +133,57 @@ failure. Acceptance includes exact partition/overflow tests, duplicate/empty
 and missing-pack input, all six supported worker/segment combinations, actual
 private snapshot reads, source unchanged, cancellation/join and shared serial
 diagnostic regressions. Native fixed-input measurements remain a separate gate.
+
+## Opt-in single-trio authentication pipeline
+
+The offline cold diagnostic may explicitly enable `--shared-read-pipeline` with owned
+copy mode. Normal readers, Runner scheduling and the parallel-segment diagnostic
+remain unchanged. A new explicit capability is implemented only by the private
+Pebble snapshot: pinned sequence, caller-owned Get values and concurrent Has/Get
+with independently owned iterators. Pinning/ownership alone are insufficient.
+Presence-coupled adapters (`GetWithPresence`) are explicitly unsupported by this
+experiment; it must not silently replace that operation with Has/Get.
+
+Within each existing dictionary and record pass, one ordered producer retains
+the original block/tx-range matching and schema handling. At most two shared
+packs are materialized concurrently through the unchanged complete reference
+preflight, Has then Get per chunk, chunk decode/SHA and final full pack SHA.
+The consumer parses RLP and invokes borrowed callbacks in original order. The
+post-materialization parser is shared with the unchanged serial path; already
+authenticated bytes never re-enter shared-envelope recognition. Non-shared and
+invalid-envelope cases drain predecessors and use the original serial decoder.
+Both full passes, their dictionary boundary, CDC and output trio remain intact.
+
+Global speculative reads of later blocks are explicitly permitted; the global
+serial I/O trace is not promised. Each block's reference read/authentication
+order is preserved. A future block failure does not cancel a predecessor or
+overtake its callback/parse failure. Known future failure stops further work;
+the consumer chooses the first original-order failure. Callback early stop
+ignores future speculative failures. Parent cancellation stops admissions,
+checks between reads and joins every worker before iterator/snapshot release.
+No worker, callback slice or authentication result survives the read operation.
+
+The two slots include completed outputs waiting for consumption. Their declared
+decoded total is at most 256 MiB; existing shared packs remain limited to
+128 MiB and a maximum-sized pack runs alone. No oversized pack is newly legal.
+The reused row scratch is cleared before releasing its decoded-output charge,
+so no prior pack remains reachable through borrowed Key/Prev fields.
+Pending iterator bytes are borrowed until admission; only admitted valid shared
+envelopes are copied. Encoded envelopes, chunk Get values, allocator overhead,
+serial legacy decoding, ETL and compression are additional memory, so 256 MiB
+is not a process heap/RSS limit. No cache, changed format, weakened checksum,
+new production admission, publication or prune authority is introduced.
+In particular, a fully authenticated shared payload can contain a compatibility
+Snappy storage envelope that the existing serial decoder accepts. Its inner
+decoded buffer (up to the unchanged 128 MiB limit) is additional to the outer
+shared-materialization charge. Tests preserve that old behavior; the 256 MiB
+claim does not include this serial compatibility buffer.
+
+Acceptance compares the frozen serial iterator and decoder for row bytes,
+filtering, order, legacy handling, malformed/nested payloads, per-block read
+errors and multiple competing failures. Tests exercise bounded admission,
+callback ownership, future error/earlier callback precedence, canceled blocked
+reads and complete joining. Full diagnostic output refs/bytes/digests must equal
+serial on the same private input; only a real complete-trio replay can establish
+throughput benefit. The options JSON explicitly reports `shared_read_pipeline: false` by default;
+source identity, refs, full digests and other report fields retain their contract.
