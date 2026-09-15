@@ -35,7 +35,7 @@ func BuildDiagnosticStateHistoryTrioWithETLContext(ctx context.Context, db ethdb
 // explicit offline shared-block authentication experiment. It preserves both
 // ordered passes and one output trio. False retains the normal serial reader;
 // true requires an audited concurrent pinned owned view and never falls back
-// silently. No production Runner enables this option.
+// silently. This diagnostic entry does not apply production resource policy.
 func BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options, pipeline bool) ([]SegmentRef, error) {
 	return BuildDiagnosticStateHistoryTrioWithReadWorkersContext(ctx, db, dir, fromTx, toTx, fromBlock, toBlock, path, format, opts, pipeline, 2)
 }
@@ -44,6 +44,15 @@ func BuildDiagnosticStateHistoryTrioWithReadPipelineContext(ctx context.Context,
 // 2/4/8 offline authentication slots, keeping the shared output budget fixed.
 // Pipeline disabled permits only the default two-slot setting (unused).
 func BuildDiagnosticStateHistoryTrioWithReadWorkersContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options, pipeline bool, workers int) ([]SegmentRef, error) {
+	return BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx, db, dir, fromTx, toTx, fromBlock, toBlock, path, format, opts, pipeline, workers, 0)
+}
+
+// BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext permits
+// an explicit local single codec worker. Zero preserves the previous automatic
+// codec topology. It does not apply production resource admission or cache
+// policy; callers may supply their independently owned cached pinned view.
+func BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options, pipeline bool, workers, compressionWorkers int) ([]SegmentRef, error) {
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -86,9 +95,9 @@ func BuildDiagnosticStateHistoryTrioWithReadWorkersContext(ctx context.Context, 
 			return fn(row)
 		})
 	}
-	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx, db, dir,
+	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextExecution(ctx, db, dir,
 		SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: fromTx, ToTxNum: toTx, Path: path},
-		cfg, opts, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, format)
+		cfg, opts, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, format, compressionWorkers)
 	return result.refs, err
 }
 

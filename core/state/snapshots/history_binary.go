@@ -742,6 +742,13 @@ func createStateDomainChangeHistoryTempContext(ctx context.Context, dir, relPath
 }
 
 func createStateDomainChangeHistoryTempFormat(ctx context.Context, dir, relPath string, compress bool, format string) (*stateDomainChangeHistoryTemp, error) {
+	return createStateDomainChangeHistoryTempFormatWorkers(ctx, dir, relPath, compress, format, 0)
+}
+
+func createStateDomainChangeHistoryTempFormatWorkers(ctx context.Context, dir, relPath string, compress bool, format string, workers int) (*stateDomainChangeHistoryTemp, error) {
+	if workers != 0 && workers != 1 {
+		return nil, errors.New("snapshots: history compression workers must be 0 or 1")
+	}
 	if !compress {
 		raw, tmpName, err := createStateDomainChangeBinaryTempFile(dir, relPath)
 		if err != nil {
@@ -762,7 +769,10 @@ func createStateDomainChangeHistoryTempFormat(ctx context.Context, dir, relPath 
 		_ = os.Remove(tmpName)
 		return nil, err
 	}
-	stream, err := newHistoryCompressedStreamFormat(ctx, filepath.Dir(abs), historyCompressChunkSize, historyCompressionConcurrency(runtime.GOMAXPROCS(0)), format)
+	if workers == 0 {
+		workers = historyCompressionConcurrency(runtime.GOMAXPROCS(0))
+	}
+	stream, err := newHistoryCompressedStreamFormat(ctx, filepath.Dir(abs), historyCompressChunkSize, workers, format)
 	if err != nil {
 		_ = os.Remove(tmpName)
 		return nil, err

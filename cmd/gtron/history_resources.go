@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/maintenance"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
 // runtimeHistoryResources keeps the CPU and shared-device baselines fresh even
@@ -106,4 +107,14 @@ func (p *runtimeHistoryResources) sampleLoad() maintenance.StoragePressure {
 
 func (p *runtimeHistoryResources) parallelReady() bool {
 	return p.running.Load() && p.parallel.ready() && p.running.Load()
+}
+
+func (p *runtimeHistoryResources) sharedReadResources() snapshots.HistoryReadResources {
+	if p.running.Load() {
+		observed := p.parallel.observeCapacity().reads
+		if p.running.Load() {
+			return observed
+		}
+	}
+	return snapshots.HistoryReadResources{}
 }

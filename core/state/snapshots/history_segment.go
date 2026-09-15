@@ -68,6 +68,20 @@ func BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(db ethdb.Iteratee, 
 	})
 }
 
+// BuildStateDomainChangeHistorySegmentsFromDBByBlockRangeReadContext is the
+// production context-aware single-trio entry. Reader options are local to this
+// build. In particular they do not change the existing effective 64MiB ETL
+// defaults by importing the unrelated runtime restore/sidecar options.
+func BuildStateDomainChangeHistorySegmentsFromDBByBlockRangeReadContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string, reads HistoryReadOptions) ([]SegmentRef, error) {
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok {
+		return nil, errors.New("snapshots: missing state-domain history configuration")
+	}
+	return buildStateHistoryReadContext(ctx, db, dir, SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: fromTxNum, ToTxNum: toTxNum, Path: relPath,
+	}, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, cfg, etl.Options{}, os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"), reads, reads.compressionWorkers())
+}
+
 func buildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string, blockRange *stateDomainChangeHistoryBlockRange) ([]SegmentRef, error) {
 	historyView, releaseHistoryView, viewErr := rawdb.AcquireStateHistoryReadView(db)
 	if viewErr != nil {

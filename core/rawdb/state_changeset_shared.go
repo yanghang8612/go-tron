@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -364,6 +365,11 @@ func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum
 		return nil, err
 	}
 	bucket := stateHistoryChunkBucket(blockNum)
+	var cache *StateHistoryChunkCache
+	var cacheContext context.Context
+	if provider, ok := db.(historyChunkCacheProvider); ok {
+		cache, cacheContext = provider.historyChunkCacheState()
+	}
 	decoded := make([]byte, length)
 	offset := 0
 	for i := 0; i < count; i++ {
@@ -371,15 +377,12 @@ func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum
 		var hash [32]byte
 		copy(hash[:], refs[n:n+32])
 		refs = refs[n+32:]
-		data, exists, err := readPresentValue(db, stateHistoryChunkKey(bucket, hash), "shared history chunk")
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, fmt.Errorf("rawdb: missing shared history chunk in bucket %d", bucket)
-		}
 		end := offset + int(size)
-		_, err = decodeStateHistorySharedChunkInto(decoded[offset:end:end], data, int(size), hash)
+		if cache != nil {
+			err = cache.copyOrRead(cacheContext, db, decoded[offset:end:end], bucket, int(size), hash)
+		} else {
+			err = readStateHistorySharedChunkInto(db, decoded[offset:end:end], bucket, int(size), hash)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -389,4 +392,17 @@ func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum
 		return nil, fmt.Errorf("rawdb: shared history pack hash mismatch")
 	}
 	return decoded, nil
+}
+
+// The default miss/read path retains the original Has/Get and error order.
+func readStateHistorySharedChunkInto(db ethdb.KeyValueReader, dst []byte, bucket uint64, want int, hash [32]byte) error {
+	data, exists, err := readPresentValue(db, stateHistoryChunkKey(bucket, hash), "shared history chunk")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("rawdb: missing shared history chunk in bucket %d", bucket)
+	}
+	_, err = decodeStateHistorySharedChunkInto(dst, data, want, hash)
+	return err
 }

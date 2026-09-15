@@ -454,6 +454,8 @@ var app = &cli.App{
 		historyCrossBlockDedupFlag,
 		historyCompressionFormatFlag,
 		historyCatchupModeFlag,
+		historySharedReadWorkersFlag,
+		historySharedChunkCacheFlag,
 		historyBacklogAdmissionFlag,
 		historyBacklogHighFlag,
 		historyBacklogLowFlag,
@@ -647,6 +649,11 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	historyReads, err := runtimeHistorySharedReadOptions(ctx)
+	if err != nil {
+		return err
+	}
+	log.Info("History shared reads configured", "maxWorkers", historyReads.Workers, "chunkCache", historyReads.ChunkCache)
 	log.Info("History catch-up scheduling configured", "mode", historyCatchupMode)
 	historyBacklog, err := runtimeHistoryBacklogOptions(ctx)
 	if err != nil {
@@ -1276,6 +1283,9 @@ func gtron(ctx *cli.Context) error {
 				ETL:                         snapshotETL,
 				CatchupBuildMinInterval:     snapshotCatchupBuildInterval,
 				HistoryCatchupMode:          historyCatchupMode,
+				HistorySharedReadWorkers:    historyReads.Workers,
+				HistorySharedChunkCache:     historyReads.ChunkCache,
+				HistoryReadResourceProbe:    historyResources.sharedReadResources,
 				HistoryLoadProbe:            historyLoadProbe,
 				HistoryRecoveryLoadProbe:    historyResources.postingPressure,
 				ParallelHistoryEventReady:   historyParallelReady,

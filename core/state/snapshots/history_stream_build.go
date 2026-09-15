@@ -53,6 +53,13 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContext(ctx context.C
 
 // The explicit format is used by offline diagnostics without changing process environment.
 func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx context.Context, db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange, format string) (result stateDomainChangeHistoryBuildResult, err error) {
+	return buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextExecution(ctx, db, dir, ref, cfg, opts, blockRange, format, 0)
+}
+
+func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextExecution(ctx context.Context, db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange, format string, compressionWorkers int) (result stateDomainChangeHistoryBuildResult, err error) {
+	if compressionWorkers != 0 && compressionWorkers != 1 {
+		return result, errors.New("snapshots: history compression workers must be 0 or 1")
+	}
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
@@ -117,7 +124,7 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx con
 			format = "3"
 		}
 	}
-	segmentTmp, err := createStateDomainChangeHistoryTempFormat(ctx, dir, ref.Path, CompressHistorySegments, format)
+	segmentTmp, err := createStateDomainChangeHistoryTempFormatWorkers(ctx, dir, ref.Path, CompressHistorySegments, format, compressionWorkers)
 	if err != nil {
 		return result, err
 	}

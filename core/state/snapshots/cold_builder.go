@@ -100,6 +100,11 @@ type Config struct {
 	CatchupBuildMinInterval time.Duration
 	// Throughput is explicitly opted into; balanced preserves existing scheduling.
 	HistoryCatchupMode HistoryCatchupMode
+	// Shared read acceleration is opt-in and selected per admitted batch from
+	// fresh resources. Resource fallback retains ordinary serial progress.
+	HistorySharedReadWorkers int
+	HistorySharedChunkCache  bool
+	HistoryReadResourceProbe func() HistoryReadResources
 	// HistoryLoadProbe reports fresh engine/device pressure without scanning
 	// application rows. Throughput uses it to size online work by observed
 	// density; hard write pressure also protects all other cold build paths.
@@ -302,9 +307,12 @@ type PassResult struct {
 	HistoryBuildAttempted bool
 	// HistoryEventParallel describes the last admitted build topology. Individual
 	// history/event durations overlap; BuildDuration remains their actual wall time.
-	HistoryEventParallel bool
-	HistoryDebtBlocks    uint64
-	HistoryDebtGrowth    int64
+	HistoryEventParallel      bool
+	HistorySharedReadWorkers  int
+	HistorySharedChunkCache   bool
+	HistoryReadFallbackReason uint8
+	HistoryDebtBlocks         uint64
+	HistoryDebtGrowth         int64
 	// HistoryMinRecovery is the importer-only recovery window selected after a
 	// forced-busy build. It is used by the next admission and for duty-cycle
 	// observability.
@@ -716,6 +724,7 @@ type Runner struct {
 	pendingMaintenanceID          uint64 // guarded by passMu; blocks new passes during outer work
 	historyLoad                   historyLoadState
 	historyEventMetrics           historyEventBuildMetrics
+	historyReadMetrics            historyReadExecutionMetrics
 	busyHistoryObservationPending atomic.Uint64 // generation; zero means canceled/consumed
 	busyHistoryObservationSerial  uint64        // guarded by passMu
 	historyObservationRecovery    bool          // guarded by passMu; never emits a full-pass wake
@@ -749,6 +758,7 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 		cfg:                           cfg,
 		metrics:                       newColdRunnerMetrics(cfg.MetricsNamespace),
 		historyEventMetrics:           newHistoryEventBuildMetrics(cfg.MetricsNamespace),
+		historyReadMetrics:            newHistoryReadExecutionMetrics(cfg.MetricsNamespace),
 		busyHistoryObservationMetrics: newBusyHistoryObservationMetrics(cfg.MetricsNamespace),
 		historyRecoveryMetrics:        newHistoryRecoveryObservationMetrics(cfg.MetricsNamespace),
 		quit:                          make(chan struct{}),
@@ -794,6 +804,9 @@ func (c Config) applyDefaults() Config {
 }
 
 func (c Config) validate() error {
+	if err := (HistoryReadOptions{Workers: c.HistorySharedReadWorkers, ChunkCache: c.HistorySharedChunkCache}).Validate(); err != nil {
+		return err
+	}
 	if !c.Enabled {
 		return nil
 	}
@@ -1529,6 +1542,12 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	result.historyWasSyncing = r.historySyncBudgetActive()
 	result.HistoryBatchBlocks = cutoffBlock - startBlock + 1
 	result.HistoryBatchTxNums = toTxNum - fromTxNum + 1
+	readOptions, readFallback := r.selectHistoryReadOptions(result.HistoryForcedBusy, time.Now())
+	result.HistorySharedReadWorkers = readOptions.Workers
+	result.HistorySharedChunkCache = readOptions.ChunkCache
+	result.HistoryReadFallbackReason = uint8(readFallback)
+	r.historyReadMetrics.begin(readOptions, readFallback, startBlock, cutoffBlock)
+	defer func() { r.historyReadMetrics.finish(result.Built) }()
 
 	var snapshotBuildHash common.Hash
 	if _, ok := db.(ethdb.KeyValueWriter); ok {
@@ -1560,6 +1579,12 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		return nil
 	}
 	buildHistory := func() ([]SegmentRef, error) {
+		if historyCfg.BuildHistoryBlockRangeContext != nil {
+			return historyCfg.BuildHistoryBlockRangeContext(ctx, db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum), readOptions)
+		}
+		if readOptions.enabled() {
+			return nil, errors.New("snapshots: enhanced history reader requires a context-aware bounded builder")
+		}
 		if historyCfg.BuildHistoryBlockRange != nil {
 			return historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
 		}
@@ -1589,6 +1614,10 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		"forcedBusy", result.HistoryForcedBusy,
 		"busyResourceReady", result.HistoryBusyResourceReady,
 		"historyPressure", pressured,
+		"sharedReadWorkers", readOptions.Workers,
+		"sharedChunkCache", readOptions.ChunkCache,
+		"historyCodecWorkers", readOptions.compressionWorkers(),
+		"sharedReadFallback", readFallback,
 		"hotHistoryBytes", pressure.HotHistoryBytes,
 		"hotHistoryBytesAvailable", pressure.HotHistoryBytesAvailable,
 		"freeBytes", pressure.FreeBytes,
@@ -1604,7 +1633,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	defer buildProgress.Stop()
 	var historyOutput, eventOutput coldSnapshotBuildOutput
 	plannedDerived, plannedEvents := planDerived(r.historySyncBudgetActive())
-	if r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
+	if r.cfg.HistorySharedReadWorkers == 0 && !r.cfg.HistorySharedChunkCache && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
 		// Only an admitted pair plans derived work before history. Serial work
 		// retains its post-history sync observation and does not require a
 		// ChainDB when history fails or yields no output.
@@ -1813,6 +1842,10 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		"totalBytes", totalBytes,
 		"historyElapsed", result.HistoryDuration.Round(time.Millisecond),
 		"historyEventParallel", result.HistoryEventParallel,
+		"sharedReadWorkers", result.HistorySharedReadWorkers,
+		"sharedChunkCache", result.HistorySharedChunkCache,
+		"historyCodecWorkers", (HistoryReadOptions{Workers: result.HistorySharedReadWorkers, ChunkCache: result.HistorySharedChunkCache}).compressionWorkers(),
+		"sharedReadFallback", result.HistoryReadFallbackReason,
 		"eventLogElapsed", result.EventLogDuration.Round(time.Millisecond),
 		"publishElapsed", result.PublishDuration.Round(time.Millisecond),
 		"elapsed", elapsed.Round(time.Millisecond),

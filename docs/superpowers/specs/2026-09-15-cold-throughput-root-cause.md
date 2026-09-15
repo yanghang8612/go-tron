@@ -191,7 +191,8 @@ source identity, refs, full digests and other report fields retain their contrac
 The subsequent offline experiment adds explicit `--shared-read-workers=2|4|8`.
 Existing no-argument pipeline APIs and the CLI default retain two slots. A
 disabled pipeline accepts only the default two-worker setting, and every report
-records `shared_read_workers`; no production scheduler enables any setting.
+records `shared_read_workers`; default production scheduling remains serial,
+with a separately gated opt-in described below.
 All selected slots (running or awaiting ordered consumption) share the same
 256 MiB declared shared-output budget. A maximum 128 MiB pack remains exclusive.
 Admission distinguishes an actual exclusive pack from the cumulative size of
@@ -202,6 +203,54 @@ same inner-Snappy compatibility allowance applies. Queue ordering, immutable
 snapshot, complete authentication, callback-first errors and cancel/join remain
 unchanged. Deterministic 2/4/8 tests exercise slot occupancy, ordered errors and
 join-before-Close; complete same-input trios must remain byte-identical.
+
+## Explicit build-scoped shared chunk authentication reuse
+
+The offline diagnostic can opt into `--shared-chunk-cache=true` (default false)
+on an audited immutable pinned owned view, with no presence-coupled operation.
+The normal public reader and the default production configuration do not create
+this adapter; the separately gated production option below may create it.
+One private cache is created per complete trio, inside the build timer, and the
+same wrapper is borrowed by both original passes and any 2/4/8 pipeline jobs.
+No snapshot is reopened or unwrapped. All jobs and iterators finish before the
+cache is cleared; only then may its owned snapshot be released. Borrowed source
+snapshots remain owned by their caller. Cache Close is idempotent, requires
+joined operations, and does not promise concurrent Close/engine-read safety.
+
+A fixed 4096-entry direct-mapped table stores complete `(bucket, SHA, expected
+decoded length)` identities. Physical reads use the existing schema accessor.
+On a miss, the original Has/Get, codec/length checks and chunk SHA write into
+the existing private pack output. Only a successful chunk can be admitted.
+Under the write lock, the cache rechecks competing inserts and evicts before
+cloning; clock eviction scans no more than the fixed table length. Hits copy
+under the read lock into the current pack output and never expose cached slices.
+There is no negative cache, singleflight or extra speculative miss clone.
+
+Cache payload slice capacities are capped at 64 MiB with at most 4096 entries;
+the table (about 0.3 MiB), allocator rounding, pack outputs and other builder
+buffers are additional. No evicted slice remains referenced by an uncharged
+local cache entry. Completed independent misses can use their own verified
+output even if another worker has already installed that key. Collisions or
+eviction affect performance only; later misses repeat the complete read/auth.
+
+Every shared pack still checks its complete SHA, and both build passes remain.
+A valid chunk may enter before its enclosing pack subsequently fails pack SHA;
+the chunk proof is independent, the pack failure is never hidden, and a failed
+build closes its entire cache. Cache hits intentionally omit later Get/chunkSHA
+and therefore do not preserve transient per-reference I/O failures on hits.
+Miss errors, malformed lengths, bucket isolation, ownership and ordered
+pipeline errors remain checked. Job cancellation is forwarded even on hits.
+The cache also retains its creation scope context: both that context and each
+operation/job context are checked, so a Background borrower cannot bypass scope
+cancellation. Snapshot release errors are joined with build/cancellation errors.
+
+Reports always include `options.shared_chunk_cache`. Enabled iterations record
+`shared_chunk_cache_before_close` and `shared_chunk_cache_after_close`; disabled
+ones omit both objects. Each reports hits/misses/inserts/evictions, current/peak
+payload and entry counts, fixed budgets and closed state. Construction, both
+passes, statistics and close are timed. After close, payload/entries must be
+zero while cumulative/peak counters stay available. Real same-input cache-off/
+on ABBA is required before claiming benefit; production defaults stay disabled.
 
 ## CDC digest reuse after complete byte equality
 
@@ -245,3 +294,64 @@ insertions, alongside low-reuse data. It reports avoided SHA bytes and unchanged
 output size; these synthetic timings are not production throughput. A separate
 native fixed-input full-trio comparison and online complete maintenance rate
 remain necessary before claiming this change clears the backlog.
+
+
+## Opt-in production reader topology and context ownership
+
+The production CLI accepts `--history.shared-read-workers=0|2|4|8` (default 0)
+and `--history.shared-chunk-cache=false|true` (default false). These flags have no
+environment-variable aliases and do not change the deployed service. A zero/
+false configuration retains serial reads, automatic codec concurrency and the
+existing independently admitted history/event pair. The registered bounded
+history hook now carries the real Runner context even with default options.
+
+Select the actual read plan only after the existing HeavyWorkGate lease is held;
+no new parallel admission, retry, forced-busy or recovery path is introduced.
+The original fresh engine/device pressure check must permit CPU work. The CPU
+capacity observation is the same mutex-protected sampler used by existing
+history/event admission, with the same completion timestamps, affinity/scope
+pair checks, finite-quota rejection and slow-read rejection. Missing, stale,
+future or unknown observations fall back to the original serial reader. Forced-
+busy describes importer scheduling, not resource pressure: an admitted forced-
+busy batch may use at most four reader workers when these same fresh resource
+checks pass. Otherwise it still progresses serially. Its existing finite batch,
+complete-maintenance recovery and cooldown are unchanged.
+
+Select the highest 2/4/8 worker count no greater than the requested maximum that
+has at least `W+1` effective idle cores and available GOMAXPROCS slots. Cache-only
+mode needs one effective idle core. In addition to the existing 2 GiB available
+memory headroom, reserve the 256 MiB declared pipeline output budget when read
+workers are selected and the 64 MiB retained cache payload when enabled. This
+is a conservative admission target, not a total heap/RSS guarantee; encoded
+buffers, active reads, table metadata, allocator rounding and runtime memory
+remain additional. Both ETL collectors retain the current effective 64 MiB
+threshold separately. No global GOMAXPROCS, compression policy or ETL default is
+changed. An actually enhanced read/cache plan uses one local codec worker;
+fallback uses the original automatic codec setting. If either option is
+configured, history and event files are generated sequentially, including
+fallback batches, to avoid nesting a second builder under the reader workers.
+
+One complete production trio acquires one pinned view, or one explicit cache
+session that owns its acquired view. Both original passes borrow that same view.
+The real context is checked before work, in range/change callbacks, by pipeline
+jobs and throughout the builder's existing context-aware finalization. All
+reader and codec jobs join before cache clearing or snapshot release. Close
+errors join build/cancellation errors and prevent manifest/stage publication.
+The normal post-build cancellation check, manifest integration, stage writes,
+merge and prune flow remain in order. Existing event/derived builders retain
+their bounded completion behavior on cancellation. Cancellation does not delete
+immutable output files that may already exist, but observed cancellation or a
+history close error cannot publish that attempted range or prune its hot input.
+
+Metrics under `state/snapshot/cold/history/shared_read/` expose the last admitted
+attempt rather than requested configuration: `last/workers`, `last/chunk_cache`,
+`last/codec_workers` (0 means original automatic setting), `last/from_block`,
+`last/to_block`, `last/active`, and `last/last_published`. `attempts` and `published`
+are cumulative counters. These describe the selected actual execution plan and
+manifest/stage completion, not total lifecycle completion or measured active OS
+threads; deferred passes do not erase the last attempt. `last/fallback_reason`
+is bounded: 0 enabled, 1 disabled, 2 reserved (not emitted), 3 missing lease, 4 storage
+pressure, 5 unknown resources, 6 stale resources, 7 insufficient memory, 8
+insufficient CPU. Complete maintenance throughput and eligible-lag slope remain
+the acceptance measures. A successful isolated trio or configured flag alone
+cannot establish that sustained backlog has been fixed.

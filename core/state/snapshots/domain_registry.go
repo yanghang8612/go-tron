@@ -49,6 +49,7 @@ type DomainCfg struct {
 	DeleteHotCommitmentCheckpoint     HotCommitmentCheckpointDeleter
 	BuildHistory                      HistorySnapshotBuilder
 	BuildHistoryBlockRange            HistorySnapshotBlockRangeBuilder
+	BuildHistoryBlockRangeContext     HistorySnapshotBlockRangeBuilderContext
 	OpenHistory                       HistorySnapshotOpener
 	WriteHistory                      HistorySnapshotWriter
 	CompactHistory                    HistoryCompactor
@@ -154,6 +155,8 @@ type HotCommitmentCheckpointDeleter func(db ethdb.KeyValueWriter, blockNum uint6
 type HistorySnapshotBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error)
 
 type HistorySnapshotBlockRangeBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string) ([]SegmentRef, error)
+
+type HistorySnapshotBlockRangeBuilderContext func(ctx context.Context, db AggregatorDB, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string, reads HistoryReadOptions) ([]SegmentRef, error)
 
 type HistorySnapshotOpener func(dir string, ref SegmentRef) ([]*rawdb.StateDomainChange, error)
 
@@ -427,6 +430,9 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			},
 			BuildHistoryBlockRange: func(db AggregatorDB, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string) ([]SegmentRef, error) {
 				return BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(db, dir, fromTxNum, toTxNum, fromBlock, toBlock, relPath)
+			},
+			BuildHistoryBlockRangeContext: func(ctx context.Context, db AggregatorDB, dir string, fromTxNum, toTxNum, fromBlock, toBlock uint64, relPath string, reads HistoryReadOptions) ([]SegmentRef, error) {
+				return BuildStateDomainChangeHistorySegmentsFromDBByBlockRangeReadContext(ctx, db, dir, fromTxNum, toTxNum, fromBlock, toBlock, relPath, reads)
 			},
 			IsHistoryBinaryPath:               isStateDomainChangeBinarySegmentPath,
 			IsHistoryCompanionPath:            isStateDomainChangeBinaryCompanionPath,

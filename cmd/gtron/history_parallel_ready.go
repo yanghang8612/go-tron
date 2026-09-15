@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
 const (
@@ -74,7 +75,16 @@ func (p *runtimeHistoryParallelProbe) reset() {
 	}
 }
 
-func (p *runtimeHistoryParallelProbe) ready() bool {
+type historyRuntimeCapacity struct {
+	ready bool
+	reads snapshots.HistoryReadResources
+}
+
+func (p *runtimeHistoryParallelProbe) ready() bool { return p.observeCapacity().ready }
+
+// Both old pair admission and new bounded read selection consume one sampler.
+// Neither callback invents a second baseline or loosens finite-quota evidence.
+func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := p.now()
@@ -128,7 +138,14 @@ func (p *runtimeHistoryParallelProbe) ready() bool {
 			gauge.Update(int64(min(value, uint64(math.MaxInt64))))
 		}
 	}
-	return ready
+	var sampledAt time.Time
+	if p.previous != nil {
+		sampledAt = p.previous.at
+	}
+	return historyRuntimeCapacity{ready: ready, reads: snapshots.HistoryReadResources{
+		Available: p.known && unlimitedCPU && gomax >= 8 && p.idlePPM >= 250_000,
+		SampledAt: sampledAt, IdleCoresMilli: idleCores, MemoryAvailableBytes: memory,
+	}}
 }
 
 func historyParallelBool(value bool) uint64 {

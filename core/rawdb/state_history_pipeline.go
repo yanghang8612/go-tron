@@ -249,6 +249,13 @@ type historyPipelineReader struct {
 }
 
 func (r historyPipelineReader) GetReturnsOwnedBytes() bool { return true }
+func (r historyPipelineReader) historyChunkCacheState() (*StateHistoryChunkCache, context.Context) {
+	if provider, ok := r.StateHistoryReadView.(historyChunkCacheProvider); ok {
+		cache, _ := provider.historyChunkCacheState()
+		return cache, r.ctx
+	}
+	return nil, r.ctx
+}
 func (r historyPipelineReader) Has(key []byte) (bool, error) {
 	if err := r.ctx.Err(); err != nil {
 		return false, err
