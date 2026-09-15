@@ -92,3 +92,44 @@ complete cold-trio bytes/references and full decoded output. Synthetic full
 builder measurements provide an allocation hypothesis; their timings cannot
 establish production throughput or prove the existing backlog will disappear.
 Only the real physical range replay can establish the benefit for current data.
+
+## Offline bounded parallel experiment
+
+`db benchmark-history-parallel` accepts only a complete original 16-block private
+export. It reuses the serial diagnostic's manifest/path/source exclusion checks,
+physical re-export verification and full logical digest routines. One real
+read-only private Pebble snapshot is owned until every worker joins; no arbitrary
+pinned reader is assumed concurrency-safe. Owned Get and auto compression are
+fixed. Workers and segments are independently 1, 2 or 4, workers <= segments.
+Partitioning is by equal complete-block counts on the exact captured heights;
+canonical and transaction continuity remain independently verified. No rows are
+re-numbered to manufacture locality.
+
+The entire command has a cooperative deadline at most five minutes and at most
+three iterations. Failure cancels the group, stops new admissions and joins all
+started work before snapshot release. Each worker creates its complete original
+trio in a separate private directory. Timed wall covers all group builds plus
+join; source authentication and exhaustive cold re-read/companion verification
+are outside timing. There is no production manifest publication, stage update,
+pruning, GC or scheduler change. Therefore this experiment cannot claim to have
+measured batched publication or complete online maintenance throughput.
+
+Across concurrent key/posting collectors the configured ETL spill thresholds
+sum to 64 MiB: each receives 64 MiB / (2 * workers). This is not a strict heap/RSS
+bound. Entry/order arrays, append overshoot, arena allocation/pools, codecs,
+per-worker key tables (up to 512 MiB), CDC dictionary payload (up to 64 MiB),
+pack output (up to 128 MiB), frame scratch and compression pipelines are extra.
+Existing export maxima remain aggregate input bounds (1 GiB physical, 262144
+rows, 4 GiB declared logical bytes), not aggregate resident memory claims.
+Normal diagnostic/default production builder thresholds do not change.
+
+Every source subrange and resulting trio must match the complete logical-row
+and tx-range digests exactly. The partition must exhaust the original block/tx
+range and summed statistics must match the full source, with a maximum rather
+than sum for MaxPrevBytes. SHA strings are not algebraically combined. Reports
+preserve all per-range hashes and the full-source hash, label process-wide
+allocations/profile scope and warmed caches, and mark any incomplete group as
+failure. Acceptance includes exact partition/overflow tests, duplicate/empty
+and missing-pack input, all six supported worker/segment combinations, actual
+private snapshot reads, source unchanged, cancellation/join and shared serial
+diagnostic regressions. Native fixed-input measurements remain a separate gate.

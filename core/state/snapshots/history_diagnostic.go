@@ -19,6 +19,15 @@ import (
 // builder with an explicit compression policy (auto, 2 or 3). It only creates an immutable
 // trio; publication, metadata registration, pruning and lifecycle work are absent.
 func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string) ([]SegmentRef, error) {
+	return BuildDiagnosticStateHistoryTrioWithETLContext(ctx, db, dir, fromTx, toTx, fromBlock, toBlock, path, format, etl.Options{})
+}
+
+// BuildDiagnosticStateHistoryTrioWithETLContext is the same offline-only full
+// builder with explicit collector thresholds. BufferLimit applies separately
+// to each collector; it is not a heap/RSS limit and excludes codec/key tables.
+// A parallel diagnostic must divide its aggregate threshold across workers and
+// both key/posting collectors. The ordinary diagnostic defaults are unchanged.
+func BuildDiagnosticStateHistoryTrioWithETLContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string, opts etl.Options) ([]SegmentRef, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -55,7 +64,7 @@ func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iterat
 	}
 	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx, db, dir,
 		SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: fromTx, ToTxNum: toTx, Path: path},
-		cfg, etl.Options{}, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, format)
+		cfg, opts, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, format)
 	return result.refs, err
 }
 

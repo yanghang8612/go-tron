@@ -82,6 +82,7 @@ func dbCommand() *cli.Command {
 			dbHistorySharingBenchmarkCommand(),
 			dbHistoryRangeExportCommand(),
 			dbHistoryColdBenchmarkCommand(),
+			dbHistoryParallelBenchmarkCommand(),
 			dbBenchmarkAncientCommand(),
 			dbBenchmarkTxIndexCommand(),
 			dbMigrateAncientV2Command(),

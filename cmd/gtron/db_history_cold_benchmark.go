@@ -132,50 +132,147 @@ func validateHistoryColdManifest(m historyRangeExportManifest) error {
 // keys are fatal. Re-export to a discard writer independently recomputes closure,
 // canonical block/range proof and declared expansion budgets from these bytes.
 func verifyHistoryColdInput(ctx context.Context, view rawdb.StateHistoryReadView, expected rawdb.StateHistoryRangeExportReport) error {
+	_, err := verifyHistoryColdInputReport(ctx, view, expected)
+	return err
+}
+
+// Return the freshly reconstructed canonical report for partition planning;
+// no plan needs to treat caller-provided BlockDetails as its source of truth.
+func verifyHistoryColdInputReport(ctx context.Context, view rawdb.StateHistoryReadView, expected rawdb.StateHistoryRangeExportReport) (verified rawdb.StateHistoryRangeExportReport, resultErr error) {
 	it := view.NewIterator(nil, nil)
 	defer it.Release()
 	var rows, physical uint64
 	var previous []byte
 	for it.Next() {
 		if err := ctx.Err(); err != nil {
-			return err
+			return verified, err
 		}
 		if rows >= uint64(len(expected.Entries)) {
-			return errors.New("unexpected extra physical history row")
+			return verified, errors.New("unexpected extra physical history row")
 		}
 		e := expected.Entries[rows]
 		key, err := hex.DecodeString(e.KeyHex)
 		if err != nil || len(key) == 0 || (previous != nil && bytes.Compare(previous, key) >= 0) || !bytes.Equal(key, it.Key()) {
-			return fmt.Errorf("physical history key mismatch at row %d", rows)
+			return verified, fmt.Errorf("physical history key mismatch at row %d", rows)
 		}
 		want, err := hex.DecodeString(e.ValueSHA256)
 		sum := sha256.Sum256(it.Value())
 		if err != nil || len(want) != sha256.Size || uint64(len(it.Value())) != e.ValueBytes || !bytes.Equal(sum[:], want) {
-			return fmt.Errorf("physical history value mismatch at row %d", rows)
+			return verified, fmt.Errorf("physical history value mismatch at row %d", rows)
 		}
 		physical += uint64(len(key)) + e.ValueBytes
 		if physical > rawdb.StateHistoryRangeExportMaxBytes {
-			return errors.New("physical history budget exceeded")
+			return verified, errors.New("physical history budget exceeded")
 		}
 		previous = key
 		rows++
 	}
 	if err := it.Error(); err != nil {
-		return err
+		return verified, err
 	}
 	if rows != expected.PhysicalRows || physical != expected.PhysicalBytes {
-		return errors.New("physical history row/byte total mismatch")
+		return verified, errors.New("physical history row/byte total mismatch")
 	}
 	replayed, err := rawdb.ExportStateHistoryRange(ctx, view, historyColdDiscardWriter{}, rawdb.StateHistoryRangeExportOptions{
 		FromBlock: expected.FromBlock, ToBlock: expected.ToBlock, MaxBytes: rawdb.StateHistoryRangeExportMaxBytes,
 		MaxRows: rawdb.StateHistoryRangeExportMaxRows, MaxDecodedBytes: rawdb.StateHistoryRangeExportMaxDecodedBytes})
 	if err != nil {
-		return err
+		return verified, err
 	}
 	if !replayed.Complete || !reflect.DeepEqual(replayed, expected) {
-		return errors.New("history range closure, digest or declared size mismatch")
+		return verified, errors.New("history range closure, digest or declared size mismatch")
 	}
-	return ctx.Err()
+	return replayed, ctx.Err()
+}
+
+// historyColdInput owns only a read-only private export snapshot. The common
+// opener preserves one manifest/path/physical-source exclusion policy for both
+// serial and parallel diagnostics. Close follows release-before-database order.
+type historyColdInput struct {
+	output         string
+	manifestSHA256 string
+	manifest       historyRangeExportManifest
+	view           rawdb.StateHistoryReadView
+	release        func() error
+	closeDB        func() error
+}
+
+func (input *historyColdInput) Close() error {
+	var viewErr, dbErr error
+	if input.release != nil {
+		viewErr = input.release()
+		input.release = nil
+	}
+	if input.closeDB != nil {
+		dbErr = input.closeDB()
+		input.closeDB = nil
+	}
+	return errors.Join(viewErr, dbErr)
+}
+
+func openHistoryColdInput(inputDir, outputDir string) (opened historyColdInput, err error) {
+	input, err := filepath.EvalSymlinks(inputDir)
+	if err != nil {
+		return opened, err
+	}
+	data, err := readHistoryDiagnosticFile(filepath.Join(input, "manifest.json"), 128<<20)
+	if err != nil {
+		return opened, err
+	}
+	sum := sha256.Sum256(data)
+	opened.manifestSHA256 = hex.EncodeToString(sum[:])
+	var manifest historyRangeExportManifest
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return opened, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return opened, errors.New("trailing history export manifest content")
+	}
+	if err := validateHistoryColdManifest(manifest); err != nil {
+		return opened, err
+	}
+	opened.manifest = manifest
+	pebblePath := filepath.Join(input, "pebble")
+	realPebble, err := filepath.EvalSymlinks(pebblePath)
+	if err != nil || realPebble != pebblePath {
+		return opened, errors.New("input pebble must be a real directory inside the export")
+	}
+	parentDir, err := filepath.EvalSymlinks(filepath.Dir(filepath.Clean(outputDir)))
+	if err != nil {
+		return opened, err
+	}
+	requested := filepath.Join(parentDir, filepath.Base(filepath.Clean(outputDir)))
+	// The original source may be absent on the replay host. If present resolve
+	// aliases; otherwise retain the absolute recorded path as an exclusion.
+	sourcePath := filepath.Clean(manifest.SourceChaindata)
+	if filepath.Base(sourcePath) != "chaindata" || filepath.Base(filepath.Dir(sourcePath)) != "gtron" {
+		return opened, errors.New("manifest source must identify datadir/gtron/chaindata")
+	}
+	sourceParent := filepath.Dir(filepath.Dir(sourcePath))
+	if resolved, err := filepath.EvalSymlinks(sourceParent); err == nil {
+		sourceParent = resolved
+	}
+	if pathInsideHistoryCold(requested, input) || pathInsideHistoryCold(requested, sourceParent) {
+		return opened, errors.New("benchmark output must be outside input and original source datadir")
+	}
+	directory, err := newHistoryPackExport(requested, input)
+	if err != nil {
+		return opened, err
+	}
+	opened.output = directory.directory
+	db, err := rawdb.NewPebbleDBReadOnly(pebblePath, 64, 128)
+	if err != nil {
+		return opened, err
+	}
+	opened.closeDB = db.Close
+	view, release, err := rawdb.AcquireStateHistoryReadView(db)
+	if err != nil {
+		return opened, err
+	}
+	opened.view, opened.release = view, release
+	return opened, nil
 }
 
 func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptions) (report historyColdBenchmarkReport, resultErr error) {
@@ -211,67 +308,13 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 	if err := ctx.Err(); err != nil {
 		return report, err
 	}
-	input, err := filepath.EvalSymlinks(opts.InputDir)
+	opened, err := openHistoryColdInput(opts.InputDir, opts.OutputDir)
+	output, report.ManifestSHA256, report.Export = opened.output, opened.manifestSHA256, opened.manifest.Export
+	defer func() { resultErr = errors.Join(resultErr, opened.Close()) }()
 	if err != nil {
 		return report, err
 	}
-	data, err := readHistoryDiagnosticFile(filepath.Join(input, "manifest.json"), 128<<20)
-	if err != nil {
-		return report, err
-	}
-	sum := sha256.Sum256(data)
-	report.ManifestSHA256 = hex.EncodeToString(sum[:])
-	var manifest historyRangeExportManifest
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
-		return report, err
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return report, errors.New("trailing history export manifest content")
-	}
-	if err := validateHistoryColdManifest(manifest); err != nil {
-		return report, err
-	}
-	report.Export = manifest.Export
-	pebblePath := filepath.Join(input, "pebble")
-	realPebble, err := filepath.EvalSymlinks(pebblePath)
-	if err != nil || realPebble != pebblePath {
-		return report, errors.New("input pebble must be a real directory inside the export")
-	}
-	parentDir, err := filepath.EvalSymlinks(filepath.Dir(filepath.Clean(opts.OutputDir)))
-	if err != nil {
-		return report, err
-	}
-	requested := filepath.Join(parentDir, filepath.Base(filepath.Clean(opts.OutputDir)))
-	// The original source may be absent on the replay host. If present resolve
-	// aliases; otherwise retain the absolute recorded path as an exclusion.
-	sourcePath := filepath.Clean(manifest.SourceChaindata)
-	if filepath.Base(sourcePath) != "chaindata" || filepath.Base(filepath.Dir(sourcePath)) != "gtron" {
-		return report, errors.New("manifest source must identify datadir/gtron/chaindata")
-	}
-	sourceParent := filepath.Dir(filepath.Dir(sourcePath))
-	if resolved, err := filepath.EvalSymlinks(sourceParent); err == nil {
-		sourceParent = resolved
-	}
-	if pathInsideHistoryCold(requested, input) || pathInsideHistoryCold(requested, sourceParent) {
-		return report, errors.New("benchmark output must be outside input and original source datadir")
-	}
-	directory, err := newHistoryPackExport(requested, input)
-	if err != nil {
-		return report, err
-	}
-	output = directory.directory
-	db, err := rawdb.NewPebbleDBReadOnly(pebblePath, 64, 128)
-	if err != nil {
-		return report, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, db.Close()) }()
-	view, release, err := rawdb.AcquireStateHistoryReadView(db)
-	if err != nil {
-		return report, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, release()) }()
+	view, manifest := opened.view, opened.manifest
 	if opts.CopyMode == "defensive" {
 		view = defensiveHistoryColdView{view}
 	} else {
