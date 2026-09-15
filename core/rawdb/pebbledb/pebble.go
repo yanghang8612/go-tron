@@ -497,6 +497,10 @@ func (s *keyValueSnapshot) Has(key []byte) (bool, error) {
 	return true, nil
 }
 
+// GetReturnsOwnedBytes reports that Get copies the engine value before releasing
+// its closer, so consumers need not copy the caller-owned bytes a second time.
+func (s *keyValueSnapshot) GetReturnsOwnedBytes() bool { return true }
+
 func (s *keyValueSnapshot) Get(key []byte) ([]byte, error) {
 	if s == nil || s.snapshot == nil {
 		return nil, pebble.ErrClosed

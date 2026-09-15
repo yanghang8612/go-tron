@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/pointread"
 )
 
 func readPresentValue(db ethdb.KeyValueReader, key []byte, context string) ([]byte, bool, error) {
@@ -30,6 +31,15 @@ func readPresentValue(db ethdb.KeyValueReader, key []byte, context string) ([]by
 	value, err := db.Get(key)
 	if err != nil {
 		return nil, false, fmt.Errorf("rawdb: read %s: %w", context, err)
+	}
+	if reader, ok := db.(pointread.OwnedKeyValueReader); ok && reader.GetReturnsOwnedBytes() {
+		// The original Has/Get sequence and errors above are unchanged. An
+		// explicitly owned Get result needs no second copy; preserve the old
+		// fallback's nil representation for present zero-length values.
+		if len(value) == 0 {
+			return nil, true, nil
+		}
+		return value, true, nil
 	}
 	return append([]byte(nil), value...), true, nil
 }

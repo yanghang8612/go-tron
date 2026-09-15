@@ -48,6 +48,11 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRange(db ethdb.Iteratee, d
 }
 
 func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContext(ctx context.Context, db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange) (result stateDomainChangeHistoryBuildResult, err error) {
+	return buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx, db, dir, ref, cfg, opts, blockRange, os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"))
+}
+
+// The explicit format is used by offline diagnostics without changing process environment.
+func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx context.Context, db ethdb.Iteratee, dir string, ref SegmentRef, cfg DomainCfg, opts etl.Options, blockRange *stateDomainChangeHistoryBlockRange, format string) (result stateDomainChangeHistoryBuildResult, err error) {
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
@@ -90,7 +95,6 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContext(ctx context.C
 		return result, err
 	}
 	defer v6Build.Close()
-	format := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT")
 	var compressionPolicy historyCompressionPolicy
 	if err := iterateStateDomainChangeHistoryChanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		if change == nil {
