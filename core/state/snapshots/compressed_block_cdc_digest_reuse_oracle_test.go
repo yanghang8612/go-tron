@@ -1,5 +1,11 @@
 package snapshots
 
+// Frozen from e913c72d274d3f76f07b61f1d44ae1df986cbee9 before the digest reuse
+// change: complete writer methods and writer-owned pipeline methods. Only the
+// receiver/constructor and private type names were changed. The unchanged compression worker,
+// metadata writer and reader are shared; candidate lookup and LRU behavior are
+// independent of the production implementation under test.
+
 import (
 	"bufio"
 	"bytes"
@@ -10,119 +16,40 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"hash/maphash"
 	"io"
 	"math"
 	"os"
-	"path/filepath"
-	"sync"
 
-	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/klauspost/compress/zstd"
 	"github.com/tronprotocol/go-tron/internal/historychunk"
 )
 
-// Container V3 preserves the complete V6 logical byte stream. Its CDC chunks
-// either own one complete zstd frame or name an earlier directory anchor with
-// exactly the same bytes. References never reference references. The footer
-// table is paged, checksummed, and located by a small checksummed sparse index.
-const (
-	compressedBlockCDCVersion  = uint32(3)
-	compressedBlockCDCEndMagic = "gtcend03"
-	cdcEntriesPerPage          = 1024
-	cdcEntrySize               = 28
-	cdcFooterSize              = 48
-	cdcAnchor                  = uint32(math.MaxUint32)
-	cdcDictionaryBytes         = 64 << 20
-	cdcDictionaryEntries       = 8192
-	cdcMaxSparseBytes          = 16 << 20
-	cdcMaxEncodedChunk         = historychunk.MaxSize + 1024
-)
-
-type historyCompressedStream interface {
-	io.Writer
-	io.WriterAt
-	Reset() error
-	Abort()
-	Finish(string) error
-	FinishWithMetadataContext(context.Context, string) (snapshotFileMetadata, error)
+type frozenCDCDictionaryEntry struct {
+	digest  [sha256.Size]byte
+	bytes   []byte
+	entry   cdcEntry
+	ordinal uint32
 }
 
-func newHistoryCompressedStream(ctx context.Context, dir string, prefixSize, workers int) (historyCompressedStream, error) {
-	return newHistoryCompressedStreamFormat(ctx, dir, prefixSize, workers, os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"))
+type frozenCDCPendingChunk struct {
+	entry     cdcEntry
+	anchor    *frozenCDCDictionaryEntry
+	job       *cdcCompressionJob
+	rawLength int
 }
 
-// Selection is per artifact. Never mutate the process environment while a
-// concurrent builder/merge may be choosing its own format.
-func newHistoryCompressedStreamFormat(ctx context.Context, dir string, prefixSize, workers int, format string) (historyCompressedStream, error) {
-	switch format {
-	case "3":
-		return newCDCStreamWriterWorkers(ctx, dir, prefixSize, workers)
-	case "2", "auto":
-		return newCompressedBlockStreamWriterWithFooter(dir, prefixSize, workers, true)
-	case "", "1":
-		return newCompressedBlockStreamWriterWithFooter(dir, prefixSize, workers, false)
-	default:
-		return nil, fmt.Errorf("snapshots: invalid history compression format %q", format)
-	}
+type frozenCDCWriteStats struct {
+	InputBytes, AnchorBytes, ReusedBytes, Anchors, References uint64
+	Pipeline                                                  cdcPipelineStats
 }
 
-var (
-	cdcEncoderOnce          sync.Once
-	cdcEncoder              *zstd.Encoder
-	cdcEncoderErr           error
-	historyCDCFilesCounter  = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"compression_cdc/files", nil)
-	historyCDCInputCounter  = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"compression_cdc/input_bytes", nil)
-	historyCDCReusedCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"compression_cdc/reused_bytes", nil)
-	historyCDCStoredCounter = metrics.NewRegisteredCounter(defaultColdSnapshotMetrics+"compression_cdc/stored_bytes", nil)
-)
-
-func sharedCDCEncoder() (*zstd.Encoder, error) {
-	cdcEncoderOnce.Do(func() {
-		cdcEncoder, cdcEncoderErr = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(cdcMaxCompressionWorkers), zstd.WithWindowSize(historychunk.MaxSize), zstd.WithEncoderCRC(true))
-	})
-	return cdcEncoder, cdcEncoderErr
-}
-
-type cdcEntry struct {
-	logical, physical, stored uint64
-	anchor                    uint32
-}
-
-func putCDCEntry(p []byte, e cdcEntry) {
-	binary.BigEndian.PutUint64(p[0:8], e.logical)
-	binary.BigEndian.PutUint64(p[8:16], e.physical)
-	binary.BigEndian.PutUint64(p[16:24], e.stored)
-	binary.BigEndian.PutUint32(p[24:28], e.anchor)
-}
-
-func getCDCEntry(p []byte) cdcEntry {
-	return cdcEntry{binary.BigEndian.Uint64(p[0:8]), binary.BigEndian.Uint64(p[8:16]), binary.BigEndian.Uint64(p[16:24]), binary.BigEndian.Uint32(p[24:28])}
-}
-
-type cdcDictionaryEntry struct {
-	digest      [sha256.Size]byte
-	fingerprint cdcChunkFingerprint
-	bytes       []byte
-	entry       cdcEntry
-	ordinal     uint32
-}
-
-// A fingerprint is only a bounded candidate index, never a content proof.
-// Each key retains at most one live primary-dictionary entry. A collision can
-// cost one full byte comparison before falling back to the original SHA path.
-type cdcChunkFingerprint struct {
-	hash uint64
-	size int
-}
-
-type cdcStreamWriter struct {
+type frozenCDCStreamWriter struct {
 	ctx                      context.Context
 	dir                      string
 	prefixSize               int
 	workers                  int
 	pipeline                 *cdcCompressionPipeline
-	pending                  []cdcPendingChunk
+	pending                  []frozenCDCPendingChunk
 	encodeChunk              cdcEncodeFunc // test fault injection; nil selects production EncodeAll
 	written                  uint64
 	failure                  error
@@ -135,26 +62,13 @@ type cdcStreamWriter struct {
 	split                    historychunk.Splitter
 	logical, physical, count uint64 // count excludes retained first chunk
 	dictionary               map[[sha256.Size]byte]*list.Element
-	fingerprints             map[cdcChunkFingerprint]*list.Element
-	fingerprintSeed          maphash.Seed
-	fingerprintForTest       func([]byte) uint64 // nil uses seeded maphash; collision tests only
 	lru                      list.List
 	dictionaryBytes          int
 	closed                   bool
-	stats                    cdcWriteStats
+	stats                    frozenCDCWriteStats
 }
 
-type cdcWriteStats struct {
-	InputBytes, AnchorBytes, ReusedBytes, Anchors, References uint64
-	ReusedDigestChunks, ReusedDigestBytes                     uint64
-	Pipeline                                                  cdcPipelineStats
-}
-
-func newCDCStreamWriter(ctx context.Context, dir string, prefixSize int) (*cdcStreamWriter, error) {
-	return newCDCStreamWriterWorkers(ctx, dir, prefixSize, 1)
-}
-
-func newCDCStreamWriterWorkers(ctx context.Context, dir string, prefixSize, workers int) (*cdcStreamWriter, error) {
+func newFrozenCDCStreamWriterWorkers(ctx context.Context, dir string, prefixSize, workers int) (*frozenCDCStreamWriter, error) {
 	if workers < 1 {
 		workers = 1
 	}
@@ -172,7 +86,7 @@ func newCDCStreamWriterWorkers(ctx context.Context, dir string, prefixSize, work
 	if err != nil {
 		return nil, err
 	}
-	w := &cdcStreamWriter{ctx: ctx, dir: dir, prefixSize: prefixSize, workers: workers, enc: enc}
+	w := &frozenCDCStreamWriter{ctx: ctx, dir: dir, prefixSize: prefixSize, workers: workers, enc: enc}
 	if err := w.initialize(); err != nil {
 		w.Abort()
 		return nil, err
@@ -180,7 +94,7 @@ func newCDCStreamWriterWorkers(ctx context.Context, dir string, prefixSize, work
 	return w, nil
 }
 
-func (w *cdcStreamWriter) initialize() (err error) {
+func (w *frozenCDCStreamWriter) initialize() (err error) {
 	if err := contextError(w.ctx); err != nil {
 		return err
 	}
@@ -200,8 +114,6 @@ func (w *cdcStreamWriter) initialize() (err error) {
 	w.first = make([]byte, 0, w.prefixSize)
 	w.chunk = make([]byte, 0, historychunk.MaxSize)
 	w.dictionary = make(map[[sha256.Size]byte]*list.Element)
-	w.fingerprints = make(map[cdcChunkFingerprint]*list.Element)
-	w.fingerprintSeed = maphash.MakeSeed()
 	w.physical = compressedBlockHeaderSize
 	var header [compressedBlockHeaderSize]byte
 	copy(header[:8], compressedBlockMagic)
@@ -211,7 +123,7 @@ func (w *cdcStreamWriter) initialize() (err error) {
 	return err
 }
 
-func (w *cdcStreamWriter) Write(p []byte) (written int, err error) {
+func (w *frozenCDCStreamWriter) Write(p []byte) (written int, err error) {
 	if w == nil || w.closed || w.bodyWriter == nil {
 		return 0, errors.New("snapshots: CDC writer closed")
 	}
@@ -278,7 +190,7 @@ func (w *cdcStreamWriter) Write(p []byte) (written int, err error) {
 	return written, nil
 }
 
-func (w *cdcStreamWriter) WriteAt(p []byte, off int64) (int, error) {
+func (w *frozenCDCStreamWriter) WriteAt(p []byte, off int64) (int, error) {
 	if w == nil || w.closed || w.bodyWriter == nil {
 		return 0, errors.New("snapshots: CDC writer closed")
 	}
@@ -302,9 +214,9 @@ func (w *cdcStreamWriter) WriteAt(p []byte, off int64) (int, error) {
 	return copy(w.first[int(off):], p), nil
 }
 
-func (w *cdcStreamWriter) flushChunk() error { return w.flushChunkContext(w.ctx) }
+func (w *frozenCDCStreamWriter) flushChunk() error { return w.flushChunkContext(w.ctx) }
 
-func (w *cdcStreamWriter) flushChunkContext(ctx context.Context) error {
+func (w *frozenCDCStreamWriter) flushChunkContext(ctx context.Context) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -326,9 +238,9 @@ func (w *cdcStreamWriter) flushChunkContext(ctx context.Context) error {
 		return w.flushChunkParallel(ctx)
 	}
 	e := cdcEntry{logical: w.logical - uint64(len(w.chunk)), anchor: cdcAnchor}
-	digest, fingerprint := w.chunkDigest()
-	if candidate := w.dictionary[digest]; candidate != nil && bytes.Equal(candidate.Value.(*cdcDictionaryEntry).bytes, w.chunk) {
-		old := candidate.Value.(*cdcDictionaryEntry)
+	digest := sha256.Sum256(w.chunk)
+	if candidate := w.dictionary[digest]; candidate != nil && bytes.Equal(candidate.Value.(*frozenCDCDictionaryEntry).bytes, w.chunk) {
+		old := candidate.Value.(*frozenCDCDictionaryEntry)
 		e.physical, e.stored, e.anchor = old.entry.physical, old.entry.stored, old.ordinal
 		w.lru.MoveToFront(candidate)
 		w.stats.References++
@@ -346,7 +258,7 @@ func (w *cdcStreamWriter) flushChunkContext(ctx context.Context) error {
 			return err
 		}
 		w.physical += e.stored
-		w.remember(digest, fingerprint, e, uint32(w.count+1))
+		w.remember(digest, e, uint32(w.count+1))
 		w.stats.Anchors++
 		w.stats.AnchorBytes += uint64(len(w.chunk))
 	}
@@ -361,7 +273,7 @@ func (w *cdcStreamWriter) flushChunkContext(ctx context.Context) error {
 	return nil
 }
 
-func (w *cdcStreamWriter) flushChunkParallel(ctx context.Context) error {
+func (w *frozenCDCStreamWriter) flushChunkParallel(ctx context.Context) error {
 	for len(w.pending) >= w.pipeline.limit {
 		if err := w.drainCDCChunk(ctx); err != nil {
 			return err
@@ -374,16 +286,16 @@ func (w *cdcStreamWriter) flushChunkParallel(ctx context.Context) error {
 		return err
 	}
 	e := cdcEntry{logical: w.logical - uint64(len(w.chunk)), anchor: cdcAnchor}
-	digest, fingerprint := w.chunkDigest()
-	item := cdcPendingChunk{entry: e, rawLength: len(w.chunk)}
-	if candidate := w.dictionary[digest]; candidate != nil && bytes.Equal(candidate.Value.(*cdcDictionaryEntry).bytes, w.chunk) {
-		item.anchor = candidate.Value.(*cdcDictionaryEntry)
+	digest := sha256.Sum256(w.chunk)
+	item := frozenCDCPendingChunk{entry: e, rawLength: len(w.chunk)}
+	if candidate := w.dictionary[digest]; candidate != nil && bytes.Equal(candidate.Value.(*frozenCDCDictionaryEntry).bytes, w.chunk) {
+		item.anchor = candidate.Value.(*frozenCDCDictionaryEntry)
 		item.entry.anchor = item.anchor.ordinal
 		w.lru.MoveToFront(candidate)
 		w.stats.References++
 		w.stats.ReusedBytes += uint64(len(w.chunk))
 	} else {
-		item.anchor = w.remember(digest, fingerprint, e, uint32(w.count+1))
+		item.anchor = w.remember(digest, e, uint32(w.count+1))
 		job, err := w.pipeline.submit(item.anchor.bytes)
 		if err != nil {
 			return err
@@ -398,35 +310,9 @@ func (w *cdcStreamWriter) flushChunkParallel(ctx context.Context) error {
 	return nil
 }
 
-// chunkDigest reuses a SHA only after proving exact equality with an immutable
-// byte slice owned by the current primary dictionary. The primary lookup below
-// still chooses the anchor and updates LRU in exactly the original order. The
-// secondary index never holds pending/retired anchors after dictionary eviction.
-func (w *cdcStreamWriter) chunkDigest() ([sha256.Size]byte, cdcChunkFingerprint) {
-	hash := uint64(0)
-	if w.fingerprintForTest != nil {
-		hash = w.fingerprintForTest(w.chunk)
-	} else {
-		hash = maphash.Bytes(w.fingerprintSeed, w.chunk)
-	}
-	fingerprint := cdcChunkFingerprint{hash: hash, size: len(w.chunk)}
-	if candidate := w.fingerprints[fingerprint]; candidate != nil {
-		old := candidate.Value.(*cdcDictionaryEntry)
-		if w.dictionary[old.digest] == candidate && bytes.Equal(old.bytes, w.chunk) {
-			w.stats.ReusedDigestChunks++
-			w.stats.ReusedDigestBytes += uint64(len(w.chunk))
-			return old.digest, fingerprint
-		}
-	}
-	return sha256.Sum256(w.chunk), fingerprint
-}
-
-func (w *cdcStreamWriter) remember(digest [sha256.Size]byte, fingerprint cdcChunkFingerprint, entry cdcEntry, ordinal uint32) *cdcDictionaryEntry {
+func (w *frozenCDCStreamWriter) remember(digest [sha256.Size]byte, entry cdcEntry, ordinal uint32) *frozenCDCDictionaryEntry {
 	remove := func(element *list.Element) {
-		old := element.Value.(*cdcDictionaryEntry)
-		if w.fingerprints[old.fingerprint] == element {
-			delete(w.fingerprints, old.fingerprint)
-		}
+		old := element.Value.(*frozenCDCDictionaryEntry)
 		delete(w.dictionary, old.digest)
 		w.dictionaryBytes -= len(old.bytes)
 		w.lru.Remove(element)
@@ -437,19 +323,18 @@ func (w *cdcStreamWriter) remember(digest [sha256.Size]byte, fingerprint cdcChun
 	for w.dictionaryBytes+len(w.chunk) > cdcDictionaryBytes || w.lru.Len() >= cdcDictionaryEntries {
 		remove(w.lru.Back())
 	}
-	value := &cdcDictionaryEntry{digest: digest, fingerprint: fingerprint, bytes: append([]byte(nil), w.chunk...), entry: entry, ordinal: ordinal}
+	value := &frozenCDCDictionaryEntry{digest: digest, bytes: append([]byte(nil), w.chunk...), entry: entry, ordinal: ordinal}
 	w.dictionary[digest] = w.lru.PushFront(value)
-	w.fingerprints[fingerprint] = w.dictionary[digest]
 	w.dictionaryBytes += len(value.bytes)
 	return value
 }
 
-func (w *cdcStreamWriter) Finish(path string) error {
+func (w *frozenCDCStreamWriter) Finish(path string) error {
 	_, err := w.FinishWithMetadataContext(context.Background(), path)
 	return err
 }
 
-func (w *cdcStreamWriter) FinishWithMetadataContext(ctx context.Context, path string) (metadata snapshotFileMetadata, err error) {
+func (w *frozenCDCStreamWriter) FinishWithMetadataContext(ctx context.Context, path string) (metadata snapshotFileMetadata, err error) {
 	if w == nil || w.closed || w.body == nil {
 		return metadata, errors.New("snapshots: CDC writer closed")
 	}
@@ -477,7 +362,6 @@ func (w *cdcStreamWriter) FinishWithMetadataContext(ctx context.Context, path st
 	}
 	w.stopPipeline() // all tasks joined before the retained first frame/finalization
 	w.dictionary = nil
-	w.fingerprints = nil
 	w.lru.Init()
 	w.dictionaryBytes = 0
 	w.metadata.dst = contextWriter{ctx: ctx, w: w.body}
@@ -576,7 +460,7 @@ func (w *cdcStreamWriter) FinishWithMetadataContext(ctx context.Context, path st
 	return metadata, nil
 }
 
-func (w *cdcStreamWriter) Abort() {
+func (w *frozenCDCStreamWriter) Abort() {
 	if w == nil {
 		return
 	}
@@ -600,19 +484,18 @@ func (w *cdcStreamWriter) Abort() {
 	w.enc = nil // shared EncodeAll pool; owned by the process
 	w.first, w.chunk, w.encoded = nil, nil, nil
 	w.dictionary = nil
-	w.fingerprints = nil
 	w.lru.Init()
 	w.bodyWriter, w.tableWriter = nil, nil
 	w.closed = true
 }
 
-func (w *cdcStreamWriter) Reset() error {
+func (w *frozenCDCStreamWriter) Reset() error {
 	if w == nil || w.closed {
 		return errors.New("snapshots: CDC writer closed")
 	}
 	ctx, dir, prefixSize, workers := w.ctx, w.dir, w.prefixSize, w.workers
 	w.Abort()
-	next, err := newCDCStreamWriterWorkers(ctx, dir, prefixSize, workers)
+	next, err := newFrozenCDCStreamWriterWorkers(ctx, dir, prefixSize, workers)
 	if err != nil {
 		return err
 	}
@@ -620,31 +503,102 @@ func (w *cdcStreamWriter) Reset() error {
 	return nil
 }
 
-// An automatic merge preserves CDC when any verified input already uses it.
-// Old-only inputs keep V2: dictionary-only collection is not evidence of value
-// repetition, and automatic merging must not introduce an extra value scan.
-func historyMergeCompressionFormat(dir string, sources []stateDomainChangeBinaryCompactionSource) (string, error) {
-	format := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT")
-	if format != "auto" {
-		return format, nil
+func (w *frozenCDCStreamWriter) startPipeline() error {
+	if w.enc.MaxEncodedSize(historychunk.MaxSize) > cdcMaxEncodedChunk {
+		return errors.New("snapshots: CDC encoder maximum exceeds frame reservation")
 	}
-	for _, source := range sources {
-		file, err := os.Open(filepath.Join(dir, source.history.Path))
+	encode := w.encodeChunk
+	if encode == nil {
+		enc := w.enc
+		encode = func(ctx context.Context, raw, dst []byte) ([]byte, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			out := enc.EncodeAll(raw, dst)
+			return out, ctx.Err()
+		}
+	}
+	w.pipeline = newCDCCompressionPipeline(w.ctx, w.workers, encode)
+	w.pending = make([]frozenCDCPendingChunk, 0, w.pipeline.limit)
+	return nil
+}
+
+func (w *frozenCDCStreamWriter) drainCDCChunk(ctx context.Context) error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	item := w.pending[0]
+	e := item.entry
+	if item.job != nil {
+		if item.anchor.ordinal != uint32(w.written+1) {
+			return errors.New("snapshots: CDC anchor completion order differs from admitted ordinal")
+		}
+		encoded, err := w.pipeline.result(ctx, item.job)
 		if err != nil {
-			return "", err
+			return err
 		}
-		var header [16]byte
-		_, readErr := io.ReadFull(file, header[:])
-		closeErr := file.Close()
-		if readErr != nil {
-			return "", readErr
+		if uint64(len(encoded)) > uint64(^uint64(0)>>1)-w.physical {
+			return errors.New("snapshots: CDC physical size overflows")
 		}
-		if closeErr != nil {
-			return "", closeErr
+		e.physical, e.stored = w.physical, uint64(len(encoded))
+		if _, err := w.bodyWriter.Write(encoded); err != nil {
+			return err
 		}
-		if string(header[:8]) == compressedBlockMagic && binary.BigEndian.Uint32(header[8:12]) == compressedBlockCDCVersion {
-			return "3", nil
+		w.physical += e.stored
+		item.anchor.entry = e // only the ordered writer publishes a completed anchor
+	} else {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		if item.anchor.ordinal >= uint32(w.written+1) || item.anchor.entry.stored == 0 || item.anchor.entry.anchor != cdcAnchor {
+			return errors.New("snapshots: CDC reference anchor has not completed in order")
+		}
+		e.physical, e.stored = item.anchor.entry.physical, item.anchor.entry.stored
+	}
+	var entry [cdcEntrySize]byte
+	putCDCEntry(entry[:], e)
+	if _, err := w.tableWriter.Write(entry[:]); err != nil {
+		return err
+	}
+	w.written++
+	w.pipeline.release(item.rawLength, item.job)
+	copy(w.pending, w.pending[1:])
+	w.pending[len(w.pending)-1] = frozenCDCPendingChunk{}
+	w.pending = w.pending[:len(w.pending)-1]
+	return nil
+}
+
+func (w *frozenCDCStreamWriter) drainCDC(ctx context.Context) error {
+	for len(w.pending) > 0 {
+		if err := w.drainCDCChunk(ctx); err != nil {
+			return err
 		}
 	}
-	return "2", nil
+	if w.written != w.count {
+		return errors.New("snapshots: CDC completed directory count differs from admitted chunks")
+	}
+	return nil
+}
+
+func (w *frozenCDCStreamWriter) stopPipeline() {
+	if w.pipeline == nil {
+		return
+	}
+	w.pipeline.stop()
+	stats := w.pipeline.stats
+	dst := &w.stats.Pipeline
+	dst.Workers = max(dst.Workers, stats.Workers)
+	dst.PeakPending = max(dst.PeakPending, stats.PeakPending)
+	dst.PeakRawBytes = max(dst.PeakRawBytes, stats.PeakRawBytes)
+	dst.PeakEncodedBufferBytes = max(dst.PeakEncodedBufferBytes, stats.PeakEncodedBufferBytes)
+	dst.PeakReservedBytes = max(dst.PeakReservedBytes, stats.PeakReservedBytes)
+	w.pipeline = nil
+	w.pending = nil
+}
+
+func (w *frozenCDCStreamWriter) fail(err error) {
+	if w.failure == nil {
+		w.failure = err
+	}
+	w.stopPipeline()
 }
