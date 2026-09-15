@@ -23,12 +23,13 @@ import (
 )
 
 type historyColdBenchmarkOptions struct {
-	InputDir    string        `json:"input_dir"`
-	OutputDir   string        `json:"output_dir"`
-	Iterations  int           `json:"iterations"`
-	MaxDuration time.Duration `json:"max_duration_ns"`
-	CopyMode    string        `json:"copy_mode"`
-	CPUProfile  bool          `json:"cpu_profile"`
+	InputDir          string        `json:"input_dir"`
+	OutputDir         string        `json:"output_dir"`
+	Iterations        int           `json:"iterations"`
+	MaxDuration       time.Duration `json:"max_duration_ns"`
+	CopyMode          string        `json:"copy_mode"`
+	CompressionFormat string        `json:"compression_format"`
+	CPUProfile        bool          `json:"cpu_profile"`
 }
 
 type historyColdBenchmarkIteration struct {
@@ -69,17 +70,18 @@ type historyColdBenchmarkReport struct {
 
 func dbHistoryColdBenchmarkCommand() *cli.Command {
 	return &cli.Command{Name: "benchmark-history-cold", Usage: "Replay a complete bounded cold-history trio from an authenticated private range export",
-		Description: "Standalone offline diagnostic: opens only input-dir/pebble read-only and writes a new private output directory. Format 3 is explicit and does not change environment. Checks every physical input row, authenticates every logical history row and tx range, then times only complete production trio builds. Full cold re-read and companion verification are outside build timing. No node, publication, pruning or service operation. Read caches are warm across iterations; allocations and optional CPU profile are process-wide. Deadlines are cooperative, not interruptible storage-call timeouts.",
+		Description: "Standalone offline diagnostic: opens only input-dir/pebble read-only and writes a new private output directory. Compression policy is explicit (default auto) and does not change environment. Checks every physical input row, authenticates every logical history row and tx range, then times only complete production trio builds. Full cold re-read and companion verification are outside build timing. No node, publication, pruning or service operation. Read caches are warm across iterations; allocations and optional CPU profile are process-wide. Deadlines are cooperative, not interruptible storage-call timeouts.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "input-dir", Required: true}, &cli.StringFlag{Name: "output-dir", Required: true},
 			&cli.IntFlag{Name: "iterations", Value: 3}, &cli.DurationFlag{Name: "max-duration", Value: 5 * time.Minute},
 			&cli.StringFlag{Name: "copy-mode", Value: "owned", Usage: "owned or defensive; only private snapshot Get ownership capability differs"},
+			&cli.StringFlag{Name: "compression-format", Value: "auto", Usage: "Production compression policy: auto, 2 or 3; explicit without changing environment"},
 			&cli.BoolFlag{Name: "cpu-profile", Usage: "Write output-dir/cpu.pprof for the first complete build only"},
 		}, Action: dbHistoryColdBenchmarkCmd}
 }
 
 func dbHistoryColdBenchmarkCmd(ctx *cli.Context) error {
-	opts := historyColdBenchmarkOptions{InputDir: ctx.String("input-dir"), OutputDir: ctx.String("output-dir"), Iterations: ctx.Int("iterations"), MaxDuration: ctx.Duration("max-duration"), CopyMode: ctx.String("copy-mode"), CPUProfile: ctx.Bool("cpu-profile")}
+	opts := historyColdBenchmarkOptions{InputDir: ctx.String("input-dir"), OutputDir: ctx.String("output-dir"), Iterations: ctx.Int("iterations"), MaxDuration: ctx.Duration("max-duration"), CopyMode: ctx.String("copy-mode"), CPUProfile: ctx.Bool("cpu-profile"), CompressionFormat: ctx.String("compression-format")}
 	report, err := benchmarkHistoryCold(ctx.Context, opts)
 	writer := ctx.App.Writer
 	if writer == nil {
@@ -99,8 +101,8 @@ func (historyColdDiscardWriter) Delete([]byte) error {
 }
 
 func validateHistoryColdOptions(opts historyColdBenchmarkOptions) error {
-	if !filepath.IsAbs(opts.InputDir) || !filepath.IsAbs(opts.OutputDir) || opts.Iterations < 1 || opts.Iterations > 5 || opts.MaxDuration <= 0 || opts.MaxDuration > 10*time.Minute || (opts.CopyMode != "owned" && opts.CopyMode != "defensive") {
-		return errors.New("history cold benchmark requires absolute input/output paths, 1..5 iterations, duration (0,10m], and copy-mode owned|defensive")
+	if !filepath.IsAbs(opts.InputDir) || !filepath.IsAbs(opts.OutputDir) || opts.Iterations < 1 || opts.Iterations > 5 || opts.MaxDuration <= 0 || opts.MaxDuration > 10*time.Minute || (opts.CopyMode != "owned" && opts.CopyMode != "defensive") || (opts.CompressionFormat != "auto" && opts.CompressionFormat != "2" && opts.CompressionFormat != "3") {
+		return errors.New("history cold benchmark requires absolute input/output paths, 1..5 iterations, duration (0,10m], copy-mode owned|defensive, and compression-format auto|2|3")
 	}
 	return nil
 }
@@ -178,7 +180,7 @@ func verifyHistoryColdInput(ctx context.Context, view rawdb.StateHistoryReadView
 
 func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptions) (report historyColdBenchmarkReport, resultErr error) {
 	start := time.Now()
-	report = historyColdBenchmarkReport{Version: 1, StartedUTC: start.UTC().Format(time.RFC3339Nano), Options: opts, GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GOMAXPROCS: runtime.GOMAXPROCS(0), CompressionFormat: "3"}
+	report = historyColdBenchmarkReport{Version: 1, StartedUTC: start.UTC().Format(time.RFC3339Nano), Options: opts, GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GOMAXPROCS: runtime.GOMAXPROCS(0), CompressionFormat: opts.CompressionFormat}
 	var output string
 	defer func() {
 		report.ElapsedNanos = time.Since(start).Nanoseconds()
@@ -297,7 +299,7 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 		if err := os.Mkdir(runDir, 0700); err != nil {
 			return report, err
 		}
-		iteration, err := runHistoryColdIteration(ctx, view, runDir, e, n, opts.CPUProfile && n == 1, filepath.Join(output, "cpu.pprof"))
+		iteration, err := runHistoryColdIteration(ctx, view, runDir, e, n, opts.CPUProfile && n == 1, filepath.Join(output, "cpu.pprof"), opts.CompressionFormat)
 		if err == nil && iteration.Digest != report.SourceDigest {
 			err = errors.New("complete hot/cold logical row or tx-range digest mismatch")
 		}
@@ -322,7 +324,7 @@ func benchmarkHistoryCold(parent context.Context, opts historyColdBenchmarkOptio
 	return report, ctx.Err()
 }
 
-func runHistoryColdIteration(ctx context.Context, view rawdb.StateHistoryReadView, dir string, e rawdb.StateHistoryRangeExportReport, n int, profile bool, profilePath string) (out historyColdBenchmarkIteration, resultErr error) {
+func runHistoryColdIteration(ctx context.Context, view rawdb.StateHistoryReadView, dir string, e rawdb.StateHistoryRangeExportReport, n int, profile bool, profilePath, format string) (out historyColdBenchmarkIteration, resultErr error) {
 	out.Iteration = n
 	var profileFile *os.File
 	if profile {
@@ -338,7 +340,7 @@ func runHistoryColdIteration(ctx context.Context, view rawdb.StateHistoryReadVie
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
-	refs, err := snapshots.BuildDiagnosticStateHistoryTrioContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg")
+	refs, err := snapshots.BuildDiagnosticStateHistoryTrioContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", format)
 	out.BuildWallNanos = time.Since(start).Nanoseconds()
 	runtime.ReadMemStats(&after)
 	out.BuildAllocatedBytes = after.TotalAlloc - before.TotalAlloc

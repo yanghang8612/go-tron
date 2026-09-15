@@ -16,14 +16,17 @@ import (
 )
 
 // BuildDiagnosticStateHistoryTrioContext uses the complete production bounded
-// builder with compression format 3 fixed locally. It only creates an immutable
+// builder with an explicit compression policy (auto, 2 or 3). It only creates an immutable
 // trio; publication, metadata registration, pruning and lifecycle work are absent.
-func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path string) ([]SegmentRef, error) {
+func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string) ([]SegmentRef, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if format != "auto" && format != "2" && format != "3" {
+		return nil, errors.New("snapshots: diagnostic compression policy must be auto, 2 or 3")
 	}
 	if !CompressHistorySegments {
 		return nil, errors.New("snapshots: diagnostic requires compression enabled")
@@ -52,7 +55,7 @@ func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iterat
 	}
 	result, err := buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextFormat(ctx, db, dir,
 		SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: fromTx, ToTxNum: toTx, Path: path},
-		cfg, etl.Options{}, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, "3")
+		cfg, etl.Options{}, &stateDomainChangeHistoryBlockRange{from: fromBlock, to: toBlock}, format)
 	return result.refs, err
 }
 

@@ -103,7 +103,7 @@ func coldBenchmarkFixture(t *testing.T, repairs bool) (string, string, historyRa
 }
 
 func coldBenchmarkOptions(input, output string) historyColdBenchmarkOptions {
-	return historyColdBenchmarkOptions{InputDir: input, OutputDir: output, Iterations: 1, MaxDuration: time.Minute, CopyMode: "owned"}
+	return historyColdBenchmarkOptions{InputDir: input, OutputDir: output, Iterations: 1, MaxDuration: time.Minute, CopyMode: "owned", CompressionFormat: "auto"}
 }
 
 func TestDBHistoryColdBenchmarkCompleteModesAndReadOnly(t *testing.T) {
@@ -112,51 +112,54 @@ func TestDBHistoryColdBenchmarkCompleteModesAndReadOnly(t *testing.T) {
 	// An invalid process environment must neither select a different format nor
 	// be rewritten by this standalone diagnostic.
 	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "invalid-diagnostic-control")
-	var reports []historyColdBenchmarkReport
-	for _, mode := range []string{"defensive", "owned"} {
-		opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), mode))
-		opts.CopyMode = mode
-		opts.Iterations = 2
-		opts.CPUProfile = mode == "owned"
-		report, err := benchmarkHistoryCold(context.Background(), opts)
-		if err != nil || !report.Complete || !report.PhysicalVerified || len(report.Iterations) != 2 || report.SourceDigest.Rows != 3 || report.SourceDigest.TxRanges != 3 {
-			t.Fatalf("%s report=%+v err=%v", mode, report, err)
-		}
-		digest := report.SourceDigest
-		if digest.PrevBytes != 3*(256<<10) || digest.MaxPrevBytes != 256<<10 || digest.LargePrevRows != 3 || digest.LargePrevBytes != digest.PrevBytes || digest.DelegationRows != 3 || digest.DelegationPrevBytes != digest.PrevBytes {
-			t.Fatalf("distribution not preserved: %+v", digest)
-		}
-		if mode == "owned" && (report.CPUProfileSHA256 == "" || !strings.Contains(report.CPUProfileScope, "build only")) {
-			t.Fatal("CPU profile provenance missing")
-		}
-		for _, iteration := range report.Iterations {
-			if !iteration.Equivalent || iteration.BuildWallNanos <= 0 || iteration.VerificationWallNanos <= 0 || iteration.BuildAllocatedBytes == 0 || iteration.OutputBytes == 0 || len(iteration.Refs) != 3 {
-				t.Fatalf("incomplete iteration: %+v", iteration)
+	for _, format := range []string{"auto", "2", "3"} {
+		var reports []historyColdBenchmarkReport
+		for _, mode := range []string{"defensive", "owned"} {
+			opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), mode))
+			opts.CopyMode = mode
+			opts.CompressionFormat = format
+			opts.Iterations = 2
+			opts.CPUProfile = mode == "owned"
+			report, err := benchmarkHistoryCold(context.Background(), opts)
+			if err != nil || !report.Complete || report.CompressionFormat != format || report.Options.CompressionFormat != format || !report.PhysicalVerified || len(report.Iterations) != 2 || report.SourceDigest.Rows != 3 || report.SourceDigest.TxRanges != 3 {
+				t.Fatalf("%s report=%+v err=%v", mode, report, err)
 			}
+			digest := report.SourceDigest
+			if digest.PrevBytes != 3*(256<<10) || digest.MaxPrevBytes != 256<<10 || digest.LargePrevRows != 3 || digest.LargePrevBytes != digest.PrevBytes || digest.DelegationRows != 3 || digest.DelegationPrevBytes != digest.PrevBytes {
+				t.Fatalf("distribution not preserved: %+v", digest)
+			}
+			if mode == "owned" && (report.CPUProfileSHA256 == "" || !strings.Contains(report.CPUProfileScope, "build only")) {
+				t.Fatal("CPU profile provenance missing")
+			}
+			for _, iteration := range report.Iterations {
+				if !iteration.Equivalent || iteration.BuildWallNanos <= 0 || iteration.VerificationWallNanos <= 0 || iteration.BuildAllocatedBytes == 0 || iteration.OutputBytes == 0 || len(iteration.Refs) != 3 {
+					t.Fatalf("incomplete iteration: %+v", iteration)
+				}
+			}
+			data, err := os.ReadFile(filepath.Join(opts.OutputDir, "report.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var durable historyColdBenchmarkReport
+			if err := json.Unmarshal(data, &durable); err != nil || !reflect.DeepEqual(durable, report) {
+				t.Fatalf("durable report differs: %v", err)
+			}
+			info, _ := os.Stat(opts.OutputDir)
+			if info.Mode().Perm() != 0700 {
+				t.Fatal("output is not private")
+			}
+			reports = append(reports, report)
 		}
-		data, err := os.ReadFile(filepath.Join(opts.OutputDir, "report.json"))
-		if err != nil {
-			t.Fatal(err)
+		if os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT") != "invalid-diagnostic-control" {
+			t.Fatal("diagnostic mutated environment")
 		}
-		var durable historyColdBenchmarkReport
-		if err := json.Unmarshal(data, &durable); err != nil || !reflect.DeepEqual(durable, report) {
-			t.Fatalf("durable report differs: %v", err)
+		if reports[0].SourceDigest != reports[1].SourceDigest {
+			t.Fatal("mode changed source semantics")
 		}
-		info, _ := os.Stat(opts.OutputDir)
-		if info.Mode().Perm() != 0700 {
-			t.Fatal("output is not private")
-		}
-		reports = append(reports, report)
-	}
-	if os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT") != "invalid-diagnostic-control" {
-		t.Fatal("diagnostic mutated environment")
-	}
-	if reports[0].SourceDigest != reports[1].SourceDigest {
-		t.Fatal("mode changed source semantics")
-	}
-	for i := range reports[0].Iterations {
-		if !reflect.DeepEqual(reports[0].Iterations[i].Refs, reports[1].Iterations[i].Refs) {
-			t.Fatal("copy mode changed complete trio bytes/ref checksums")
+		for i := range reports[0].Iterations {
+			if !reflect.DeepEqual(reports[0].Iterations[i].Refs, reports[1].Iterations[i].Refs) {
+				t.Fatal("copy mode changed complete trio bytes/ref checksums")
+			}
 		}
 	}
 	if !reflect.DeepEqual(sourceBefore, historyInspectionFileHashes(t, source)) || !reflect.DeepEqual(inputBefore, historyInspectionFileHashes(t, input)) {
@@ -235,7 +238,7 @@ func TestDBHistoryColdBenchmarkPathsOptionsAndCancellation(t *testing.T) {
 	if _, err := benchmarkHistoryCold(context.Background(), coldBenchmarkOptions(input, filepath.Join(alias, "child"))); err == nil {
 		t.Fatal("accepted source alias")
 	}
-	for _, mutate := range []func(*historyColdBenchmarkOptions){func(o *historyColdBenchmarkOptions) { o.Iterations = 0 }, func(o *historyColdBenchmarkOptions) { o.Iterations = 6 }, func(o *historyColdBenchmarkOptions) { o.MaxDuration = 11 * time.Minute }, func(o *historyColdBenchmarkOptions) { o.MaxDuration = 0 }, func(o *historyColdBenchmarkOptions) { o.CopyMode = "unknown" }, func(o *historyColdBenchmarkOptions) { o.OutputDir = "relative" }} {
+	for _, mutate := range []func(*historyColdBenchmarkOptions){func(o *historyColdBenchmarkOptions) { o.Iterations = 0 }, func(o *historyColdBenchmarkOptions) { o.Iterations = 6 }, func(o *historyColdBenchmarkOptions) { o.MaxDuration = 11 * time.Minute }, func(o *historyColdBenchmarkOptions) { o.MaxDuration = 0 }, func(o *historyColdBenchmarkOptions) { o.CopyMode = "unknown" }, func(o *historyColdBenchmarkOptions) { o.CompressionFormat = "1" }, func(o *historyColdBenchmarkOptions) { o.CompressionFormat = "" }, func(o *historyColdBenchmarkOptions) { o.OutputDir = "relative" }} {
 		opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), "out"))
 		mutate(&opts)
 		if _, err := benchmarkHistoryCold(context.Background(), opts); err == nil {
@@ -283,11 +286,11 @@ func TestDBHistoryColdBenchmarkPinnedCapabilityAndColdCorruption(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	e := m.Export
-	if _, err := snapshots.BuildDiagnosticStateHistoryTrioContext(ctx, view, t.TempDir(), e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg"); !errors.Is(err, context.Canceled) {
+	if _, err := snapshots.BuildDiagnosticStateHistoryTrioContext(ctx, view, t.TempDir(), e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", "auto"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("build cancellation: %v", err)
 	}
 	dir := t.TempDir()
-	refs, err := snapshots.BuildDiagnosticStateHistoryTrioContext(context.Background(), view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg")
+	refs, err := snapshots.BuildDiagnosticStateHistoryTrioContext(context.Background(), view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", "auto")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +313,7 @@ func TestDBHistoryColdBenchmarkCLIFlags(t *testing.T) {
 	app := &cli.App{Writer: &out, ErrWriter: &out, Commands: []*cli.Command{dbHistoryColdBenchmarkCommand()}}
 	err := app.Run([]string{"gtron", "benchmark-history-cold", "--input-dir", "/missing", "--output-dir", "/also-missing", "--iterations", "6"})
 	var report historyColdBenchmarkReport
-	if json.Unmarshal(out.Bytes(), &report) != nil || err == nil || report.Complete || report.Options.Iterations != 6 || report.Options.CopyMode != "owned" {
+	if json.Unmarshal(out.Bytes(), &report) != nil || err == nil || report.Complete || report.Options.Iterations != 6 || report.Options.CopyMode != "owned" || report.Options.CompressionFormat != "auto" {
 		t.Fatalf("CLI result: %s %v", out.String(), err)
 	}
 }
@@ -358,7 +361,7 @@ func TestDBHistoryColdBenchmarkLegacyAndActiveCancellation(t *testing.T) {
 		if sourceDigest {
 			_, err = snapshots.DigestHotStateHistoryContext(ctx, controlled, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, 4<<30)
 		} else {
-			_, err = snapshots.BuildDiagnosticStateHistoryTrioContext(ctx, controlled, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg")
+			_, err = snapshots.BuildDiagnosticStateHistoryTrioContext(ctx, controlled, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", "auto")
 		}
 		cancel()
 		if !errors.Is(err, context.Canceled) || controlled.gets < 2 {
