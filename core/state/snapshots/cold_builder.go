@@ -102,9 +102,10 @@ type Config struct {
 	HistoryCatchupMode HistoryCatchupMode
 	// Shared read acceleration is opt-in and selected per admitted batch from
 	// fresh resources. Resource fallback retains ordinary serial progress.
-	HistorySharedReadWorkers int
-	HistorySharedChunkCache  bool
-	HistoryReadResourceProbe func() HistoryReadResources
+	HistorySharedReadWorkers  int
+	HistorySharedChunkCache   bool
+	HistoryReferenceContainer bool
+	HistoryReadResourceProbe  func() HistoryReadResources
 	// HistoryLoadProbe reports fresh engine/device pressure without scanning
 	// application rows. Throughput uses it to size online work by observed
 	// density; hard write pressure also protects all other cold build paths.
@@ -315,6 +316,7 @@ type PassResult struct {
 	HistoryEventParallel      bool
 	HistorySharedReadWorkers  int
 	HistorySharedChunkCache   bool
+	HistoryReferenceContainer bool
 	HistoryReadFallbackReason uint8
 	HistoryDebtBlocks         uint64
 	HistoryDebtGrowth         int64
@@ -809,7 +811,7 @@ func (c Config) applyDefaults() Config {
 }
 
 func (c Config) validate() error {
-	if err := (HistoryReadOptions{Workers: c.HistorySharedReadWorkers, ChunkCache: c.HistorySharedChunkCache}).Validate(); err != nil {
+	if err := (HistoryReadOptions{Workers: c.HistorySharedReadWorkers, ChunkCache: c.HistorySharedChunkCache, ReferenceContainer: c.HistoryReferenceContainer}).Validate(); err != nil {
 		return err
 	}
 	if !c.Enabled {
@@ -1471,6 +1473,9 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		}
 	}
 	batchBlocks, batchTxNums = r.adaptiveHistoryBatchLimits(batchBlocks, batchTxNums)
+	if r.cfg.HistoryReferenceContainer {
+		batchBlocks = min(batchBlocks, uint64(historyReferenceBlockLimit))
+	}
 	retryCheckedAt := time.Now()
 	if retryAfter := r.historyBuildRetryAfter(retryCheckedAt, result.HistoryAccelerated, result.HistoryForcedBusy); retryAfter > 0 {
 		result.HistoryDeferred = true
@@ -1550,6 +1555,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	readOptions, readFallback := r.selectHistoryReadOptions(result.HistoryForcedBusy, time.Now())
 	result.HistorySharedReadWorkers = readOptions.Workers
 	result.HistorySharedChunkCache = readOptions.ChunkCache
+	result.HistoryReferenceContainer = readOptions.ReferenceContainer
 	result.HistoryReadFallbackReason = uint8(readFallback)
 	r.historyReadMetrics.begin(readOptions, readFallback, startBlock, cutoffBlock)
 	defer func() { r.historyReadMetrics.finish(result.Built) }()
@@ -1621,6 +1627,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		"historyPressure", pressured,
 		"sharedReadWorkers", readOptions.Workers,
 		"sharedChunkCache", readOptions.ChunkCache,
+		"referenceContainer", readOptions.ReferenceContainer,
 		"historyCodecWorkers", readOptions.compressionWorkers(),
 		"sharedReadFallback", readFallback,
 		"hotHistoryBytes", pressure.HotHistoryBytes,
@@ -1638,7 +1645,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	defer buildProgress.Stop()
 	var historyOutput, eventOutput coldSnapshotBuildOutput
 	plannedDerived, plannedEvents := planDerived(r.historySyncBudgetActive())
-	if r.cfg.HistorySharedReadWorkers == 0 && !r.cfg.HistorySharedChunkCache && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
+	if r.cfg.HistorySharedReadWorkers == 0 && !r.cfg.HistorySharedChunkCache && !r.cfg.HistoryReferenceContainer && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
 		// Only an admitted pair plans derived work before history. Serial work
 		// retains its post-history sync observation and does not require a
 		// ChainDB when history fails or yields no output.
@@ -1849,7 +1856,8 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		"historyEventParallel", result.HistoryEventParallel,
 		"sharedReadWorkers", result.HistorySharedReadWorkers,
 		"sharedChunkCache", result.HistorySharedChunkCache,
-		"historyCodecWorkers", (HistoryReadOptions{Workers: result.HistorySharedReadWorkers, ChunkCache: result.HistorySharedChunkCache}).compressionWorkers(),
+		"referenceContainer", result.HistoryReferenceContainer,
+		"historyCodecWorkers", (HistoryReadOptions{Workers: result.HistorySharedReadWorkers, ChunkCache: result.HistorySharedChunkCache, ReferenceContainer: result.HistoryReferenceContainer}).compressionWorkers(),
 		"sharedReadFallback", result.HistoryReadFallbackReason,
 		"eventLogElapsed", result.EventLogDuration.Round(time.Millisecond),
 		"publishElapsed", result.PublishDuration.Round(time.Millisecond),

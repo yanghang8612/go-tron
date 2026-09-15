@@ -65,13 +65,14 @@ type historyCompactionCandidate struct {
 }
 
 type historyCompactionSelection struct {
-	candidates        []historyCompactionCandidate
-	fromTxNum         uint64
-	toTxNum           uint64
-	aggregationSteps  uint64
-	inputBytes        uint64
-	inputLogicalBytes uint64
-	inputRecords      uint64
+	candidates           []historyCompactionCandidate
+	fromTxNum            uint64
+	toTxNum              uint64
+	aggregationSteps     uint64
+	inputBytes           uint64
+	inputLogicalBytes    uint64
+	inputRecords         uint64
+	referenceDeferReason string
 }
 
 // CompactHistoryDomain merges the frontmost continuous run of binary history
@@ -119,24 +120,56 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	if historyCfg.CompactHistoryContext == nil && historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
 		return HistoryCompactionResult{}, fmt.Errorf("snapshots: history domain %s missing compaction codec", historyCfg.Dataset)
 	}
+	// Both probes are immutable per-source observations for this selection.
+	// Group subdivision and final input accounting reuse them rather than
+	// reopening source headers for every attempted combination.
+	costCache := make(map[SegmentRef]historyCompactionInputCost)
+	readCost := func(candidate historyCompactionCandidate) (historyCompactionInputCost, error) {
+		if cost, ok := costCache[candidate.history]; ok {
+			return cost, nil
+		}
+		cost, err := readHistoryCompactionInputCost(ctx, dir, candidate)
+		if err == nil {
+			costCache[candidate.history] = cost
+		}
+		return cost, err
+	}
+	var readReference historyReferenceCompactionBudgetRead
+	if historyCfg.Dataset == SegmentDatasetStateDomainChange {
+		cache := make(map[SegmentRef]historyReferenceCompactionInputBudget)
+		readReference = func(candidate historyCompactionCandidate) (historyReferenceCompactionInputBudget, error) {
+			if input, ok := cache[candidate.history]; ok {
+				return input, nil
+			}
+			input, err := readHistoryReferenceCompactionInputBudget(ctx, dir, candidate)
+			if err == nil {
+				cache[candidate.history] = input
+			}
+			return input, err
+		}
+	}
+	candidates := historyCompactionCandidates(manifest, historyCfg)
 	var selection historyCompactionSelection
 	if cfg.BusyLeafOnly {
-		selection, ok, err = selectBudgetedHistoryCompactionLeaves(ctx, historyCompactionCandidates(manifest, historyCfg), cfg,
-			func(candidate historyCompactionCandidate) (historyCompactionInputCost, error) {
-				return readHistoryCompactionInputCost(ctx, dir, candidate)
-			})
-		if err != nil {
-			return HistoryCompactionResult{}, err
-		}
+		selection, ok, err = selectBudgetedHistoryCompactionLeaves(ctx, candidates, cfg, readCost, readReference)
+	} else if readReference != nil {
+		selection, ok, err = selectReferenceBudgetedHistoryCompactionRun(ctx, candidates, minSteps, maxSteps, readReference)
 	} else {
-		selection, ok = selectHistoryCompactionRunAtLeast(manifest, historyCfg, minSteps, maxSteps)
+		selection, ok = selectHistoryCompactionCandidatesRunAtLeast(candidates, minSteps, maxSteps)
+	}
+	if err != nil {
+		return HistoryCompactionResult{}, err
 	}
 	if !ok {
-		return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: cfg.BusyLeafOnly, DeferReason: historyCompactionNoSelectionReason(cfg)}, nil
+		reason := selection.referenceDeferReason
+		if reason == "" {
+			reason = historyCompactionNoSelectionReason(cfg)
+		}
+		return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: cfg.BusyLeafOnly || selection.referenceDeferReason != "", DeferReason: reason}, nil
 	}
 	if !cfg.BusyLeafOnly && (cfg.MaxInputBytes > 0 || cfg.MaxInputLogicalBytes > 0 || cfg.MaxInputRecords > 0 || cfg.MaxSources > 0) {
 		for _, candidate := range selection.candidates {
-			cost, err := readHistoryCompactionInputCost(ctx, dir, candidate)
+			cost, err := readCost(candidate)
 			if err != nil {
 				return HistoryCompactionResult{}, err
 			}
@@ -234,6 +267,10 @@ func selectHistoryCompactionRunAtLeast(manifest *Manifest, cfg DomainCfg, minSte
 		return historyCompactionSelection{}, false
 	}
 	candidates := historyCompactionCandidates(manifest, cfg)
+	return selectHistoryCompactionCandidatesRunAtLeast(candidates, minSteps, maxSteps)
+}
+
+func selectHistoryCompactionCandidatesRunAtLeast(candidates []historyCompactionCandidate, minSteps, maxSteps uint64) (historyCompactionSelection, bool) {
 	if len(candidates) < 2 {
 		return historyCompactionSelection{}, false
 	}

@@ -15,11 +15,11 @@ import sys
 import types
 
 REPO = Path('/data/gtron/go-tron')
-BASE = '61708c9de685efa2be727167f8d2b3e3970a0099'
+BASE = '174fd631eb9fab8bf8763a36ef779e036146f21a'
 BUILDER_PATH = 'scripts/prepare_history_parallel_20260915.py'
 BUILDER_SHA = '43e1c06ea0065f6cf42a5b7cb60c34d17cba99eddf019e4dd51e2c2fcfe02ef1'
 SCRIPT_PATH = 'scripts/prepare_history_reference_20260915.py'
-RELEASE = Path('/data/gtron/releases/20260915-history-reference')
+RELEASE = Path('/data/gtron/releases/20260915-history-reference-v2')
 
 
 def load_builder():
@@ -35,27 +35,52 @@ def load_builder():
     module.BINARY = RELEASE / 'gtron-inspect'
     module.SCRIPT_PATH = SCRIPT_PATH
     module.ALLOWED_SOURCE_CHANGES = {
+        'cmd/gtron/db_cmd.go',
         'cmd/gtron/db_history_cold_benchmark.go',
         'cmd/gtron/db_history_reference_benchmark_test.go',
+        'cmd/gtron/db_history_reference_migrate.go',
+        'cmd/gtron/db_history_reference_migrate_test.go',
+        'cmd/gtron/history_shared_read.go',
+        'cmd/gtron/main.go',
         'core/rawdb/state_history_span.go',
-        'core/rawdb/state_history_span_test.go',
+        'core/rawdb/state_history_span_pipeline.go',
+        'core/rawdb/state_history_span_pipeline_test.go',
+        'core/state/snapshots/cold_builder.go',
+        'core/state/snapshots/compactor.go',
         'core/state/snapshots/compactor_budget.go',
+        'core/state/snapshots/history_reference_compaction_budget.go',
+        'core/state/snapshots/history_reference_compaction_budget_test.go',
+        'core/state/snapshots/history_reference_compaction_hook_test.go',
         'core/state/snapshots/history_binary.go',
-        'core/state/snapshots/history_business_sample.go',
-        'core/state/snapshots/history_diagnostic.go',
-        'core/state/snapshots/history_migrate_v7.go',
-        'core/state/snapshots/history_space_inspect.go',
+        'core/state/snapshots/history_shared_read.go',
         'core/state/snapshots/history_reference_build.go',
-        'core/state/snapshots/history_reference_build_test.go',
-        'core/state/snapshots/history_reference_container.go',
-        'core/state/snapshots/history_reference_container_reader.go',
         'core/state/snapshots/history_reference_container_writer.go',
-        'core/state/snapshots/history_reference_container_test.go',
+        'core/state/snapshots/history_reference_container_metadata_test.go',
+        'core/state/snapshots/history_reference_merge.go',
+        'core/state/snapshots/history_reference_merge_test.go',
+        'core/state/snapshots/history_reference_migrate.go',
+        'core/state/snapshots/history_reference_migrate_test.go',
+        'core/state/snapshots/history_reference_runner_test.go',
+        'core/state/snapshots/history_reference_transcode.go',
+        'core/state/snapshots/history_reference_transcode_test.go',
         SCRIPT_PATH,
     }
     module.REQUIRED_SOURCE_CHANGES = module.ALLOWED_SOURCE_CHANGES - {SCRIPT_PATH}
     module.TEST_PATTERN += '|Test.*(HistoryReference|StateHistorySpan)'
     module.REQUIRED_TESTS += (
+        ('core/rawdb', 'TestStateHistorySpanPipelineSerialOracle'),
+        ('core/rawdb', 'TestStateHistorySpanPipelineSerialFallback'),
+        ('core/rawdb', 'TestStateHistorySpanPipelineQueueOwnershipAndCancelJoin'),
+        ('core/rawdb', 'TestStateHistorySpanPipelineFutureErrorOrder'),
+        ('core/rawdb', 'TestStateHistorySpanPipelineIteratorErrorOracle'),
+        ('core/rawdb', 'TestStateHistorySpanPipelineValidationAndBounds'),
+        ('core/state/snapshots', 'TestHistoryReferenceMergeRevalidatesAfterFinalSourceRead'),
+        ('core/state/snapshots', 'TestHistoryReferenceCompactionHookAlignedContinues'),
+        ('core/state/snapshots', 'TestHistoryReferenceCompactionHookRealMergeOracle'),
+        ('core/state/snapshots', 'TestHistoryReferenceCompactionHookOversizedHeaderBoundary'),
+        ('cmd/gtron', 'TestDBHistoryReferenceBenchmarkPipelined'),
+        ('cmd/gtron', 'TestDBHistoryReferenceMigrationInPlaceAndResume'),
+        ('cmd/gtron', 'TestDBHistoryReferenceMigrationRequiresOfflineLock'),
         ('core/rawdb', 'TestStateHistorySpanColdOrderOracle'),
         ('core/rawdb', 'TestStateHistorySpanCorruptionBeforeAnyBlockCallback'),
         ('core/state/snapshots', 'TestHistoryReferenceBuildIntegrationOracle'),
@@ -66,6 +91,7 @@ def load_builder():
     )
     module.HELP_CONTRACTS = dict(module.HELP_CONTRACTS)
     module.HELP_CONTRACTS['benchmark-history-cold'] += ('--reference-container', '--shared-chunk-cache')
+    module.HELP_CONTRACTS['migrate-history-reference'] = ('--datadir', '--yes', '--max-trios', '--max-work-gib')
     return module
 
 

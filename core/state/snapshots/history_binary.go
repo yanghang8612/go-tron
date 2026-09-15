@@ -642,6 +642,21 @@ func compactStateDomainChangeBinaryHistoryRunContext(ctx context.Context, dir st
 	if err != nil {
 		return nil, err
 	}
+	for _, source := range sources {
+		file, err := os.Open(filepath.Join(dir, source.history.Path))
+		if err != nil {
+			return nil, err
+		}
+		var magic [8]byte
+		_, readErr := file.ReadAt(magic[:], 0)
+		err = errors.Join(readErr, file.Close(), contextError(ctx))
+		if err != nil {
+			return nil, err
+		}
+		if string(magic[:]) == historyReferenceMagic {
+			return compactStateDomainChangeReferenceHistoryRunContext(ctx, dir, cfg, selection, sources, progress)
+		}
+	}
 	segRef, idxRef, accessorRef, err := writeCompactedStateDomainChangeBinaryFiles(ctx, dir, cfg, selection, sources, progress)
 	if err != nil {
 		return nil, err

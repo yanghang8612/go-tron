@@ -17,8 +17,9 @@ import (
 // original serial reader and automatic codec topology. Enhanced reads retain
 // one serial record/CDC consumer and never run beside the event builder.
 type HistoryReadOptions struct {
-	Workers    int
-	ChunkCache bool
+	Workers            int
+	ChunkCache         bool
+	ReferenceContainer bool
 }
 
 func (o HistoryReadOptions) Validate() error {
@@ -27,9 +28,11 @@ func (o HistoryReadOptions) Validate() error {
 	}
 	return nil
 }
-func (o HistoryReadOptions) enabled() bool { return o.Workers != 0 || o.ChunkCache }
+func (o HistoryReadOptions) enabled() bool {
+	return o.Workers != 0 || o.ChunkCache || o.ReferenceContainer
+}
 func (o HistoryReadOptions) compressionWorkers() int {
-	if o.enabled() {
+	if o.enabled() && !o.ReferenceContainer {
 		return 1
 	}
 	return 0
@@ -63,9 +66,9 @@ const (
 )
 
 func (r *Runner) selectHistoryReadOptions(forcedBusy bool, now time.Time) (HistoryReadOptions, historyReadFallback) {
-	requested := HistoryReadOptions{Workers: r.cfg.HistorySharedReadWorkers, ChunkCache: r.cfg.HistorySharedChunkCache}
-	none := HistoryReadOptions{}
-	if !requested.enabled() {
+	requested := HistoryReadOptions{Workers: r.cfg.HistorySharedReadWorkers, ChunkCache: r.cfg.HistorySharedChunkCache, ReferenceContainer: r.cfg.HistoryReferenceContainer}
+	none := HistoryReadOptions{ReferenceContainer: requested.ReferenceContainer}
+	if requested.Workers == 0 && !requested.ChunkCache {
 		return none, historyReadDisabled
 	}
 	// Forced busy describes import scheduling, not resource pressure. Its
@@ -154,7 +157,16 @@ func buildStateHistoryReadContext(ctx context.Context, db ethdb.Iteratee, dir st
 			return nil, err
 		}
 	}
-	defer func() { err = errors.Join(err, release()) }()
+	defer func() {
+		err = errors.Join(err, release())
+		if err != nil {
+			refs = nil
+		}
+	}()
+	if reads.ReferenceContainer {
+		refs, _, err = BuildStateHistoryReferenceTrioReadContext(ctx, view, dir, ref.FromTxNum, ref.ToTxNum, blockRange.from, blockRange.to, ref.Path, opts, reads.Workers)
+		return refs, errors.Join(err, ctx.Err())
+	}
 	if cfg.IterateHotHistoryBlockTxBorrowed == nil || cfg.IterateHotHistoryTxRangeBorrowed == nil {
 		return nil, fmt.Errorf("snapshots: bounded history reader hooks missing for %s", cfg.Dataset)
 	}

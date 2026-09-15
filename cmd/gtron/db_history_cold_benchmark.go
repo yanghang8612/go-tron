@@ -90,7 +90,7 @@ func dbHistoryColdBenchmarkCommand() *cli.Command {
 			&cli.IntFlag{Name: "shared-read-workers", Value: 2, Usage: "Offline authentication slots: 2, 4 or 8; shared 256MiB output budget, pipeline=false requires 2"},
 			&cli.BoolFlag{Name: "shared-chunk-cache", Usage: "Offline-only per-trio authenticated chunk reuse: 64MiB payload/4096 entries; requires owned immutable view, always retains whole-pack SHA"},
 			&cli.IntFlag{Name: "cdc-compression-workers", Value: 0, Usage: "Local CDC task setting: 0 keeps automatic workers; 1 limits this diagnostic trio without changing environment"},
-			&cli.BoolFlag{Name: "reference-container", Usage: "Experimental self-contained reference container with one authenticated source pass; owned mode, no read pipeline or CDC worker override; never publishes to a live manifest"},
+			&cli.BoolFlag{Name: "reference-container", Usage: "Experimental self-contained reference container with one authenticated source pass; owned mode, optional bounded read pipeline, no CDC worker override; never publishes to a live manifest"},
 		}, Action: dbHistoryColdBenchmarkCmd}
 }
 
@@ -115,8 +115,8 @@ func (historyColdDiscardWriter) Delete([]byte) error {
 }
 
 func validateHistoryColdOptions(opts historyColdBenchmarkOptions) error {
-	if opts.ReferenceContainer && (opts.CopyMode != "owned" || opts.SharedReadPipeline || opts.CDCCompressionWorkers != 0 || opts.CompressionFormat != "auto") {
-		return errors.New("reference-container requires owned mode, default auto policy, no read pipeline or CDC worker override")
+	if opts.ReferenceContainer && (opts.CopyMode != "owned" || opts.CDCCompressionWorkers != 0 || opts.CompressionFormat != "auto") {
+		return errors.New("reference-container requires owned mode, default auto policy and no CDC worker override")
 	}
 	if opts.CDCCompressionWorkers != 0 && opts.CDCCompressionWorkers != 1 {
 		return errors.New("cdc-compression-workers must be 0 (automatic) or 1")
@@ -450,7 +450,11 @@ func runHistoryColdIterationWithBuildMode(ctx context.Context, view rawdb.StateH
 	if err == nil {
 		if reference {
 			var stats snapshots.HistoryReferenceBuildStats
-			refs, stats, err = snapshots.BuildDiagnosticStateHistoryReferenceTrioContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", etl.Options{})
+			readWorkers := 0
+			if pipeline {
+				readWorkers = workers
+			}
+			refs, stats, err = snapshots.BuildStateHistoryReferenceTrioReadContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", etl.Options{}, readWorkers)
 			out.ReferenceBuild = &stats
 		} else {
 			refs, err = snapshots.BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx, view, dir, e.FromTxNum, e.ToTxNum, e.FromBlock, e.ToBlock, "history/state-domain-change-range.seg", format, etl.Options{}, pipeline, workers, compressionWorkers)

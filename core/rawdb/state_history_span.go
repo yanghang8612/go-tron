@@ -362,68 +362,7 @@ func (b *StateHistorySpanBlock) add(view StateHistoryReadView, encoded []byte, s
 		if err != nil {
 			return err
 		}
-		payload, pooled, err := borrowStateDomainChangeBlockPayload(data)
-		if err != nil {
-			return err
-		}
-		b.pooled = pooled
-		if pooled == nil && !shared {
-			payload = bytes.Clone(payload)
-		}
-		b.raw = payload
-		b.info.SharedPack = shared
-		b.info.Fallback = !shared || pooled != nil
-		b.repairBytes = uint64(len(payload))
-		b.info.DecodedBytes = uint64(len(payload))
-		if b.repairBytes > stateDomainChangeBlockMaxDecodedBytes {
-			return ErrStateHistorySpanBudget
-		}
-		_, parseErr := b.parseRows(func(row *StateDomainChange, _ uint64) (bool, error) {
-			if err := b.validateRow(row); err != nil {
-				return false, err
-			}
-			if row.TxNum >= b.fromTx && row.TxNum <= b.toTx {
-				b.info.Rows++
-			}
-			return true, nil
-		})
-		if parseErr != nil {
-			// A shared envelope is never reinterpreted as a standalone row. The
-			// compatibility probe applies only to old sequence-zero physical rows.
-			if shared {
-				return parseErr
-			}
-			row, legacyErr := decodePersistedStateDomainChange(encoded, b.info.BlockNum, 0)
-			if legacyErr != nil {
-				return parseErr
-			}
-			b.releasePayload()
-			b.info.Fallback = true
-			b.ownRows = []*StateDomainChange{row}
-			b.repairBytes = uint64(len(encoded))
-			b.repairCount = 1
-			return b.validateRow(row)
-		}
-		b.packed = true
-		if shared && pooled == nil {
-			refs, _, count, _, err := sharedStateHistoryPackHeader(encoded, b.info.BlockNum)
-			if err != nil {
-				return err
-			}
-			b.chunks = make([]stateHistorySpanChunk, 0, count)
-			offset := 0
-			for i := 0; i < count; i++ {
-				size, n := binary.Uvarint(refs)
-				var digest [32]byte
-				copy(digest[:], refs[n:n+32])
-				refs = refs[n+32:]
-				b.chunks = append(b.chunks, stateHistorySpanChunk{StateHistorySpanChunk{digest, uint32(size)}, uint32(offset), b.raw[offset : offset+int(size) : offset+int(size)]})
-				offset += int(size)
-			}
-		} else {
-			b.addFixedChunks(b.raw)
-		}
-		return nil
+		return b.initializeAuthenticatedPack(encoded, data, shared)
 	}
 	if len(encoded) > stateDomainChangeBlockMaxDecodedBytes || uint64(len(encoded)) > stateDomainChangeBlockMaxDecodedBytes-b.repairBytes || b.repairCount >= stateHistorySpanRepairRows {
 		return ErrStateHistorySpanBudget
@@ -471,6 +410,74 @@ func (b *StateHistorySpanBlock) add(view StateHistoryReadView, encoded []byte, s
 		}
 	} else {
 		b.ownRows = append(b.ownRows, row)
+	}
+	return nil
+}
+
+// initializeAuthenticatedPack consumes bytes already authenticated by the
+// unchanged materializer. Parallel readers call it only after the worker's
+// complete chunk/pack checks; the serial add path retains the same call order.
+func (b *StateHistorySpanBlock) initializeAuthenticatedPack(encoded, data []byte, shared bool) error {
+	payload, pooled, err := borrowStateDomainChangeBlockPayload(data)
+	if err != nil {
+		return err
+	}
+	b.pooled = pooled
+	if pooled == nil && !shared {
+		payload = bytes.Clone(payload)
+	}
+	b.raw = payload
+	b.info.SharedPack = shared
+	b.info.Fallback = !shared || pooled != nil
+	b.repairBytes = uint64(len(payload))
+	b.info.DecodedBytes = uint64(len(payload))
+	if b.repairBytes > stateDomainChangeBlockMaxDecodedBytes {
+		return ErrStateHistorySpanBudget
+	}
+	_, parseErr := b.parseRows(func(row *StateDomainChange, _ uint64) (bool, error) {
+		if err := b.validateRow(row); err != nil {
+			return false, err
+		}
+		if row.TxNum >= b.fromTx && row.TxNum <= b.toTx {
+			b.info.Rows++
+		}
+		return true, nil
+	})
+	if parseErr != nil {
+		// A shared envelope is never reinterpreted as a standalone row. The
+		// compatibility probe applies only to old sequence-zero physical rows.
+		if shared {
+			return parseErr
+		}
+		row, legacyErr := decodePersistedStateDomainChange(encoded, b.info.BlockNum, 0)
+		if legacyErr != nil {
+			return parseErr
+		}
+		b.releasePayload()
+		b.info.Fallback = true
+		b.ownRows = []*StateDomainChange{row}
+		b.repairBytes = uint64(len(encoded))
+		b.repairCount = 1
+		return b.validateRow(row)
+	}
+	b.packed = true
+	if shared && pooled == nil {
+		refs, _, count, _, err := sharedStateHistoryPackHeader(encoded, b.info.BlockNum)
+		if err != nil {
+			return err
+		}
+		b.chunks = make([]stateHistorySpanChunk, 0, count)
+		offset := 0
+		for i := 0; i < count; i++ {
+			size, n := binary.Uvarint(refs)
+			var digest [32]byte
+			copy(digest[:], refs[n:n+32])
+			refs = refs[n+32:]
+			b.chunks = append(b.chunks, stateHistorySpanChunk{StateHistorySpanChunk{digest, uint32(size)}, uint32(offset), b.raw[offset : offset+int(size) : offset+int(size)]})
+			offset += int(size)
+		}
+	} else {
+		b.addFixedChunks(b.raw)
 	}
 	return nil
 }

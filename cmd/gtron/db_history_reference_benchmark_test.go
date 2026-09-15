@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/urfave/cli/v2"
 )
 
@@ -74,7 +75,6 @@ func TestDBHistoryReferenceBenchmarkCLIAndInvalidTopology(t *testing.T) {
 		t.Fatalf("CLI report: %+v", report)
 	}
 	for _, mutate := range []func(*historyColdBenchmarkOptions){
-		func(o *historyColdBenchmarkOptions) { o.SharedReadPipeline = true },
 		func(o *historyColdBenchmarkOptions) { o.CopyMode = "defensive" },
 		func(o *historyColdBenchmarkOptions) { o.CDCCompressionWorkers = 1 },
 		func(o *historyColdBenchmarkOptions) { o.CompressionFormat = "3" },
@@ -84,6 +84,30 @@ func TestDBHistoryReferenceBenchmarkCLIAndInvalidTopology(t *testing.T) {
 		mutate(&opts)
 		if err := validateHistoryColdOptions(opts); err == nil {
 			t.Fatalf("invalid topology accepted: %+v", opts)
+		}
+	}
+}
+
+func TestDBHistoryReferenceBenchmarkPipelined(t *testing.T) {
+	for _, repair := range []bool{false, true} {
+		_, input, _ := coldBenchmarkFixture(t, repair)
+		var oracle []snapshots.SegmentRef
+		for _, workers := range []int{0, 2, 4, 8} {
+			opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), "reference"))
+			opts.ReferenceContainer, opts.SharedChunkCache = true, true
+			if workers != 0 {
+				opts.SharedReadPipeline, opts.SharedReadWorkers = true, workers
+			}
+			report, err := benchmarkHistoryCold(context.Background(), opts)
+			if err != nil || !report.Complete || !report.Iterations[0].Equivalent {
+				t.Fatalf("workers=%d repair=%v %+v %v", workers, repair, report, err)
+			}
+			refs := report.Iterations[0].Refs
+			if oracle == nil {
+				oracle = refs
+			} else if !reflect.DeepEqual(oracle, refs) {
+				t.Fatalf("worker topology changed output %d", workers)
+			}
 		}
 	}
 }

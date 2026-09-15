@@ -14,7 +14,12 @@ var historySharedChunkCacheFlag = &cli.BoolFlag{
 	Usage: "Allow a bounded per-build authenticated shared-chunk cache when fresh resource admission permits",
 }
 
+var historyReferenceContainerFlag = &cli.BoolFlag{
+	Name: "history.reference-container", Value: false,
+	Usage: "Write self-contained reference history; every future restart must use a reference-capable reader",
+}
+
 func runtimeHistorySharedReadOptions(ctx *cli.Context) (snapshots.HistoryReadOptions, error) {
-	opts := snapshots.HistoryReadOptions{Workers: ctx.Int(historySharedReadWorkersFlag.Name), ChunkCache: ctx.Bool(historySharedChunkCacheFlag.Name)}
+	opts := snapshots.HistoryReadOptions{Workers: ctx.Int(historySharedReadWorkersFlag.Name), ChunkCache: ctx.Bool(historySharedChunkCacheFlag.Name), ReferenceContainer: ctx.Bool(historyReferenceContainerFlag.Name)}
 	return opts, opts.Validate()
 }

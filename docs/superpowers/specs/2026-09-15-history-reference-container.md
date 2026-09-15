@@ -13,7 +13,8 @@
 
 范围包括新容器、只读认证 span 导出、单遍源构建、统一 reader 接线、完整语义/故障
 验证及固定输入性能测量。第一阶段不改变共识、proposal 生效高度、状态 latest 逻辑键、
-commitment，也不实现独立 durable journal 或跨文件 chunk store。
+commitment，不实现跨文件 chunk store。离线迁移使用逐 trio 的小型耐久 journal；
+它只记录发布与回收状态，不复制数据库或保存整份旧仓。
 
 既有热 v3 的承诺是 SHA256(完整原始 RLP)，因此至少一次全文认证仍然必要，不能由
 chunk SHA 组合替代。新格式消除重复源扫描和重复冷物化，不承诺所有历史操作为 O(1)。
@@ -30,6 +31,10 @@ chunk SHA 组合替代。新格式消除重复源扫描和重复冷物化，不�
 行保留存在性、generation、逻辑 key、txNum、Seq 与 block 绑定，Prev/Next 不重复物化。
 借用行字段仅在行回调内有效，块对象在外层回调结束后失效。取消及所有失败释放私有资源，
 不得关闭调用者仍在使用的 view。
+
+共享 v3 连续范围可使用 2/4/8 个 worker 并行认证，回调仍按块有序交付。预检遇到旧格式、
+repair 或不连续范围时，在交付任何回调前回退串行；最多 5,000 块，已完成结果与消费中的
+块共同受 256 MiB 预算约束，取消或失败必须等待 worker 退出后再释放 view。
 
 ## 物理容器
 
@@ -64,10 +69,13 @@ metadata 路径保持同一顺序，使用明确 fallback 或返回待支持错�
 
 ## 验收与切换
 
-新 reader 默认可识别新 magic，writer 第一阶段通过显式离线入口验证。生产启用还需
-reader-required 标识和可回滚到保留新 reader 的 bridge；旧 binary 不能读新文件。
+新 reader 默认可识别新 magic，生产 writer 通过 `--history.reference-container` 显式启用。
+CPU/cache 压力回退可以降低读取并发，但必须继续写新格式。生产启用前安装绑定新 binary
+摘要的 reader-required guard；首次新文件发布后不得回滚到不能识别新 magic 的旧 binary。
 compactor、prune verifier、export/inspect、restore 和逻辑大小预算必须一起审计。
 不得只接 query 后就允许 hot prune，也不得 merge 回旧格式却声称消除了长期重复工作。
+含 R1 的合并保留引用，混合旧输入转换为私有 R1 后合并。目录预算通过低成本头部探测
+预先检查；超过上限的组划为边界并继续查找后续可合并组，避免反复尝试失败的同一组。
 
 固定原生 16 块样本优先比较旧 R4/cache/CDC1 与新单遍引用构建：完整 trio/逻辑行/全部
 字段一致，比较实际墙钟、CPU、临时写入、最终三文件总量以及 point/range/restore 成本。
@@ -75,6 +83,8 @@ compactor、prune verifier、export/inspect、restore 和逻辑大小预算必�
 测试包含 shared/legacy/repair、空值/不存在、重复 tx 顺序、跨 chunk/段、字节损坏、
 错长度/引用、取消、临时失败和生命周期；本地与服务器原生分别验证。
 
-旧数据迁移和从创世重同步成本单列：旧数据实际 active/retained/logical bytes、双份输出
-与 scratch 峰值、源认证/转换时间、重同步各历史时期执行速度分别测量。不能用某一高度
+旧数据就地逐 trio 迁移：节点停止并持对应 Pebble 排他锁，完整验证新输出后原子发布，
+再删除精确旧文件。源数据库复制量为零，每批预算只包含新输出和 scratch 等新增空间。
+旧数据实际 active/retained/logical bytes、每批峰值、源认证/转换时间、重同步各历史时期
+执行速度分别测量。不能用某一高度
 12 分钟速度推算全链 ETA，不能把可接受清空解释为可以跳过新格式正确性验收。

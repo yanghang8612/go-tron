@@ -24,7 +24,7 @@ const (
 	historyReferenceBlockLimit = 5000
 )
 
-// HistoryReferenceBuildStats counts actual work in the experimental one-source-
+// HistoryReferenceBuildStats counts actual work in the one-source-
 // pass builder. SpoolBytes excludes Prev payloads; it is not a heap/RSS bound.
 type HistoryReferenceBuildStats struct {
 	SourceBlocks   uint64                         `json:"source_blocks"`
@@ -43,11 +43,17 @@ type historyReferenceValueSpan struct {
 	chunk, offset, length uint32
 }
 
-// BuildDiagnosticStateHistoryReferenceTrioContext writes a self-contained
-// reference container and ordinary V7 companions in a private output directory.
+// BuildStateHistoryReferenceTrioContext writes a self-contained
+// reference container and ordinary V7 companions in the caller output directory.
 // It never publishes a manifest, changes source state, or permits hot pruning.
 // The caller owns and authenticates the canonical range of the pinned view.
-func BuildDiagnosticStateHistoryReferenceTrioContext(ctx context.Context, view rawdb.StateHistoryReadView, dir string, fromTx, toTx, fromBlock, toBlock uint64, relPath string, opts etl.Options) (refs []SegmentRef, stats HistoryReferenceBuildStats, err error) {
+func BuildStateHistoryReferenceTrioContext(ctx context.Context, view rawdb.StateHistoryReadView, dir string, fromTx, toTx, fromBlock, toBlock uint64, relPath string, opts etl.Options) ([]SegmentRef, HistoryReferenceBuildStats, error) {
+	return BuildStateHistoryReferenceTrioReadContext(ctx, view, dir, fromTx, toTx, fromBlock, toBlock, relPath, opts, 0)
+}
+
+// BuildStateHistoryReferenceTrioReadContext optionally authenticates source packs
+// in 2/4/8 bounded workers. Row consumption and the output remain serial.
+func BuildStateHistoryReferenceTrioReadContext(ctx context.Context, view rawdb.StateHistoryReadView, dir string, fromTx, toTx, fromBlock, toBlock uint64, relPath string, opts etl.Options, workers int) (refs []SegmentRef, stats HistoryReferenceBuildStats, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -96,7 +102,16 @@ func BuildDiagnosticStateHistoryReferenceTrioContext(ctx context.Context, view r
 	var chunkScratch []byte
 	var previousTx uint64
 	havePrevious := false
-	err = rawdb.IterateStateHistorySpanBlocks(ctx, view, fromBlock, toBlock, fromTx, toTx, func(block *rawdb.StateHistorySpanBlock) (bool, error) {
+	iterate := rawdb.IterateStateHistorySpanBlocks
+	if workers != 0 {
+		if workers != 2 && workers != 4 && workers != 8 {
+			return nil, stats, rawdb.ErrStateHistoryPipelineWorkers
+		}
+		iterate = func(ctx context.Context, view rawdb.StateHistoryReadView, fromBlock, toBlock, fromTx, toTx uint64, fn func(*rawdb.StateHistorySpanBlock) (bool, error)) error {
+			return rawdb.IterateStateHistorySpanBlocksWithWorkers(ctx, view, fromBlock, toBlock, fromTx, toTx, workers, fn)
+		}
+	}
+	err = iterate(ctx, view, fromBlock, toBlock, fromTx, toTx, func(block *rawdb.StateHistorySpanBlock) (bool, error) {
 		info := block.Info()
 		stats.SourceBlocks++
 		if info.SharedPack {
@@ -245,6 +260,10 @@ func BuildDiagnosticStateHistoryReferenceTrioContext(ctx context.Context, view r
 	if err := writeStateDomainChangeBinaryHeaderCount(index, rw.indexCount); err != nil {
 		return nil, stats, err
 	}
+	index, indexName, err = rewriteStateDomainChangeBinaryIndexV7Context(ctx, index, indexName)
+	if err != nil {
+		return nil, stats, err
+	}
 	abs := filepath.Join(dir, relPath)
 	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 		return nil, stats, err
@@ -325,7 +344,7 @@ func readHistoryReferenceSpoolRow(r io.Reader) (*rawdb.StateDomainChange, uint64
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	if len(row.Prev) != 0 || len(row.Next) != 0 || (!row.PrevExists && prev != 0) {
+	if len(row.Prev) != 0 || len(row.Next) != 0 {
 		return nil, 0, nil, errors.New("snapshots: invalid reference history spool metadata")
 	}
 	spans := make([]historyReferenceValueSpan, count)
@@ -423,4 +442,10 @@ func (w *historyReferenceRecordWriter) Finish() error {
 		return err
 	}
 	return w.index.Flush()
+}
+
+// BuildDiagnosticStateHistoryReferenceTrioContext uses the same complete builder
+// without publishing its output. The caller supplies a private directory.
+func BuildDiagnosticStateHistoryReferenceTrioContext(ctx context.Context, view rawdb.StateHistoryReadView, dir string, fromTx, toTx, fromBlock, toBlock uint64, relPath string, opts etl.Options) ([]SegmentRef, HistoryReferenceBuildStats, error) {
+	return BuildStateHistoryReferenceTrioContext(ctx, view, dir, fromTx, toTx, fromBlock, toBlock, relPath, opts)
 }

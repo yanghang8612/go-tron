@@ -36,19 +36,20 @@ type historyReferenceChunkKey struct {
 // directories are files, not slices. The dedup map is bounded by MaxChunks and
 // the combined directory budget; those limits are not an exact RSS claim.
 type historyReferenceWriter struct {
-	ctx                context.Context
-	dir                string
-	raw, chunks, spans *os.File
-	dictionary         map[historyReferenceChunkKey]uint32
-	prefixLimit        uint64
-	rawBytes           uint64
-	stats              HistoryReferenceContainerStats
-	last               historyReferenceSpan
-	literal            []byte
-	literalID          uint32
-	hasLiteral         bool
-	finished, released bool
-	err                error
+	ctx                         context.Context
+	dir                         string
+	raw, chunks, spans          *os.File
+	chunkMetadata, spanMetadata historyReferenceMetadataIO
+	dictionary                  map[historyReferenceChunkKey]uint32
+	prefixLimit                 uint64
+	rawBytes                    uint64
+	stats                       HistoryReferenceContainerStats
+	last                        historyReferenceSpan
+	literal                     []byte
+	literalID                   uint32
+	hasLiteral                  bool
+	finished, released          bool
+	err                         error
 }
 
 func newHistoryReferenceWriter(ctx context.Context, dir string, prefixLimit int) (*historyReferenceWriter, error) {
@@ -75,6 +76,8 @@ func newHistoryReferenceWriter(ctx context.Context, dir string, prefixLimit int)
 			return nil, errors.Join(err, w.Release())
 		}
 	}
+	w.chunkMetadata = newHistoryReferenceMetadataCache(ctx, w.chunks)
+	w.spanMetadata = newHistoryReferenceMetadataCache(ctx, w.spans)
 	return w, nil
 }
 
@@ -117,7 +120,7 @@ func (w *historyReferenceWriter) chunk(id uint32) (historyReferenceChunk, error)
 		return historyReferenceChunk{}, fmt.Errorf("%w: chunk ID", errHistoryReferenceCorrupt)
 	}
 	var raw [historyReferenceChunkEntrySize]byte
-	if err := historyReferenceReadAt(w.ctx, w.chunks, raw[:], uint64(id)*historyReferenceChunkEntrySize); err != nil {
+	if err := historyReferenceReadAt(w.ctx, w.chunkMetadata, raw[:], uint64(id)*historyReferenceChunkEntrySize); err != nil {
 		return historyReferenceChunk{}, err
 	}
 	return decodeHistoryReferenceChunk(raw[:])
@@ -125,7 +128,7 @@ func (w *historyReferenceWriter) chunk(id uint32) (historyReferenceChunk, error)
 
 func (w *historyReferenceWriter) setChunk(id uint32, chunk historyReferenceChunk) error {
 	b := chunk.encode()
-	n, err := w.chunks.WriteAt(b[:], int64(id)*historyReferenceChunkEntrySize)
+	n, err := w.chunkMetadata.WriteAt(b[:], int64(id)*historyReferenceChunkEntrySize)
 	if err == nil && n != len(b) {
 		err = io.ErrShortWrite
 	}
@@ -233,7 +236,7 @@ func (w *historyReferenceWriter) appendSpan(id, off, length uint32) error {
 		return err
 	}
 	b := span.encode()
-	n, err := w.spans.WriteAt(b[:], int64(index)*historyReferenceSpanEntrySize)
+	n, err := w.spanMetadata.WriteAt(b[:], int64(index)*historyReferenceSpanEntrySize)
 	if err == nil && n != len(b) {
 		err = io.ErrShortWrite
 	}
@@ -310,7 +313,7 @@ func (w *historyReferenceWriter) WriteLiteral(p []byte) (int, error) {
 
 func (w *historyReferenceWriter) span(index uint64) (historyReferenceSpan, error) {
 	var b [historyReferenceSpanEntrySize]byte
-	if err := historyReferenceReadAt(w.ctx, w.spans, b[:], index*historyReferenceSpanEntrySize); err != nil {
+	if err := historyReferenceReadAt(w.ctx, w.spanMetadata, b[:], index*historyReferenceSpanEntrySize); err != nil {
 		return historyReferenceSpan{}, err
 	}
 	return decodeHistoryReferenceSpan(b[:])
@@ -396,6 +399,9 @@ func (w *historyReferenceWriter) Finalize(path string) (size uint64, checksum st
 	if err = w.flushLiteral(); err != nil {
 		return 0, "", w.fail(err)
 	}
+	if err = errors.Join(w.chunkMetadata.Flush(), w.spanMetadata.Flush()); err != nil {
+		return 0, "", w.fail(err)
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return 0, "", w.fail(err)
@@ -439,6 +445,11 @@ func (w *historyReferenceWriter) Finalize(path string) (size uint64, checksum st
 			return 0, "", e
 		}
 		physical += uint64(len(stored))
+	}
+	// Final chunk offsets/codecs replace scratch descriptors. Flush these pages
+	// before copying the canonical directory bytes into the self-contained file.
+	if err = errors.Join(w.chunkMetadata.Flush(), w.spanMetadata.Flush()); err != nil {
+		return 0, "", err
 	}
 	header := historyReferenceHeader{logical: w.stats.LogicalBytes, chunkDir: physical, chunks: w.stats.Chunks, spans: w.stats.Spans}
 	header.spanDir = physical + w.stats.Chunks*historyReferenceChunkEntrySize
@@ -508,5 +519,155 @@ func (w *historyReferenceWriter) Release() error {
 		}
 	}
 	w.dictionary, w.literal = nil, nil
+	w.chunkMetadata, w.spanMetadata = nil, nil
 	return errors.Join(err, os.RemoveAll(w.dir))
+}
+
+// Two independent tables use 16 fixed 4KiB pages each: 128KiB of page data per
+// writer, plus small tags. This is a bounded write-back cache, not a full table
+// allocation. Disk entries and their authenticated final bytes are unchanged.
+// A failed write/eviction is sticky. Failed builders discard dirty scratch on
+// Release; successful Finalize flushes before copying and verifying all bytes.
+type historyReferenceMetadataIO interface {
+	io.ReaderAt
+	io.WriterAt
+	Flush() error
+}
+
+type historyReferenceMetadataFile interface {
+	io.ReaderAt
+	io.WriterAt
+}
+
+type historyReferenceMetadataCachePage struct {
+	data           [historyReferenceMetadataPage]byte
+	base           uint64
+	valid          int
+	present, dirty bool
+}
+
+type historyReferenceMetadataCache struct {
+	ctx   context.Context
+	file  historyReferenceMetadataFile
+	pages [historyReferenceMetadataPages]historyReferenceMetadataCachePage
+	size  uint64
+	err   error
+}
+
+func newHistoryReferenceMetadataCache(ctx context.Context, file historyReferenceMetadataFile) *historyReferenceMetadataCache {
+	return &historyReferenceMetadataCache{ctx: ctx, file: file}
+}
+
+func (m *historyReferenceMetadataCache) check() error {
+	if m.err != nil {
+		return m.err
+	}
+	return contextError(m.ctx)
+}
+func (m *historyReferenceMetadataCache) fail(err error) error {
+	if err != nil && m.err == nil {
+		m.err = err
+	}
+	return err
+}
+func (m *historyReferenceMetadataCache) flushPage(p *historyReferenceMetadataCachePage) error {
+	if !p.present || !p.dirty {
+		return nil
+	}
+	if err := m.check(); err != nil {
+		return err
+	}
+	n, err := m.file.WriteAt(p.data[:p.valid], int64(p.base))
+	if err == nil && n != p.valid {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return m.fail(err)
+	}
+	p.dirty = false
+	return nil
+}
+func (m *historyReferenceMetadataCache) page(base uint64) (*historyReferenceMetadataCachePage, error) {
+	p := &m.pages[(base/historyReferenceMetadataPage)%historyReferenceMetadataPages]
+	if p.present && p.base == base {
+		return p, nil
+	}
+	if err := m.flushPage(p); err != nil {
+		return nil, err
+	}
+	*p = historyReferenceMetadataCachePage{base: base}
+	if base < m.size {
+		p.valid = int(min(uint64(historyReferenceMetadataPage), m.size-base))
+		if err := historyReferenceReadAt(m.ctx, m.file, p.data[:p.valid], base); err != nil {
+			return nil, m.fail(err)
+		}
+	}
+	p.present = true
+	return p, nil
+}
+func (m *historyReferenceMetadataCache) ReadAt(dst []byte, off int64) (int, error) {
+	if err := m.check(); err != nil {
+		return 0, err
+	}
+	if off < 0 || uint64(off) > m.size || uint64(len(dst)) > m.size-uint64(off) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	n := 0
+	for len(dst) > 0 {
+		if err := m.check(); err != nil {
+			return n, err
+		}
+		pos := uint64(off)
+		base := pos / historyReferenceMetadataPage * historyReferenceMetadataPage
+		p, err := m.page(base)
+		if err != nil {
+			return n, err
+		}
+		delta := int(pos - base)
+		copied := min(len(dst), p.valid-delta)
+		if copied <= 0 {
+			return n, m.fail(io.ErrUnexpectedEOF)
+		}
+		copy(dst[:copied], p.data[delta:delta+copied])
+		dst, off, n = dst[copied:], off+int64(copied), n+copied
+	}
+	return n, nil
+}
+func (m *historyReferenceMetadataCache) WriteAt(src []byte, off int64) (int, error) {
+	if err := m.check(); err != nil {
+		return 0, err
+	}
+	if off < 0 || uint64(off) > m.size || uint64(len(src)) > historyReferenceMaxMetadata-uint64(off) {
+		return 0, m.fail(errHistoryReferenceBudget)
+	}
+	n := 0
+	for len(src) > 0 {
+		if err := m.check(); err != nil {
+			return n, err
+		}
+		pos := uint64(off)
+		base := pos / historyReferenceMetadataPage * historyReferenceMetadataPage
+		p, err := m.page(base)
+		if err != nil {
+			return n, err
+		}
+		delta := int(pos - base)
+		copied := min(len(src), historyReferenceMetadataPage-delta)
+		copy(p.data[delta:delta+copied], src[:copied])
+		p.valid, p.dirty = max(p.valid, delta+copied), true
+		m.size = max(m.size, pos+uint64(copied))
+		src, off, n = src[copied:], off+int64(copied), n+copied
+	}
+	return n, nil
+}
+func (m *historyReferenceMetadataCache) Flush() error {
+	if err := m.check(); err != nil {
+		return err
+	}
+	for i := range m.pages {
+		if err := m.flushPage(&m.pages[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

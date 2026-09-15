@@ -17,6 +17,8 @@ type historyCompactionInputCost struct {
 	logicalBytes uint64
 }
 
+type historyReferenceCompactionBudgetRead func(historyCompactionCandidate) (historyReferenceCompactionInputBudget, error)
+
 func historyCompactionNoSelectionReason(cfg CompactionConfig) string {
 	if cfg.BusyLeafOnly {
 		return "leaf-target-or-budget"
@@ -80,7 +82,7 @@ func readHistoryCompactionInputCost(ctx context.Context, dir string, candidate h
 // original leaf is rewritten at most once, and two newly published small leaves
 // do not trigger a merge on every build. An oversized leaf is a boundary, not a
 // failing job that strands all subsequent work.
-func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []historyCompactionCandidate, cfg CompactionConfig, readCost func(historyCompactionCandidate) (historyCompactionInputCost, error)) (historyCompactionSelection, bool, error) {
+func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []historyCompactionCandidate, cfg CompactionConfig, readCost func(historyCompactionCandidate) (historyCompactionInputCost, error), referenceReaders ...historyReferenceCompactionBudgetRead) (historyCompactionSelection, bool, error) {
 	maxSources := cfg.MaxSources
 	maxSteps := cfg.MaxSteps
 	if maxSteps == 0 {
@@ -93,7 +95,13 @@ func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []his
 		return historyCompactionSelection{}, false, nil
 	}
 	var selection historyCompactionSelection
-	reset := func() { selection = historyCompactionSelection{} }
+	var references []historyReferenceCompactionInputBudget
+	var readReference historyReferenceCompactionBudgetRead
+	if len(referenceReaders) > 0 {
+		readReference = referenceReaders[0]
+	}
+	var referenceReason string
+	reset := func() { selection = historyCompactionSelection{}; references = references[:0] }
 	for _, candidate := range candidates {
 		if err := contextError(ctx); err != nil {
 			return historyCompactionSelection{}, false, err
@@ -109,8 +117,21 @@ func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []his
 		if err != nil {
 			return historyCompactionSelection{}, false, err
 		}
+		var reference historyReferenceCompactionInputBudget
+		referenceExceeded := false
+		if readReference != nil {
+			reference, err = readReference(candidate)
+			if err != nil {
+				return historyCompactionSelection{}, false, err
+			}
+			budget := estimateHistoryReferenceCompactionBudget(append(references, reference))
+			referenceExceeded = budget.HasReference && budget.Deferred
+			if referenceExceeded {
+				referenceReason = budget.Reason
+			}
+		}
 		overflow := cost.bytes > math.MaxUint64-selection.inputBytes || cost.logicalBytes > math.MaxUint64-selection.inputLogicalBytes || cost.records > math.MaxUint64-selection.inputRecords
-		if overflow || !historyCompactionWithinBudget(cfg, selection.inputBytes+cost.bytes, selection.inputLogicalBytes+cost.logicalBytes, selection.inputRecords+cost.records, uint64(len(selection.candidates)+1)) {
+		if overflow || referenceExceeded || !historyCompactionWithinBudget(cfg, selection.inputBytes+cost.bytes, selection.inputLogicalBytes+cost.logicalBytes, selection.inputRecords+cost.records, uint64(len(selection.candidates)+1)) {
 			if len(selection.candidates) >= 2 {
 				return selection, true, nil
 			}
@@ -118,6 +139,14 @@ func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []his
 		}
 		if !historyCompactionWithinBudget(cfg, cost.bytes, cost.logicalBytes, cost.records, 1) {
 			continue
+		}
+		if readReference != nil {
+			budget := estimateHistoryReferenceCompactionBudget([]historyReferenceCompactionInputBudget{reference})
+			if budget.HasReference && budget.Deferred {
+				referenceReason = budget.Reason
+				continue
+			}
+			references = append(references, reference)
 		}
 		selection.candidates = append(selection.candidates, candidate)
 		selection.inputBytes += cost.bytes
@@ -136,7 +165,76 @@ func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []his
 			reset()
 		}
 	}
-	return historyCompactionSelection{}, false, nil
+	return historyCompactionSelection{referenceDeferReason: referenceReason}, false, nil
+}
+
+// Preserve the original aligned selection when it fits. If its R1 upper bound
+// is too large, try a bounded contiguous prefix at each following source start.
+// An oversized extension ends only that prefix, never all crossing groups: e.g.
+// [large, small, small, large] still considers the middle pair. All bound terms
+// are non-negative, so extending a rejected prefix cannot make it fit. Headers
+// are cached by the caller; retries never rescan payloads or rewrite a source.
+func selectReferenceBudgetedHistoryCompactionRun(ctx context.Context, candidates []historyCompactionCandidate, minSteps, maxSteps uint64, read historyReferenceCompactionBudgetRead) (historyCompactionSelection, bool, error) {
+	if err := contextError(ctx); err != nil {
+		return historyCompactionSelection{}, false, err
+	}
+	original, ok := selectHistoryCompactionCandidatesRunAtLeast(candidates, minSteps, maxSteps)
+	if !ok {
+		return historyCompactionSelection{}, false, nil
+	}
+	inputs := make([]historyReferenceCompactionInputBudget, 0, len(original.candidates))
+	for _, candidate := range original.candidates {
+		if err := contextError(ctx); err != nil {
+			return historyCompactionSelection{}, false, err
+		}
+		input, err := read(candidate)
+		if err != nil {
+			return historyCompactionSelection{}, false, err
+		}
+		inputs = append(inputs, input)
+	}
+	budget := estimateHistoryReferenceCompactionBudget(inputs)
+	if !budget.HasReference || !budget.Deferred {
+		return original, true, nil
+	}
+	reason := budget.Reason
+	if maxSteps == 0 {
+		maxSteps = defaultCompactionMaxSteps
+	}
+	for start := 0; start < len(candidates); start++ {
+		inputs = inputs[:0]
+		var steps uint64
+		end := start
+		for ; end < len(candidates); end++ {
+			if err := contextError(ctx); err != nil {
+				return historyCompactionSelection{}, false, err
+			}
+			candidate := candidates[end]
+			if end > start && !historySegmentsAreContiguous(candidates[end-1].history, candidate.history) {
+				break
+			}
+			nextSteps := candidate.history.effectiveAggregationSteps()
+			if nextSteps > maxSteps-steps {
+				break
+			}
+			input, err := read(candidate)
+			if err != nil {
+				return historyCompactionSelection{}, false, err
+			}
+			proposed := append(inputs, input)
+			budget := estimateHistoryReferenceCompactionBudget(proposed)
+			if budget.HasReference && budget.Deferred {
+				reason = budget.Reason
+				break
+			}
+			inputs = proposed
+			steps += nextSteps
+		}
+		if selection, ok := selectHistoryCompactionCandidatesRunAtLeast(candidates[start:end], minSteps, maxSteps); ok {
+			return selection, true, nil
+		}
+	}
+	return historyCompactionSelection{referenceDeferReason: reason}, false, nil
 }
 
 // Admission needs the logical size, not the block directory or any decoded
