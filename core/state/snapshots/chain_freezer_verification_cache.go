@@ -616,11 +616,11 @@ func (c *ChainFreezerVerificationCache) persistLocked() error {
 	sort.Slice(eventEntries, func(i, j int) bool {
 		return eventEntries[i].Index.Path < eventEntries[j].Index.Path
 	})
-	data, err := json.MarshalIndent(chainFreezerVerificationDisk{
+	data, err := json.Marshal(chainFreezerVerificationDisk{
 		Version:      chainFreezerVerificationCacheVersion,
 		Entries:      entries,
 		EventEntries: eventEntries,
-	}, "", "  ")
+	})
 	if err != nil {
 		return err
 	}
