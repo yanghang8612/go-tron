@@ -24,28 +24,51 @@ type NodeInfo struct {
 // backward compatible for wallet clients, while changing the imported proto
 // would break wire compatibility.
 type SyncInfo struct {
-	Active                bool   `json:"active"`
-	Paused                bool   `json:"paused"`
-	PeerCount             int    `json:"peerCount"`
-	SyncPeerCount         int    `json:"syncPeerCount"`
-	TargetHead            uint64 `json:"targetHead"`
-	AppliedTip            uint64 `json:"appliedTip"`
-	SessionBlocks         int    `json:"sessionBlocks"`
-	SessionTransactions   int    `json:"sessionTransactions"`
-	Remaining             int64  `json:"remaining"`
-	Inflight              int    `json:"inflight"`
-	BufferedBlocks        int    `json:"bufferedBlocks"`
-	BufferedBytes         int64  `json:"bufferedBytes"`
-	FetchBackpressured    bool   `json:"fetchBackpressured"`
-	RequestedBlocks       int    `json:"requestedBlocks"`
-	RetryBlocks           int    `json:"retryBlocks"`
-	RetainedDecodedBlocks int    `json:"retainedDecodedBlocks"`
-	RetainedDecodedBytes  int64  `json:"retainedDecodedBytes"`
-	PauseBlock            uint64 `json:"pauseBlock,omitempty"`
-	PauseTime             string `json:"pauseTime,omitempty"`
-	PauseError            string `json:"pauseError,omitempty"`
-	LastPeerFailure       string `json:"lastPeerFailure,omitempty"`
-	LastPeerFailureTime   string `json:"lastPeerFailureTime,omitempty"`
+	Active                bool                `json:"active"`
+	Paused                bool                `json:"paused"`
+	PeerCount             int                 `json:"peerCount"`
+	SyncPeerCount         int                 `json:"syncPeerCount"`
+	TargetHead            uint64              `json:"targetHead"`
+	AppliedTip            uint64              `json:"appliedTip"`
+	SessionBlocks         int                 `json:"sessionBlocks"`
+	SessionTransactions   int                 `json:"sessionTransactions"`
+	Remaining             int64               `json:"remaining"`
+	Inflight              int                 `json:"inflight"`
+	BufferedBlocks        int                 `json:"bufferedBlocks"`
+	BufferedBytes         int64               `json:"bufferedBytes"`
+	FetchBackpressured    bool                `json:"fetchBackpressured"`
+	RequestedBlocks       int                 `json:"requestedBlocks"`
+	RetryBlocks           int                 `json:"retryBlocks"`
+	RetainedDecodedBlocks int                 `json:"retainedDecodedBlocks"`
+	RetainedDecodedBytes  int64               `json:"retainedDecodedBytes"`
+	PauseBlock            uint64              `json:"pauseBlock,omitempty"`
+	PauseTime             string              `json:"pauseTime,omitempty"`
+	PauseError            string              `json:"pauseError,omitempty"`
+	LastPeerFailure       string              `json:"lastPeerFailure,omitempty"`
+	LastPeerFailureTime   string              `json:"lastPeerFailureTime,omitempty"`
+	HistoryBacklog        *HistoryBacklogInfo `json:"historyBacklog,omitempty"`
+}
+
+// HistoryBacklogInfo describes an intentional import-capacity hold; it does
+// not change the canonical failure/paused fields or the protobuf wire format.
+type HistoryBacklogInfo struct {
+	Enabled         bool   `json:"enabled"`
+	Holding         bool   `json:"holding"`
+	Reason          string `json:"reason"`
+	HighBlocks      uint64 `json:"highBlocks"`
+	LowBlocks       uint64 `json:"lowBlocks"`
+	HeadBlock       uint64 `json:"headBlock"`
+	EligibleBlock   uint64 `json:"eligibleBlock"`
+	PublishedBlock  uint64 `json:"publishedBlock"`
+	LagBlocks       uint64 `json:"lagBlocks"`
+	HeadGapBlocks   uint64 `json:"headGapBlocks"`
+	ObservedAt      string `json:"observedAt,omitempty"`
+	CheckedAt       string `json:"checkedAt,omitempty"`
+	Since           string `json:"since,omitempty"`
+	LastError       string `json:"lastError,omitempty"`
+	Checks          uint64 `json:"checks"`
+	ProbeErrors     uint64 `json:"probeErrors"`
+	HoldTransitions uint64 `json:"holdTransitions"`
 }
 
 type TriggerResult struct {

@@ -157,7 +157,9 @@ type SyncService struct {
 	// is safe.
 	stats *tsync.Stats
 
-	importBatchSize int
+	importBatchSize       int
+	historyBacklog        atomic.Pointer[historyBacklogAdmission]
+	historyBacklogStarted atomic.Bool
 
 	// watchdog runs the periodic isolation check. Owns its own goroutine
 	// and ticker; Start/Stop fan-out launches and joins it.
@@ -356,6 +358,10 @@ func (ss *SyncService) onApplyStats(block *types.Block, s core.ApplyStats) {
 // Start launches the isolation watchdog goroutine.
 func (ss *SyncService) Start() {
 	ss.stopping.Store(false)
+	ss.historyBacklogStarted.Store(true)
+	if admission := ss.historyBacklog.Load(); admission != nil {
+		admission.start(ss)
+	}
 	ss.pauseIfStopHeightReached()
 	if ss.watchdog != nil {
 		ss.watchdog.Start()
@@ -379,6 +385,11 @@ func (ss *SyncService) Stop() {
 	// head even though the block commit itself succeeded.
 	syncdl.ApplySessionResetPlan(syncdl.PlanSessionQuiesce(), syncSessionResetApplier{service: ss})
 	ss.mu.Unlock()
+	if admission := ss.historyBacklog.Load(); admission != nil {
+		// The poller can own the active drain. Quiesce first so joining it
+		// waits only for the selected batch and its normal Finish barrier.
+		admission.stop()
+	}
 	ss.waitForDrain()
 	ss.derivedWG.Wait()
 	// No new bodies can enter after stopping is set, and the sole drain owner is
@@ -545,7 +556,7 @@ func (ss *SyncService) RecoverStalledFetch() {
 // its own start/progress/completion logs, so polling it every 30 seconds would
 // add noise and resource contention without advancing sync.
 func (ss *SyncService) StallRecoveryBlocked() bool {
-	blocked := statedomains.CommitmentRebuildActive()
+	blocked := statedomains.CommitmentRebuildActive() || ss.historyBacklogHolding()
 	if blocked {
 		ss.stalledFetchLogMu.Lock()
 		ss.stalledFetchLog = stalledFetchRecoveryLogState{}
@@ -585,6 +596,7 @@ func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, 
 
 // SyncStatus is a point-in-time downloader snapshot for operational APIs.
 type SyncStatus struct {
+	HistoryBacklog        HistoryBacklogAdmissionStatus
 	Active                bool
 	Paused                bool
 	SyncPeerCount         int
@@ -614,6 +626,7 @@ func (ss *SyncService) Status() SyncStatus {
 	paused, pauseBlock, pauseTime, pauseErr := ss.pause.Status()
 	stats := ss.stats.CurrentSnapshot()
 	return SyncStatus{
+		HistoryBacklog:      ss.historyBacklogStatus(),
 		Active:              ss.syncing,
 		Paused:              paused,
 		SyncPeerCount:       len(ss.peers),
@@ -787,6 +800,9 @@ func (ss *SyncService) reportUnavailableSyncPeer(peer *p2p.Peer, needFrom, peerL
 }
 
 func (ss *SyncService) initSessionLocked(now time.Time) {
+	if admission := ss.historyBacklog.Load(); admission != nil {
+		admission.reset()
+	}
 	ss.syncing = true
 	ss.syncPeer = nil
 	ss.fetchList = nil
@@ -2146,6 +2162,11 @@ func (a *syncSignatureLookahead) discard() {
 }
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
+	// Admission happens before a session owns an executor or lifetime gate.
+	// Held triggers return; one owned poller eventually retries the drain.
+	if !ss.historyBacklogAdmissionReady() {
+		return
+	}
 	// Only this drain owns decoded imports. Finish below joins async commitment
 	// before returning, including paused/failed sessions; peer resets must not
 	// release the hashes while the off-lock executor still owns the batch.
@@ -4095,6 +4116,9 @@ func (a syncSessionResetApplier) StopPeerTimers() {
 }
 
 func (a syncSessionResetApplier) DeactivateSession() {
+	if admission := a.service.historyBacklog.Load(); admission != nil {
+		admission.reset()
+	}
 	if a.service.stats != nil {
 		a.service.stats.EndSession(time.Now())
 	}

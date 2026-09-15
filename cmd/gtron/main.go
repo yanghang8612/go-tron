@@ -454,6 +454,9 @@ var app = &cli.App{
 		historyCrossBlockDedupFlag,
 		historyCompressionFormatFlag,
 		historyCatchupModeFlag,
+		historyBacklogAdmissionFlag,
+		historyBacklogHighFlag,
+		historyBacklogLowFlag,
 		historyPressureHotFlag,
 		historyPressureFreeFlag,
 		historyBuildMinFreeFlag,
@@ -645,6 +648,10 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	log.Info("History catch-up scheduling configured", "mode", historyCatchupMode)
+	historyBacklog, err := runtimeHistoryBacklogOptions(ctx)
+	if err != nil {
+		return err
+	}
 	rawdb.SetStateHistoryBlockDedup(ctx.Bool(historyBlockDedupFlag.Name))
 	rawdb.SetStateHistoryCrossBlockDedup(ctx.Bool(historyCrossBlockDedupFlag.Name))
 	log.Info("Hot history cross-block dedup configured", "enabled", ctx.Bool(historyCrossBlockDedupFlag.Name), "bucketBlocks", rawdb.StateHistoryChunkBucketBlocks)
@@ -1089,6 +1096,7 @@ func gtron(ctx *cli.Context) error {
 			BufferedBlocks:        status.BufferedBlocks,
 			BufferedBytes:         status.BufferedBytes,
 			FetchBackpressured:    status.FetchBackpressured,
+			HistoryBacklog:        historyBacklogSyncInfo(status.HistoryBacklog),
 			RequestedBlocks:       status.RequestedBlocks,
 			RetryBlocks:           status.RetryBlocks,
 			RetainedDecodedBlocks: status.RetainedDecodedBlocks,
@@ -1194,6 +1202,10 @@ func gtron(ctx *cli.Context) error {
 		syncHistoryBuildAdmission := newSyncImporterMaintenanceAdmission(30 * time.Second)
 		historyMode := chainConfig.EffectiveHistoryMode()
 		coldStateSnapshotsEnabled := (historyMode == params.HistoryModeSnap || historyMode == params.HistoryModeArchive) && chainConfig.HistoryEnabled
+		if historyBacklog.enabled && !coldStateSnapshotsEnabled {
+			closeStores()
+			return fmt.Errorf("history backlog admission requires enabled cold state history")
+		}
 		var pressureProbe func(context.Context) (statesnapshots.HistoryPressure, error)
 		var pressureLimits historyPressureLimits
 		if coldStateSnapshotsEnabled {
@@ -1336,6 +1348,13 @@ func gtron(ctx *cli.Context) error {
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
+		if err := configureRuntimeHistoryBacklog(syncService, bc, prunePolicy.HistoryWindow, historyBacklog); err != nil {
+			closeStores()
+			return err
+		}
+		if historyBacklog.enabled {
+			log.Info("Cold history backlog import admission enabled", "highBlocks", historyBacklog.high, "lowBlocks", historyBacklog.low, "historyWindow", prunePolicy.HistoryWindow)
+		}
 		if postingPrune {
 			stack.RegisterLifecycle(statepruning.NewPostingPruneWorker(statepruning.PostingPruneWorkerConfig{
 				Boundary:      domainLifecycle.PostingPruneBoundary,
@@ -1393,6 +1412,10 @@ func gtron(ctx *cli.Context) error {
 			"catalogGrace", snapshotCatalogGrace,
 			"snapshotDir", stateSnapshotDir)
 	} else {
+		if historyBacklog.enabled {
+			closeStores()
+			return fmt.Errorf("history backlog admission requires the cold state snapshot lifecycle")
+		}
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
 	}
 	if !chainLookupPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
