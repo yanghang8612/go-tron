@@ -22,6 +22,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 import types
 
@@ -148,6 +149,15 @@ def validate_revision(h, source, ops):
         require(required in changed, 'diagnostic source does not include range capture')
     script = git('show', ops + ':' + SCRIPT_PATH)
     require(script == read_regular(__file__, 256 << 10, root=True), 'executing ops differs from pinned Git script')
+    manifest, gitlinks = source_tree_manifest(source)
+    return {'source_commit': source, 'script_commit': ops, 'script_sha256': sha(script),
+            'base_commit': CURRENT_SOURCE, 'changed_files': sorted(changed), 'checkout': CHECKOUT,
+            'manifest': manifest, 'gitlinks': gitlinks, 'modules': MODULES,
+            'production_prepared_sha256': CURRENT_PREPARED_SHA}
+
+
+def source_tree_manifest(source):
+    full_commit(source)
     manifest, gitlinks = {}, {}
     for row in git('ls-tree', '-rz', source).split(b'\0'):
         if not row:
@@ -163,10 +173,44 @@ def validate_revision(h, source, ops):
             require(kind == 'blob' and mode in ('100644', '100755'), 'unsupported source tree entry')
             manifest[name] = {'git_blob': oid, 'mode': int(mode, 8) & 0o777}
     require(manifest and len(manifest) <= 20000 and len(gitlinks) == 1, 'unexpected source tree size/submodules')
-    return {'source_commit': source, 'script_commit': ops, 'script_sha256': sha(script),
-            'base_commit': CURRENT_SOURCE, 'changed_files': sorted(changed), 'checkout': CHECKOUT,
-            'manifest': manifest, 'gitlinks': gitlinks, 'modules': MODULES,
-            'production_prepared_sha256': CURRENT_PREPARED_SHA}
+    return manifest, gitlinks
+
+
+def extract_private_source(archive, manifest):
+    """Create a new private tree using Git's executable bit, not tar.umask.
+
+    git archive commonly emits 0664/0775 for Git 100644/100755. Normalize only
+    during this fresh extraction; existing trees and verifier rules stay intact.
+    Every member's bytes and final mode remain bound to the pinned Git manifest.
+    """
+    require(not os.path.lexists(SOURCE), 'private extraction requires a new source directory')
+    SOURCE.mkdir()
+    seen, files = set(), set()
+    with tarfile.open(str(archive)) as bundle:
+        for item in bundle:
+            rel = Path(item.name)
+            require(not rel.is_absolute() and '..' not in rel.parts and str(rel) not in ('', '.'), 'unsafe archive path')
+            name = str(rel)
+            require(name not in seen, 'duplicate archive member')
+            seen.add(name)
+            require(len(seen) <= 40000, 'too many source archive members')
+            target = SOURCE / rel
+            if item.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            require(item.isfile() and name in manifest and item.size <= 64 << 20, 'unexpected source archive member: ' + name)
+            entry = manifest[name]
+            require(entry['mode'] in (0o644, 0o755), 'unexpected pinned Git file mode')
+            with bundle.extractfile(item) as stream:
+                data = stream.read((64 << 20) + 1)
+            oid = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+            require(len(data) == item.size and oid == entry['git_blob'], 'source archive Git blob differs: ' + name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(str(target), 'xb') as stream:
+                stream.write(data)
+                os.fchmod(stream.fileno(), entry['mode'])
+            files.add(name)
+    require(files == set(manifest), 'source archive omits pinned files')
 
 
 def verify_source(h, manifest):
@@ -301,6 +345,7 @@ def load_modules():
     i.PROBE_TIMEOUT, i.probe_argv = PROBE_TIMEOUT, probe_argv
     i.NATIVE_TEST_PATTERN = 'Test.*(HistoryRangeExport|StateHistoryRangeExport|HistoryColdBenchmark|HistoryDiagnostic|Owned)'
     i.validate_revision, i.verify_source = validate_revision, verify_source
+    i.extract = lambda archive: extract_private_source(archive, source_tree_manifest(SOURCE_REVISION)[0])
     i.normalize_exec_start = guard.parse_commands
     h.REPO, h.RELEASE, h.BINARY = REPO, RELEASE, Path(CURRENT_EXE)
     h.OLD_EXE, h.OLD_SHA, h.OLD_PID, h.OLD_START_TICKS = CURRENT_EXE, CURRENT_SHA, CURRENT_PID, CURRENT_TICKS

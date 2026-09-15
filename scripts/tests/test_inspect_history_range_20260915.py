@@ -4,9 +4,11 @@ import base64
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import types
 import unittest
@@ -181,6 +183,44 @@ class RangeOpsTests(unittest.TestCase):
                 target.write_bytes(b'changed')
                 with self.assertRaisesRegex(RuntimeError, 'Git blob'):
                     m.verify_source(None, manifest)
+
+    def test_extract_normalizes_git_modes_without_relaxing_verifier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive, source = Path(directory) / 'source.tar', Path(directory) / 'source'
+            contents = {'plain': (b'plain bytes', 0o644, 0o664), 'bin/run': (b'exec bytes', 0o755, 0o775)}
+            manifest = {}
+            with tarfile.open(str(archive), 'w') as bundle:
+                for name, (data, git_mode, tar_mode) in contents.items():
+                    item = tarfile.TarInfo(name)
+                    item.mode, item.size = tar_mode, len(data)
+                    bundle.addfile(item, io.BytesIO(data))
+                    manifest[name] = {'git_blob': hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest(), 'mode': git_mode}
+            with patch.object(m, 'SOURCE', source):
+                m.extract_private_source(archive, manifest)
+                m.verify_source(None, manifest)
+                for name, (data, mode, unused) in contents.items():
+                    self.assertEqual((source / name).read_bytes(), data)
+                    self.assertEqual((source / name).stat().st_mode & 0o777, mode)
+                (source / 'plain').chmod(0o664)
+                with self.assertRaisesRegex(RuntimeError, 'Git blob/mode'):
+                    m.verify_source(None, manifest)
+                # Never fix permissions in an existing or failed source tree.
+                with self.assertRaisesRegex(RuntimeError, 'new source directory'):
+                    m.extract_private_source(archive, manifest)
+                self.assertEqual((source / 'plain').stat().st_mode & 0o777, 0o664)
+
+    def test_extract_rejects_tampered_blob_before_publishing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive, source = Path(directory) / 'source.tar', Path(directory) / 'source'
+            with tarfile.open(str(archive), 'w') as bundle:
+                item = tarfile.TarInfo('plain')
+                item.mode, item.size = 0o664, 3
+                bundle.addfile(item, io.BytesIO(b'bad'))
+            manifest = {'plain': {'git_blob': hashlib.sha1(b'blob 4\0good').hexdigest(), 'mode': 0o644}}
+            with patch.object(m, 'SOURCE', source):
+                with self.assertRaisesRegex(RuntimeError, 'Git blob differs'):
+                    m.extract_private_source(archive, manifest)
+            self.assertFalse((source / 'plain').exists())
 
     def test_range_admission_binds_native_tests_and_builder_record(self):
         args = argparse.Namespace(source_revision='a' * 40, script_revision='b' * 40)
