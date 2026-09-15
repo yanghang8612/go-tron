@@ -86,7 +86,7 @@ func (r *Runner) initHistoryLoadMetrics() {
 		r.historyLoad.syncSeenAt = time.Now()
 	}
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
-	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery",
+	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_gc_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery",
 		"reason_bits", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
 		r.historyLoad.metrics[name] = metrics.GetOrRegisterGauge(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/"+name, nil)
 	}
@@ -424,6 +424,11 @@ func (r *Runner) recordHistoryWork(result *PassResult) {
 		bytes: segmentRefsSize(result.Segments), work: work}
 	r.historyLoad.metric("density_work", int64(work))
 	r.historyLoad.metric("density_metadata_work", int64(metadata))
+	gcWork := time.Duration(0)
+	if measurement == 1 {
+		gcWork = result.BeforeMergeHistoryGCDuration
+	}
+	r.historyLoad.metric("density_gc_work", int64(gcWork))
 	r.historyLoad.metric("density_total_work", int64(historyWorkDurationSum(result.BuildDuration, result.BeforeMergeDuration)))
 	r.historyLoad.metric("density_measurement", measurement)
 }

@@ -264,10 +264,15 @@ type PassResult struct {
 	// complete maintenance, including these operations, still earns recovery.
 	HistoryMetadataDuration     time.Duration
 	BeforeMergeMetadataDuration time.Duration
-	Built                       bool
-	HistoryDeferred             bool
-	HistoryRateLimited          bool
-	HistoryAccelerated          bool
+	// BeforeMergeHistoryGCDuration is the separately timed shared-chunk GC
+	// portion of BeforeMergeDuration, disjoint from metadata and current-batch
+	// hot-row pruning. Only row-density estimation excludes this independent
+	// bucket sweep; complete maintenance/recovery still charges its full cost.
+	BeforeMergeHistoryGCDuration time.Duration
+	Built                        bool
+	HistoryDeferred              bool
+	HistoryRateLimited           bool
+	HistoryAccelerated           bool
 	// HistoryForcedBusy selects bounded work and recovery despite a busy
 	// importer, admitted by the liveness watermark, hot-storage pressure, or
 	// throughput resource headroom. It never selects ready/unthrottled work.

@@ -5,24 +5,26 @@ import (
 	"time"
 )
 
-// historyDensityWork removes only directly timed metadata regions from the
-// batch-size estimate. Everything else remains chargeable, including content
-// authentication, scans, compression, deletes and batch commits. This is not a
-// fixed/per-row regression model: an unmeasured callback retains its whole cost.
+// historyDensityWork excludes directly timed metadata and the independent
+// shared-chunk GC phase from the current history batch-size estimate. Current
+// batch authentication, scans, compression, hot-row deletes and commits remain
+// chargeable. Independent GC still performs every proof and retirement; its
+// bucket count does not scale with the current history range. An unmeasured
+// callback retains its whole cost; the measured regions must be disjoint.
 // The separate complete-lifecycle recovery calculation must not use this value.
 //
-// density_measurement: 0 = no metadata timing (conservative original estimate),
-// 1 = validated measured metadata, 2 = inconsistent timing (conservative fallback).
+// density_measurement: 0 = no excluded timing (conservative original estimate),
+// 1 = validated measured regions, 2 = inconsistent timing (conservative fallback).
 func historyDensityWork(result *PassResult) (work, metadata time.Duration, measurement int64) {
 	if result == nil {
 		return 0, 0, 0
 	}
 	work = historyWorkDurationSum(result.BuildDuration, result.BeforeMergeDuration)
-	for _, phase := range []struct{ total, metadata time.Duration }{
-		{result.BuildDuration, result.HistoryMetadataDuration},
-		{result.BeforeMergeDuration, result.BeforeMergeMetadataDuration},
+	for _, phase := range []struct{ total, metadata, gc time.Duration }{
+		{result.BuildDuration, result.HistoryMetadataDuration, 0},
+		{result.BeforeMergeDuration, result.BeforeMergeMetadataDuration, result.BeforeMergeHistoryGCDuration},
 	} {
-		if phase.total < 0 || phase.metadata < 0 || phase.metadata > phase.total {
+		if phase.total < 0 || phase.metadata < 0 || phase.gc < 0 || phase.metadata > phase.total || phase.gc > phase.total-phase.metadata {
 			if work == 0 {
 				// An impossible zero/negative observation provides no row-rate
 				// estimate. Treat it as over budget rather than resetting to a
@@ -33,12 +35,12 @@ func historyDensityWork(result *PassResult) (work, metadata time.Duration, measu
 		}
 	}
 	metadata = historyWorkDurationSum(result.HistoryMetadataDuration, result.BeforeMergeMetadataDuration)
-	if metadata == 0 {
+	if metadata == 0 && result.BeforeMergeHistoryGCDuration == 0 {
 		return work, 0, 0
 	}
 	// Subtract before adding to avoid two saturated totals hiding real row work.
 	work = historyWorkDurationSum(result.BuildDuration-result.HistoryMetadataDuration,
-		result.BeforeMergeDuration-result.BeforeMergeMetadataDuration)
+		result.BeforeMergeDuration-result.BeforeMergeMetadataDuration-result.BeforeMergeHistoryGCDuration)
 	// A timer-resolution-sized batch is still an observation; zero would reset
 	// the controller to its initial configured/4 batch and bypass bounded growth.
 	return max(time.Nanosecond, work), metadata, 1

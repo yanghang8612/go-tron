@@ -75,8 +75,13 @@ type Stats struct {
 	DomainChangePrunedThroughTx  uint64
 	// HistoryMetadataDuration covers manifest planning/progress work only.
 	// Lazy content verification, hot row reads/deletes and every batch flush
-	// remain outside it and therefore in the adaptive per-row work estimate.
+	// remain outside it. Only separately timed independent shared GC is also
+	// excluded from the adaptive current-batch row-work estimate.
 	HistoryMetadataDuration time.Duration
+	// HistoryChunkGCDuration measures the complete independent shared-GC phase,
+	// including metadata scan, old cold coverage authentication and guard wait.
+	// It does not overlap HistoryMetadataDuration or the current hot-row prune.
+	HistoryChunkGCDuration time.Duration
 	// HistoryDeletes counts accepted logical deletes from a completely
 	// successful pass. It is not reclaimed filesystem space.
 	HistoryDeletes               rawdb.StateDomainChangeDeleteStats
@@ -342,7 +347,9 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, fmt.Errorf("pruning: flush hot history delete batch: %w", err)
 	}
 	if w.HistorySharedChunkGC {
+		gcStarted := time.Now()
 		stats.HistoryChunkGC = w.pruneHistorySharedChunks(ctx, coverage, headNum)
+		stats.HistoryChunkGCDuration = time.Since(gcStarted)
 		if err := ctx.Err(); err != nil {
 			return Stats{}, err
 		}
