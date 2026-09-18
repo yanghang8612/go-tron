@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
@@ -15,6 +16,9 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestPlanHistoricalWithdrawRewardSegments(t *testing.T) {
@@ -173,6 +177,73 @@ func TestCalculateHistoricalReward_HybridAndPaidGate(t *testing.T) {
 
 func fmtAddress(addr tcommon.Address) string {
 	return fmt.Sprintf("%x", addr.Bytes())
+}
+
+func TestHistoricalWithdrawHashFormattingAndComparison(t *testing.T) {
+	const knownWithdrawTxID = "22636ad43e891be19129b2a19fac9bde68047241f5b861cb78795c29e1d69734"
+	// raw_data_hex returned for the incident transaction. Hashing the decoded
+	// protobuf exercises Transaction.Hash and findExpectedWithdraw rather than
+	// comparing two strings produced by the formatter under test.
+	const knownWithdrawRawData = "0a0217a8220819437f5959495fcc40a8ce9eefc92f5a53080d124f0a34747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e576974686472617742616c616e6365436f6e747261637412170a15418924da63576c7c332cd336217f6a888004d4948c709d8c9befc92f"
+	rawBytes, err := hex.DecodeString(knownWithdrawRawData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw corepb.TransactionRaw
+	if err := proto.Unmarshal(rawBytes, &raw); err != nil {
+		t.Fatal(err)
+	}
+	ownerBytes, err := hex.DecodeString("418924da63576c7c332cd336217f6a888004d4948c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := tcommon.BytesToAddress(ownerBytes)
+
+	// These deterministic synthetic headers exercise block-hash formatting;
+	// their fixed hashes below are not the mainnet hashes at these heights.
+	preBlock := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+		Number: 34740158, Timestamp: 1634736719000, AccountStateRoot: []byte{1, 2, 3},
+	}}})
+	withdrawBlock := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number: 34740159, Timestamp: 1634736722000, ParentHash: preBlock.Hash().Bytes(), AccountStateRoot: []byte{4, 5, 6},
+		}},
+		Transactions: []*corepb.Transaction{{RawData: &raw}},
+	})
+	index, txID, preceding, err := findExpectedWithdraw(withdrawBlock, owner, knownWithdrawTxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index != 0 || txID != knownWithdrawTxID || len(preceding) != 0 {
+		t.Fatalf("known withdrawal = index %d txid %q preceding %d", index, txID, len(preceding))
+	}
+
+	prestateHash, withdrawHash := historicalBlockHashStrings(preBlock, withdrawBlock)
+	if want := "00000000021217beb941e24739c3ee414a02c5b456b50f28d545402670494560"; prestateHash != want {
+		t.Fatalf("prestate hash = %q, want %q", prestateHash, want)
+	}
+	if want := "00000000021217bfc34c1e9f09039aee0a36b54a791989a56cb7945a04a807b3"; withdrawHash != want {
+		t.Fatalf("withdraw block hash = %q, want %q", withdrawHash, want)
+	}
+
+	known := tcommon.HexToHash(knownWithdrawTxID)
+	if err := requireHistoricalHashMatch("state tx range block hash", known, known); err != nil {
+		t.Fatalf("equal block hashes rejected: %v", err)
+	}
+
+	different := known
+	different[0] ^= 0xff
+	err = requireHistoricalHashMatch("withdraw block parent", different, known)
+	if err == nil {
+		t.Fatal("different block hashes accepted")
+	}
+	wantError := "withdraw block parent " + different.Hex() + " does not match prestate hash " + knownWithdrawTxID
+	if err.Error() != wantError {
+		t.Fatalf("block hash mismatch error = %q, want %q", err, wantError)
+	}
+	if strings.Contains(err.Error(), "32323633") {
+		t.Fatalf("block hash mismatch contains double-encoded ASCII hex: %q", err)
+	}
 }
 
 func TestHistoricalWithdrawExportLimits(t *testing.T) {

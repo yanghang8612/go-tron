@@ -260,8 +260,8 @@ func exportHistoricalWithdrawInputs(opts historicalWithdrawExportOptions) error 
 	if err != nil || withdrawBlock == nil {
 		return fmt.Errorf("read withdraw block %d: %w", opts.PrestateBlock+1, err)
 	}
-	if withdrawBlock.ParentHash() != preBlock.Hash() {
-		return fmt.Errorf("withdraw block parent %x does not match prestate hash %x", withdrawBlock.ParentHash(), preBlock.Hash())
+	if err := requireHistoricalHashMatch("withdraw block parent", withdrawBlock.ParentHash(), preBlock.Hash()); err != nil {
+		return err
 	}
 	txIndex, txID, precedingTxs, err := findExpectedWithdraw(withdrawBlock, opts.Owner, opts.WithdrawTxID)
 	if err != nil {
@@ -271,8 +271,8 @@ func exportHistoricalWithdrawInputs(opts historicalWithdrawExportOptions) error 
 	if err != nil {
 		return err
 	}
-	if txRange.BlockHash != preBlock.Hash() {
-		return fmt.Errorf("state tx range block hash %x does not match prestate hash %x", txRange.BlockHash, preBlock.Hash())
+	if err := requireHistoricalHashMatch("state tx range block hash", txRange.BlockHash, preBlock.Hash()); err != nil {
+		return err
 	}
 
 	reader := state.NewPersistentHistoryReaderWithColdHistory(opts.DB, opts.LiveState, opts.HeadNumber, opts.ColdHistory)
@@ -318,9 +318,8 @@ func exportHistoricalWithdrawInputs(opts historicalWithdrawExportOptions) error 
 	out.Manifest = manifestStart
 	out.Chain.HeadNumber = opts.HeadNumber
 	out.Chain.PrestateBlock = opts.PrestateBlock
-	out.Chain.PrestateHash = fmt.Sprintf("%x", preBlock.Hash())
+	out.Chain.PrestateHash, out.Chain.WithdrawBlockHash = historicalBlockHashStrings(preBlock, withdrawBlock)
 	out.Chain.WithdrawBlock = withdrawBlock.Number()
-	out.Chain.WithdrawBlockHash = fmt.Sprintf("%x", withdrawBlock.Hash())
 	out.Chain.WithdrawTxIndex = txIndex
 	out.Chain.WithdrawTxID = txID
 	out.Chain.PrecedingTxs = precedingTxs
@@ -368,7 +367,7 @@ func findExpectedWithdraw(block *types.Block, owner tcommon.Address, wantTxID st
 		if found >= 0 {
 			return -1, "", nil, fmt.Errorf("multiple owner withdrawals in block %d", block.Number())
 		}
-		found, gotID = i, fmt.Sprintf("%x", tx.Hash())
+		found, gotID = i, tx.Hash().Hex()
 	}
 	if found < 0 {
 		return -1, "", nil, fmt.Errorf("owner withdrawal absent from block %d", block.Number())
@@ -398,11 +397,22 @@ func findExpectedWithdraw(block *types.Block, owner tcommon.Address, wantTxID st
 			return -1, "", nil, fmt.Errorf("preceding tx %d touches target owner", i)
 		}
 		preceding = append(preceding, historicalPrecedingTransaction{
-			Index: i, TxID: fmt.Sprintf("%x", tx.Hash()), ContractType: tx.ContractType().String(),
+			Index: i, TxID: tx.Hash().Hex(), ContractType: tx.ContractType().String(),
 			Owner: fmt.Sprintf("%x", decoded.OwnerAddress), To: fmt.Sprintf("%x", decoded.ToAddress),
 		})
 	}
 	return found, gotID, preceding, nil
+}
+
+func requireHistoricalHashMatch(label string, got, want tcommon.Hash) error {
+	if got != want {
+		return fmt.Errorf("%s %s does not match prestate hash %s", label, got.Hex(), want.Hex())
+	}
+	return nil
+}
+
+func historicalBlockHashStrings(preBlock, withdrawBlock *types.Block) (string, string) {
+	return preBlock.Hash().Hex(), withdrawBlock.Hash().Hex()
 }
 
 func historicalStateTxRange(db ethdb.KeyValueReader, cold *snapshots.Manager, block uint64) (*rawdb.StateTxRange, error) {
