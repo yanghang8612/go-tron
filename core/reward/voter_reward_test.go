@@ -1,6 +1,7 @@
 package reward
 
 import (
+	"math"
 	"math/big"
 	"testing"
 
@@ -68,6 +69,123 @@ func TestComputeVoterReward_OldAlgorithm_NoVoteSnapshot(t *testing.T) {
 
 	if got != 0 {
 		t.Fatalf("missing snapshot should skip: got %d, want 0", got)
+	}
+}
+
+// TestOldRewardSum_JavaCompoundAssignmentGolden freezes values produced by a
+// standalone Java copy of MortgageService.computeReward(cycle, votes) at the
+// official GreatVoyage-v4.8.2 source. GreatVoyage-v4.3.0 (2021-08-03) has the
+// same per-cycle accumulator at MortgageService.java:185-201 and calls it once
+// per old cycle at lines 222-224. Java evaluates
+//
+//	reward += voteRate * totalReward
+//
+// by converting the existing per-cycle long reward to double, adding the new
+// rounded double product, then narrowing the sum back to long. Its caller adds
+// returned cycle rewards as longs and creates a fresh accumulator each cycle.
+func TestOldRewardSum_JavaCompoundAssignmentGolden(t *testing.T) {
+	type cycleInput struct {
+		totalVotes   []int64
+		totalRewards []int64
+	}
+	tests := []struct {
+		name       string
+		userVotes  []int64
+		cycles     []cycleInput
+		wantReward int64
+	}{
+		{
+			name:      "one then rounded-below-one in one cycle",
+			userVotes: []int64{1, 1},
+			cycles: []cycleInput{{
+				totalVotes:   []int64{1, 49},
+				totalRewards: []int64{1, 49},
+			}},
+			wantReward: 2,
+		},
+		{
+			name:      "rounded-below-one before one preserves witness order",
+			userVotes: []int64{1, 1},
+			cycles: []cycleInput{{
+				totalVotes:   []int64{49, 1},
+				totalRewards: []int64{49, 1},
+			}},
+			wantReward: 1,
+		},
+		{
+			name:      "cycle boundary resets floating accumulator",
+			userVotes: []int64{1, 1},
+			cycles: []cycleInput{
+				{totalVotes: []int64{1, 0}, totalRewards: []int64{1, 0}},
+				{totalVotes: []int64{0, 49}, totalRewards: []int64{0, 49}},
+			},
+			wantReward: 1,
+		},
+		{
+			name:      "multi-witness rounding repeats per cycle",
+			userVotes: []int64{1, 1},
+			cycles: []cycleInput{
+				{totalVotes: []int64{1, 49}, totalRewards: []int64{1, 49}},
+				{totalVotes: []int64{1, 49}, totalRewards: []int64{1, 49}},
+			},
+			wantReward: 4,
+		},
+		{
+			name:      "integer carry above exact double range",
+			userVotes: []int64{9_007_199_254_740_993, 1},
+			cycles: []cycleInput{{
+				totalVotes:   []int64{1, 1},
+				totalRewards: []int64{1, 1},
+			}},
+			wantReward: 9_007_199_254_740_992,
+		},
+		{
+			name:      "double narrowing saturates within one cycle",
+			userVotes: []int64{math.MaxInt64, math.MaxInt64},
+			cycles: []cycleInput{{
+				totalVotes:   []int64{1, 1},
+				totalRewards: []int64{2, 2},
+			}},
+			wantReward: math.MaxInt64,
+		},
+		{
+			name:      "outer long addition wraps across cycles",
+			userVotes: []int64{math.MaxInt64},
+			cycles: []cycleInput{
+				{totalVotes: []int64{1}, totalRewards: []int64{2}},
+				{totalVotes: []int64{1}, totalRewards: []int64{2}},
+			},
+			wantReward: -2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newRewardTestStore(t)
+			votes := make([]VoteEntry, len(tt.userVotes))
+			for i, count := range tt.userVotes {
+				votes[i] = VoteEntry{
+					Witness: tcommon.BytesToAddress([]byte{0x41, byte(i + 1)}),
+					Count:   count,
+				}
+			}
+			for cycleIndex, cycle := range tt.cycles {
+				cycleNumber := int64(cycleIndex + 1)
+				for i := range votes {
+					if cycle.totalRewards[i] == 0 {
+						continue
+					}
+					if err := store.WriteCycleVote(cycleNumber, votes[i].Witness.Bytes(), cycle.totalVotes[i]); err != nil {
+						t.Fatal(err)
+					}
+					if err := store.WriteCycleReward(cycleNumber, votes[i].Witness.Bytes(), cycle.totalRewards[i]); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if got := oldRewardSum(store, votes, 1, int64(len(tt.cycles)+1)); got != tt.wantReward {
+				t.Fatalf("oldRewardSum = %d, want Java golden %d", got, tt.wantReward)
+			}
+		})
 	}
 }
 

@@ -147,6 +147,7 @@ func oldRewardSumOpt(store SnapshotReader, votes []VoteEntry, begin, end int64) 
 func oldRewardSum(store SnapshotReader, votes []VoteEntry, begin, end int64) int64 {
 	var reward int64
 	for cycle := begin; cycle < end; cycle++ {
+		var cycleReward int64
 		for _, v := range votes {
 			totalReward := store.ReadCycleReward(cycle, v.Witness.Bytes())
 			if totalReward <= 0 {
@@ -157,8 +158,16 @@ func oldRewardSum(store SnapshotReader, votes []VoteEntry, begin, end int64) int
 				continue
 			}
 			voteRate := float64(v.Count) / float64(totalVote)
-			reward += tcommon.JavaDoubleToInt64(voteRate * float64(totalReward))
+			// Java's compound assignment is equivalent to narrowing the double
+			// sum of the existing per-cycle long and this witness's rounded
+			// product. Keep the explicit product conversion: Go may otherwise
+			// fuse a multiply-add and skip Java's intermediate double rounding.
+			product := float64(voteRate * float64(totalReward))
+			cycleReward = tcommon.JavaDoubleToInt64(float64(cycleReward) + product)
 		}
+		// MortgageService.computeReward(cycle, votes) creates a fresh reward
+		// for every cycle; getOldReward adds the returned longs as integers.
+		reward += cycleReward
 	}
 	return reward
 }
