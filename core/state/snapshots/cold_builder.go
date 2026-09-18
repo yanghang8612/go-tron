@@ -361,6 +361,9 @@ type PassResult struct {
 	DerivedSidecarsDeferred bool
 	EventLogFreezerHandoff  bool
 	CatalogPublished        bool
+	RetiredMetadataScanned  int
+	RetiredMetadataRemoved  int
+	RetiredMetadataDeferred string
 	Manifest                *Manifest
 	HistoryDuration         time.Duration
 	BalanceTraceDuration    time.Duration
@@ -739,6 +742,7 @@ type Runner struct {
 	busyHistoryObservationMetrics busyHistoryObservationMetrics
 	historyRecoveryMetrics        historyRecoveryObservationMetrics
 	compactionBudget              historyCompactionBudgetState
+	retiredMetadataCursor         retiredMetadataSweepCursor // guarded by passMu
 
 	lastSuccessfulForcedAt        atomic.Int64
 	lastSuccessfulForcedLag       atomic.Uint64
@@ -1759,7 +1763,10 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	buildProgress.SetPhase("publish")
 	publishStarted := time.Now()
 	metadataStarted = time.Now()
-	manifest, err := aggregator.integrateWithManifest(fromTxNum, toTxNum, refs, productionManifest)
+	manifest, retiredSweep, err := r.integrateWithRetiredMetadataSweep(ctx, aggregator, fromTxNum, toTxNum, refs, productionManifest)
+	result.RetiredMetadataScanned = retiredSweep.Scanned
+	result.RetiredMetadataRemoved = retiredSweep.Removed
+	result.RetiredMetadataDeferred = retiredSweep.Deferred
 	result.HistoryMetadataDuration += coldSnapshotPhaseDuration(metadataStarted)
 	if err != nil {
 		return result, err
@@ -1861,6 +1868,9 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		"sharedReadFallback", result.HistoryReadFallbackReason,
 		"eventLogElapsed", result.EventLogDuration.Round(time.Millisecond),
 		"publishElapsed", result.PublishDuration.Round(time.Millisecond),
+		"retiredMetadataScanned", result.RetiredMetadataScanned,
+		"retiredMetadataRemoved", result.RetiredMetadataRemoved,
+		"retiredMetadataDeferred", result.RetiredMetadataDeferred,
 		"elapsed", elapsed.Round(time.Millisecond),
 		"blocksPerSec", coldSnapshotRate(blocks, elapsed),
 		"txsPerSec", coldSnapshotRate(txs, elapsed),
