@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/log"
@@ -74,6 +75,11 @@ func main() {
 	witnessVoters := flag.String("witness-voters", "", "witnesshex — enumerate ALL head accounts that vote for the witness (addr, count, isContract); a contract voter necessarily voted via the TVM VOTEWITNESS opcode")
 	accountVotes := flag.String("account-votes", "", "hexaddr — print this account's head vote list (validates that account vote reads work at all in this tool)")
 	tallyAudit := flag.Bool("tally-audit", false, "audit the invariant 'witness vote tally == sum of its voters' votes' across ALL witnesses at head; lists every witness where they differ")
+	withdrawPrestateBlock := flag.Uint64("withdraw-prestate-block", 0, "export historical reward inputs at end of this parent block (requires --owner, --withdraw-txid, --export-output, --expect-balance)")
+	withdrawTxID := flag.String("withdraw-txid", "", "expected WithdrawBalance transaction ID in --withdraw-prestate-block+1")
+	exportOutput := flag.String("export-output", "", "JSON output path for --withdraw-prestate-block")
+	expectBalance := flag.Int64("expect-balance", -1, "required historical owner balance assertion for --withdraw-prestate-block")
+	exportTimeout := flag.Duration("export-timeout", 15*time.Minute, "historical export timeout (maximum 15m)")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -83,7 +89,7 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" && *accountVotes == "" && !*tallyAudit {
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" && *accountVotes == "" && !*tallyAudit && *withdrawPrestateBlock == 0 {
 		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle / --witness-voters / --account-votes / --tally-audit)")
 	}
 
@@ -91,8 +97,9 @@ func main() {
 	if _, err := os.Stat(dbPath); err != nil {
 		log.Crit("datadir not accessible", "path", dbPath, "err", err)
 	}
-	// Read-only open so this can run against a live (or stalled) node's datadir
-	// without contending for Pebble's write lock.
+	// All storage handles are opened read-only. Operational use of the historical
+	// export mode still stops gtron first: snapshot manifests and referenced files
+	// can otherwise change between separate cold reads.
 	db, err := pebbledb.New(dbPath, 256, 500, "", true, pebbledb.DefaultOptions())
 	if err != nil {
 		log.Crit("open pebble (read-only)", "err", err)
@@ -109,7 +116,15 @@ func main() {
 		ancient = rawdb.NewFreezerReader(fz)
 	}
 	snapshotPath := filepath.Join(*datadir, "gtron", "state-snapshots")
-	snapshotManager, err := statesnapshots.OpenManager(snapshotPath)
+	var snapshotManager *statesnapshots.Manager
+	if *withdrawPrestateBlock != 0 {
+		// The exporter must not mutate the production verification-cache directory.
+		// An empty cache dir is the cache's documented memory-only mode.
+		snapshotManager, err = statesnapshots.OpenManagerWithChainVerificationCache(
+			snapshotPath, statesnapshots.NewChainFreezerVerificationCache(""))
+	} else {
+		snapshotManager, err = statesnapshots.OpenManager(snapshotPath)
+	}
 	if err != nil {
 		log.Crit("open state snapshots", "path", snapshotPath, "err", err)
 	}
@@ -143,11 +158,43 @@ func main() {
 		log.Crit("open statedb", "root", fmt.Sprintf("%x", headRoot[:]), "err", err)
 	}
 	dp := state.LoadDynamicProperties(db, statedb)
+	var headNumber uint64
 	if hn, ok, err := readRewardTraceBlockNumber(chaindb, headHash); err != nil {
 		log.Crit("read head block number", "hash", fmt.Sprintf("%x", headHash[:]), "err", err)
 	} else if ok {
+		headNumber = hn
 		fmt.Printf("head block=%d currentCycle=%d newRewardAlgoEffectiveCycle=%d allowOldRewardOpt=%v changeDelegation=%v\n",
 			hn, dp.CurrentCycleNumber(), dp.NewRewardAlgorithmEffectiveCycle(), dp.AllowOldRewardOpt(), dp.ChangeDelegation())
+	} else {
+		log.Crit("head block number missing", "hash", fmt.Sprintf("%x", headHash[:]))
+	}
+
+	if *withdrawPrestateBlock != 0 {
+		if *ownerHex == "" || *withdrawTxID == "" || *exportOutput == "" || *expectBalance < 0 {
+			log.Crit("historical withdraw export requires --owner, --withdraw-txid, --export-output, and --expect-balance")
+		}
+		if err := exportHistoricalWithdrawInputs(historicalWithdrawExportOptions{
+			DB:              db,
+			ChainDB:         chaindb,
+			ColdHistory:     snapshotManager,
+			LiveState:       statedb,
+			DataDir:         *datadir,
+			SnapshotDir:     snapshotPath,
+			HeadNumber:      headNumber,
+			Owner:           mustAddr(*ownerHex),
+			PrestateBlock:   *withdrawPrestateBlock,
+			WithdrawTxID:    *withdrawTxID,
+			ExpectedBalance: *expectBalance,
+			OutputPath:      *exportOutput,
+			Timeout:         *exportTimeout,
+			MaxCycles:       historicalWithdrawMaxCycles,
+			MaxKeys:         historicalWithdrawMaxKeys,
+			MaxOutputBytes:  historicalWithdrawMaxOutputBytes,
+		}); err != nil {
+			log.Crit("export historical withdraw inputs", "err", err)
+		}
+		fmt.Printf("historical withdraw reward inputs written to %s\n", *exportOutput)
+		return
 	}
 
 	dec := reward.DecimalOfViReward
