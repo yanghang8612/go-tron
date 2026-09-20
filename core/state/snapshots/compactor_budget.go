@@ -33,6 +33,11 @@ func historyCompactionWithinBudget(cfg CompactionConfig, bytes, logicalBytes, re
 		(cfg.MaxSources == 0 || sources <= cfg.MaxSources)
 }
 
+func historyStreamingFallbackWithinBudget(bytes, logicalBytes, records, sources uint64) bool {
+	return bytes <= busyHistoryCompactionInputBytes && logicalBytes <= busyHistoryCompactionLogicalBytes &&
+		records <= busyHistoryCompactionInputRecords && sources <= busyHistoryCompactionSources
+}
+
 // The accessor's small header supplies the record count without scanning or
 // decompressing the canonical history. This is admission metadata only: the
 // normal compactor still authenticates all inputs and cross-checks the count
@@ -131,22 +136,47 @@ func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []his
 			}
 		}
 		overflow := cost.bytes > math.MaxUint64-selection.inputBytes || cost.logicalBytes > math.MaxUint64-selection.inputLogicalBytes || cost.records > math.MaxUint64-selection.inputRecords
-		if overflow || referenceExceeded || !historyCompactionWithinBudget(cfg, selection.inputBytes+cost.bytes, selection.inputLogicalBytes+cost.logicalBytes, selection.inputRecords+cost.records, uint64(len(selection.candidates)+1)) {
+		if overflow || !historyCompactionWithinBudget(cfg, selection.inputBytes+cost.bytes, selection.inputLogicalBytes+cost.logicalBytes, selection.inputRecords+cost.records, uint64(len(selection.candidates)+1)) {
 			if len(selection.candidates) >= 2 {
 				return selection, true, nil
 			}
 			reset()
+			if readReference != nil {
+				budget := estimateHistoryReferenceCompactionBudget([]historyReferenceCompactionInputBudget{reference})
+				referenceExceeded = budget.HasReference && budget.Deferred
+				if referenceExceeded {
+					referenceReason = budget.Reason
+				}
+			}
 		}
 		if !historyCompactionWithinBudget(cfg, cost.bytes, cost.logicalBytes, cost.records, 1) {
 			continue
 		}
-		if readReference != nil {
+		if referenceExceeded || selection.outputMode == historyCompactionOutputStreaming {
+			if !historyStreamingFallbackWithinBudget(selection.inputBytes+cost.bytes, selection.inputLogicalBytes+cost.logicalBytes, selection.inputRecords+cost.records, uint64(len(selection.candidates)+1)) {
+				if len(selection.candidates) >= 2 {
+					return selection, true, nil
+				}
+				reset()
+				if !historyStreamingFallbackWithinBudget(cost.bytes, cost.logicalBytes, cost.records, 1) {
+					continue
+				}
+				budget := estimateHistoryReferenceCompactionBudget([]historyReferenceCompactionInputBudget{reference})
+				referenceExceeded = budget.HasReference && budget.Deferred
+			}
+			if referenceExceeded {
+				selection.outputMode = historyCompactionOutputStreaming
+			}
+		}
+		if readReference != nil && selection.outputMode != historyCompactionOutputStreaming {
 			budget := estimateHistoryReferenceCompactionBudget([]historyReferenceCompactionInputBudget{reference})
 			if budget.HasReference && budget.Deferred {
 				referenceReason = budget.Reason
-				continue
+				selection.outputMode = historyCompactionOutputStreaming
+			} else {
+				references = append(references, reference)
+				selection.outputMode = historyCompactionOutputReference
 			}
-			references = append(references, reference)
 		}
 		selection.candidates = append(selection.candidates, candidate)
 		selection.inputBytes += cost.bytes
@@ -164,6 +194,9 @@ func selectBudgetedHistoryCompactionLeaves(ctx context.Context, candidates []his
 			}
 			reset()
 		}
+	}
+	if len(selection.candidates) >= 2 && selection.outputMode == historyCompactionOutputStreaming {
+		return selection, true, nil
 	}
 	return historyCompactionSelection{referenceDeferReason: referenceReason}, false, nil
 }

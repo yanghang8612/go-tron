@@ -5,12 +5,102 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
+
+type boundedPrevReader struct {
+	data    []byte
+	maxRead int
+	reads   int
+	cancel  context.CancelFunc
+}
+
+func (r *boundedPrevReader) ReadAt(p []byte, off int64) (int, error) {
+	r.reads++
+	if len(p) > r.maxRead {
+		r.maxRead = len(p)
+	}
+	n := copy(p, r.data[off:])
+	if r.cancel != nil && r.reads == 1 {
+		r.cancel()
+	}
+	if n != len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func streamedV6WriterFixture(t *testing.T) (*stateDomainChangeHistoryRecordWriter, *bytes.Buffer, *rawdb.StateDomainChange, uint32) {
+	t.Helper()
+	dir := t.TempDir()
+	change := v6StreamChanges(1, 1, 1, 1)[0]
+	change.Prev, change.PrevExists, change.Next, change.NextExists = nil, true, nil, false
+	build, err := newStateDomainChangeV6Build(etl.Options{TempDir: filepath.Join(dir, "etl")}, dir, "out.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(build.Close)
+	key := appendStateDomainChangeBinaryAccessorLookupKey(nil, change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
+	if err = build.CollectLogicalKey(key); err != nil {
+		t.Fatal(err)
+	}
+	if err = build.FinishDictionaryContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	keyID, err := build.KeyID(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := os.Create(filepath.Join(dir, "out.idx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	sink := new(bytes.Buffer)
+	w := newStateDomainChangeHistoryRecordWriterV6(sink, index, build, SegmentRef{FromTxNum: 1, ToTxNum: 1}, 1, 0)
+	t.Cleanup(w.Release)
+	return w, sink, change, keyID
+}
+
+func TestWriteStreamedV6ChangeBoundsPrevReads(t *testing.T) {
+	w, sink, change, keyID := streamedV6WriterFixture(t)
+	prev := bytes.Repeat([]byte("bounded-prev"), (3*stateDomainChangeHistoryWriteBufferSize)/12+97)
+	r := &boundedPrevReader{data: prev}
+	if err := w.WriteStreamedV6Change(context.Background(), change, keyID, r, 0, uint64(len(prev)), make([]byte, stateDomainChangeHistoryWriteBufferSize)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if r.reads < 4 || r.maxRead > stateDomainChangeHistoryWriteBufferSize {
+		t.Fatalf("reads=%d max=%d", r.reads, r.maxRead)
+	}
+	got := sink.Bytes()
+	if len(got) != 21+len(prev) || !bytes.Equal(got[21:], prev) {
+		t.Fatal("streamed Prev differs")
+	}
+}
+
+func TestWriteStreamedV6ChangeCancelsBetweenChunks(t *testing.T) {
+	w, _, change, keyID := streamedV6WriterFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &boundedPrevReader{data: make([]byte, 3*stateDomainChangeHistoryWriteBufferSize), cancel: cancel}
+	err := w.WriteStreamedV6Change(ctx, change, keyID, r, 0, uint64(len(r.data)), make([]byte, stateDomainChangeHistoryWriteBufferSize))
+	if !errors.Is(err, context.Canceled) || r.reads != 1 {
+		t.Fatalf("reads=%d err=%v", r.reads, err)
+	}
+	if w.count != 0 {
+		t.Fatal("canceled record became publishable")
+	}
+}
 
 func TestHistoryReferenceCompactionHookBusyBoundaries(t *testing.T) {
 	small := historyReferenceCompactionInputBudget{HasReference: true, Records: 1, LogicalBytes: 100, ChunksUpper: 1, SpansUpper: 1, RawUpper: 100}
@@ -26,11 +116,11 @@ func TestHistoryReferenceCompactionHookBusyBoundaries(t *testing.T) {
 		maxSources uint64
 		from, to   uint64
 	}{
-		{"skip oversized", []historyReferenceCompactionInputBudget{large, small, small}, 2, 2, 3},
-		{"return preceding ready group", []historyReferenceCompactionInputBudget{small, small, large}, 4, 1, 2},
-		{"combined boundary", []historyReferenceCompactionInputBudget{small, combined, combined}, 4, 1, 2},
+		{"oversized estimate streams", []historyReferenceCompactionInputBudget{large, small, small}, 2, 1, 2},
+		{"late oversized estimate streams", []historyReferenceCompactionInputBudget{small, small, large}, 4, 1, 3},
+		{"combined boundary streams", []historyReferenceCompactionInputBudget{small, combined, combined}, 4, 1, 3},
 		{"old only unchanged", []historyReferenceCompactionInputBudget{old, old}, 2, 1, 2},
-		{"all deferred", []historyReferenceCompactionInputBudget{large, large}, 2, 0, 0},
+		{"all estimates stream", []historyReferenceCompactionInputBudget{large, large}, 2, 1, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			costs := make([]historyCompactionInputCost, len(tc.inputs))
@@ -47,6 +137,12 @@ func TestHistoryReferenceCompactionHookBusyBoundaries(t *testing.T) {
 			if err != nil || ok != (tc.from != 0) || selection.fromTxNum != tc.from || selection.toTxNum != tc.to {
 				t.Fatalf("selection %+v ok%v err%v", selection, ok, err)
 			}
+			if selection.outputMode == historyCompactionOutputStreaming && tc.name == "old only unchanged" {
+				t.Fatal("old-only inputs unexpectedly selected streaming output")
+			}
+			if strings.Contains(tc.name, "stream") && selection.outputMode != historyCompactionOutputStreaming {
+				t.Fatal("combined R1 overflow did not select streaming output")
+			}
 			for _, n := range calls {
 				if n != 1 {
 					t.Fatal("source budget read repeatedly", calls)
@@ -56,6 +152,32 @@ func TestHistoryReferenceCompactionHookBusyBoundaries(t *testing.T) {
 				t.Fatal("missing defer reason")
 			}
 		})
+	}
+}
+
+func TestHistoryReferenceStreamingFallbackRetriesBoundaryCandidate(t *testing.T) {
+	giB := uint64(1 << 30)
+	costs := []historyCompactionInputCost{
+		{bytes: 1, logicalBytes: 1700 << 20, records: 1},
+		{bytes: 1, logicalBytes: giB, records: 1},
+		{bytes: 1, logicalBytes: giB, records: 1},
+	}
+	candidates, read := budgetTestLeaves(costs...)
+	large := historyReferenceCompactionInputBudget{HasReference: true, Records: 1, LogicalBytes: 1, ChunksUpper: historyReferenceMaxChunks}
+	selection, ok, err := selectBudgetedHistoryCompactionLeaves(context.Background(), candidates, CompactionConfig{}, read, func(historyCompactionCandidate) (historyReferenceCompactionInputBudget, error) { return large, nil })
+	if err != nil || !ok || selection.fromTxNum != 2 || selection.toTxNum != 3 || selection.outputMode != historyCompactionOutputStreaming {
+		t.Fatal("boundary candidate was not retried under fixed zero-config limits", selection, ok, err)
+	}
+}
+
+func TestHistoryReferenceStreamingFallbackStopsBeforeFixedLimit(t *testing.T) {
+	giB := uint64(1 << 30)
+	costs := []historyCompactionInputCost{{bytes: 1, logicalBytes: giB, records: 1}, {bytes: 1, logicalBytes: giB, records: 1}, {bytes: 1, logicalBytes: giB, records: 1}}
+	candidates, read := budgetTestLeaves(costs...)
+	large := historyReferenceCompactionInputBudget{HasReference: true, Records: 1, LogicalBytes: 1, ChunksUpper: historyReferenceMaxChunks}
+	selection, ok, err := selectBudgetedHistoryCompactionLeaves(context.Background(), candidates, CompactionConfig{}, read, func(historyCompactionCandidate) (historyReferenceCompactionInputBudget, error) { return large, nil })
+	if err != nil || !ok || selection.fromTxNum != 1 || selection.toTxNum != 2 || selection.inputLogicalBytes != 2*giB {
+		t.Fatal("streaming group crossed fixed logical limit", selection, ok, err)
 	}
 }
 
@@ -206,6 +328,32 @@ func TestHistoryReferenceCompactionHookRealMergeOracle(t *testing.T) {
 						t.Fatal("old source not retired", ref.Path, err)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestHistoryReferenceCompactionStreamingFallbackOracle(t *testing.T) {
+	for _, mode := range []string{"r1", "codec3"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, cfg, selection, sources := referenceMergeFixture(t, mode)
+			wantRefs, err := compactStateDomainChangeReferenceHistoryRunContext(context.Background(), dir, cfg, selection, sources, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := referenceMergeKindBytes(t, dir, wantRefs)
+			selection.outputMode = historyCompactionOutputStreaming
+			got, err := compactStateDomainChangeBinaryHistoryRunContext(context.Background(), dir, cfg, selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			history := referenceBuildHistoryRef(t, got)
+			data, err := os.ReadFile(filepath.Join(dir, history.Path))
+			if err != nil || string(data[:8]) == historyReferenceMagic {
+				t.Fatal("fallback did not produce compressed V6", err)
+			}
+			if !reflect.DeepEqual(referenceMergeKindBytes(t, dir, got), want) {
+				t.Fatal("streaming fallback changed logical/index output")
 			}
 		})
 	}

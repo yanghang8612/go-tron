@@ -73,7 +73,16 @@ type historyCompactionSelection struct {
 	inputLogicalBytes    uint64
 	inputRecords         uint64
 	referenceDeferReason string
+	outputMode           historyCompactionOutputMode
 }
+
+type historyCompactionOutputMode uint8
+
+const (
+	historyCompactionOutputAuto historyCompactionOutputMode = iota
+	historyCompactionOutputReference
+	historyCompactionOutputStreaming
+)
 
 // CompactHistoryDomain merges the frontmost continuous run of binary history
 // segments for a registered history domain and publishes the replacement refs.

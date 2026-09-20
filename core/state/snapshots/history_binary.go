@@ -653,7 +653,7 @@ func compactStateDomainChangeBinaryHistoryRunContext(ctx context.Context, dir st
 		if err != nil {
 			return nil, err
 		}
-		if string(magic[:]) == historyReferenceMagic {
+		if string(magic[:]) == historyReferenceMagic && selection.outputMode != historyCompactionOutputStreaming {
 			return compactStateDomainChangeReferenceHistoryRunContext(ctx, dir, cfg, selection, sources, progress)
 		}
 	}
@@ -1353,14 +1353,16 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 	}
 	var (
 		compressedRecords *compressedBlockReader
+		referenceRecords  *historyReferenceReader
 		rangeReader       historySegmentReader
 		rangeCursor       *stateDomainChangeTxRangeCursor
 	)
 	if header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 {
 		if contextual, ok := reader.(*stateDomainChangeHistoryReader); ok {
 			compressedRecords, _ = contextual.historySegmentReader.(*compressedBlockReader)
+			referenceRecords, _ = contextual.historySegmentReader.(*historyReferenceReader)
 		}
-		if compressedRecords != nil {
+		if compressedRecords != nil || referenceRecords != nil {
 			var rangeHeader stateDomainChangeBinaryHeader
 			var rangeSize uint64
 			rangeReader, rangeHeader, rangeSize, err = openStateDomainChangeBinarySegmentSequentialReader(dir, source.history)
@@ -1398,6 +1400,7 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 	}()
 	var v6Payload []byte
 	var v6Change rawdb.StateDomainChange
+	streamScratch := make([]byte, stateDomainChangeHistoryWriteBufferSize)
 	for recordIndex := uint64(0); recordIndex < header.count; recordIndex++ {
 		if recordIndex&1023 == 0 {
 			if err := contextError(ctx); err != nil {
@@ -1453,6 +1456,33 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 			} else {
 				borrowedV5 = true
 			}
+		} else if header.version == stateDomainChangeBinaryVersionV6 && referenceRecords != nil {
+			if offset > logicalSize || logicalSize-offset < 21 {
+				return io.ErrUnexpectedEOF
+			}
+			var frame [21]byte
+			if err = historyReferenceReadAt(ctx, referenceRecords, frame[:], offset); err != nil {
+				return err
+			}
+			payloadLen := uint64(binary.BigEndian.Uint32(frame[:4]))
+			sourceKeyID := binary.BigEndian.Uint32(frame[4:8])
+			prevLen := uint64(binary.BigEndian.Uint32(frame[17:21]))
+			if payloadLen != 17+prevLen || payloadLen > logicalSize-offset-4 || frame[16] > 1 || uint64(sourceKeyID) >= uint64(len(v6KeyRemap)) {
+				return errors.New("snapshots: malformed reference V6 compaction record")
+			}
+			v6Change = rawdb.StateDomainChange{TxNum: binary.BigEndian.Uint64(frame[8:16]), PrevExists: frame[16] == 1}
+			row, rangeErr := rangeCursor.txRangeForTxNum(v6Change.TxNum)
+			if rangeErr != nil {
+				return rangeErr
+			}
+			if err = hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, &v6Change); err != nil {
+				return err
+			}
+			if err = dst.WriteStreamedV6Change(ctx, &v6Change, v6KeyRemap[sourceKeyID], referenceRecords, offset+21, prevLen, streamScratch); err != nil {
+				return err
+			}
+			next = offset + 4 + payloadLen
+			change = &v6Change
 		} else if header.version == stateDomainChangeBinaryVersionV6 {
 			var sourceKeyID uint32
 			v6Payload, sourceKeyID, next, err = readStateDomainChangeBinaryRecordV6FrameInto(reader, offset, logicalSize, recordIndex, v6Payload, &v6Change)

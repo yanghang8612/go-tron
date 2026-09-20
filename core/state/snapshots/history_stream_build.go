@@ -701,6 +701,99 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteBorrowedV6Change(change *raw
 	return nil
 }
 
+// WriteStreamedV6Change writes a V6 row whose Prev remains in an immutable
+// ReaderAt. It bounds transient memory independently of Prev length.
+func (w *stateDomainChangeHistoryRecordWriter) WriteStreamedV6Change(ctx context.Context, change *rawdb.StateDomainChange, targetKeyID uint32, prev io.ReaderAt, prevOffset, prevLen uint64, scratch []byte) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if w == nil || w.segment == nil || w.index == nil || w.v6 == nil || change == nil || prev == nil {
+		return errors.New("snapshots: invalid streamed v6 state-domain-change record")
+	}
+	if prevLen > math.MaxUint32-17 || prevOffset > math.MaxInt64 || prevLen > uint64(math.MaxInt64)-prevOffset {
+		return errors.New("snapshots: streamed v6 source range overflows")
+	}
+	if targetKeyID >= w.v6.keyCount || w.count >= w.expected {
+		return errors.New("snapshots: streamed v6 target outside writer bounds")
+	}
+	if len(change.Prev) != 0 || change.NextExists || len(change.Next) != 0 {
+		return fmt.Errorf("snapshots: streamed v6 value presence is inconsistent: exists=%t prevLen=%d ownedPrev=%d nextExists=%t next=%d", change.PrevExists, prevLen, len(change.Prev), change.NextExists, len(change.Next))
+	}
+	frameLen := uint64(21) + prevLen
+	if frameLen > math.MaxUint64-w.segmentOff {
+		return errors.New("snapshots: state-domain-change segment offset overflows")
+	}
+	if change.TxNum < w.ref.FromTxNum || change.TxNum > w.ref.ToTxNum {
+		return fmt.Errorf("snapshots: state-domain-change tx %d outside segment range [%d,%d]", change.TxNum, w.ref.FromTxNum, w.ref.ToTxNum)
+	}
+	if w.havePreviousV5 && (change.TxNum < w.previousV5Tx || change.TxNum == w.previousV5Tx && change.Seq <= w.previousV5Seq) {
+		return errStateDomainChangeHistoryRecordsNotOrdered
+	}
+	if err := w.v6.CollectPosting(targetKeyID, change.TxNum, w.segmentOff, w.count); err != nil {
+		return err
+	}
+	if !w.haveIndex {
+		w.currentIndex = stateDomainChangeBinaryTxOffset{txNum: change.TxNum, offset: w.segmentOff, recordIndex: w.count, count: 1}
+		w.haveIndex = true
+	} else if w.currentIndex.txNum == change.TxNum {
+		if w.currentIndex.count == math.MaxUint64 {
+			return errors.New("snapshots: state-domain-change tx index count overflows")
+		}
+		w.currentIndex.count++
+	} else {
+		if err := w.flushIndex(); err != nil {
+			return err
+		}
+		w.currentIndex = stateDomainChangeBinaryTxOffset{txNum: change.TxNum, offset: w.segmentOff, recordIndex: w.count, count: 1}
+		w.haveIndex = true
+	}
+	var header [21]byte
+	binary.BigEndian.PutUint32(header[:4], uint32(17+prevLen))
+	binary.BigEndian.PutUint32(header[4:8], targetKeyID)
+	binary.BigEndian.PutUint64(header[8:16], change.TxNum)
+	if change.PrevExists {
+		header[16] = 1
+	}
+	binary.BigEndian.PutUint32(header[17:21], uint32(prevLen))
+	if n, err := w.segment.Write(header[:]); err != nil {
+		return err
+	} else if n != len(header) {
+		return io.ErrShortWrite
+	}
+	if len(scratch) == 0 {
+		scratch = make([]byte, stateDomainChangeHistoryWriteBufferSize)
+	}
+	for copied := uint64(0); copied < prevLen; {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		n := uint64(len(scratch))
+		if remain := prevLen - copied; n > remain {
+			n = remain
+		}
+		read, err := prev.ReadAt(scratch[:n], int64(prevOffset+copied))
+		if err != nil {
+			return err
+		}
+		if read != int(n) {
+			return io.ErrUnexpectedEOF
+		}
+		written, err := w.segment.Write(scratch[:n])
+		if err != nil {
+			return err
+		}
+		if written != int(n) {
+			return io.ErrShortWrite
+		}
+		copied += n
+	}
+	w.segmentOff += frameLen
+	w.count++
+	w.previous = nil
+	w.previousV5Tx, w.previousV5Seq, w.havePreviousV5 = change.TxNum, change.Seq, true
+	return nil
+}
+
 func (w *stateDomainChangeHistoryRecordWriter) writeChange(change *rawdb.StateDomainChange, trustedOrder bool) error {
 	return w.writeChangeWithV6KeyID(change, trustedOrder, nil)
 }
