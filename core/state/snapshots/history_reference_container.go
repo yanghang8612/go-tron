@@ -13,8 +13,20 @@ import (
 	"io"
 	"math"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/tronprotocol/go-tron/internal/historychunk"
 )
+
+func newHistoryReferenceZstdEncoder() (*zstd.Encoder, error) {
+	return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1),
+		zstd.WithWindowSize(historyReferenceMaxChunk), zstd.WithSingleSegment(true), zstd.WithEncoderCRC(true))
+}
+
+func newHistoryReferenceZstdDecoder() (*zstd.Decoder, error) {
+	return zstd.NewReader(nil, zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxMemory(historyReferenceMaxChunk), zstd.WithDecoderMaxWindow(historyReferenceMaxChunk),
+		zstd.WithDecodeAllCapLimit(true), zstd.WithDecoderLowmem(true))
+}
 
 const (
 	historyReferenceMagic           = "GTHREF01"
@@ -32,6 +44,12 @@ const (
 	historyReferenceMetadataPages   = 16
 	historyReferenceMaxCache        = 64 << 20
 	historyReferenceMaxCacheEntries = 512
+	historyReferenceCodecRaw        = uint32(0)
+	historyReferenceCodecSnappy     = uint32(1)
+	// Codec 2 is deliberately unavailable: the writer uses it only as a
+	// scratch marker before Finalize. Codec 3 therefore lets old readers fail
+	// closed instead of confusing finalized Zstd data with scratch metadata.
+	historyReferenceCodecZstd = uint32(3)
 )
 
 var (

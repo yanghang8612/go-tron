@@ -443,10 +443,13 @@ type Stats struct {
 	LastPassDuration        time.Duration
 	// LastBuildDuration is the duration of the most recent successful history
 	// build, not the eligibility-check latency of a later deferred pass.
-	LastBuildDuration        time.Duration
-	LastMaintenanceDuration  time.Duration
-	LastCompactionDuration   time.Duration
-	LastCompactionMerges     uint64
+	LastBuildDuration       time.Duration
+	LastMaintenanceDuration time.Duration
+	LastCompactionDuration  time.Duration
+	LastCompactionMerges    uint64
+	// LastCompactionDeferCode is the bounded numeric reason exported by
+	// lastpass/compaction/defer_reason. See coldCompactionDeferReasonCode.
+	LastCompactionDeferCode  uint64
 	LastLatestDuration       time.Duration
 	LatestDeferredSync       uint64
 	HistoryDeferredSync      uint64
@@ -503,6 +506,7 @@ type coldRunnerMetrics struct {
 	lastBuildDuration        *metrics.Gauge
 	lastCompactionDuration   *metrics.Gauge
 	lastCompactionMerges     *metrics.Gauge
+	lastCompactionDeferCode  *metrics.Gauge
 	lastLatestDuration       *metrics.Gauge
 	latestDeferredSync       *metrics.Gauge
 	historyDeferredSync      *metrics.Gauge
@@ -559,6 +563,7 @@ func newColdRunnerMetrics(namespace string) coldRunnerMetrics {
 		lastBuildDuration:        metrics.GetOrRegisterGauge(namespace+"lastpass/build/duration", nil),
 		lastCompactionDuration:   metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/duration", nil),
 		lastCompactionMerges:     metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/merges", nil),
+		lastCompactionDeferCode:  metrics.GetOrRegisterGauge(namespace+"lastpass/compaction/defer_reason", nil),
 		lastLatestDuration:       metrics.GetOrRegisterGauge(namespace+"lastpass/latest/duration", nil),
 		latestDeferredSync:       metrics.GetOrRegisterGauge(namespace+"latest/deferred/sync", nil),
 		historyDeferredSync:      metrics.GetOrRegisterGauge(namespace+"history/deferred/sync", nil),
@@ -624,6 +629,7 @@ func (m coldRunnerMetrics) update(stats Stats) {
 	m.lastBuildDuration.Update(int64(stats.LastBuildDuration))
 	m.lastCompactionDuration.Update(int64(stats.LastCompactionDuration))
 	m.lastCompactionMerges.Update(coldSnapshotUintGauge(stats.LastCompactionMerges))
+	m.lastCompactionDeferCode.Update(coldSnapshotUintGauge(stats.LastCompactionDeferCode))
 	m.lastLatestDuration.Update(int64(stats.LastLatestDuration))
 	m.latestDeferredSync.Update(coldSnapshotUintGauge(stats.LatestDeferredSync))
 	m.historyDeferredSync.Update(coldSnapshotUintGauge(stats.HistoryDeferredSync))
@@ -701,6 +707,7 @@ type Runner struct {
 	lastBuildDuration        atomic.Int64
 	lastCompactionDuration   atomic.Int64
 	lastCompactionMerges     atomic.Uint64
+	lastCompactionDeferCode  atomic.Uint64
 	lastLatestDuration       atomic.Int64
 	lastLatestBuildBlock     atomic.Uint64
 	latestDeferredSync       atomic.Uint64
@@ -995,6 +1002,7 @@ func (r *Runner) Snapshot() Stats {
 		LastMaintenanceDuration:  time.Duration(r.lastMaintenanceDuration.Load()),
 		LastCompactionDuration:   time.Duration(r.lastCompactionDuration.Load()),
 		LastCompactionMerges:     r.lastCompactionMerges.Load(),
+		LastCompactionDeferCode:  r.lastCompactionDeferCode.Load(),
 		LastLatestDuration:       time.Duration(r.lastLatestDuration.Load()),
 		LatestDeferredSync:       r.latestDeferredSync.Load(),
 		HistoryDeferredSync:      r.historyDeferredSync.Load(),
@@ -2944,8 +2952,36 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	}
 	r.lastCompactionDuration.Store(int64(result.CompactionDuration))
 	r.lastCompactionMerges.Store(uint64(result.Compaction.MergePasses))
+	r.lastCompactionDeferCode.Store(coldCompactionDeferReasonCode(result.Compaction))
 	r.lastLatestDuration.Store(int64(result.LatestDuration))
 	r.updateMetrics()
+}
+
+// coldCompactionDeferReasonCode is deliberately finite so production metrics
+// never derive names or labels from error/reason strings. Values are:
+// 0 none, 1 import load, 2 merge recovery, 3 heavy-work gate, 4 leaf target,
+// 5 input budget, 6 reference-container limit, 7 other deferred reason.
+func coldCompactionDeferReasonCode(result HistoryCompactionResult) uint64 {
+	if !result.Deferred {
+		return 0
+	}
+	switch result.DeferReason {
+	case "import-load":
+		return 1
+	case "merge-recovery":
+		return 2
+	case "heavy-work-gate":
+		return 3
+	case "leaf-target", "leaf-target-or-budget":
+		return 4
+	case "input-budget":
+		return 5
+	default:
+		if strings.HasPrefix(result.DeferReason, "reference-") {
+			return 6
+		}
+		return 7
+	}
 }
 
 func (r *Runner) recordSuccessfulForcedBuild(batchBlocks, lagBlocks uint64, completedAt time.Time) {
@@ -3406,6 +3442,10 @@ func (r *Runner) loop() {
 			"compactionMergePasses", result.Compaction.MergePasses,
 			"compactionSteps", result.Compaction.AggregationSteps,
 			"compactionSegments", result.Compaction.SegmentsMerged,
+			"compactionDeferred", result.Compaction.Deferred,
+			"compactionDeferReason", result.Compaction.DeferReason,
+			"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
+			"compactionInputSources", result.Compaction.InputSources,
 			"sectionBloomBuilt", result.SectionBloomBuilt,
 			"balanceTraceBuilt", result.BalanceTraceBuilt,
 			"eventLogBuilt", result.EventLogBuilt)
@@ -3416,7 +3456,11 @@ func (r *Runner) loop() {
 			"toTx", result.Compaction.ToTxNum,
 			"mergePasses", result.Compaction.MergePasses,
 			"aggregationSteps", result.Compaction.AggregationSteps,
-			"segments", result.Compaction.SegmentsMerged)
+			"segments", result.Compaction.SegmentsMerged,
+			"compactionDeferred", result.Compaction.Deferred,
+			"compactionDeferReason", result.Compaction.DeferReason,
+			"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
+			"compactionInputSources", result.Compaction.InputSources)
 	} else if result.LatestBuilt && !result.LatestCommitmentBaseBuilt {
 		coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 	}
@@ -3471,6 +3515,10 @@ func (r *Runner) loop() {
 				"compactionMergePasses", result.Compaction.MergePasses,
 				"compactionSteps", result.Compaction.AggregationSteps,
 				"compactionSegments", result.Compaction.SegmentsMerged,
+				"compactionDeferred", result.Compaction.Deferred,
+				"compactionDeferReason", result.Compaction.DeferReason,
+				"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
+				"compactionInputSources", result.Compaction.InputSources,
 				"sectionBloomBuilt", result.SectionBloomBuilt,
 				"balanceTraceBuilt", result.BalanceTraceBuilt,
 				"eventLogBuilt", result.EventLogBuilt)
@@ -3481,7 +3529,11 @@ func (r *Runner) loop() {
 				"toTx", result.Compaction.ToTxNum,
 				"mergePasses", result.Compaction.MergePasses,
 				"aggregationSteps", result.Compaction.AggregationSteps,
-				"segments", result.Compaction.SegmentsMerged)
+				"segments", result.Compaction.SegmentsMerged,
+				"compactionDeferred", result.Compaction.Deferred,
+				"compactionDeferReason", result.Compaction.DeferReason,
+				"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
+				"compactionInputSources", result.Compaction.InputSources)
 		} else if result.LatestBuilt && !result.LatestCommitmentBaseBuilt {
 			coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 		}

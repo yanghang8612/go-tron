@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/golang/snappy"
+	"github.com/klauspost/compress/zstd"
 )
 
 type historyReferencePage struct {
@@ -36,6 +37,7 @@ type historyReferenceReader struct {
 	cache                  map[uint32][]byte
 	cacheOrder             []uint32
 	cacheBytes, cacheLimit int
+	zstd                   *zstd.Decoder
 }
 
 func openHistoryReferenceReader(ctx context.Context, path string, cacheBytes int) (*historyReferenceReader, error) {
@@ -194,8 +196,10 @@ func (r *historyReferenceReader) validateLayout(ctx context.Context) error {
 			return err
 		}
 		if chunk.offset != physical || chunk.raw == 0 || chunk.raw > historyReferenceMaxChunk || chunk.stored == 0 ||
-			chunk.codec > 1 || chunk.codec == 0 && chunk.stored != chunk.raw ||
-			chunk.codec == 1 && chunk.stored >= chunk.raw || uint64(chunk.stored) > h.chunkDir-physical {
+			(chunk.codec != historyReferenceCodecRaw && chunk.codec != historyReferenceCodecSnappy && chunk.codec != historyReferenceCodecZstd) ||
+			chunk.codec == historyReferenceCodecRaw && chunk.stored != chunk.raw ||
+			(chunk.codec == historyReferenceCodecSnappy || chunk.codec == historyReferenceCodecZstd) && chunk.stored >= chunk.raw ||
+			uint64(chunk.stored) > h.chunkDir-physical {
 			return fmt.Errorf("%w: chunk layout", errHistoryReferenceCorrupt)
 		}
 		physical += uint64(chunk.stored)
@@ -245,7 +249,7 @@ func (r *historyReferenceReader) loadChunk(ctx context.Context, id uint32) ([]by
 		return nil, err
 	}
 	raw := stored
-	if chunk.codec == 1 {
+	if chunk.codec == historyReferenceCodecSnappy {
 		n, err := snappy.DecodedLen(stored)
 		if err != nil || n != int(chunk.raw) {
 			return nil, fmt.Errorf("%w: Snappy decoded length", errHistoryReferenceCorrupt)
@@ -253,6 +257,19 @@ func (r *historyReferenceReader) loadChunk(ctx context.Context, id uint32) ([]by
 		raw, err = snappy.Decode(make([]byte, int(chunk.raw)), stored)
 		if err != nil {
 			return nil, fmt.Errorf("%w: Snappy data: %v", errHistoryReferenceCorrupt, err)
+		}
+	} else if chunk.codec == historyReferenceCodecZstd {
+		if r.zstd == nil {
+			r.zstd, err = newHistoryReferenceZstdDecoder()
+			if err != nil {
+				return nil, err
+			}
+		}
+		// A capacity equal to the authenticated directory declaration makes
+		// DecodeAllCapLimit reject frames whose real output exceeds it.
+		raw, err = r.zstd.DecodeAll(stored, make([]byte, 0, int(chunk.raw)))
+		if err != nil {
+			return nil, fmt.Errorf("%w: Zstd data: %v", errHistoryReferenceCorrupt, err)
 		}
 	}
 	if len(raw) != int(chunk.raw) || sha256.Sum256(raw) != chunk.digest {
@@ -360,6 +377,10 @@ func (r *historyReferenceReader) Close() error {
 	r.cache, r.cacheOrder = nil, nil
 	r.cacheBytes = 0
 	r.pages = [historyReferenceMetadataPages]historyReferencePage{}
+	if r.zstd != nil {
+		r.zstd.Close()
+		r.zstd = nil
+	}
 	if r.closer != nil {
 		return r.closer.Close()
 	}

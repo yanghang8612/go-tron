@@ -416,6 +416,13 @@ func (w *historyReferenceWriter) Finalize(path string) (size uint64, checksum st
 	if err = historyReferenceWrite(file, make([]byte, historyReferenceHeaderSize)); err != nil {
 		return 0, "", err
 	}
+	// One encoder is reused across independent frames for the duration of this
+	// finalize and always released before returning, including failure paths.
+	encoder, err := newHistoryReferenceZstdEncoder()
+	if err != nil {
+		return 0, "", err
+	}
+	defer encoder.Close()
 	physical := uint64(historyReferenceHeaderSize)
 	for id := uint32(0); uint64(id) < w.stats.Chunks; id++ {
 		chunk, e := w.chunk(id)
@@ -432,10 +439,20 @@ func (w *historyReferenceWriter) Finalize(path string) (size uint64, checksum st
 		if sha256.Sum256(raw) != chunk.digest {
 			return 0, "", fmt.Errorf("%w: scratch chunk digest", errHistoryReferenceCorrupt)
 		}
+		// Each chunk is a complete frame, preserving direct random reads. These
+		// options match the repository's production history Zstd profile while
+		// fixing the frame window and worker count for this <=128 KiB unit.
+		zstdStored := encoder.EncodeAll(raw, nil)
+		if e = w.check(); e != nil {
+			return 0, "", e
+		}
 		stored := snappy.Encode(nil, raw)
-		chunk.codec = 1
+		chunk.codec = historyReferenceCodecSnappy
+		if len(zstdStored) < len(stored) {
+			stored, chunk.codec = zstdStored, historyReferenceCodecZstd
+		}
 		if len(stored) >= len(raw) {
-			stored, chunk.codec = raw, 0
+			stored, chunk.codec = raw, historyReferenceCodecRaw
 		}
 		chunk.offset, chunk.stored = physical, uint32(len(stored))
 		if e = historyReferenceWrite(file, stored); e != nil {

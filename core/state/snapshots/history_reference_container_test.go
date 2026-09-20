@@ -15,7 +15,45 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/golang/snappy"
 )
+
+func encodedReferenceContainer(t testing.TB, raw, stored []byte, codec uint32, declared uint32) []byte {
+	t.Helper()
+	if declared == 0 {
+		declared = uint32(len(raw))
+	}
+	h := historyReferenceHeader{
+		logical:  uint64(declared),
+		chunkDir: historyReferenceHeaderSize + uint64(len(stored)),
+		chunks:   1,
+		spans:    1,
+	}
+	h.spanDir = h.chunkDir + historyReferenceChunkEntrySize
+	h.physical = h.spanDir + historyReferenceSpanEntrySize
+	out := make([]byte, h.physical)
+	copy(out[historyReferenceHeaderSize:], stored)
+	c := historyReferenceChunk{offset: historyReferenceHeaderSize, stored: uint32(len(stored)), raw: declared, codec: codec, digest: sha256.Sum256(raw)}
+	ce := c.encode()
+	copy(out[h.chunkDir:], ce[:])
+	se := (historyReferenceSpan{chunk: 0, length: declared}).encode()
+	copy(out[h.spanDir:], se[:])
+	h.metadata, _ = historyReferenceMetadataHash(context.Background(), bytes.NewReader(out), h)
+	he := h.encode()
+	copy(out, he[:])
+	return out
+}
+
+func testReferenceZstd(t testing.TB, raw []byte) []byte {
+	t.Helper()
+	enc, err := newHistoryReferenceZstdEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+	return enc.EncodeAll(raw, nil)
+}
 
 func referenceContainerFixture(t *testing.T, cache int) ([]byte, []byte, *historyReferenceReader) {
 	t.Helper()
@@ -135,6 +173,217 @@ func TestHistoryReferenceContainerRandomAccessAndOwnedOutput(t *testing.T) {
 	}
 	if _, err := r.ReadAt(make([]byte, 1), -1); !errors.Is(err, errHistoryReferenceCorrupt) {
 		t.Fatal(err)
+	}
+}
+
+func TestHistoryReferenceContainerCodecCompatibilityAndBounds(t *testing.T) {
+	raw := bytes.Repeat([]byte("independent reference chunk "), 3000)
+	codecs := []struct {
+		name   string
+		codec  uint32
+		stored []byte
+	}{
+		{"raw", historyReferenceCodecRaw, raw},
+		{"legacy-snappy", historyReferenceCodecSnappy, snappy.Encode(nil, raw)},
+		{"zstd", historyReferenceCodecZstd, testReferenceZstd(t, raw)},
+	}
+	for _, tc := range codecs {
+		t.Run(tc.name, func(t *testing.T) {
+			data := encodedReferenceContainer(t, raw, tc.stored, tc.codec, 0)
+			r, err := newHistoryReferenceReader(context.Background(), bytes.NewReader(data), uint64(len(data)), nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			got := make([]byte, len(raw))
+			if _, err = r.ReadAt(got, 0); err != nil || !bytes.Equal(got, raw) {
+				t.Fatalf("round trip: %v", err)
+			}
+			if err = r.ValidateAll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	for _, codec := range []uint32{2, 4, math.MaxUint32} {
+		data := encodedReferenceContainer(t, raw, raw, codec, 0)
+		r, err := newHistoryReferenceReader(context.Background(), bytes.NewReader(data), uint64(len(data)), nil, 0)
+		if err == nil {
+			err = r.ValidateLayout(context.Background())
+			_ = r.Close()
+		}
+		if !errors.Is(err, errHistoryReferenceCorrupt) {
+			t.Fatalf("codec %d accepted: %v", codec, err)
+		}
+	}
+
+	// The frame really expands to 128 KiB, while its authenticated directory
+	// claims only 64 KiB. DecodeAllCapLimit must reject it before checksum use.
+	bombRaw := bytes.Repeat([]byte{'z'}, historyReferenceMaxChunk)
+	bomb := encodedReferenceContainer(t, bombRaw, testReferenceZstd(t, bombRaw), historyReferenceCodecZstd, historyReferenceMaxChunk/2)
+	r, err := newHistoryReferenceReader(context.Background(), bytes.NewReader(bomb), uint64(len(bomb)), nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.ValidateAll(context.Background()); !errors.Is(err, errHistoryReferenceCorrupt) {
+		t.Fatalf("overlong Zstd output accepted: %v", err)
+	}
+	if err = r.Close(); err != nil || r.zstd != nil {
+		t.Fatalf("decoder resource retained: %v", err)
+	}
+
+	// A frame whose declared raw size itself exceeds the 128 KiB format bound
+	// is rejected by layout validation without invoking the decoder.
+	tooLarge := encodedReferenceContainer(t, bombRaw, testReferenceZstd(t, bombRaw), historyReferenceCodecZstd, historyReferenceMaxChunk+1)
+	r, err = newHistoryReferenceReader(context.Background(), bytes.NewReader(tooLarge), uint64(len(tooLarge)), nil, 0)
+	if err == nil {
+		err = r.ValidateLayout(context.Background())
+		_ = r.Close()
+	}
+	if !errors.Is(err, errHistoryReferenceCorrupt) {
+		t.Fatalf("oversize declaration accepted: %v", err)
+	}
+}
+
+func TestHistoryReferenceContainerZstdCorruptionAndTruncation(t *testing.T) {
+	raw := bytes.Repeat([]byte("checksum protected Zstd chunk"), 3000)
+	stored := testReferenceZstd(t, raw)
+	data := encodedReferenceContainer(t, raw, stored, historyReferenceCodecZstd, 0)
+	for _, cut := range []int{1, len(stored) / 2, len(stored) - 1} {
+		broken := bytes.Clone(data)
+		// Keep the physical layout intact while making the independent frame
+		// equivalent to a truncated payload followed by unrelated zeros.
+		clear(broken[historyReferenceHeaderSize+cut : historyReferenceHeaderSize+len(stored)])
+		r, err := newHistoryReferenceReader(context.Background(), bytes.NewReader(broken), uint64(len(broken)), nil, 0)
+		if err == nil {
+			err = r.ValidateAll(context.Background())
+			_ = r.Close()
+		}
+		if !errors.Is(err, errHistoryReferenceCorrupt) {
+			t.Fatalf("truncated frame at %d accepted: %v", cut, err)
+		}
+	}
+	broken := bytes.Clone(data)
+	broken[historyReferenceHeaderSize+len(stored)/2] ^= 0x80
+	r, err := newHistoryReferenceReader(context.Background(), bytes.NewReader(broken), uint64(len(broken)), nil, 0)
+	if err == nil {
+		err = r.ValidateAll(context.Background())
+		_ = r.Close()
+	}
+	if !errors.Is(err, errHistoryReferenceCorrupt) {
+		t.Fatalf("corrupt Zstd frame accepted: %v", err)
+	}
+}
+
+func TestHistoryReferenceContainerWriterSelectsSmallestCodec(t *testing.T) {
+	dir := t.TempDir()
+	w, err := newHistoryReferenceWriter(context.Background(), dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Release()
+	compressible := bytes.Repeat([]byte("zstd chooses across the whole independent chunk;"), 2500)
+	random := make([]byte, historyReferenceMaxChunk)
+	rand.New(rand.NewSource(909)).Read(random)
+	for _, raw := range [][]byte{compressible, random} {
+		id, err := w.StoreChunk(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = w.WriteSpan(id, 0, uint32(len(raw))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "codec-choice.r1")
+	if _, _, err = w.Finalize(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := decodeHistoryReferenceHeader(data[:historyReferenceHeaderSize], uint64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := decodeHistoryReferenceChunk(data[h.chunkDir : h.chunkDir+historyReferenceChunkEntrySize])
+	if err != nil || first.codec != historyReferenceCodecZstd {
+		t.Fatalf("compressible chunk codec=%d err=%v", first.codec, err)
+	}
+	second, err := decodeHistoryReferenceChunk(data[h.chunkDir+historyReferenceChunkEntrySize : h.chunkDir+2*historyReferenceChunkEntrySize])
+	if err != nil || second.codec != historyReferenceCodecRaw {
+		t.Fatalf("incompressible chunk codec=%d err=%v", second.codec, err)
+	}
+	r, err := openHistoryReferenceReader(context.Background(), path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// One ReadAt deliberately crosses the independently encoded chunk boundary.
+	got := make([]byte, 64)
+	off := len(compressible) - 32
+	if _, err = r.ReadAt(got, int64(off)); err != nil || !bytes.Equal(got, append(bytes.Clone(compressible[off:]), random[:32]...)) {
+		t.Fatalf("cross-chunk read: %v", err)
+	}
+}
+
+// BenchmarkHistoryReferenceChunkCodecsSynthetic compares only in-memory codec
+// work and sizes on generated bytes. It is not an online history throughput or
+// production space-savings claim.
+func BenchmarkHistoryReferenceChunkCodecsSynthetic(b *testing.B) {
+	inputs := map[string][]byte{
+		"repeated": bytes.Repeat([]byte("synthetic history owner/block/value;"), historyReferenceMaxChunk/36),
+		"random":   make([]byte, historyReferenceMaxChunk),
+	}
+	rand.New(rand.NewSource(920)).Read(inputs["random"])
+	enc, err := newHistoryReferenceZstdEncoder()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer enc.Close()
+	dec, err := newHistoryReferenceZstdDecoder()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer dec.Close()
+	for name, raw := range inputs {
+		for _, codec := range []string{"snappy", "zstd"} {
+			b.Run(name+"/"+codec+"/encode", func(b *testing.B) {
+				b.SetBytes(int64(len(raw)))
+				b.ReportAllocs()
+				var stored []byte
+				for i := 0; i < b.N; i++ {
+					if codec == "snappy" {
+						stored = snappy.Encode(stored[:0], raw)
+					} else {
+						stored = enc.EncodeAll(raw, stored[:0])
+					}
+				}
+				b.ReportMetric(float64(len(stored)), "stored-B")
+			})
+			var stored []byte
+			if codec == "snappy" {
+				stored = snappy.Encode(nil, raw)
+			} else {
+				stored = enc.EncodeAll(raw, nil)
+			}
+			b.Run(name+"/"+codec+"/decode", func(b *testing.B) {
+				b.SetBytes(int64(len(raw)))
+				b.ReportAllocs()
+				out := make([]byte, 0, len(raw))
+				for i := 0; i < b.N; i++ {
+					if codec == "snappy" {
+						out, err = snappy.Decode(out[:0], stored)
+					} else {
+						out, err = dec.DecodeAll(stored, out[:0])
+					}
+					if err != nil || len(out) != len(raw) {
+						b.Fatal(err)
+					}
+				}
+				b.ReportMetric(float64(len(stored)), "stored-B")
+			})
+		}
 	}
 }
 
