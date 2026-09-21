@@ -30,11 +30,15 @@ const baseReadCacheEntryOverhead = 64
 // entries remain resident or recyclable.
 const baseReadCacheEntryBatchSize = 64
 
-// Recycled entry metadata is outside the payload byte budget. One slab-sized
-// reserve per shard absorbs steady eviction churn; the small cap also bounds
-// whole-slab retention after the cache empties, even if free pointers happen to
-// come from different slabs.
-const baseReadCacheMaxFreeEntries = baseReadCacheEntryBatchSize
+// Keep private key/value storage on at most one slab-sized set of recycled
+// entries per shard. Entry metadata itself always remains reusable: dropping an
+// interior pointer while another entry keeps the slab alive strands that slot
+// and eventually turns an 80-byte live entry into a retained 5 KiB slab. The
+// payload cap preserves the prior bound while the complete metadata free list
+// prevents that slab fragmentation under long-running eviction churn. Its high
+// water mark is bounded by byte admission plus stale-token compaction, and a
+// cache clear drops the entire list.
+const baseReadCacheMaxFreeStorageEntries = baseReadCacheEntryBatchSize
 
 // baseReadCacheMaxReferenceCredit lets repeated resident hits accumulate a
 // small amount of CLOCK protection. A single bit loses frequency information:
@@ -1095,6 +1099,7 @@ func retireBaseReadCacheEntry(entry *baseReadCacheEntry) {
 
 func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	retainValue := entry.live && entry.value != nil && !entry.exposed.Load() &&
+		s.freeEntryCount < baseReadCacheMaxFreeStorageEntries &&
 		cap(entry.value) <= baseReadCacheMaxFreeValueSize &&
 		s.freeValueBytes+cap(entry.value) <= s.limit/baseReadCacheFreeValueBudgetDivisor
 	if !retainValue {
@@ -1109,11 +1114,10 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	entry.exposed.Store(false)
 	entry.references.Store(0)
 	entry.nextFree = nil
-	if s.freeEntryCount >= baseReadCacheMaxFreeEntries {
+	if s.freeEntryCount >= baseReadCacheMaxFreeStorageEntries {
 		entry.key = ""
 		entry.keyCapacity = 0
 		entry.value = nil
-		return
 	}
 	s.freeValueBytes += cap(entry.value)
 	entry.nextFree = s.freeEntries

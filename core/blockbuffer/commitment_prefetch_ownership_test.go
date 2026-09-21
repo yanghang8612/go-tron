@@ -107,12 +107,15 @@ func checkCommitmentOwnershipBudget(t testing.TB, cache *baseReadCache) {
 				other += entry.charge
 			}
 		}
-		freeCount, freeBytes := 0, 0
+		freeCount, freeBytes, freeStorageCount := 0, 0, 0
 		for entry := s.freeEntries; entry != nil; entry = entry.nextFree {
 			freeCount++
 			freeBytes += cap(entry.value)
-			if entry.live || entry.exposed.Load() || freeCount > baseReadCacheMaxFreeEntries {
-				t.Fatal("invalid/beyond-budget reusable entry")
+			if entry.keyCapacity != 0 || cap(entry.value) != 0 {
+				freeStorageCount++
+			}
+			if entry.live || entry.exposed.Load() || freeStorageCount > baseReadCacheMaxFreeStorageEntries {
+				t.Fatal("invalid/beyond-budget reusable entry storage")
 			}
 		}
 		if used != s.used || trunk != s.trunkUsed || window != s.windowUsed || other != s.nonCommitmentUsed || used > s.limit || trunk > s.trunkLimit || window > s.windowLimit || freeBytes != s.freeValueBytes || freeCount != s.freeEntryCount || freeBytes > s.limit/baseReadCacheFreeValueBudgetDivisor {

@@ -277,17 +277,27 @@ func TestHistorySharedReadRunnerDefaultsAndFallbackKeepFiles(t *testing.T) {
 	defer runtime.GOMAXPROCS(old)
 	var wantRefs []SegmentRef
 	var wantFiles map[string][]byte
-	for _, mode := range []string{"default", "enhanced", "unknown", "forced-busy-ready", "forced-busy-unknown"} {
+	for _, mode := range []string{"default", "enhanced", "unknown", "memory-low", "forced-busy-ready", "forced-busy-unknown"} {
 		t.Run(mode, func(t *testing.T) {
 			db := newHistorySharedSource(t)
 			r := historySharedRunner(db, t.TempDir())
 			defer r.cancel()
+			parallelChecks := 0
+			r.cfg.ParallelHistoryEventReady = func() bool {
+				parallelChecks++
+				return true
+			}
 			if mode == "default" {
 				r.cfg.HistorySharedReadWorkers = 0
 				r.cfg.HistorySharedChunkCache = false
 			}
 			if mode == "unknown" {
 				r.cfg.HistoryReadResourceProbe = func() HistoryReadResources { return HistoryReadResources{} }
+			}
+			if mode == "memory-low" {
+				r.cfg.HistoryReadResourceProbe = func() HistoryReadResources {
+					return HistoryReadResources{Available: true, SampledAt: time.Now(), IdleCoresMilli: 16000, MemoryAvailableBytes: historyReadMinimumHeadroom}
+				}
 			}
 			if mode == "forced-busy-ready" || mode == "forced-busy-unknown" {
 				r.cfg.DeferHistoryBuildWhileSyncing = true
@@ -309,8 +319,19 @@ func TestHistorySharedReadRunnerDefaultsAndFallbackKeepFiles(t *testing.T) {
 			} else if result.HistorySharedReadWorkers != 0 || result.HistorySharedChunkCache {
 				t.Fatal("fallback enabled new reader", result)
 			}
-			if mode != "default" && result.HistoryEventParallel {
-				t.Fatal("configured enhanced mode nested event work")
+			wantParallel := mode == "default" || mode == "unknown" || mode == "memory-low" || mode == "forced-busy-unknown"
+			if result.HistoryEventParallel != wantParallel {
+				t.Fatal("parallel event decision did not follow selected topology", result)
+			}
+			wantParallelChecks := 0
+			if wantParallel {
+				wantParallelChecks = 1
+			}
+			if parallelChecks != wantParallelChecks {
+				t.Fatal("parallel readiness gate checks", parallelChecks, "want", wantParallelChecks)
+			}
+			if mode == "memory-low" && result.HistoryReadFallbackReason != uint8(historyReadMemoryLow) {
+				t.Fatal("memory-low fallback reason", result.HistoryReadFallbackReason)
 			}
 			files := make(map[string][]byte)
 			for _, ref := range result.Segments {

@@ -1657,7 +1657,10 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	defer buildProgress.Stop()
 	var historyOutput, eventOutput coldSnapshotBuildOutput
 	plannedDerived, plannedEvents := planDerived(r.historySyncBudgetActive())
-	if r.cfg.HistorySharedReadWorkers == 0 && !r.cfg.HistorySharedChunkCache && !r.cfg.HistoryReferenceContainer && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
+	// Resource admission may have reduced a requested enhanced reader to the
+	// serial topology. Only the topology selected for this attempt can conflict
+	// with the event builder; reference-container reads remain enhanced.
+	if !readOptions.enabled() && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
 		// Only an admitted pair plans derived work before history. Serial work
 		// retains its post-history sync observation and does not require a
 		// ChainDB when history fails or yields no output.

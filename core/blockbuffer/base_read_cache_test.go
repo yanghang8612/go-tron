@@ -28,6 +28,27 @@ func BenchmarkBaseReadCacheEntryAllocation(b *testing.B) {
 	baseReadCacheEntryBenchmarkSink = entries[len(entries)-1]
 }
 
+func BenchmarkBaseReadCacheEntryRecycleBeyondStorageReserve(b *testing.B) {
+	const entryCount = baseReadCacheEntryBatchSize * 64
+	entries := make([]*baseReadCacheEntry, entryCount)
+	var shard baseReadCacheShard
+	for i := range entries {
+		entries[i] = shard.takeEntry()
+	}
+	b.ReportAllocs()
+	b.ReportMetric(entryCount, "entries/op")
+	b.ResetTimer()
+	for range b.N {
+		for _, entry := range entries {
+			shard.recycleEntry(entry)
+		}
+		for i := range entries {
+			entries[i] = shard.takeEntry()
+		}
+	}
+	baseReadCacheEntryBenchmarkSink = entries[len(entries)-1]
+}
+
 func TestBaseReadCacheEntryStaysInEightyByteClass(t *testing.T) {
 	if got := unsafe.Sizeof(baseReadCacheEntry{}); got != 80 {
 		t.Fatalf("baseReadCacheEntry size = %d, want 80", got)
@@ -46,6 +67,39 @@ func TestBaseReadCacheEntryBatchReturnsDistinctStableEntries(t *testing.T) {
 	}
 	if len(entries) != baseReadCacheEntryBatchSize || shard.freeEntryCount != 0 {
 		t.Fatalf("entry batch size/free = %d/%d, want %d/0", len(entries), shard.freeEntryCount, baseReadCacheEntryBatchSize)
+	}
+}
+
+func TestBaseReadCacheEntryBatchReusesEveryRecycledSlot(t *testing.T) {
+	var shard baseReadCacheShard
+	const entryCount = baseReadCacheEntryBatchSize * 3
+	original := make(map[*baseReadCacheEntry]struct{}, entryCount)
+	for range entryCount {
+		entry := shard.takeEntry()
+		entry.live = true
+		entry.key = strings.Repeat("k", 32)
+		entry.keyCapacity = 32
+		entry.value = make([]byte, 64)
+		original[entry] = struct{}{}
+	}
+	for entry := range original {
+		shard.recycleEntry(entry)
+	}
+	if got := shard.freeEntryCount; got != entryCount {
+		t.Fatalf("recycled metadata entries = %d, want %d", got, entryCount)
+	}
+	if got, max := shard.freeValueBytes, baseReadCacheMaxFreeStorageEntries*64; got > max {
+		t.Fatalf("recycled value storage = %d, want <= %d", got, max)
+	}
+	for range entryCount {
+		entry := shard.takeEntry()
+		if _, ok := original[entry]; !ok {
+			t.Fatalf("allocated a new slab before reusing recycled entry %p", entry)
+		}
+		delete(original, entry)
+	}
+	if len(original) != 0 || shard.freeEntryCount != 0 {
+		t.Fatalf("unreused entries/free = %d/%d, want 0/0", len(original), shard.freeEntryCount)
 	}
 }
 
