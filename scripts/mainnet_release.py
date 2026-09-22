@@ -379,7 +379,8 @@ def restore(old):
 
 def deploy(source, candidate, digest):
     require(re.fullmatch(r'[0-9a-f]{40}', source or ''), 'invalid source commit')
-    head = command(['/usr/bin/git', '-C', str(REPO), 'rev-parse', 'HEAD'], 30).strip()
+    head = command(['/usr/bin/git', '--git-dir=' + str(REPO / '.git'),
+                    'rev-parse', 'HEAD'], 30).strip()
     require(head == source, 'checkout does not match requested source')
     buildinfo = command(['/data/go/bin/go', 'version', '-m', candidate], 30)
     for token in ('\tvcs.revision=' + source, '\t-tags=sapling',

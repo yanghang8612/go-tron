@@ -153,6 +153,8 @@ class MainnetReleaseTests(unittest.TestCase):
                     with self.assertRaises(subprocess.TimeoutExpired):
                         release.deploy(SOURCE, '/candidate', SHA)
                 restore.assert_called_once_with(old)
+                self.assertIn(['/usr/bin/git', '--git-dir=' + str(release.REPO / '.git'),
+                               'rev-parse', 'HEAD'], attempts)
 
     def test_restore_reinstalls_original_bytes_before_start(self):
         old = old_state()
