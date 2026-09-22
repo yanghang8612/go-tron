@@ -13,6 +13,7 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8090/wallet/getnowblock}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 RUN_TESTS="${RUN_TESTS:-1}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+MAINNET_RELEASE_HELPER="/usr/local/libexec/gtron-mainnet-release.py"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -102,7 +103,40 @@ fi
 log "remote revision:   $remote_rev"
 log "deployed revision: ${deployed_rev:-unknown}"
 
-if [[ "$remote_rev" == "$deployed_rev" ]]; then
+if [[ "$SERVICE_NAME" == "gtron.service" ]]; then
+  [[ "$BRANCH" == "master" ]] || die "mainnet deployment requires master"
+  # The on-disk revision may be stale after an independently verified release.
+  # Match the root-owned guard/marker and the running executable before
+  # recording it; this path does not restart an already healthy mainnet.
+  if sudo -n /usr/bin/python3 "$MAINNET_RELEASE_HELPER" verify --source "$remote_rev"; then
+    state_tmp="$STATE_FILE.tmp.$$"
+    printf '%s\n' "$remote_rev" >"$state_tmp"
+    mv -f "$state_tmp" "$STATE_FILE"
+    log "$SERVICE_NAME already runs verified $remote_rev"
+    exit 0
+  else
+    verify_status=$?
+    case "$verify_status" in
+      3) log "running source differs; building $remote_rev" ;;
+      4)
+        log "verified source is unhealthy; restarting guarded service"
+        sudo systemctl restart "$SERVICE_NAME"
+        if wait_healthy && sudo -n /usr/bin/python3 "$MAINNET_RELEASE_HELPER" verify --source "$remote_rev"; then
+          state_tmp="$STATE_FILE.tmp.$$"
+          printf '%s\n' "$remote_rev" >"$state_tmp"
+          mv -f "$state_tmp" "$STATE_FILE"
+          log "$SERVICE_NAME recovered verified $remote_rev"
+          exit 0
+        fi
+        show_failure_context
+        die "$SERVICE_NAME did not recover verified $remote_rev"
+        ;;
+      *) die "mainnet release verification failed (status $verify_status)" ;;
+    esac
+  fi
+fi
+
+if [[ "$SERVICE_NAME" != "gtron.service" && "$remote_rev" == "$deployed_rev" ]]; then
   if service_active && wallet_healthy; then
     log "$SERVICE_NAME is already up to date and healthy"
     exit 0
@@ -159,6 +193,22 @@ make GOBIN="$deploy_build_dir" gtron-sapling
 
 [[ -x "$deploy_build_dir/gtron" ]] ||
   die "binary missing: $deploy_build_dir/gtron"
+
+if [[ "$SERVICE_NAME" == "gtron.service" ]]; then
+  need_cmd sha256sum
+  candidate_sha="$(sha256sum "$deploy_build_dir/gtron")"
+  candidate_sha="${candidate_sha%% *}"
+  log "publishing root-owned mainnet release for $remote_rev"
+  sudo -n /usr/bin/python3 "$MAINNET_RELEASE_HELPER" deploy \
+    --source "$remote_rev" --candidate "$deploy_build_dir/gtron" --sha256 "$candidate_sha"
+  # The helper returns only after the effective systemd command, configured
+  # reader guards, process executable SHA, and Wallet API have been verified.
+  state_tmp="$STATE_FILE.tmp.$$"
+  printf '%s\n' "$remote_rev" >"$state_tmp"
+  mv -f "$state_tmp" "$STATE_FILE"
+  log "successfully deployed root-owned mainnet release $remote_rev"
+  exit 0
+fi
 
 # Preserve the exact currently installed binary. The source tree may already
 # point at origin/master after an earlier failed deployment, so git HEAD is not
