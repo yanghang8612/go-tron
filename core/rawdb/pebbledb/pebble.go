@@ -966,6 +966,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	db.liveIterGauge = metrics.GetOrRegisterGauge(namespace+"iter/count", nil)
 	if acquireSpaceMetrics(db) {
 		db.engineSpace = newEngineSpaceMetrics(namespace)
+		// New creates a distinct cache for this DB. The namespace lease ensures
+		// auxiliary opens cannot publish another cache's capacity here.
+		db.engineSpace.blockCacheCapacityBytes.Update(opt.Cache.MaxSize())
 		db.diskSpace = newDiskSpaceObserver(namespace, spaceRanges, db.db.EstimateDiskUsage)
 		db.diskSpace.start()
 	}

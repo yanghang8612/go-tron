@@ -324,3 +324,79 @@ func BenchmarkRawdbBranchStorePutBranches(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkRawdbBranchStoreMultiBlock includes the layer map allocation that
+// the same-layer microbenchmark above amortizes away. Sibling sizes are fixed
+// before timing; each iteration writes and commits four distinct layers.
+func BenchmarkRawdbBranchStoreMultiBlock(b *testing.B) {
+	for _, tc := range []struct {
+		name      string
+		counts    []int
+		opWeights []int
+	}{
+		{name: "one-sibling", counts: []int{256}},
+		{name: "two-siblings", counts: []int{128, 128}},
+		{name: "uniform-16", counts: []int{32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32}},
+		{name: "skewed-16", counts: []int{256, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16}},
+		{name: "skewed-last-16", counts: []int{16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 256}},
+		// Equal op counts can still yield unequal branch counts when prefix
+		// sharing differs. This is a deliberate negative control for the hint.
+		{name: "equal-ops-skewed-branches", counts: []int{256, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16}, opWeights: []int{32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32}},
+	} {
+		for _, adaptive := range []bool{false, true} {
+			name := "baseline"
+			if adaptive {
+				name = "adaptive"
+			}
+			b.Run(tc.name+"/"+name, func(b *testing.B) {
+				weights := tc.opWeights
+				if weights == nil {
+					weights = tc.counts
+				}
+				totalCount := 0
+				for _, count := range weights {
+					totalCount += count
+				}
+				keys := make([][]string, len(tc.counts))
+				branches := make([]map[string]*BranchData, len(tc.counts))
+				for sibling, count := range tc.counts {
+					keys[sibling] = make([]string, count)
+					branches[sibling] = make(map[string]*BranchData, count)
+					for i := 0; i < count; i++ {
+						key := string([]byte{byte(sibling), byte(i >> 8), byte(i)})
+						branch := new(BranchData)
+						for nibble := uint8(0); nibble < 12; nibble++ {
+							branch.SetHashChild(nibble, common.Hash{byte(sibling + 1), byte(i), nibble})
+						}
+						keys[sibling][i] = key
+						branches[sibling][key] = branch
+					}
+				}
+				buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					for block := 1; block <= 4; block++ {
+						buffer.BeginBlock(common.Hash{byte(block)}, uint64(block))
+						h, ok := buffer.NewestInflight()
+						if !ok {
+							b.Fatal("missing in-flight layer")
+						}
+						store := newRawdbBranchStore(buffer.ViewLayer(h))
+						for sibling := range keys {
+							hint := len(keys)
+							if adaptive {
+								hint = siblingBatchReserveHint(len(keys), totalCount, weights[sibling])
+							}
+							if err := store.putBranchesWithReserveHint(keys[sibling], branches[sibling], len(keys), hint); err != nil {
+								b.Fatal(err)
+							}
+						}
+						buffer.CommitBlock()
+					}
+					buffer.Discard()
+				}
+			})
+		}
+	}
+}

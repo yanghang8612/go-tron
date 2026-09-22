@@ -154,6 +154,13 @@ type branchBatchStore interface {
 	putBranches(keys []string, branches map[string]*BranchData, batchCount int) error
 }
 
+// branchBatchStoreWithReserveHint lets the combined-arena blockbuffer writer
+// size its first shard maps without changing the actual sibling batch count
+// used by writers that reserve key storage across batches.
+type branchBatchStoreWithReserveHint interface {
+	putBranchesWithReserveHint(keys []string, branches map[string]*BranchData, batchCount, reserveHint int) error
+}
+
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
 	return &bufferedBranchStore{base: base}
 }
@@ -251,7 +258,7 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 // rawdb batch path may skip that local sort because blockbuffer is map-backed and
 // its durable flush sorts the globally coalesced write stream. Each surviving
 // branch is encoded here exactly once (inside the batch or base.PutBranch).
-func (s *bufferedBranchStore) flush(base branchStore, batchCount int) error {
+func (s *bufferedBranchStore) flush(base branchStore, batchCount, reserveHint int) error {
 	// A buffered store is single-use: after applyRootParallel flushes it, no
 	// caller reads it again. Return every large BranchData destination even when
 	// the base write fails so the next fold can reuse the storage.
@@ -282,6 +289,9 @@ func (s *bufferedBranchStore) flush(base branchStore, batchCount int) error {
 	if len(s.puts) > 0 {
 		for k := range s.puts {
 			*keysPtr = append(*keysPtr, k)
+		}
+		if hinted, ok := base.(branchBatchStoreWithReserveHint); ok {
+			return hinted.putBranchesWithReserveHint(*keysPtr, s.puts, batchCount, reserveHint)
 		}
 		if batch, ok := base.(branchBatchStore); ok {
 			return batch.putBranches(*keysPtr, s.puts, batchCount)
@@ -355,12 +365,16 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		concurrentFlush = store.concurrentSiblingFlushSafe()
 	}
 	var activeNibbles [maxFoldNibbles]uint8
+	var reserveHints [maxFoldNibbles]int
 	activeBatches := 0
 	for nb, count := range counts {
 		if count > 0 {
 			activeNibbles[activeBatches] = uint8(nb)
 			activeBatches++
 		}
+	}
+	for _, nb := range activeNibbles[:activeBatches] {
+		reserveHints[nb] = siblingBatchReserveHint(activeBatches, len(ops), counts[nb])
 	}
 
 	var (
@@ -415,7 +429,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 					// This worker only reads/writes prefixes beginning with nb. Publishing
 					// its finished buffer cannot affect any still-running sibling, so overlap
 					// encoding/writes with their computation and avoid a second goroutine wave.
-					err = buf.flush(t.store, activeBatches)
+					err = buf.flush(t.store, activeBatches, reserveHints[nb])
 				}
 				errs[nb] = err
 			}
@@ -435,7 +449,7 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		}
 	}
 	if !concurrentFlush {
-		if err := flushSiblingBuffersSerial(t.store, buffers, activeBatches); err != nil {
+		if err := flushSiblingBuffersSerial(t.store, buffers, activeBatches, reserveHints); err != nil {
 			returnSiblingBuffers(buffers)
 			return nil, false, err
 		}
@@ -454,14 +468,26 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 
 // flushSiblingBuffersSerial publishes first-nibble buffers in deterministic
 // order for stores that do not opt into concurrent read/write access.
-func flushSiblingBuffersSerial(base branchStore, buffers [maxFoldNibbles]*bufferedBranchStore, batchCount int) error {
+func flushSiblingBuffersSerial(base branchStore, buffers [maxFoldNibbles]*bufferedBranchStore, batchCount int, reserveHints [maxFoldNibbles]int) error {
 	for nb := 0; nb < maxFoldNibbles; nb++ {
 		if buffers[nb] == nil {
 			continue
 		}
-		if err := buffers[nb].flush(base, batchCount); err != nil {
+		if err := buffers[nb].flush(base, batchCount, reserveHints[nb]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// siblingBatchReserveHint estimates how many batches of this sibling's size
+// could fill the layer's branch map. A uniformly distributed fold keeps the
+// exact active-sibling reservation. A much larger sibling reserves less than
+// the full fan-out, avoiding empty map buckets retained until layer drop. This
+// is only a capacity hint: later sibling writes can grow the map as needed.
+func siblingBatchReserveHint(activeBatches, totalOps, siblingOps int) int {
+	if siblingOps <= 0 {
+		return 1
+	}
+	return min(activeBatches, 1+(totalOps-1)/siblingOps)
 }

@@ -38,6 +38,8 @@ type engineSpaceMetrics struct {
 	tombstonesEstimate        *metrics.Gauge
 	memtableLiveBytes         *metrics.Gauge
 	memtableZombieBytes       *metrics.Gauge
+	blockCacheBytes           *metrics.Gauge
+	blockCacheCapacityBytes   *metrics.Gauge
 	compactionInProgressBytes *metrics.Gauge
 	optionsManifestBytes      *metrics.Gauge
 }
@@ -68,6 +70,8 @@ func newEngineSpaceMetrics(namespace string) *engineSpaceMetrics {
 		tombstonesEstimate:        gauge("keys/tombstones/estimated_count"),
 		memtableLiveBytes:         gauge("memtable/live/bytes"),
 		memtableZombieBytes:       gauge("memtable/zombie/bytes"),
+		blockCacheBytes:           gauge("block_cache/bytes"),
+		blockCacheCapacityBytes:   gauge("block_cache/configured_capacity_bytes"),
 		compactionInProgressBytes: gauge("compaction/in_progress/bytes"),
 		optionsManifestBytes:      gauge("metadata/options_manifest/bytes"),
 	}
@@ -105,6 +109,9 @@ func (m *engineSpaceMetrics) update(stats *pebble.Metrics) {
 	m.tombstonesEstimate.Update(int64(stats.Keys.TombstoneCount))
 	m.memtableLiveBytes.Update(int64(stats.MemTable.Size))
 	m.memtableZombieBytes.Update(int64(stats.MemTable.ZombieSize))
+	// Size is Pebble's currently cached block payload, not the configured
+	// capacity or the entire native allocation footprint (e.g. cache metadata).
+	m.blockCacheBytes.Update(stats.BlockCache.Size)
 	m.compactionInProgressBytes.Update(stats.Compact.InProgressBytes)
 
 	// Pebble v1.1.5 keeps OPTIONS/MANIFEST sizes private. Its DiskSpaceUsage

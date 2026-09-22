@@ -98,7 +98,7 @@ func BenchmarkBufferedBranchStoreFlushBatchKeys(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				if err := store.flush(store.base, 1); err != nil {
+				if err := store.flush(store.base, 1, 1); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -382,7 +382,7 @@ func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
 		t.Fatal("buffered value changed when the source was mutated after PUT")
 	}
 
-	if err := buf.flush(base, 1); err != nil {
+	if err := buf.flush(base, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if len(buf.puts) != 0 {

@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -54,6 +55,111 @@ func TestRawdbBranchStoreBatchRoundTrip(t *testing.T) {
 		if !got.Equal(*branches[key]) {
 			t.Fatalf("GetBranch(%x) differs from input", key)
 		}
+	}
+}
+
+func TestCommitmentBranchArenaAcrossCommitDiscardAndFlush(t *testing.T) {
+	reference := rawdb.NewMemoryDatabase()
+	disk := rawdb.NewMemoryDatabase()
+	buffer := blockbuffer.New(disk)
+	updates := func(block byte) []rawdb.StateCommitmentUpdate {
+		out := make([]rawdb.StateCommitmentUpdate, 64)
+		for i := range out {
+			owner := common.Address{0x41, byte(i), block & 1}
+			out[i] = rawdb.NewStateCommitmentPut(
+				rawdb.StateAccountLatestCommitmentKey(owner),
+				[]byte{block, byte(i), byte(i >> 1)},
+			)
+		}
+		return out
+	}
+	branchRows := func(db ethdb.Iteratee) map[string][]byte {
+		t.Helper()
+		rows := make(map[string][]byte)
+		if err := rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+			rows[string(prefix)] = bytes.Clone(encoded)
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	compareRows := func(got, want map[string][]byte) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("branch row count = %d, want %d", len(got), len(want))
+		}
+		for key, expected := range want {
+			if !bytes.Equal(got[key], expected) {
+				t.Fatalf("branch %x differs from direct store", key)
+			}
+		}
+	}
+	applyLayer := func(number uint64, block byte) (blockbuffer.InflightHandle, *blockbuffer.LayerView, common.Hash, []byte) {
+		t.Helper()
+		buffer.BeginBlock(common.Hash{block}, number)
+		h, ok := buffer.NewestInflight()
+		if !ok {
+			t.Fatal("missing in-flight layer")
+		}
+		view := buffer.ViewLayer(h)
+		root, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStoreForAsyncFold(view), updates(block))
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, found, err := rawdb.ReadCommitmentBranchNoCopy(view, nil)
+		if err != nil || !found {
+			t.Fatalf("root branch missing: found=%v err=%v", found, err)
+		}
+		return h, view, root, encoded
+	}
+
+	firstUpdates := updates(1)
+	wantFirst, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(reference), firstUpdates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1, view1, gotFirst, firstBytes := applyLayer(1, 1)
+	if gotFirst != wantFirst {
+		t.Fatalf("block 1 root = %x, want %x", gotFirst, wantFirst)
+	}
+	firstCopy := bytes.Clone(firstBytes)
+	compareRows(branchRows(view1), branchRows(reference))
+	if err := buffer.CommitInflight(h1); err != nil {
+		t.Fatal(err)
+	}
+
+	h2, _, _, discardedBytes := applyLayer(2, 2)
+	discardedCopy := bytes.Clone(discardedBytes)
+	buffer.DiscardInflight(h2)
+	if root, found, err := rawdb.ReadLatestDomainCommitmentRoot(buffer); err != nil || !found || root != wantFirst {
+		t.Fatalf("root after discard = %x, found=%v err=%v, want %x", root, found, err, wantFirst)
+	}
+
+	wantThird, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(reference), updates(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h3, view3, gotThird, _ := applyLayer(3, 3)
+	if gotThird != wantThird {
+		t.Fatalf("block 3 root = %x, want %x", gotThird, wantThird)
+	}
+	compareRows(branchRows(view3), branchRows(reference))
+	if !bytes.Equal(firstBytes, firstCopy) || !bytes.Equal(discardedBytes, discardedCopy) {
+		t.Fatal("a previously returned branch value changed after newer writes or discard")
+	}
+	if err := buffer.CommitInflight(h3); err != nil {
+		t.Fatal(err)
+	}
+	if err := buffer.Flush(disk); err != nil {
+		t.Fatal(err)
+	}
+	compareRows(branchRows(disk), branchRows(reference))
+	if root, found, err := rawdb.ReadLatestDomainCommitmentRoot(disk); err != nil || !found || root != wantThird {
+		t.Fatalf("flushed root = %x, found=%v err=%v, want %x", root, found, err, wantThird)
+	}
+	if !bytes.Equal(firstBytes, firstCopy) || !bytes.Equal(discardedBytes, discardedCopy) {
+		t.Fatal("flush changed a branch value retained by an older reader")
 	}
 }
 

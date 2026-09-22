@@ -223,12 +223,15 @@ func TestDatabaseSpaceMetricsNamespaceOwnership(t *testing.T) {
 	if owner <= 0 {
 		t.Fatal("first database did not acquire observation")
 	}
+	if got := first.engineSpace.blockCacheCapacityBytes.Snapshot().Value(); got != 16<<20 {
+		t.Fatalf("owner block cache capacity = %d, want 16 MiB", got)
+	}
 	for _, enabled := range []bool{false, true} {
 		tune := Options{}
 		if enabled {
 			tune.DiskSpaceRanges = testSpaceRanges()
 		}
-		second, err := New(t.TempDir(), 16, 32, namespace, false, tune)
+		second, err := New(t.TempDir(), 32, 32, namespace, false, tune)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,6 +243,9 @@ func TestDatabaseSpaceMetricsNamespaceOwnership(t *testing.T) {
 		}
 		if first.diskSpace.enabled.Snapshot().Value() != 1 || first.diskSpace.owner.Snapshot().Value() != owner {
 			t.Fatal("secondary construction/close changed active owner")
+		}
+		if got := first.engineSpace.blockCacheCapacityBytes.Snapshot().Value(); got != 16<<20 {
+			t.Fatalf("secondary cache overwrote owner capacity: %d", got)
 		}
 	}
 	if err := first.Close(); err != nil {

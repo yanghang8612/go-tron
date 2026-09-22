@@ -507,7 +507,7 @@ func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, r
 	}
 	defer func() { _ = payloadData.Close(); _ = os.Remove(payloadName) }()
 
-	rowFrames, payloadFrames, addressPostings, topicPostings, err := writeEventLogV3Frames(reader, fromBlock, toBlock, rowCount, blockIDs, txHashes, addressIDs, topicIDs, rowData, payloadData, workers)
+	rowFrames, payloadFrames, addressPostings, topicPostings, err := writeEventLogV3Frames(reader, fromBlock, toBlock, rowCount, blockIDs, txHashes, addressIDs, topicIDs, addresses, topics, rowData, payloadData, workers)
 	if err != nil {
 		return SegmentRef{}, err
 	}
@@ -584,11 +584,11 @@ func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, r
 	return ref, nil
 }
 
-func scanEventLogV3Dictionaries(reader rawdb.EventLogReader, fromBlock, toBlock uint64) ([]eventLogV3Block, []common.Hash, map[string]struct{}, map[string]struct{}, uint64, error) {
+func scanEventLogV3Dictionaries(reader rawdb.EventLogReader, fromBlock, toBlock uint64) ([]eventLogV3Block, []common.Hash, map[string]uint64, map[string]uint64, uint64, error) {
 	var blocks []eventLogV3Block
 	var txHashes []common.Hash
-	addresses := make(map[string]struct{})
-	topics := make(map[string]struct{})
+	addresses := make(map[string]uint64)
+	topics := make(map[string]uint64)
 	var count uint64
 	var prev EventLog
 	havePrev := false
@@ -611,11 +611,11 @@ func scanEventLogV3Dictionaries(reader rawdb.EventLogReader, fromBlock, toBlock 
 		if !havePrev || prev.TxHash != row.TxHash {
 			txHashes = append(txHashes, row.TxHash)
 		}
-		addresses[string(row.Address[:])] = struct{}{}
+		addresses[string(row.Address[:])]++
 		for position, rawTopic := range row.Log.GetTopics() {
 			var topic common.Hash
 			copy(topic[:], rawTopic)
-			topics[string(eventLogTopicLookupKey(uint64(position), topic))] = struct{}{}
+			topics[string(eventLogTopicLookupKey(uint64(position), topic))]++
 		}
 		prev, havePrev = row, true
 		count++
@@ -697,13 +697,17 @@ func (w *eventLogV3PayloadWriter) flushSerial(firstRow uint64) error {
 	return nil
 }
 
-func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, wantRows uint64, blockIDs map[uint64]uint64, txHashes []common.Hash, addressIDs, topicIDs map[string]uint64, rowData, payloadData *os.File, workers int) ([]eventLogV3Frame, []eventLogV3Frame, map[string][]uint64, map[string][]uint64, error) {
+func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, wantRows uint64, blockIDs map[uint64]uint64, txHashes []common.Hash, addressIDs, topicIDs, addressCounts, topicCounts map[string]uint64, rowData, payloadData *os.File, workers int) ([]eventLogV3Frame, []eventLogV3Frame, map[string][]uint64, map[string][]uint64, error) {
 	var rowFrames []eventLogV3Frame
 	rowBuf := make([]eventLogV3Row, 0, eventLogV3RowFrameRows)
+	var topicArena []uint64
 	payload := newEventLogV3PayloadWriter(payloadData, workers)
 	defer payload.close()
-	addressPostings := make(map[string][]uint64, len(addressIDs))
-	topicPostings := make(map[string][]uint64)
+	addressPostings := make(map[string][]uint64, len(addressCounts))
+	topicPostings := make(map[string][]uint64, len(topicCounts))
+	// The first pass counts every posting. Allocate a key's exact capacity
+	// only when the second pass actually sees it: a changing source may omit
+	// a formerly present key, and the old writer omitted it from the lookup.
 	var rowIndex uint64
 	var txID uint64
 	var previousTx common.Hash
@@ -722,6 +726,7 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 		}
 		rowFrames = append(rowFrames, eventLogV3Frame{firstRow: rowIndex - uint64(len(rowBuf)), dataOff: uint64(off), dataLen: uint32(len(raw)), rowCount: uint32(len(rowBuf)), checksum: crc32.ChecksumIEEE(raw), rawLen: uint32(len(raw))})
 		rowBuf = rowBuf[:0]
+		topicArena = topicArena[:0]
 		return nil
 	}
 	err := reader.IterateEventLogs(fromBlock, toBlock, EventLogFilter{}, func(row EventLog) (bool, error) {
@@ -757,10 +762,25 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 		if err != nil {
 			return false, err
 		}
-		topicSequence := make([]uint64, 0, len(row.Log.GetTopics()))
+		rowTopics := row.Log.GetTopics()
+		if len(rowTopics) > 0 && topicArena == nil {
+			// Only one row frame holds these IDs. Small and empty builds do
+			// not reserve a full 256-row frame.
+			arenaRows := min(wantRows, uint64(eventLogV3RowFrameRows))
+			topicArena = make([]uint64, 0, int(arenaRows)*min(len(rowTopics), 8))
+		}
+		topicStart := len(topicArena)
 		addressKey := string(eventLogAddressLookupKey(row.Address))
-		addressPostings[addressKey] = append(addressPostings[addressKey], rowIndex)
-		for position, rawTopic := range row.Log.GetTopics() {
+		addressRows, seenAddress := addressPostings[addressKey]
+		if !seenAddress {
+			count := addressCounts[addressKey]
+			if count > math.MaxInt {
+				return false, errors.New("snapshots: V4 address posting count exceeds platform limits")
+			}
+			addressRows = make([]uint64, 0, int(count))
+		}
+		addressPostings[addressKey] = append(addressRows, rowIndex)
+		for position, rawTopic := range rowTopics {
 			var topic common.Hash
 			copy(topic[:], rawTopic)
 			key := string(eventLogTopicLookupKey(uint64(position), topic))
@@ -768,10 +788,18 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 			if !ok {
 				return false, fmt.Errorf("snapshots: missing V4 topic dictionary entry position=%d topic=%x", position, topic)
 			}
-			topicSequence = append(topicSequence, topicID)
-			topicPostings[key] = append(topicPostings[key], rowIndex)
+			topicArena = append(topicArena, topicID)
+			topicRows, seenTopic := topicPostings[key]
+			if !seenTopic {
+				count := topicCounts[key]
+				if count > math.MaxInt {
+					return false, errors.New("snapshots: V4 topic posting count exceeds platform limits")
+				}
+				topicRows = make([]uint64, 0, int(count))
+			}
+			topicPostings[key] = append(topicRows, rowIndex)
 		}
-		rowBuf = append(rowBuf, eventLogV3Row{blockID: blockID, txIndex: row.TxIndex, logIndex: row.LogIndex, txID: txID, addressID: addressID, payloadFrame: frame, payloadOffset: offset, payloadLength: uint64(len(raw)), topicIDs: topicSequence})
+		rowBuf = append(rowBuf, eventLogV3Row{blockID: blockID, txIndex: row.TxIndex, logIndex: row.LogIndex, txID: txID, addressID: addressID, payloadFrame: frame, payloadOffset: offset, payloadLength: uint64(len(raw)), topicIDs: topicArena[topicStart:len(topicArena)]})
 		rowIndex++
 		if len(rowBuf) == eventLogV3RowFrameRows {
 			if err := flushRows(); err != nil {

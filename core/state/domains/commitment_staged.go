@@ -763,6 +763,10 @@ func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 // blockbuffer stores a map and its durable flush sorts the globally coalesced
 // operations after every sibling has published.
 func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*BranchData, batchCount int) error {
+	return s.putBranchesWithReserveHint(keys, branches, batchCount, batchCount)
+}
+
+func (s *rawdbBranchStore) putBranchesWithReserveHint(keys []string, branches map[string]*BranchData, batchCount, reserveHint int) error {
 	if !s.ownedValue {
 		// A direct durable rebuild deliberately bypasses blockbuffer ownership.
 		// Commit each sibling flush as one bounded database batch instead of one
@@ -816,7 +820,7 @@ func (s *rawdbBranchStore) putBranches(keys []string, branches map[string]*Branc
 		values[i] = arena[start:len(arena):len(arena)]
 	}
 	if s.ownedBatchArena {
-		return s.keyspace.WriteOwnedStringsInArenaWithBatchCount(s.db, keys, values, arena, batchCount)
+		return s.keyspace.WriteOwnedStringsInArenaWithBatchCount(s.db, keys, values, arena, reserveHint)
 	}
 	return s.keyspace.WriteOwnedStringsWithBatchCount(s.db, keys, values, batchCount)
 }

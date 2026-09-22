@@ -397,7 +397,8 @@ func (p *OrderedCommitmentPipeline) runLane(nb uint8, root BranchData, tasks <-c
 			var err error
 			changed, err = sub.applyNibble(path[:0], 0, &root, nb, task.ops)
 			if err == nil && changed {
-				err = buf.flush(job.store, job.activeSplits)
+				reserveHint := siblingBatchReserveHint(job.activeSplits, len(*job.ops), len(task.ops))
+				err = buf.flush(job.store, job.activeSplits, reserveHint)
 			}
 			returnBufferedBranchStore(buf)
 			if err != nil {

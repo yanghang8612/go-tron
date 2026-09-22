@@ -185,7 +185,8 @@ func (p *OrderedCommitmentPipeline) runPartition(partition int, root BranchData,
 			trie := commitmentTrie{store: buf, hasher: h, foldStats: &job.partitions.stats[partition]}
 			_, changed, err := trie.apply(path[:1], 1, &root, task.ops)
 			if err == nil && changed {
-				err = buf.flush(job.store, job.activeSplits)
+				reserveHint := siblingBatchReserveHint(job.activeSplits, len(*job.ops), len(task.ops))
+				err = buf.flush(job.store, job.activeSplits, reserveHint)
 			}
 			returnBufferedBranchStore(buf)
 			if err != nil {

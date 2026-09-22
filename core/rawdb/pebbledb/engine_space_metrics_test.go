@@ -105,6 +105,7 @@ func TestEngineSpaceMetricsDiskComponentsExcludeLogicalAndCumulativeBytes(t *tes
 	stats.Table.ObsoleteSize, stats.Table.ZombieSize = 17, 23
 	stats.Compact.InProgressBytes = 31
 	stats.MemTable.Size, stats.MemTable.ZombieSize = 1<<20, 2<<20
+	stats.BlockCache.Size = 3 << 20
 	stats.Snapshots.PinnedSize = 8 << 20
 	m := newEngineSpaceMetrics("test/engine-space-components/")
 	m.update(stats)
@@ -117,6 +118,15 @@ func TestEngineSpaceMetricsDiskComponentsExcludeLogicalAndCumulativeBytes(t *tes
 	}
 	if m.optionsManifestBytes.Snapshot().Value() != 0 {
 		t.Fatal("zero-private-metadata fixture must not classify memtables or snapshot totals as disk metadata")
+	}
+	if got := m.blockCacheBytes.Snapshot().Value(); got != 3<<20 {
+		t.Fatalf("block cache bytes = %d, want 3 MiB", got)
+	}
+	if got := m.blockCacheBytes.Snapshot().Value() + m.memtableLiveBytes.Snapshot().Value() + m.memtableZombieBytes.Snapshot().Value(); got != 6<<20 {
+		t.Fatalf("Pebble manual allocation components = %d, want 6 MiB", got)
+	}
+	if registered := metrics.DefaultRegistry.Get("test/engine-space-components/storage/engine/block_cache/bytes"); registered != m.blockCacheBytes {
+		t.Fatal("block cache metric must expose Pebble's current cache bytes")
 	}
 	// A nil sample leaves the latest valid reading intact; update needs no DB.
 	m.update(nil)
