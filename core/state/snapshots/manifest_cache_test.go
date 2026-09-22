@@ -201,47 +201,60 @@ func TestManifestCacheBudgetAndDisable(t *testing.T) {
 func TestManifestCacheConcurrentPublication(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
 	t.Setenv(manifestCacheBudgetEnv, "")
-	dir := t.TempDir()
-	if err := PublishManifest(dir, cachedManifestFixture(12)); err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	errs := make(chan error, 5)
-	start := make(chan struct{})
-	for worker := 0; worker < 5; worker++ {
-		wg.Add(1)
-		go func(writer bool) {
-			defer wg.Done()
-			<-start
-			for i := 0; i < 100; i++ {
-				if writer {
-					m := cachedManifestFixture(12)
-					m.Generation, m.Progress.LatestBuildTxNum = uint64(i+8), uint64(i+8)
-					if err := PublishManifest(dir, m); err != nil {
-						errs <- err
-						return
-					}
-					continue
-				}
-				m, err := LoadProductionManifest(dir)
-				if err != nil {
-					errs <- err
-					return
-				}
-				if m.Generation != m.Progress.LatestBuildTxNum || m.Segments[0].Size != 1024 {
-					errs <- fmt.Errorf("mixed or shared generation")
-					return
-				}
-				m.Segments[0].Size++
-				m.Progress.LatestBuildTxNum++
+	for _, refs := range []int{12, 64} {
+		t.Run(fmt.Sprintf("refs-%d", refs), func(t *testing.T) {
+			loadedManifestCache.clear()
+			t.Cleanup(loadedManifestCache.clear)
+			dir := t.TempDir()
+			if err := PublishManifest(dir, cachedManifestFixture(refs)); err != nil {
+				t.Fatal(err)
 			}
-		}(worker == 0)
-	}
-	close(start)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Error(err)
+			raw, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(raw) >= manifestCacheStreamMinBytes) != (refs == 64) {
+				t.Fatalf("manifest size %d does not exercise the intended read path", len(raw))
+			}
+			var wg sync.WaitGroup
+			errs := make(chan error, 5)
+			start := make(chan struct{})
+			for worker := 0; worker < 5; worker++ {
+				wg.Add(1)
+				go func(writer bool) {
+					defer wg.Done()
+					<-start
+					for i := 0; i < 100; i++ {
+						if writer {
+							m := cachedManifestFixture(refs)
+							m.Generation, m.Progress.LatestBuildTxNum = uint64(i+8), uint64(i+8)
+							if err := PublishManifest(dir, m); err != nil {
+								errs <- err
+								return
+							}
+							continue
+						}
+						m, err := LoadProductionManifest(dir)
+						if err != nil {
+							errs <- err
+							return
+						}
+						if m.Generation != m.Progress.LatestBuildTxNum || m.Segments[0].Size != 1024 {
+							errs <- fmt.Errorf("mixed or shared generation")
+							return
+						}
+						m.Segments[0].Size++
+						m.Progress.LatestBuildTxNum++
+					}
+				}(worker == 0)
+			}
+			close(start)
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				t.Error(err)
+			}
+		})
 	}
 }
 

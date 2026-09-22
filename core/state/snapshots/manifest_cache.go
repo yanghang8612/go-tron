@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,6 +20,9 @@ const (
 	manifestCacheDefaultBytes   = 256 << 20
 	manifestCacheConfigMaxBytes = 1 << 30
 	manifestCacheBudgetEnv      = "GTRON_SNAPSHOT_MANIFEST_CACHE_BUDGET_BYTES"
+	// Below this size, the extra read calls cost more than the saved ReadFile
+	// allocation in complete warm LoadProductionManifest benchmarks.
+	manifestCacheStreamMinBytes = 64 << 10
 )
 
 var (
@@ -89,10 +93,36 @@ func loadManifestFile(dir string, production bool) (*Manifest, error) {
 	// subsequently fails. This is configuration, never a stale-read fallback.
 	loadedManifestCache.mu.Lock()
 	loadedManifestCache.resizeLocked(budget)
+	cachedData, cachedManifest := loadedManifestCache.data, loadedManifestCache.manifest
 	loadedManifestCache.mu.Unlock()
 	// Always read the current file. Equal size, timestamp, generation, inode,
 	// or checksum is not enough to reuse a previously validated object.
-	data, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+	path := filepath.Join(dir, ManifestFile)
+	var data []byte
+	if cachedManifest != nil && len(cachedData) >= manifestCacheStreamMinBytes {
+		// A byte-for-byte streaming comparison avoids allocating the entire JSON
+		// file on a cache hit. A changed file is assembled from the bytes actually
+		// read and still takes the ordinary decode and validation path.
+		var equal bool
+		data, equal, err = readManifestAgainstCache(path, cachedData)
+		if err != nil {
+			return nil, err
+		}
+		if equal {
+			loadedManifestCache.mu.Lock()
+			if loadedManifestCache.manifest == cachedManifest {
+				m, hitErr := loadedManifestCache.cloneHitLocked(production)
+				loadedManifestCache.mu.Unlock()
+				return m, hitErr
+			}
+			loadedManifestCache.mu.Unlock()
+			// Publication changed the resident while the file was read. Retain the
+			// exact bytes observed by this load, rather than reopening the path.
+			data = bytes.Clone(cachedData)
+		}
+	} else {
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +136,75 @@ func loadManifestFile(dir string, production bool) (*Manifest, error) {
 	return loadedManifestCache.decodeOwned(data, production, budget)
 }
 
+// readManifestAgainstCache reads through EOF even on a mismatch, including
+// extra and truncated bytes. It holds no cache lock during I/O. The cached
+// input is immutable for its lifetime, including after another reader or a
+// publisher replaces the resident entry.
+func readManifestAgainstCache(path string, cached []byte) ([]byte, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	return compareManifestReader(f, cached)
+}
+
+func compareManifestReader(reader io.Reader, cached []byte) ([]byte, bool, error) {
+	// A hit on a small manifest must not allocate a fixed 64 KiB scratch.
+	// The extra byte also detects a file that grew beyond the cached length.
+	chunk := make([]byte, min(64<<10, len(cached)+1))
+	var data []byte
+	read, emptyReads, equal := 0, 0, true
+	for {
+		n, readErr := reader.Read(chunk)
+		if n != 0 {
+			emptyReads = 0
+			if equal && (read+n > len(cached) || !bytes.Equal(chunk[:n], cached[read:read+n])) {
+				equal = false
+				// All earlier chunks matched, so the already-observed prefix is
+				// exactly the cached prefix. Stat is a capacity hint only: it
+				// cannot establish identity or bypass reading the rest of the
+				// actual file. Reserve once to avoid repeated growth on misses.
+				capacity := read + n
+				if file, ok := reader.(*os.File); ok {
+					if info, statErr := file.Stat(); statErr == nil && info.Mode().IsRegular() && info.Size() >= 0 && info.Size() < int64(^uint(0)>>1) {
+						capacity = max(capacity, int(info.Size())+1)
+					}
+				}
+				data = make([]byte, read, capacity)
+				copy(data, cached[:read])
+			}
+			if !equal {
+				data = append(data, chunk[:n]...)
+			}
+			read += n
+		}
+		if readErr == io.EOF {
+			if equal && read == len(cached) {
+				return nil, true, nil
+			}
+			if equal {
+				data = bytes.Clone(cached[:read])
+			}
+			return data, false, nil
+		}
+		if readErr != nil {
+			return nil, false, readErr
+		}
+		if n == 0 {
+			emptyReads++
+			if emptyReads >= 100 {
+				return nil, false, io.ErrNoProgress
+			}
+		}
+		if !equal && n == len(chunk) && len(chunk) < 64<<10 {
+			// A small cached file grew. Keep a large sequential read buffer
+			// only for the remainder of this changed-file load.
+			chunk = make([]byte, 64<<10)
+		}
+	}
+}
+
 // decodeOwned takes ownership of data, which comes from a private ReadFile
 // buffer. Returned manifests never share mutable containers with the cache.
 func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget uint64) (*Manifest, error) {
@@ -113,15 +212,7 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 	defer c.mu.Unlock()
 	c.resizeLocked(budget)
 	if c.manifest != nil && bytes.Equal(data, c.data) {
-		manifestCacheHits.Inc(1)
-		if c.publication {
-			manifestCachePublicationHits.Inc(1)
-		}
-		manifestCacheCandidate.Update(int64(c.charge))
-		if production && c.productionErr != nil {
-			return nil, c.productionErr
-		}
-		return cloneDecodedManifest(c.manifest), nil
+		return c.cloneHitLocked(production)
 	}
 	manifestCacheMisses.Inc(1)
 	// An old entry is no longer useful for these bytes. In particular, do not
@@ -138,6 +229,18 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 		return nil, productionErr
 	}
 	return m, nil
+}
+
+func (c *manifestDecodeCache) cloneHitLocked(production bool) (*Manifest, error) {
+	manifestCacheHits.Inc(1)
+	if c.publication {
+		manifestCachePublicationHits.Inc(1)
+	}
+	manifestCacheCandidate.Update(int64(c.charge))
+	if production && c.productionErr != nil {
+		return nil, c.productionErr
+	}
+	return cloneDecodedManifest(c.manifest), nil
 }
 
 // A successful local publisher already normalized, sorted and validated m and

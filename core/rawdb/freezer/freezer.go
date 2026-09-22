@@ -447,33 +447,53 @@ func (f *Freezer) PublishTransactionIndexRun(result TransactionIndexBuildResult)
 	if result.EndBlock > f.V2Coverage() {
 		return fmt.Errorf("transaction index end %d exceeds V2 coverage %d", result.EndBlock, f.V2Coverage())
 	}
-	current, err := OpenTransactionIndexStore(f.datadir)
-	if err != nil {
-		return err
+	// The selected runs are immutable and were validated when installed. Check
+	// the durable manifest on every publish, but only reopen all directories if
+	// a previous publish left the live view stale (for example, after a failed
+	// post-commit install). Reopening them twice per healthy publish allocates
+	// proportional to the entire historical index.
+	current := f.txIndex
+	if err := validateSelectedTransactionIndexStore(f.datadir, current); err != nil {
+		var openErr error
+		current, openErr = OpenTransactionIndexStore(f.datadir)
+		if openErr != nil {
+			return openErr
+		}
+		if current.Coverage() > f.V2Coverage() {
+			_ = current.Close()
+			return fmt.Errorf("transaction index coverage %d exceeds ancient V2 coverage %d", current.Coverage(), f.V2Coverage())
+		}
+		f.replaceTransactionIndexStore(current)
 	}
 	if current.Coverage() == result.EndBlock {
 		if err := verifyTransactionIndexBuildResult(f.datadir, result); err != nil {
-			_ = current.Close()
 			return err
 		}
-		f.replaceTransactionIndexStore(current)
 		return nil
 	}
 	if current.Coverage() != result.StartBlock {
-		_ = current.Close()
 		return fmt.Errorf("transaction index publish: live coverage %d does not match run start %d", current.Coverage(), result.StartBlock)
-	}
-	if err := current.Close(); err != nil {
-		return err
 	}
 	if err := PublishTransactionIndexRun(f.datadir, result); err != nil {
 		return err
 	}
-	store, err := OpenTransactionIndexStore(f.datadir)
+	run, err := OpenTransactionIndexRun(result.Path)
 	if err != nil {
 		return err
 	}
-	f.replaceTransactionIndexStore(store)
+	// Readers hold v2Mu.RLock through lookup. Installing the newly verified run
+	// under its write lock makes the coverage and run list visible together;
+	// existing run handles and directories retain their original ownership.
+	f.v2Mu.Lock()
+	if f.txIndex != current {
+		f.v2Mu.Unlock()
+		_ = run.Close()
+		return errors.New("transaction index publish: live store changed during installation")
+	}
+	current.runs = append(current.runs, run)
+	current.manifestRuns = append(current.manifestRuns, transactionIndexManifestRunForResult(result))
+	current.coverage = result.EndBlock
+	f.v2Mu.Unlock()
 	return nil
 }
 

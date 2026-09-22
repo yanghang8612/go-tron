@@ -41,9 +41,10 @@ type transactionIndexManifestRun struct {
 // currently cover disjoint contiguous block ranges. Lookup probes every run;
 // later geometric merging keeps that fan-out logarithmically bounded.
 type TransactionIndexStore struct {
-	base     string
-	runs     []*TransactionIndexRun
-	coverage uint64
+	base         string
+	runs         []*TransactionIndexRun
+	manifestRuns []transactionIndexManifestRun
+	coverage     uint64
 }
 
 type transactionIndexOrphanCleanupResult struct {
@@ -96,6 +97,7 @@ func OpenTransactionIndexStore(ancientDir string) (*TransactionIndexStore, error
 			return nil, fmt.Errorf("transaction index manifest: run %q metadata mismatch", declared.File)
 		}
 		store.runs = append(store.runs, run)
+		store.manifestRuns = append(store.manifestRuns, declared)
 		expectedStart = declared.EndBlock
 	}
 	store.coverage = expectedStart
@@ -218,7 +220,7 @@ func validateSelectedTransactionIndexStoreContext(ctx context.Context, ancientDi
 	if err := validateTransactionIndexManifestContext(ctx, manifest); err != nil {
 		return err
 	}
-	if len(manifest.Runs) != len(selected.runs) {
+	if len(manifest.Runs) != len(selected.runs) || len(manifest.Runs) != len(selected.manifestRuns) {
 		return errors.New("transaction index orphan cleanup: selected store is stale")
 	}
 	for i, declared := range manifest.Runs {
@@ -226,7 +228,7 @@ func validateSelectedTransactionIndexStoreContext(ctx context.Context, ancientDi
 			return err
 		}
 		run := selected.runs[i]
-		if run == nil || filepath.Base(run.Path()) != declared.File || run.StartBlock() != declared.StartBlock ||
+		if selected.manifestRuns[i] != declared || run == nil || filepath.Base(run.Path()) != declared.File || run.StartBlock() != declared.StartBlock ||
 			run.EndBlock() != declared.EndBlock || run.Rows() != declared.Rows {
 			return errors.New("transaction index orphan cleanup: selected store does not match manifest")
 		}
@@ -288,15 +290,19 @@ func PublishTransactionIndexRun(ancientDir string, result TransactionIndexBuildR
 	if result.StartBlock != expectedStart || result.EndBlock <= result.StartBlock {
 		return fmt.Errorf("transaction index publish: run range [%d,%d) does not continue at %d", result.StartBlock, result.EndBlock, expectedStart)
 	}
-	manifest.Runs = append(manifest.Runs, transactionIndexManifestRun{
+	manifest.Runs = append(manifest.Runs, transactionIndexManifestRunForResult(result))
+	return writeTransactionIndexManifest(base, manifest)
+}
+
+func transactionIndexManifestRunForResult(result TransactionIndexBuildResult) transactionIndexManifestRun {
+	return transactionIndexManifestRun{
 		File:               filepath.Base(result.Path),
 		StartBlock:         result.StartBlock,
 		EndBlock:           result.EndBlock,
 		Rows:               result.Rows,
 		CompactionLevel:    transactionIndexBaseCompactionLevel(result.EndBlock - result.StartBlock),
 		CompactionLevelSet: true,
-	})
-	return writeTransactionIndexManifest(base, manifest)
+	}
 }
 
 func verifyTransactionIndexBuildResult(ancientDir string, result TransactionIndexBuildResult) error {
@@ -406,6 +412,7 @@ func (s *TransactionIndexStore) Close() error {
 		}
 	}
 	s.runs = nil
+	s.manifestRuns = nil
 	return errors.Join(errs...)
 }
 
