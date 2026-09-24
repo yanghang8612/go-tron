@@ -136,15 +136,23 @@ func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation
 // and must be consumed before the next database operation. Internal StateDB
 // decode paths use it only for immediate protobuf or scalar decoding.
 func ReadStateKVLatestNoCopy(db ethdb.KeyValueReader, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
-	context := fmt.Sprintf("state kv latest for %s generation %d domain %#04x", owner.Hex(), generation, uint16(domain))
 	var raw []byte
 	if reader, ok := db.(cachedNoCopyStateKVLatestReader); ok {
 		var err error
 		raw, err = reader.GetNoCopyCachedStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey)
 		if err != nil {
+			// A native not-found result needs neither a physical key nor an error
+			// context. Construct both only for errors that need the Has fallback
+			// or a diagnostic; SLOAD reaches this branch frequently for absent
+			// storage rows.
+			if classifier, ok := db.(keyNotFoundClassifier); ok && classifier.IsKeyNotFound(err) {
+				return nil, false, nil
+			}
+			context := fmt.Sprintf("state kv latest for %s generation %d domain %#04x", owner.Hex(), generation, uint16(domain))
 			return verifyStateReadMiss(db, stateKVLatestKey(owner, generation, domain, logicalKey), context, err)
 		}
 	} else {
+		context := fmt.Sprintf("state kv latest for %s generation %d domain %#04x", owner.Hex(), generation, uint16(domain))
 		var ok bool
 		var err error
 		raw, ok, err = readStatePresentNoCopy(db, stateKVLatestKey(owner, generation, domain, logicalKey), context)

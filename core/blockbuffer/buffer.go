@@ -216,10 +216,14 @@ type layer struct {
 	// rescanning both topology slices for every operation was pure bookkeeping
 	// on the block-import hot path. owner also rejects handles originating from
 	// another Buffer without relying on pointer scans.
-	owner   *Buffer
-	state   layerState
-	bloom   atomic.Pointer[layerBloom]
-	segment atomic.Pointer[layerBloomSegment]
+	owner *Buffer
+	state layerState
+	// flushDone is non-nil while FlushUpTo owns this committed layer's
+	// overlay-to-durable handoff. Guarded by owner.mu. A batch targeting this
+	// layer waits for that flush, while batches targeting newer layers proceed.
+	flushDone chan struct{}
+	bloom     atomic.Pointer[layerBloom]
+	segment   atomic.Pointer[layerBloomSegment]
 	// ownedKeyArena packs commitment physical keys across sibling batches.
 	// Reservations are disjoint before the caller copies bytes, so the lock is
 	// never held with a shard lock and concurrent fold workers can populate
@@ -684,10 +688,11 @@ func layerShardIndexString(key string) uint32 {
 // maxInflight==1 (the default), only one layer is ever in flight; this then
 // degenerates to the single-active model and is byte-identical to it.
 //
-// flushMu serializes FlushUpTo/Flush calls against each other so the
-// snapshot→disk-I/O→drop phases of two concurrent flushers can't
-// interleave (double-flush / double-drop). It is held across the whole
-// flush, but mu is released during the disk I/O so readers
+// flushMu serializes FlushUpTo/Flush calls against each other and protects
+// NewReadSnapshot's atomic base/overlay capture. FlushUpTo marks its selected
+// layers under mu before releasing mu for merge, sort and disk writes; a
+// range-owned batch only waits if it targets one of those layers. It is held
+// across the whole flush, but mu is released during the disk I/O so readers
 // (Get/Has/NewIterator — the LoadDynamicProperties path) proceed
 // concurrently. FlushUpTo callers are the async-flush worker, the
 // inline fallback, and Close; only one runs the body at a time.
@@ -708,7 +713,11 @@ type Buffer struct {
 	readView      atomic.Pointer[bufferReadView]
 	mu            sync.RWMutex
 	flushMu       sync.Mutex
-	layers        []*layer
+	// activeFlushDone is non-nil only while FlushUpTo has marked a committed
+	// prefix. Guarded by mu; it keeps the normal no-flush batch path from
+	// scanning the operation slice an extra time.
+	activeFlushDone chan struct{}
+	layers          []*layer
 	// inflight holds begun-but-uncommitted layers, oldest→newest. The newest
 	// is the foreground's active layer. Empty or length 1 under the default
 	// maxInflight==1; the async commit worker raises maxInflight to allow a
@@ -1475,22 +1484,52 @@ func (b *bufferBatch) NewestCommittedNumber() (uint64, bool) {
 }
 
 func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale bool) (int, error) {
-	b.parent.flushMu.Lock()
-	defer b.parent.flushMu.Unlock()
-	// RLock: see Write. Structural writers are still excluded (they Lock), so the
-	// membership classification is stable; applyBatchOpToLayer locks each target
-	// layer so committed-layer applies don't block disjoint-layer writers.
+	for {
+		wait, remaining, err := b.writeFilteredAttempt(matchCommitted, dropStale)
+		if wait == nil {
+			return remaining, err
+		}
+		<-wait
+	}
+}
+
+// writeFilteredAttempt holds mu from the all-ops preflight through publication.
+// The defer keeps the lock releasable if a map/shard helper panics, matching the
+// original writeFiltered lock lifetime. The caller waits only after it returns.
+func (b *bufferBatch) writeFilteredAttempt(matchCommitted func(*layer) bool, dropStale bool) (<-chan struct{}, int, error) {
 	b.parent.mu.RLock()
 	defer b.parent.mu.RUnlock()
-	if !dropStale {
-		// Validate captured targets before compacting b.ops in place. Besides
-		// keeping the operation slice intact on error, this guarantees an owned
-		// reservation has exactly one live op that will eventually consume or
-		// release it.
+	// A batch can include both a layer currently being flushed and newer
+	// committed layers. Preflight the whole batch before applying any op: if a
+	// matched target is in the flush prefix, wait outside mu and then reclassify
+	// it after the flush either drops or retains it. The RLock makes preflight
+	// atomic with FlushUpTo's marking step and final prefix drop.
+	if b.parent.activeFlushDone != nil {
+		for i := range b.ops {
+			target := b.ops[i].target
+			if target == nil {
+				target = b.parent.newestInflightLocked()
+			}
+			if target == nil {
+				continue
+			}
+			state := b.parent.layerStateLocked(target)
+			// Retain the old all-or-nothing stale-target validation before
+			// compacting ops or consuming owned reservations.
+			if !dropStale && state == layerDetached {
+				return nil, len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
+			}
+			if state == layerCommitted && matchCommitted(target) && target.flushDone != nil {
+				return target.flushDone, len(b.ops), nil
+			}
+		}
+	} else if !dropStale {
+		// The common no-flush path keeps its original single validation scan,
+		// even for a large range-owned batch mostly kept for later.
 		for i := range b.ops {
 			target := b.ops[i].target
 			if target != nil && b.parent.layerStateLocked(target) == layerDetached {
-				return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
+				return nil, len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
 			}
 		}
 	}
@@ -1518,7 +1557,7 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 				releaseBatchOpReservation(op)
 				continue
 			}
-			return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
+			return nil, len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
 		}
 		if state != layerCommitted || !matchCommitted(target) {
 			kept = append(kept, *op)
@@ -1530,7 +1569,7 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 	clear(b.ops[len(kept):])
 	b.ops = kept
 	b.size = keptSize
-	return len(b.ops), nil
+	return nil, len(b.ops), nil
 }
 
 func (b *bufferBatch) Reset() {
@@ -2742,32 +2781,26 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 // Layers above the cutoff stay in the slice and remain rewindable via
 // DiscardBlock. The active layer (if any) is untouched.
 //
-// numberOf maps a block hash to its block number; it is the caller's
-// hash-to-number lookup, typically backed by rawdb.ReadBlockNumber on the
-// disk store. If numberOf returns (_, false) for a layer's blockHash that
-// layer is conservatively kept (not flushed) — typically this means the
-// block hasn't been written to disk yet and isn't safe to flush.
-//
-// Iteration stops at the first layer whose number is > cutoff or whose
-// numberOf lookup fails. This relies on the slice-1 invariant that
-// committed layers are appended in block order; switchFork's DiscardBlock
-// preserves that order.
+// Selection stops at the first layer whose recorded block number is above
+// cutoff. Committed layers are appended in block order, and switchFork's
+// DiscardBlock preserves that order.
 //
 // FlushUpTo is idempotent: a second call with the same cutoff (and no new
 // blocks added in between) drops zero layers.
 //
-// Locking: the disk I/O (numberOf lookups + flushLayer writes) runs WITHOUT
-// holding b.mu, so concurrent readers — most importantly the
+// Locking: merge, sort, batch writes, and cache promotion run WITHOUT holding
+// b.mu, so concurrent readers — most importantly the
 // LoadDynamicProperties(buffer) scan that every applyBlock runs in its
 // prologue — are not blocked by an in-flight flush. This is safe because
-// FlushUpTo holds flushMu, which excludes writeFiltered (the only path that can
-// finish range-owned batch writes into a committed layer); ordinary
+// FlushUpTo marks the selected committed layers under b.mu, excluding later
+// range-owned batch writes to those layers until their flush/drop completes.
+// Batches writing newer committed layers can proceed during the flush. Ordinary
 // foreground/worker writes target in-flight layers only. Per-shard read locks
 // additionally make every map traversal race-free. We therefore:
 //
-//  1. briefly RLock to snapshot the layer pointers,
-//  2. run numberOf + flushLayer without b.mu on that snapshot,
-//  3. briefly Lock to drop the flushed prefix.
+//  1. briefly Lock to snapshot and mark the selected committed prefix,
+//  2. run flushLayersObserved without b.mu on that snapshot,
+//  3. briefly Lock to drop the flushed prefix and clear the marker.
 //
 // flushMu serializes flushers against each other; DiscardBlock (the only
 // other path that removes front layers) cannot run concurrently because
@@ -2781,18 +2814,12 @@ func (b *Buffer) FlushUpTo(
 	b.flushMu.Lock()
 	defer b.flushMu.Unlock()
 
-	// Step 1: snapshot the committed-layer pointers under a brief read lock.
-	b.mu.RLock()
+	// Step 1: mark the exact committed prefix before any batch can write to
+	// it. The write lock waits for an already-running batch's writes to finish,
+	// giving the flush a complete, stable view of every selected layer.
+	b.mu.Lock()
 	snapshot := make([]*layer, len(b.layers))
 	copy(snapshot, b.layers)
-	b.mu.RUnlock()
-	if len(snapshot) == 0 {
-		return nil
-	}
-
-	// Step 2: disk I/O without b.mu. flushMu excludes committed-layer batch
-	// mutations, and writeLayer's shard RLocks protect each map traversal, so
-	// readers can continue resolving unrelated shards concurrently.
 	eligible := 0
 	for _, l := range snapshot {
 		if l.number > cutoff {
@@ -2800,6 +2827,28 @@ func (b *Buffer) FlushUpTo(
 		}
 		eligible++
 	}
+	if eligible == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	flushDone := make(chan struct{})
+	for _, l := range snapshot[:eligible] {
+		l.flushDone = flushDone
+	}
+	b.activeFlushDone = flushDone
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		for _, l := range snapshot[:eligible] {
+			l.flushDone = nil
+		}
+		b.activeFlushDone = nil
+		close(flushDone)
+		b.mu.Unlock()
+	}()
+
+	// Step 2: merge, sort, batch and disk I/O without b.mu. Only batches
+	// targeting a selected layer wait; readers and newer-layer batches proceed.
 	var observe flushGroupObserver
 	if b.baseReadCache != nil {
 		versionAdvanced := false
@@ -3075,8 +3124,8 @@ func returnFlushWriteKeys(keys *[]string) {
 
 func writeLayerSorted(l *layer, w ethdb.KeyValueWriter) error {
 	// Keep every source map read-locked through gathering, sorting and batch
-	// construction. FlushUpTo's flushMu already excludes the only committed-
-	// layer writer, but the locks preserve layer's standalone concurrency
+	// construction. FlushUpTo freezes its selected committed layers under b.mu,
+	// while these locks preserve layer's standalone concurrency
 	// contract and make this helper safe for direct callers too.
 	for i := range l.shards {
 		l.shards[i].mu.RLock()
