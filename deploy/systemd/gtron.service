@@ -69,11 +69,11 @@ KillSignal=SIGTERM
 
 LimitNOFILE=131072
 
-# CentOS 7 / systemd 219: MemorySoftLimit is unsupported. The 24 GiB hard
-# limit is a staged candidate for mainnet cold-history headroom. Keep the Go
+# CentOS 7 / systemd 219: MemorySoftLimit is unsupported. The 32 GiB hard
+# limit is the selected mainnet cold-history budget. Keep the Go
 # runtime soft limit and Pebble cache at the deployed 8 GiB / 4 GiB values;
 # these are not additive RSS bounds. See docs/dev/mainnet-memory-budget-20260930.md.
-MemoryLimit=24G
+MemoryLimit=32G
 
 [Install]
 WantedBy=multi-user.target

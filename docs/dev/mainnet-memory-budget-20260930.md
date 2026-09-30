@@ -1,4 +1,4 @@
-# Mainnet memory budget candidate (2026-09-30)
+# Mainnet memory budget (2026-09-30)
 
 The six-minute sync observation and independent host sample are in
 `build/benchmarks/20260930-resource-bottleneck/`. The running `9a1ac520`
@@ -35,50 +35,55 @@ cache reclaim can increment it without an OOM. The new
 and `memory_oom_known` gauges distinguish raw hard headroom from provisional
 clean-file credit.
 
-## Staged candidate
+## Selected 32 GiB budget
 
-The repository's `deploy/systemd/gtron.service` template now represents a
-**24 GiB candidate** while retaining the deployed 8 GiB Go soft limit,
-`GOGC=100`, and 4 GiB Pebble cache. It also drops `MemorySoftLimit`: the
+On 2026-10-01, the user selected 32 GiB for the mainnet service budget.
+The repository's `deploy/systemd/gtron.service` template now represents the
+selected **32 GiB hard limit** while retaining the deployed 8 GiB Go soft
+limit, `GOGC=100`, and 4 GiB Pebble cache. It also drops `MemorySoftLimit`: the
 2026-09-18 live investigation in `docs/dev/mainnet-oom-status-20260918.md`
 records systemd 219 rejecting it as `unknown lvalue`, with the kernel soft
 limit still unlimited. The live service has a later
 `zz-memory-budget-20260918.conf` drop-in; editing the template alone cannot
 change the running service. The separately reviewable
-`deploy/systemd/zzzz-mainnet-memory-24g.conf` only overrides `MemoryLimit` and
+`deploy/systemd/zzzz-mainnet-memory-32g.conf` only overrides `MemoryLimit` and
 sorts after the existing drop-in. Confirm the effective unit and actual cgroup
 limit after any activation; a source-file diff is not deployment verification.
 
 The operator can review the single-setting file, copy it to
-`/etc/systemd/system/gtron.service.d/zzzz-mainnet-memory-24g.conf`, run
+`/etc/systemd/system/gtron.service.d/zzzz-mainnet-memory-32g.conf`, run
 `systemctl daemon-reload`, and restart `gtron.service` through the existing
 guarded procedure. Verify `systemctl show gtron -p MemoryLimit -p ExecStart`
-and the cgroup's `memory.limit_in_bytes` equals 25,769,803,776 bytes. Removing
+and the cgroup's `memory.limit_in_bytes` equals 34,359,738,368 bytes. Removing
 that one drop-in, reloading, and restarting restores the prior effective 20G
 limit. This does not alter the existing `zz-memory-budget-20260918.conf`,
 `ExecStart`, environment, or reader guards.
 
-This is a staged candidate, not a guaranteed four GiB of durable probe
-headroom. The added budget may fill with page cache as syncing continues; the
-bounded clean-file credit is intended to permit cold bursts in that state
+The additional 12 GiB is not guaranteed durable probe headroom. It may fill
+with page cache as syncing continues; the bounded clean-file credit is
+intended to permit cold bursts in that state
 without counting all cache as unused memory. A 20 GiB limit with roughly 4.3
 GiB inactive file and virtually no raw headroom would usually remain below
-the reader threshold, while a 24 GiB limit with more clean cache may cross it.
-Neither is an observed production outcome. The earlier
-40 GiB service setting coincided with a host-wide OOM when other processes
+the reader threshold, while a 32 GiB limit with more clean cache may cross it.
+Neither is an observed production outcome. The earlier 40 GiB service setting
+coincided with a host-wide OOM when other processes
 used much more RAM; the 20 GiB setting was chosen to leave room for tracker,
 Java, and the OS. Recheck those processes and host `MemAvailable` immediately
-before any trial. Do not extrapolate today's 35.6 GiB host availability to a
-future workload.
+before deployment. Do not extrapolate the sampled 35.6 GiB host availability to a
+future workload. The 32 GiB limit leaves less host-wide protection than 20 GiB;
+the live rollout must verify other services' memory use and retain the 20G
+drop-in behavior as the rollback path.
 
 After activation, use a post-warmup observation window of at least 30 minutes,
 recording the same process start, cgroup usage/limit, `rss`, `cache`,
 `active_file`, `inactive_file`, `memory.failcnt`, host `MemAvailable`, OOM
 messages, Pebble cache occupancy/hit rate, physical read rate, cold probe
-raw headroom, credited headroom, ready, cold read fallback, head and cold publication rates, and cold
-lag. The trial succeeds only if the enhanced reader gains sustained admission
-and cold lag trend improves without host memory or importer regressions. A
-brief `ready=1` after restart is insufficient. Restore 20G if host memory
-falls toward the historical OOM margin, the process is killed, or the extra
+raw headroom, credited headroom, ready, cold read fallback, head and cold
+publication rates, and cold lag. Sustained enhanced reader admission and an
+improving cold lag trend, without host memory or importer regressions, are the
+intended outcomes. A brief `ready=1` after restart is insufficient. Restore
+20G if host memory falls toward the historical OOM margin, the process is
+killed, or the extra
 budget simply refills with cache while the cold probe remains below 2.3125
-GiB. No production change, restart, or database write is made by this note.
+GiB. This document and configuration file do not themselves change the live
+service.
