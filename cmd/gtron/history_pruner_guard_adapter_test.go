@@ -40,3 +40,18 @@ func TestDomainPrunerQueuedGuardAdapterFailsClosed(t *testing.T) {
 		t.Fatalf("context not forwarded to queued guard: ran=%v err=%v", ran, err)
 	}
 }
+
+func TestDomainPrunerGuardProbeAdapterFailsClosed(t *testing.T) {
+	for _, adapter := range []*domainPrunerChainSource{nil, {}, {prunerChainSource: &prunerChainSource{}}} {
+		ready, err := adapter.TryStateDomainChangePruneGuardReady(context.Background())
+		if ready || err == nil {
+			t.Fatalf("unavailable probe ready=%v err=%v", ready, err)
+		}
+	}
+	adapter := &domainPrunerChainSource{prunerChainSource: &prunerChainSource{chain: &core.BlockChain{}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if ready, err := adapter.TryStateDomainChangePruneGuardReady(ctx); ready || !errors.Is(err, context.Canceled) {
+		t.Fatalf("probe context not forwarded: ready=%v err=%v", ready, err)
+	}
+}

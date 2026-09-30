@@ -33,11 +33,16 @@ type historyParallelCPU struct {
 }
 
 type historyParallelObservation struct {
-	at              time.Time
-	cpus            []historyParallelCPU
-	memoryAvailable uint64
-	cpuLimitMilli   uint64
-	scope           string
+	at               time.Time
+	cpus             []historyParallelCPU
+	memoryAvailable  uint64
+	memoryUncredited uint64
+	memoryCredit     uint64
+	memoryUnderOOM   bool
+	memoryOOMKnown   bool
+	memoryOOMEvents  []uint64
+	cpuLimitMilli    uint64
+	scope            string
 }
 
 // This is an additional admission hint, never a replacement for the shared I/O
@@ -60,7 +65,7 @@ func newRuntimeHistoryParallelProbe() *runtimeHistoryParallelProbe {
 	p := &runtimeHistoryParallelProbe{now: time.Now, read: readRuntimeHistoryParallel,
 		gomax: func() int { return runtime.GOMAXPROCS(0) }, numCPU: runtime.NumCPU,
 		metrics: make(map[string]*metrics.Gauge)}
-	for _, name := range []string{"known", "idle_ppm", "idle_cores_milli", "memory_available_bytes", "ready"} {
+	for _, name := range []string{"known", "idle_ppm", "idle_cores_milli", "memory_available_bytes", "memory_uncredited_bytes", "memory_clean_credit_bytes", "memory_under_oom", "memory_oom_known", "ready"} {
 		p.metrics[name] = metrics.GetOrRegisterGauge("state/snapshot/cold/history/parallel/runtime/"+name, nil)
 	}
 	return p
@@ -103,17 +108,28 @@ func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 		if err == nil && finished.Sub(now) >= 0 && finished.Sub(now) <= time.Second {
 			current.at = finished
 			p.previous = &current
-			if previous != nil && current.scope == previous.scope &&
-				current.at.Sub(previous.at) >= historyParallelSampleInterval && current.at.Sub(previous.at) <= historyParallelMaxSpan {
+			freshPair := previous != nil && current.scope == previous.scope &&
+				current.at.Sub(previous.at) >= historyParallelSampleInterval && current.at.Sub(previous.at) <= historyParallelMaxSpan
+			if freshPair {
 				p.idlePPM, p.known = historyParallelIdle(previous.cpus, current.cpus)
+			}
+			// Require a valid pair for credit even if CPU readiness fails.
+			// Failcnt increments alone are normal with cache reclaim.
+			if current.memoryCredit > 0 && (!freshPair || !p.known || !historyParallelMemoryCreditReady(previous, &current)) {
+				current.memoryAvailable = current.memoryUncredited
+				current.memoryCredit = 0
 			}
 		}
 	}
-	var idleCores, memory uint64
+	var idleCores, memory, uncredited, credit, underOOM, oomKnown uint64
 	unlimitedCPU := false
 	gomax := p.gomax()
 	if p.previous != nil {
 		memory = p.previous.memoryAvailable
+		uncredited = p.previous.memoryUncredited
+		credit = p.previous.memoryCredit
+		underOOM = historyParallelBool(p.previous.memoryUnderOOM)
+		oomKnown = historyParallelBool(p.previous.memoryOOMKnown)
 		// Host idle time cannot establish unused quota inside a finite CPU
 		// cgroup. Its own usage/throttle deltas would be needed to enable this
 		// case safely; retain serial operation until that evidence is available.
@@ -133,7 +149,9 @@ func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 	}
 	ready := p.known && unlimitedCPU && gomax >= 8 && p.idlePPM >= 250_000 && idleCores >= 2000 && memory >= historyParallelMinimumMemory
 	for name, value := range map[string]uint64{"known": historyParallelBool(p.known), "idle_ppm": p.idlePPM,
-		"idle_cores_milli": idleCores, "memory_available_bytes": memory, "ready": historyParallelBool(ready)} {
+		"idle_cores_milli": idleCores, "memory_available_bytes": memory,
+		"memory_uncredited_bytes": uncredited, "memory_clean_credit_bytes": credit,
+		"memory_under_oom": underOOM, "memory_oom_known": oomKnown, "ready": historyParallelBool(ready)} {
 		if gauge := p.metrics[name]; gauge != nil {
 			gauge.Update(int64(min(value, uint64(math.MaxInt64))))
 		}
@@ -238,7 +256,8 @@ func collectHistoryParallel(read historyParallelReadFile) (historyParallelObserv
 	if err != nil {
 		return out, err
 	}
-	out.memoryAvailable, out.cpuLimitMilli, out.scope, err = historyParallelCgroupHeadroom(read, groups, mounts, out.memoryAvailable)
+	out.memoryAvailable, out.memoryUncredited, out.memoryCredit,
+		out.memoryUnderOOM, out.memoryOOMKnown, out.memoryOOMEvents, out.cpuLimitMilli, out.scope, err = historyParallelCgroupHeadroomDetailed(read, groups, mounts, out.memoryAvailable, mem)
 	return out, err
 }
 
@@ -363,30 +382,39 @@ type historyParallelCgroup struct {
 	v2          bool
 }
 
-func historyParallelCgroupHeadroom(read historyParallelReadFile, groups, mounts []byte, available uint64) (uint64, uint64, string, error) {
+// Each hierarchy level bounds the final value. Only a small fraction of
+// inactive, clean file pages is provisionally available for a short burst;
+// dirty, writeback, and shmem pages are excluded. Host MemAvailable remains a
+// separate upper bound. The caller also checks fresh OOM evidence.
+func historyParallelCgroupHeadroomDetailed(read historyParallelReadFile, groups, mounts []byte, available uint64, hostMem []byte) (uint64, uint64, uint64, bool, bool, []uint64, uint64, string, error) {
 	memory, err := historyParallelResolveCgroup(groups, mounts, "memory")
 	if err != nil {
-		return 0, 0, "", err
+		return 0, 0, 0, false, false, nil, 0, "", err
 	}
 	cpu, err := historyParallelResolveCgroup(groups, mounts, "cpu")
 	if err != nil {
-		return 0, 0, "", err
+		return 0, 0, 0, false, false, nil, 0, "", err
 	}
 	for _, group := range []historyParallelCgroup{memory, cpu} {
 		depth := 0
 		for dir := group.path; ; dir = filepath.Dir(dir) {
 			depth++
 			if depth > 32 {
-				return 0, 0, "", errors.New("cgroup hierarchy exceeds limit")
+				return 0, 0, 0, false, false, nil, 0, "", errors.New("cgroup hierarchy exceeds limit")
 			}
 			if dir == group.mount {
 				break
 			}
 			if dir == filepath.Dir(dir) {
-				return 0, 0, "", errors.New("cgroup escaped mount")
+				return 0, 0, 0, false, false, nil, 0, "", errors.New("cgroup escaped mount")
 			}
 		}
 	}
+	base, credited := available, available
+	hostUnsafe, hostUnsafeKnown := historyParallelHostUnsafeFile(hostMem)
+	underOOM := false
+	oomKnown := true
+	var oomEvents []uint64
 	for dir := memory.path; ; dir = filepath.Dir(dir) {
 		limitName, usageName, softName := "memory.limit_in_bytes", "memory.usage_in_bytes", "memory.soft_limit_in_bytes"
 		if memory.v2 {
@@ -395,34 +423,56 @@ func historyParallelCgroupHeadroom(read historyParallelReadFile, groups, mounts 
 		limitRaw, err := read(filepath.Join(dir, limitName), historyParallelCgroupLimit)
 		if !(memory.v2 && dir == memory.mount && os.IsNotExist(err)) {
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			limit, err := historyParallelLimit(limitRaw, memory.v2)
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			softRaw, err := read(filepath.Join(dir, softName), historyParallelCgroupLimit)
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			soft, err := historyParallelLimit(softRaw, memory.v2)
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			usageRaw, err := read(filepath.Join(dir, usageName), historyParallelCgroupLimit)
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			usage, err := historyParallelLimit(usageRaw, false)
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			limit = min(limit, soft)
+			var free uint64
 			if usage >= limit {
-				available = 0
+				free = 0
 			} else {
-				available = min(available, limit-usage)
+				free = limit - usage
 			}
+			base = min(base, free)
+			credit := uint64(0)
+			if usage <= limit && hostUnsafeKnown {
+				credit = historyParallelCleanFileCredit(read, dir, memory.v2, hostUnsafe, usage, limit)
+			}
+			// Leave at least half of proven clean inactive pages uncredited.
+			credit = min(credit, uint64(3<<30))
+			if free > math.MaxUint64-credit {
+				credited = min(credited, uint64(math.MaxUint64))
+			} else {
+				credited = min(credited, free+credit)
+			}
+			// An under-OOM cgroup can make no safe promise about page cache.
+			known, activeOOM, events := historyParallelOOM(read, dir, memory.v2)
+			if !known {
+				oomKnown = false
+			}
+			if activeOOM {
+				underOOM = true
+			}
+			oomEvents = append(oomEvents, events)
 		}
 		if dir == memory.mount {
 			break
@@ -437,27 +487,27 @@ func historyParallelCgroupHeadroom(read historyParallelReadFile, groups, mounts 
 		raw, err := read(filepath.Join(dir, quotaName), historyParallelCgroupLimit)
 		if !(cpu.v2 && dir == cpu.mount && os.IsNotExist(err)) {
 			if err != nil {
-				return 0, 0, "", err
+				return 0, 0, 0, false, false, nil, 0, "", err
 			}
 			parts := strings.Fields(string(raw))
 			if !cpu.v2 {
 				period, err := read(filepath.Join(dir, "cpu.cfs_period_us"), historyParallelCgroupLimit)
 				if err != nil {
-					return 0, 0, "", err
+					return 0, 0, 0, false, false, nil, 0, "", err
 				}
 				parts = append(parts, strings.Fields(string(period))...)
 			}
 			if len(parts) != 2 {
-				return 0, 0, "", errors.New("invalid CPU quota")
+				return 0, 0, 0, false, false, nil, 0, "", errors.New("invalid CPU quota")
 			}
 			period, err := strconv.ParseUint(parts[1], 10, 64)
 			if err != nil || period == 0 {
-				return 0, 0, "", errors.New("invalid CPU quota period")
+				return 0, 0, 0, false, false, nil, 0, "", errors.New("invalid CPU quota period")
 			}
 			if !(cpu.v2 && parts[0] == "max" || !cpu.v2 && parts[0] == "-1") {
 				quota, err := strconv.ParseUint(parts[0], 10, 64)
 				if err != nil || quota == 0 {
-					return 0, 0, "", errors.New("invalid CPU quota value")
+					return 0, 0, 0, false, false, nil, 0, "", errors.New("invalid CPU quota value")
 				}
 				// A saturated finite ratio must never become the unlimited
 				// sentinel used by the readiness decision.
@@ -468,7 +518,11 @@ func historyParallelCgroupHeadroom(read historyParallelReadFile, groups, mounts 
 			break
 		}
 	}
-	return available, capacity, fmt.Sprintf("%v|%v", memory, cpu), nil
+	credit := credited - base
+	if underOOM || !oomKnown {
+		credited, credit = base, 0
+	}
+	return credited, base, credit, underOOM, oomKnown, oomEvents, capacity, fmt.Sprintf("%v|%v", memory, cpu), nil
 }
 
 func historyParallelLimit(raw []byte, allowMax bool) (uint64, error) {

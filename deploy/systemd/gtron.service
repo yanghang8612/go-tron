@@ -25,8 +25,8 @@ Environment=ZCASH_PARAMS_DIR=/data/gtron/params
 EnvironmentFile=-/etc/gtron/snapshot.env
 
 # Go runtime
-Environment=GOMEMLIMIT=10GiB
-Environment=GOGC=200
+Environment=GOMEMLIMIT=8GiB
+Environment=GOGC=100
 
 # Async commit pipeline
 Environment=GTRON_ASYNC_COMMIT_DEPTH=4
@@ -47,7 +47,7 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --metrics.addr 127.0.0.1 \
     --metrics.port 6071 \
     --maxpeers 30 \
-    --db.cache 8192 \
+    --db.cache 4096 \
     --db.handles 8192 \
     --state.trie.cache 128 \
     --log.file /data/gtron/main/gtron.log \
@@ -69,11 +69,11 @@ KillSignal=SIGTERM
 
 LimitNOFILE=131072
 
-# CentOS 7 / old systemd
-# 10 GiB Go heap + 8 GiB Pebble cache leaves room for memtables, mmap, ETL,
-# goroutine stacks and filesystem cache below the 32 GiB hard limit.
-MemorySoftLimit=24G
-MemoryLimit=32G
+# CentOS 7 / systemd 219: MemorySoftLimit is unsupported. The 24 GiB hard
+# limit is a staged candidate for mainnet cold-history headroom. Keep the Go
+# runtime soft limit and Pebble cache at the deployed 8 GiB / 4 GiB values;
+# these are not additive RSS bounds. See docs/dev/mainnet-memory-budget-20260930.md.
+MemoryLimit=24G
 
 [Install]
 WantedBy=multi-user.target

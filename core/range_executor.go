@@ -309,6 +309,9 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 	if block == nil {
 		return fmt.Errorf("canonical range executor: nil block")
 	}
+	if e.readAhead != nil {
+		e.readAhead.MarkApplying(block.Number())
+	}
 	bc := e.bc
 	current := e.tip()
 	if e.state == nil {

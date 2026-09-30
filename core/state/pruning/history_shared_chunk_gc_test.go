@@ -3,6 +3,7 @@ package pruning
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"math/rand/v2"
 	"slices"
@@ -15,6 +16,149 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
+
+type gcTxRangeScanCounter struct {
+	ethdb.KeyValueStore
+	starts []uint64
+}
+
+func (d *gcTxRangeScanCounter) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if len(start) == 8 {
+		block := binary.BigEndian.Uint64(start)
+		if block >= 1024 && block <= 3071 {
+			d.starts = append(d.starts, block)
+		}
+	}
+	return d.KeyValueStore.NewIterator(prefix, start)
+}
+
+func TestWorkerSharedGCProbeBusySkipsCoverageAndRetriesAfterWrap(t *testing.T) {
+	w, db := newSharedGCWorkerBuckets(t, 2)
+	w.HistorySharedChunkGC = false
+	if _, err := w.PruneTo(3074); err != nil {
+		t.Fatal(err)
+	}
+	tracked := &gcTxRangeScanCounter{KeyValueStore: db}
+	w.DB, w.HistorySharedChunkGC = tracked, true
+	w.HistoryRangeGuard = func(_ context.Context, _ uint64, work func() error) (bool, error) { return true, work() }
+	w.HistoryRangeQueuedGuard = w.HistoryRangeGuard
+	w.HistoryRangeGuardProbe = func(context.Context) (bool, error) { return false, nil }
+	first, err := w.PruneTo(3074)
+	if err != nil || first.HistoryChunkGC.Candidates != 2 || first.HistoryChunkGC.Retired != 1 || first.HistoryChunkGC.ProbeAttempts != 1 || first.HistoryChunkGC.ProbeBusy != 1 || first.HistoryChunkGC.Busy != 0 || first.HistoryChunkGC.QueuedAttempts != 1 || !slices.Contains(tracked.starts, uint64(1024)) || slices.Contains(tracked.starts, uint64(2048)) {
+		t.Fatalf("busy probe re-read cold coverage: stats=%+v starts=%v err=%v", first.HistoryChunkGC, tracked.starts, err)
+	}
+	second, err := w.PruneTo(3074) // the completed first page wrapped the cursor
+	if err != nil || second.HistoryChunkGC.Retired != 1 || second.HistoryChunkGC.QueuedAttempts != 1 {
+		t.Fatalf("queued retry after wrap = %+v %v", second.HistoryChunkGC, err)
+	}
+	third, err := w.PruneTo(3074)
+	if err != nil || third.HistoryChunkGC.Candidates != 0 {
+		t.Fatalf("retired buckets revisited as active: %+v %v", third.HistoryChunkGC, err)
+	}
+}
+
+func TestWorkerSharedGCReadyProbeNeverAuthorizesRetirement(t *testing.T) {
+	w, db := newSharedGCWorkerBuckets(t, 3)
+	w.HistorySharedChunkGC = false
+	if _, err := w.PruneTo(4098); err != nil {
+		t.Fatal(err)
+	}
+	w.HistorySharedChunkGC = true
+	w.HistoryRangeGuardProbe = func(context.Context) (bool, error) { return true, nil }
+	w.HistoryRangeQueuedGuard = func(_ context.Context, _ uint64, work func() error) (bool, error) { return true, work() }
+	guardCalls := 0
+	w.HistoryRangeGuard = func(_ context.Context, _ uint64, work func() error) (bool, error) {
+		guardCalls++
+		switch guardCalls {
+		case 1:
+			return false, nil // lock became busy after the ready hint
+		case 2:
+			return false, errors.New("canonical proof changed")
+		default:
+			return true, work()
+		}
+	}
+	first, err := w.PruneTo(4098)
+	if err != nil || first.HistoryChunkGC.ProbeAttempts != 2 || first.HistoryChunkGC.ProbeBusy != 0 || first.HistoryChunkGC.Busy != 1 || first.HistoryChunkGC.Errors != 1 || first.HistoryChunkGC.Retired != 1 {
+		t.Fatalf("final busy after ready probe = %+v %v", first.HistoryChunkGC, err)
+	}
+	second, err := w.PruneTo(4098) // error retained the cursor for another full proof
+	if err != nil || second.HistoryChunkGC.Retired != 2 || second.HistoryChunkGC.ProbeAttempts != 1 {
+		t.Fatalf("retry after changed proof = %+v %v", second.HistoryChunkGC, err)
+	}
+	if guardCalls != 3 {
+		t.Fatalf("final guard calls = %d, want retry after changed proof", guardCalls)
+	}
+	page, err := rawdb.ScanStateHistoryChunkGCBuckets(context.Background(), db, nil, 4098, 64, 4)
+	if err != nil || len(page.Buckets) != 0 {
+		t.Fatalf("retired metadata still active: %+v %v", page, err)
+	}
+}
+
+func TestWorkerSharedGCNoQueueRetainsFirstFullGuardAttempt(t *testing.T) {
+	w, _ := newSharedGCWorkerBuckets(t, 2)
+	w.HistorySharedChunkGC = false
+	if _, err := w.PruneTo(3074); err != nil {
+		t.Fatal(err)
+	}
+	w.HistorySharedChunkGC = true
+	w.HistoryRangeGuardProbe = func(context.Context) (bool, error) { return false, nil }
+	guardCalls := 0
+	w.HistoryRangeGuard = func(_ context.Context, _ uint64, work func() error) (bool, error) {
+		guardCalls++
+		return true, work()
+	}
+	stats, err := w.PruneTo(3074)
+	if err != nil || stats.HistoryChunkGC.Retired != 1 || stats.HistoryChunkGC.ProbeBusy != 1 || stats.HistoryChunkGC.ProbeAttempts != 1 || guardCalls != 1 {
+		t.Fatalf("first no-queue guard starved by busy hint: %+v calls=%d err=%v", stats.HistoryChunkGC, guardCalls, err)
+	}
+}
+
+func TestWorkerSharedGCIncompleteFirstBucketRetainsQueue(t *testing.T) {
+	w, db := newSharedGCWorkerBuckets(t, 2)
+	w.HistorySharedChunkGC = false
+	if _, err := w.PruneTo(3074); err != nil {
+		t.Fatal(err)
+	}
+	w.HistorySharedChunkGC = true
+	if err := rawdb.DeleteStateTxRange(db, 1536); err != nil {
+		t.Fatal(err)
+	}
+	queued, probed := 0, 0
+	w.HistoryRangeGuard = func(_ context.Context, _ uint64, work func() error) (bool, error) { return true, work() }
+	w.HistoryRangeQueuedGuard = func(ctx context.Context, through uint64, work func() error) (bool, error) {
+		queued++
+		if through != 3071 {
+			t.Fatalf("queued incomplete bucket boundary %d", through)
+		}
+		return w.HistoryRangeGuard(ctx, through, work)
+	}
+	w.HistoryRangeGuardProbe = func(context.Context) (bool, error) { probed++; return true, nil }
+	first, err := w.PruneTo(3074)
+	if err != nil || first.HistoryChunkGC.NotCovered != 1 || first.HistoryChunkGC.Retired != 1 || first.HistoryChunkGC.QueuedAttempts != 1 || queued != 1 || probed != 0 {
+		t.Fatalf("incomplete first bucket consumed queue/probe: %+v queued=%d probed=%d err=%v", first.HistoryChunkGC, queued, probed, err)
+	}
+	// The incomplete first bucket has not consumed the queue allowance.
+}
+
+func TestWorkerSharedGCProbeCancellation(t *testing.T) {
+	w, _ := newSharedGCWorkerBuckets(t, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	guardCalls := 0
+	w.HistoryRangeGuard = func(_ context.Context, _ uint64, work func() error) (bool, error) {
+		guardCalls++
+		return false, nil // the first covered candidate retains the full Try attempt
+	}
+	w.HistoryRangeGuardProbe = func(context.Context) (bool, error) { cancel(); return true, nil }
+	gate, err := w.newSnapshotStateDomainChangeCoverageGate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceledStats := w.pruneHistorySharedChunks(ctx, gate, 3074)
+	if !errors.Is(ctx.Err(), context.Canceled) || canceledStats.ProbeAttempts != 1 || canceledStats.Errors != 1 || guardCalls != 1 || canceledStats.Retired != 0 {
+		t.Fatalf("canceled ready hint reached final guard: ctx=%v stats=%+v calls=%d", ctx.Err(), canceledStats, guardCalls)
+	}
+}
 
 // This scope is private to a fixture's one complete pack; Put queues into one
 // atomic Pebble batch and reads see committed prior data. No test writes schema

@@ -37,6 +37,14 @@ var (
 	stateReadAheadPresentCounter        = metrics.NewRegisteredCounter("core/state_read_ahead/present", nil)
 	stateReadAheadMissingCounter        = metrics.NewRegisteredCounter("core/state_read_ahead/missing", nil)
 	stateReadAheadErrorsCounter         = metrics.NewRegisteredCounter("core/state_read_ahead/errors", nil)
+	stateReadAheadBeforeApplyCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/completed_before_apply/blocks", nil)
+	stateReadAheadAfterApplyCounter     = metrics.NewRegisteredCounter("core/state_read_ahead/completed_after_apply/blocks", nil)
+	stateReadAheadAssetCapBlocksCounter = metrics.NewRegisteredCounter("core/state_read_ahead/asset/cap/blocks", nil)
+	stateReadAheadAssetCappedCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/asset/cap/rejected_attempts", nil)
+	stateReadAheadAssetLegacyCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/asset/legacy/rows", nil)
+	stateReadAheadAssetV2Counter        = metrics.NewRegisteredCounter("core/state_read_ahead/asset/v2/rows", nil)
+	stateReadAheadAssetBalanceCounter   = metrics.NewRegisteredCounter("core/state_read_ahead/asset/balance/rows", nil)
+	stateReadAheadAssetPlanFullCounter  = metrics.NewRegisteredCounter("core/state_read_ahead/asset/plan_full/rows", nil)
 )
 
 // StateReadAheadConfig bounds the non-consensus bulk-sync warmup pipeline.
@@ -47,18 +55,29 @@ type StateReadAheadConfig struct {
 }
 
 // StateReadAheadStats is a point-in-time view of one session's warmup work.
+// Asset row counts describe planned reads, not cache admission or later hits.
+// AssetCappedAttempts counts rejected hint attempts, including repeats of a
+// key rejected earlier in the same block.
 type StateReadAheadStats struct {
-	EnqueuedBlocks  uint64
-	EnqueuedBytes   uint64
-	QueuedBytes     int64
-	DroppedBlocks   uint64
-	DroppedBytes    uint64
-	ProcessedBlocks uint64
-	StaleBlocks     uint64
-	Rows            uint64
-	Present         uint64
-	Missing         uint64
-	Errors          uint64
+	EnqueuedBlocks       uint64
+	EnqueuedBytes        uint64
+	QueuedBytes          int64
+	DroppedBlocks        uint64
+	DroppedBytes         uint64
+	ProcessedBlocks      uint64
+	StaleBlocks          uint64
+	Rows                 uint64
+	Present              uint64
+	Missing              uint64
+	Errors               uint64
+	CompletedBeforeApply uint64
+	CompletedAfterApply  uint64
+	AssetCapBlocks       uint64
+	AssetCappedAttempts  uint64
+	AssetLegacyRows      uint64
+	AssetV2Rows          uint64
+	AssetBalanceRows     uint64
+	AssetPlanFullRows    uint64
 }
 
 type stateReadAheadJob struct {
@@ -82,19 +101,28 @@ type StateReadAhead struct {
 	workersWG sync.WaitGroup
 	pendingWG sync.WaitGroup
 
-	epoch       atomic.Uint64
-	queuedBytes atomic.Int64
+	epoch         atomic.Uint64
+	applyingBlock atomic.Uint64
+	queuedBytes   atomic.Int64
 
-	enqueuedBlocks atomic.Uint64
-	enqueuedBytes  atomic.Uint64
-	droppedBlocks  atomic.Uint64
-	droppedBytes   atomic.Uint64
-	processed      atomic.Uint64
-	stale          atomic.Uint64
-	rows           atomic.Uint64
-	present        atomic.Uint64
-	missing        atomic.Uint64
-	errors         atomic.Uint64
+	enqueuedBlocks       atomic.Uint64
+	enqueuedBytes        atomic.Uint64
+	droppedBlocks        atomic.Uint64
+	droppedBytes         atomic.Uint64
+	processed            atomic.Uint64
+	stale                atomic.Uint64
+	rows                 atomic.Uint64
+	present              atomic.Uint64
+	missing              atomic.Uint64
+	errors               atomic.Uint64
+	completedBeforeApply atomic.Uint64
+	completedAfterApply  atomic.Uint64
+	assetCapBlocks       atomic.Uint64
+	assetCappedAttempts  atomic.Uint64
+	assetLegacyRows      atomic.Uint64
+	assetV2Rows          atomic.Uint64
+	assetBalanceRows     atomic.Uint64
+	assetPlanFullRows    atomic.Uint64
 }
 
 // NewStateReadAhead builds a bounded session-level read-ahead pipeline.
@@ -242,6 +270,16 @@ func (p *StateReadAhead) recordDrop(bytes int64) {
 func (p *StateReadAhead) Reset() {
 	if p != nil {
 		p.epoch.Add(1)
+		p.applyingBlock.Store(0)
+	}
+}
+
+// MarkApplying records when canonical execution begins a block. The canonical
+// executor calls this and Reset serially. Workers use the height only for
+// timing diagnostics; it never waits for or consumes warmup data.
+func (p *StateReadAhead) MarkApplying(blockNumber uint64) {
+	if p != nil {
+		p.applyingBlock.Store(blockNumber)
 	}
 }
 
@@ -273,17 +311,25 @@ func (p *StateReadAhead) Stats() StateReadAheadStats {
 		return StateReadAheadStats{}
 	}
 	return StateReadAheadStats{
-		EnqueuedBlocks:  p.enqueuedBlocks.Load(),
-		EnqueuedBytes:   p.enqueuedBytes.Load(),
-		QueuedBytes:     p.queuedBytes.Load(),
-		DroppedBlocks:   p.droppedBlocks.Load(),
-		DroppedBytes:    p.droppedBytes.Load(),
-		ProcessedBlocks: p.processed.Load(),
-		StaleBlocks:     p.stale.Load(),
-		Rows:            p.rows.Load(),
-		Present:         p.present.Load(),
-		Missing:         p.missing.Load(),
-		Errors:          p.errors.Load(),
+		EnqueuedBlocks:       p.enqueuedBlocks.Load(),
+		EnqueuedBytes:        p.enqueuedBytes.Load(),
+		QueuedBytes:          p.queuedBytes.Load(),
+		DroppedBlocks:        p.droppedBlocks.Load(),
+		DroppedBytes:         p.droppedBytes.Load(),
+		ProcessedBlocks:      p.processed.Load(),
+		StaleBlocks:          p.stale.Load(),
+		Rows:                 p.rows.Load(),
+		Present:              p.present.Load(),
+		Missing:              p.missing.Load(),
+		Errors:               p.errors.Load(),
+		CompletedBeforeApply: p.completedBeforeApply.Load(),
+		CompletedAfterApply:  p.completedAfterApply.Load(),
+		AssetCapBlocks:       p.assetCapBlocks.Load(),
+		AssetCappedAttempts:  p.assetCappedAttempts.Load(),
+		AssetLegacyRows:      p.assetLegacyRows.Load(),
+		AssetV2Rows:          p.assetV2Rows.Load(),
+		AssetBalanceRows:     p.assetBalanceRows.Load(),
+		AssetPlanFullRows:    p.assetPlanFullRows.Load(),
 	}
 }
 
@@ -298,8 +344,21 @@ func (p *StateReadAhead) worker() {
 			continue
 		}
 		if p.warmBlock(job) {
+			if job.epoch != p.epoch.Load() {
+				p.stale.Add(1)
+				stateReadAheadStaleCounter.Inc(1)
+				p.pendingWG.Done()
+				continue
+			}
 			p.processed.Add(1)
 			stateReadAheadProcessedCounter.Inc(1)
+			if job.block.Number() <= p.applyingBlock.Load() {
+				p.completedAfterApply.Add(1)
+				stateReadAheadAfterApplyCounter.Inc(1)
+			} else {
+				p.completedBeforeApply.Add(1)
+				stateReadAheadBeforeApplyCounter.Inc(1)
+			}
 		} else {
 			p.stale.Add(1)
 			stateReadAheadStaleCounter.Inc(1)
@@ -399,13 +458,19 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 	if err != nil {
 		p.recordError()
 	}
-	// TransferAsset reads predictable point rows after opening the owner and
-	// recipient account envelopes. Warm both legacy name-keyed rows and, for a
-	// numeric wire name, the post-AllowSameTokenName ID-keyed rows. The fork
-	// decision remains exclusively on the canonical path; an unnecessary
-	// prefetch merely admits an unused immutable cache entry.
-	seenKV := make(map[stateReadAheadKVTarget]struct{}, len(assetTransfers)*8)
-	prefetchKV := func(address tcommon.Address, domain kvdomains.KVDomain, key []byte) {
+	// Prioritize the balance rows used by Validate across the whole block before
+	// bandwidth, operation time, and metadata rows. Numeric names may mean a
+	// literal pre-fork name or a post-fork V2 ID, so retain both balance forms;
+	// putting all V2 balances first ensures a dense modern block does not spend
+	// its 128-row budget on less useful ancillary or legacy rows.
+	seenCapacity := len(assetTransfers) * 8
+	if seenCapacity > maxTransferAssetPrefetchRows {
+		seenCapacity = maxTransferAssetPrefetchRows
+	}
+	seenKV := make(map[stateReadAheadKVTarget]struct{}, seenCapacity)
+	var cappedAttempts uint64
+	var legacyRows, v2Rows, balanceRows, planFullRows uint64
+	prefetchKV := func(address tcommon.Address, domain kvdomains.KVDomain, key []byte, v2, balance bool) {
 		generation, ok := generations[address]
 		if !ok {
 			return
@@ -415,32 +480,77 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			return
 		}
 		if len(seenKV) >= maxTransferAssetPrefetchRows {
+			// Rejected hints are not retained; repeated rejected keys count
+			// again. This keeps the tracking set bounded at 128 entries.
+			cappedAttempts++
 			return
 		}
 		seenKV[target] = struct{}{}
-		rows.AddKV(address, generation, domain, key)
+		if rows.AddKV(address, generation, domain, key) < 0 {
+			planFullRows++
+			return
+		}
+		if v2 {
+			v2Rows++
+		} else {
+			legacyRows++
+		}
+		if balance {
+			balanceRows++
+		}
+	}
+	for _, transfer := range assetTransfers {
+		tokenID, err := strconv.ParseInt(string(transfer.assetName), 10, 64)
+		if err != nil {
+			continue
+		}
+		tokenKey := []byte(strconv.FormatInt(tokenID, 10))
+		prefetchKV(transfer.owner, kvdomains.AccountAssetV2, tokenKey, true, true)
+		prefetchKV(transfer.to, kvdomains.AccountAssetV2, tokenKey, true, true)
+	}
+	for _, transfer := range assetTransfers {
+		prefetchKV(transfer.owner, kvdomains.AccountAsset, transfer.assetName, false, true)
+		prefetchKV(transfer.to, kvdomains.AccountAsset, transfer.assetName, false, true)
 	}
 	for _, transfer := range assetTransfers {
 		legacyMeta := assetBytesKey(assetLegacyTag, transfer.assetName)
-		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, legacyMeta)
-		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta))
-		prefetchKV(transfer.owner, kvdomains.AccountAsset, transfer.assetName)
-		prefetchKV(transfer.to, kvdomains.AccountAsset, transfer.assetName)
-		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsage, transfer.assetName)
-		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTime, transfer.assetName)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, legacyMeta, false, false)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta), false, false)
+		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsage, transfer.assetName, false, false)
+		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTime, transfer.assetName, false, false)
 
 		tokenID, err := strconv.ParseInt(string(transfer.assetName), 10, 64)
 		if err != nil {
 			continue
 		}
 		v2Meta := assetIDKey(assetV2Tag, tokenID)
-		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, v2Meta)
-		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(v2Meta))
-		tokenKey := strconv.FormatInt(tokenID, 10)
-		prefetchKV(transfer.owner, kvdomains.AccountAssetV2, []byte(tokenKey))
-		prefetchKV(transfer.to, kvdomains.AccountAssetV2, []byte(tokenKey))
-		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsageV2, []byte(tokenKey))
-		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTimeV2, []byte(tokenKey))
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, v2Meta, true, false)
+		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(v2Meta), true, false)
+		tokenKey := []byte(strconv.FormatInt(tokenID, 10))
+		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsageV2, tokenKey, true, false)
+		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTimeV2, tokenKey, true, false)
+	}
+	if cappedAttempts > 0 {
+		p.assetCapBlocks.Add(1)
+		p.assetCappedAttempts.Add(cappedAttempts)
+		stateReadAheadAssetCapBlocksCounter.Inc(1)
+		stateReadAheadAssetCappedCounter.Inc(int64(cappedAttempts))
+	}
+	if legacyRows > 0 {
+		p.assetLegacyRows.Add(legacyRows)
+		stateReadAheadAssetLegacyCounter.Inc(int64(legacyRows))
+	}
+	if v2Rows > 0 {
+		p.assetV2Rows.Add(v2Rows)
+		stateReadAheadAssetV2Counter.Inc(int64(v2Rows))
+	}
+	if balanceRows > 0 {
+		p.assetBalanceRows.Add(balanceRows)
+		stateReadAheadAssetBalanceCounter.Inc(int64(balanceRows))
+	}
+	if planFullRows > 0 {
+		p.assetPlanFullRows.Add(planFullRows)
+		stateReadAheadAssetPlanFullCounter.Inc(int64(planFullRows))
 	}
 	err = rows.Execute(p.db, func(_ int, _ []byte, present bool, err error) error {
 		if job.epoch != p.epoch.Load() {

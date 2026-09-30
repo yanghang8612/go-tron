@@ -35,6 +35,35 @@ func (bc *BlockChain) TryWithStateDomainChangePruneGuard(ctx context.Context, th
 	return bc.tryWithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work, stateDomainChangePruneGuardProcessMetrics)
 }
 
+// TryStateDomainChangePruneGuardReady is only a momentary lock-availability
+// hint for optional background work. It never grants deletion authority or
+// checks canonical, Finish, index, or cold-coverage proofs. A caller that sees
+// ready must still obtain TryWithStateDomainChangePruneGuard after completing
+// its coverage proof; contention or a reorg may intervene at any time.
+func (bc *BlockChain) TryStateDomainChangePruneGuardReady(ctx context.Context) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if bc == nil {
+		return false, errors.New("state domain change prune: unavailable blockchain")
+	}
+	if !bc.stateHistoryIndexMu.TryLock() {
+		return false, nil
+	}
+	defer bc.stateHistoryIndexMu.Unlock()
+	if !bc.chainmu.TryLock() {
+		return false, nil
+	}
+	defer bc.chainmu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // WithStateDomainChangePruneGuard queues for the chain lock after opportunistic
 // index admission. Its caller must not hold a maintenance lease or either lock.
 // The live hot-pruner calls it synchronously after the cold-builder lease has

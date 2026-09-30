@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -172,6 +173,146 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 	stats := prefetcher.Stats()
 	if stats.Rows != 14 || stats.Present != 10 || stats.Missing != 4 || stats.Errors != 0 {
 		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestStateReadAheadTransferAssetCapPrioritizesV2Balances(t *testing.T) {
+	const transfers = 60 // 120 V2 balance rows fit; all 240 balance rows do not.
+	disk := rawdb.NewMemoryDatabase()
+	to, witness := readAheadAddress(0xe0), readAheadAddress(0xe1)
+	owners := make([]tcommon.Address, transfers)
+	transactions := make([]*corepb.Transaction, 0, transfers)
+	for i := range owners {
+		owners[i] = readAheadAddress(byte(i + 1))
+	}
+	addresses := append(append([]tcommon.Address(nil), owners...), to, witness, tcommon.SystemAccountAddress)
+	for _, address := range addresses {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: 7}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, address, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, owner := range owners {
+		name := []byte(strconv.Itoa(1000000 + i))
+		transfer, err := anypb.New(&contractpb.TransferAssetContract{OwnerAddress: owner.Bytes(), ToAddress: to.Bytes(), AssetName: name, Amount: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		transactions = append(transactions, &corepb.Transaction{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_TransferAssetContract, Parameter: transfer}}}})
+		for _, address := range []tcommon.Address{owner, to} {
+			for _, domain := range []kvdomains.KVDomain{kvdomains.AccountAsset, kvdomains.AccountAssetV2} {
+				if err := rawdb.WriteStateKVLatest(disk, address, 7, domain, name, encodeAccountAuxInt64(10)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: transactions,
+	})
+	// Use the previous interleaved row order as a controlled cache-coverage
+	// baseline against the same fixture and 128-row limit.
+	oldBase := &readAheadCountingReader{KeyValueReader: disk}
+	oldBuffer := blockbuffer.New(oldBase)
+	oldBuffer.SetBaseReadCacheSize(1 << 20)
+	oldPlan := rawdb.NewStatePrefetchPlan(maxTransferAssetPrefetchRows)
+	for i, owner := range owners {
+		name := []byte(strconv.Itoa(1000000 + i))
+		legacyMeta := assetBytesKey(assetLegacyTag, name)
+		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, legacyMeta)
+		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta))
+		oldPlan.AddKV(owner, 7, kvdomains.AccountAsset, name)
+		oldPlan.AddKV(to, 7, kvdomains.AccountAsset, name)
+		oldPlan.AddKV(owner, 7, kvdomains.AccountFreeAssetNetUsage, name)
+		oldPlan.AddKV(owner, 7, kvdomains.AccountAssetOperationTime, name)
+		v2Meta := assetIDKey(assetV2Tag, int64(1000000+i))
+		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, v2Meta)
+		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, assetBandwidthKey(v2Meta))
+		oldPlan.AddKV(owner, 7, kvdomains.AccountAssetV2, name)
+		oldPlan.AddKV(to, 7, kvdomains.AccountAssetV2, name)
+		oldPlan.AddKV(owner, 7, kvdomains.AccountFreeAssetNetUsageV2, name)
+		oldPlan.AddKV(owner, 7, kvdomains.AccountAssetOperationTimeV2, name)
+	}
+	if err := oldPlan.Execute(oldBuffer, func(_ int, _ []byte, _ bool, _ error) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	oldBefore := oldBase.gets.Load()
+	for i, owner := range owners {
+		name := []byte(strconv.Itoa(1000000 + i))
+		for _, address := range []tcommon.Address{owner, to} {
+			if _, ok, err := rawdb.ReadStateKVLatestNoCopy(oldBuffer, address, 7, kvdomains.AccountAssetV2, name); err != nil || !ok {
+				t.Fatalf("baseline V2 balance %d %s: ok=%t err=%v", i, address.Hex(), ok, err)
+			}
+		}
+	}
+	oldDurableReads := oldBase.gets.Load() - oldBefore
+	t.Logf("canonical V2 balance durable reads with old interleaved plan: %d", oldDurableReads)
+	if oldDurableReads < 80 {
+		t.Fatalf("old interleaved ordering had only %d durable V2 balance reads; want at least 80", oldDurableReads)
+	}
+	base := &readAheadCountingReader{KeyValueReader: disk}
+	buffer := blockbuffer.New(base)
+	buffer.SetBaseReadCacheSize(1 << 20)
+	p := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 1})
+	defer p.Close()
+	if !p.EnqueueBlock(block, 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+	before := base.gets.Load()
+	for i, owner := range owners {
+		name := []byte(strconv.Itoa(1000000 + i))
+		for _, address := range []tcommon.Address{owner, to} {
+			value, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, address, 7, kvdomains.AccountAssetV2, name)
+			if err != nil || !ok || !bytes.Equal(value, encodeAccountAuxInt64(10)) {
+				t.Fatalf("V2 balance %d %s: %x/%t/%v", i, address.Hex(), value, ok, err)
+			}
+		}
+	}
+	if got := base.gets.Load(); got != before {
+		t.Fatalf("canonical V2 balance reads reached durable base: before=%d after=%d", before, got)
+	}
+	t.Log("canonical V2 balance durable reads with prioritized plan: 0")
+	legacyName := []byte(strconv.Itoa(1000000))
+	if _, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, owners[0], 7, kvdomains.AccountAsset, legacyName); err != nil || !ok || base.gets.Load() != before {
+		t.Fatalf("first numeric legacy balance was not warmed: ok=%t err=%v", ok, err)
+	}
+	stats := p.Stats()
+	if stats.AssetBalanceRows != maxTransferAssetPrefetchRows || stats.AssetV2Rows != 2*transfers || stats.AssetLegacyRows == 0 || stats.AssetCapBlocks != 1 || stats.AssetCappedAttempts == 0 {
+		t.Fatalf("cap and balance coverage stats = %+v", stats)
+	}
+}
+
+func TestStateReadAheadCompletionTiming(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		markBefore bool
+		wantBefore uint64
+		wantAfter  uint64
+	}{
+		{name: "before apply", wantBefore: 1},
+		{name: "after apply", markBefore: true, wantAfter: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewStateReadAhead(rawdb.NewMemoryDatabase(), StateReadAheadConfig{Workers: 1})
+			defer p.Close()
+			block := readAheadTestBlock(t, readAheadAddress(1), readAheadAddress(2), readAheadAddress(3), readAheadAddress(4))
+			if tc.markBefore {
+				p.MarkApplying(block.Number())
+			}
+			if !p.EnqueueBlock(block, 1) {
+				t.Fatal("read-ahead block rejected")
+			}
+			p.Wait()
+			stats := p.Stats()
+			if stats.CompletedBeforeApply != tc.wantBefore || stats.CompletedAfterApply != tc.wantAfter {
+				t.Fatalf("completion timing stats = %+v", stats)
+			}
+		})
 	}
 }
 

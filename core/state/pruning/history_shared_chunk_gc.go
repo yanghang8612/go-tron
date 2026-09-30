@@ -22,6 +22,7 @@ const (
 // the normal already-authorized hot-history prune.
 type HistorySharedChunkGCStats struct {
 	Scanned, Candidates, Retired, NonEmpty, NotCovered, Busy, Errors uint64
+	ProbeAttempts, ProbeBusy                                         uint64
 	LastError                                                        string
 	// Queued admission is a subset of the ordinary bucket outcomes. Errors
 	// include work failures after admission, so they can overlap Admitted.
@@ -51,7 +52,7 @@ func newHistoryChunkGCMetrics(namespace string) map[string]*metrics.Gauge {
 		prefix = "state/history/shared/gc/"
 	}
 	out := make(map[string]*metrics.Gauge)
-	for _, name := range []string{"enabled", "scanned_meta", "candidates", "retired", "nonempty", "deferred_coverage", "deferred_busy", "errors", "queued_attempts", "queued_admitted", "queued_busy", "queued_errors", "queued_work_total_ns", "queued_work_max_ns"} {
+	for _, name := range []string{"enabled", "scanned_meta", "candidates", "retired", "nonempty", "deferred_coverage", "deferred_busy", "probe_attempts", "probe_busy", "errors", "queued_attempts", "queued_admitted", "queued_busy", "queued_errors", "queued_work_total_ns", "queued_work_max_ns"} {
 		out[name] = metrics.GetOrRegisterGauge(prefix+name, nil)
 	}
 	return out
@@ -60,6 +61,7 @@ func newHistoryChunkGCMetrics(namespace string) map[string]*metrics.Gauge {
 func updateHistoryChunkGCMetrics(gauges map[string]*metrics.Gauge, enabled bool, stats HistorySharedChunkGCStats) {
 	values := map[string]uint64{"scanned_meta": stats.Scanned, "candidates": stats.Candidates, "retired": stats.Retired, "nonempty": stats.NonEmpty, "deferred_coverage": stats.NotCovered, "deferred_busy": stats.Busy, "errors": stats.Errors}
 	values["queued_attempts"], values["queued_admitted"] = stats.QueuedAttempts, stats.QueuedAdmitted
+	values["probe_attempts"], values["probe_busy"] = stats.ProbeAttempts, stats.ProbeBusy
 	values["queued_busy"], values["queued_errors"] = stats.QueuedBusy, stats.QueuedErrors
 	values["queued_work_total_ns"], values["queued_work_max_ns"] = stats.QueuedWorkNanos, stats.QueuedWorkMaxNanos
 	if enabled {
@@ -94,6 +96,8 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 		state.total.NonEmpty += stats.NonEmpty
 		state.total.NotCovered += stats.NotCovered
 		state.total.Busy += stats.Busy
+		state.total.ProbeAttempts += stats.ProbeAttempts
+		state.total.ProbeBusy += stats.ProbeBusy
 		state.total.Errors += stats.Errors
 		state.total.QueuedAttempts += stats.QueuedAttempts
 		state.total.QueuedAdmitted += stats.QueuedAdmitted
@@ -122,11 +126,31 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 		return stats
 	}
 	stats.Scanned, stats.Candidates = page.Scanned, uint64(len(page.Buckets))
+	guardAttempted := false
 	for _, bucket := range page.Buckets {
 		first, last, err := rawdb.StateHistoryChunkBucketBounds(bucket)
 		if err != nil {
 			reportError(err)
 			return stats
+		}
+		// The first covered bucket gets a full guard attempt even without
+		// queued admission. For later candidates, a busy nonblocking lock
+		// probe avoids reading 1,024
+		// tx ranges and authenticating old cold files for an attempt that
+		// cannot currently enter the writer guard. A ready probe is only a
+		// hint: coverage and the real guard still run afterward, and any
+		// change between them is handled by that final guard.
+		if guardAttempted && w.HistoryRangeGuardProbe != nil {
+			stats.ProbeAttempts++
+			ready, err := w.HistoryRangeGuardProbe(ctx)
+			if err != nil {
+				reportError(err)
+				return stats
+			}
+			if !ready {
+				stats.ProbeBusy++
+				continue
+			}
 		}
 		covered, err := w.historyChunkBucketCovered(ctx, coverage, head, first, last)
 		if err != nil {
@@ -151,6 +175,7 @@ func (w Worker) pruneHistorySharedChunks(ctx context.Context, coverage *snapshot
 			guard = w.HistoryRangeQueuedGuard
 			stats.QueuedAttempts++
 		}
+		guardAttempted = true
 		admitted, err := guard(ctx, last, func() error {
 			if queued {
 				started := time.Now()

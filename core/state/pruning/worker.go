@@ -45,6 +45,10 @@ type Worker struct {
 	// It remains useful when shared writing is disabled on a reader bridge.
 	HistorySharedChunkGC bool
 	historyChunkGC       *historyChunkGCState
+	// HistoryRangeGuardProbe is an optional lock-availability hint for the
+	// extra opportunistic shared-GC candidates. It grants no prune authority;
+	// the real guard still runs after complete cold-coverage verification.
+	HistoryRangeGuardProbe func(context.Context) (bool, error)
 
 	// ShouldDeferStateCodePrune skips the optional full CodeDomain reference
 	// scan when it returns true at the stage boundary. Hot code is immutable and

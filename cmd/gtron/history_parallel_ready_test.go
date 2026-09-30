@@ -401,3 +401,237 @@ func TestHistoryParallelBoundedReads(t *testing.T) {
 		t.Fatalf("exact bound rejected: %q %v", raw, err)
 	}
 }
+
+func historyParallelMemoryCreditFixture(v2 bool) map[string]string {
+	files := historyParallelFixture(v2)
+	files["/proc/meminfo"] += "Dirty: 0 kB\nWriteback: 0 kB\nShmem: 0 kB\n"
+	for _, suffix := range []string{"/system.slice/gtron.service", "/system.slice", ""} {
+		root := "/sys/fs/cgroup/memory" + suffix + "/"
+		stat := "total_inactive_file 8589934592\ntotal_dirty 0\ntotal_writeback 0\ntotal_shmem 0\n"
+		if v2 {
+			root = "/sys/fs/cgroup" + suffix + "/"
+			stat = "inactive_file 8589934592\nfile_dirty 0\nfile_writeback 0\nshmem 0\n"
+			files[root+"memory.events"] = "low 0\nhigh 0\nmax 1000\noom 0\noom_kill 0\n"
+		} else {
+			files[root+"memory.oom_control"] = "oom_kill_disable 0\nunder_oom 0\n"
+		}
+		files[root+"memory.stat"] = stat
+	}
+	if v2 {
+		files["/sys/fs/cgroup/system.slice/gtron.service/memory.max"] = "21474836480"
+		files["/sys/fs/cgroup/system.slice/gtron.service/memory.current"] = "21474836480"
+	} else {
+		files["/sys/fs/cgroup/memory/system.slice/gtron.service/memory.limit_in_bytes"] = "21474836480"
+		files["/sys/fs/cgroup/memory/system.slice/gtron.service/memory.usage_in_bytes"] = "21474836480"
+	}
+	return files
+}
+
+func TestHistoryParallelCleanMemoryCreditBoundaries(t *testing.T) {
+	for _, v2 := range []bool{false, true} {
+		t.Run(fmt.Sprint("v2=", v2), func(t *testing.T) {
+			files := historyParallelMemoryCreditFixture(v2)
+			read := historyParallelFixtureReader(files)
+			check := func(want uint64) {
+				t.Helper()
+				out, err := collectHistoryParallel(read)
+				if err != nil || out.memoryAvailable != want || out.memoryUncredited != 0 || out.memoryCredit != want {
+					t.Fatalf("credited capacity = %+v, %v; want %d", out, err, want)
+				}
+			}
+			check(3 << 30) // Half of 8 GiB, capped at 3 GiB.
+			files["/proc/meminfo"] = strings.Replace(files["/proc/meminfo"], "MemAvailable: 25165824 kB", "MemAvailable: 1048576 kB", 1)
+			check(1 << 30) // Host capacity still bounds the credit.
+			files["/proc/meminfo"] = strings.Replace(files["/proc/meminfo"], "MemAvailable: 1048576 kB", "MemAvailable: 25165824 kB", 1)
+			service := "/sys/fs/cgroup/memory/system.slice/gtron.service/"
+			parent := "/sys/fs/cgroup/memory/system.slice/"
+			if v2 {
+				service, parent = "/sys/fs/cgroup/system.slice/gtron.service/", "/sys/fs/cgroup/system.slice/"
+			}
+			original := files[service+"memory.stat"]
+			if v2 {
+				files[service+"memory.stat"] = "inactive_file 8589934592\nfile_dirty 1073741824\nfile_writeback 1073741824\nshmem 1073741824\n"
+			} else {
+				files[service+"memory.stat"] = "total_inactive_file 8589934592\ntotal_dirty 1073741824\ntotal_writeback 1073741824\ntotal_shmem 1073741824\n"
+			}
+			check((5 << 30) / 2)
+			files[service+"memory.stat"] = original
+			// A tighter parent cannot be bypassed by generous service stats.
+			if v2 {
+				files[parent+"memory.max"], files[parent+"memory.current"] = "21474836480", "21474836480"
+				files[parent+"memory.stat"] = "inactive_file 2147483648\nfile_dirty 0\nfile_writeback 0\nshmem 0\n"
+			} else {
+				files[parent+"memory.limit_in_bytes"], files[parent+"memory.usage_in_bytes"] = "21474836480", "21474836480"
+				files[parent+"memory.stat"] = "total_inactive_file 2147483648\ntotal_dirty 0\ntotal_writeback 0\ntotal_shmem 0\n"
+			}
+			check(1 << 30)
+			parentStat := files[parent+"memory.stat"]
+			if v2 {
+				files[parent+"memory.stat"] = "inactive_file 8589934592\nfile_dirty 7516192768\nfile_writeback 0\nshmem 0\n"
+			} else {
+				files[parent+"memory.stat"] = "total_inactive_file 8589934592\ntotal_dirty 7516192768\ntotal_writeback 0\ntotal_shmem 0\n"
+			}
+			check(1 << 29) // Dirty pages in a parent are never lent by a child.
+			files[parent+"memory.stat"] = parentStat
+			// Effective soft/high limits also prohibit credit above them.
+			if v2 {
+				files[parent+"memory.high"] = "19327352832"
+			} else {
+				files[parent+"memory.soft_limit_in_bytes"] = "19327352832"
+			}
+			check(0)
+			if v2 {
+				files[parent+"memory.high"] = "max"
+			} else {
+				files[parent+"memory.soft_limit_in_bytes"] = "9223372036854771712"
+			}
+			// Over-limit usage receives no credit, even with clean pages.
+			if v2 {
+				files[parent+"memory.current"] = "21474836481"
+			} else {
+				files[parent+"memory.usage_in_bytes"] = "21474836481"
+			}
+			check(0)
+		})
+	}
+}
+
+func TestHistoryParallelCleanMemoryCreditEvidence(t *testing.T) {
+	for _, v2 := range []bool{false, true} {
+		t.Run(fmt.Sprint("v2=", v2), func(t *testing.T) {
+			files := historyParallelMemoryCreditFixture(v2)
+			service := "/sys/fs/cgroup/memory/system.slice/gtron.service/"
+			if v2 {
+				service = "/sys/fs/cgroup/system.slice/gtron.service/"
+			}
+			baseline, err := collectHistoryParallel(historyParallelFixtureReader(files))
+			if err != nil || !baseline.memoryOOMKnown || baseline.memoryCredit != 3<<30 {
+				t.Fatalf("bad baseline: %+v %v", baseline, err)
+			}
+			if !historyParallelMemoryCreditReady(&baseline, &baseline) {
+				t.Fatal("unchanged OOM evidence rejected")
+			}
+			files[service+"memory.stat"] = strings.Replace(files[service+"memory.stat"], "8589934592", "18446744073709551615", 1)
+			out, err := collectHistoryParallel(historyParallelFixtureReader(files))
+			if err != nil || out.memoryCredit != 3<<30 {
+				t.Fatalf("inactive cap not bounded by usage: %+v %v", out, err)
+			}
+			files[service+"memory.stat"] = "invalid"
+			out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+			if err != nil || out.memoryCredit != 0 {
+				t.Fatalf("missing inactive stat credited: %+v %v", out, err)
+			}
+			files[service+"memory.stat"] = historyParallelMemoryCreditFixture(v2)[service+"memory.stat"]
+			files["/proc/meminfo"] = strings.Replace(files["/proc/meminfo"], "Shmem: 0 kB", "Shmem: 8388608 kB", 1)
+			// Complete local unsafe stats are safe to use in place of host
+			// upper bounds. When any local field is absent, use the host bound.
+			out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+			if err != nil || out.memoryCredit != 3<<30 {
+				t.Fatalf("complete local stats ignored: %+v %v", out, err)
+			}
+			if v2 {
+				files[service+"memory.stat"] = strings.Replace(files[service+"memory.stat"], "shmem 0\n", "", 1)
+			} else {
+				files[service+"memory.stat"] = strings.Replace(files[service+"memory.stat"], "total_shmem 0\n", "", 1)
+			}
+			out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+			if err != nil || out.memoryCredit != 0 {
+				t.Fatalf("incomplete local stats bypassed host bound: %+v %v", out, err)
+			}
+			files["/proc/meminfo"] = strings.Replace(files["/proc/meminfo"], "Shmem: 8388608 kB", "Shmem: 0 kB", 1)
+			if v2 {
+				files[service+"memory.events"] = "max 1000\noom 1\noom_kill 0\n"
+				out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+				if err != nil || historyParallelMemoryCreditReady(&baseline, &out) {
+					t.Fatalf("new OOM event accepted: %+v %v", out, err)
+				}
+				files[service+"memory.events"] = "max 1000\noom 0\noom_kill 0\n"
+				files[service+"memory.events"] = "oom 18446744073709551615\noom_kill 1\n"
+				out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+				if err != nil || out.memoryOOMKnown || out.memoryCredit != 0 {
+					t.Fatalf("overflowed OOM events credited: %+v %v", out, err)
+				}
+			} else {
+				files[service+"memory.oom_control"] = "under_oom 1\n"
+				out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+				if err != nil || !out.memoryUnderOOM || out.memoryCredit != 0 || historyParallelMemoryCreditReady(&baseline, &out) {
+					t.Fatalf("under_oom accepted: %+v %v", out, err)
+				}
+			}
+			delete(files, service+map[bool]string{true: "memory.events", false: "memory.oom_control"}[v2])
+			out, err = collectHistoryParallel(historyParallelFixtureReader(files))
+			if err != nil || out.memoryOOMKnown || out.memoryUnderOOM || out.memoryCredit != 0 {
+				t.Fatalf("missing OOM evidence misreported: %+v %v", out, err)
+			}
+		})
+	}
+}
+
+func TestHistoryParallelHostUnsafeOverflowDisablesCredit(t *testing.T) {
+	files := historyParallelMemoryCreditFixture(false)
+	service := "/sys/fs/cgroup/memory/system.slice/gtron.service/"
+	files[service+"memory.stat"] = strings.Replace(files[service+"memory.stat"], "total_shmem 0\n", "", 1)
+	files["/proc/meminfo"] = strings.Replace(files["/proc/meminfo"], "Dirty: 0 kB", "Dirty: 18446744073709551615 kB", 1)
+	out, err := collectHistoryParallel(historyParallelFixtureReader(files))
+	if err != nil || out.memoryCredit != 0 {
+		t.Fatalf("host unsafe overflow credited: %+v %v", out, err)
+	}
+}
+
+func TestHistoryParallelCreditCannotExceedSmallLimit(t *testing.T) {
+	files := historyParallelMemoryCreditFixture(false)
+	service := "/sys/fs/cgroup/memory/system.slice/gtron.service/"
+	files[service+"memory.limit_in_bytes"] = "1073741824"
+	files[service+"memory.usage_in_bytes"] = "1073741824"
+	out, err := collectHistoryParallel(historyParallelFixtureReader(files))
+	if err != nil || out.memoryAvailable != 1<<29 || out.memoryCredit != 1<<29 {
+		t.Fatalf("small cgroup enlarged by stale inactive stat: %+v %v", out, err)
+	}
+}
+
+func TestHistoryParallelCreditNeedsFreshStableOOMEvidence(t *testing.T) {
+	now := time.Unix(1000, 0)
+	tick := uint64(100)
+	scope := "old"
+	oom := uint64(0)
+	p := &runtimeHistoryParallelProbe{
+		now: func() time.Time { return now }, gomax: func() int { return 16 }, numCPU: func() int { return 16 },
+		read: func() (historyParallelObservation, error) {
+			out := historyParallelTestObservation(tick)
+			out.scope, out.memoryAvailable, out.memoryUncredited, out.memoryCredit = scope, 3<<30, 0, 3<<30
+			out.memoryOOMKnown, out.memoryOOMEvents = true, []uint64{oom}
+			tick += 100
+			return out, nil
+		},
+	}
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 0 || got.ready {
+		t.Fatalf("first sample received credit: %+v", got)
+	}
+	now = now.Add(5 * time.Second)
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 3<<30 || !got.ready {
+		t.Fatalf("stable pair lacked credit: %+v", got)
+	}
+	now = now.Add(5 * time.Second)
+	scope = "new"
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 0 || got.ready {
+		t.Fatalf("changed hierarchy retained credit: %+v", got)
+	}
+	now = now.Add(5 * time.Second)
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 3<<30 || !got.ready {
+		t.Fatalf("new hierarchy did not establish baseline: %+v", got)
+	}
+	now = now.Add(5 * time.Second)
+	oom++
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 0 || got.ready {
+		t.Fatalf("OOM event increase retained credit: %+v", got)
+	}
+	now = now.Add(5 * time.Second)
+	oom = 0 // A reset is also untrusted for this interval.
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 0 || got.ready {
+		t.Fatalf("OOM counter reset retained credit: %+v", got)
+	}
+	now = now.Add(31 * time.Second)
+	if got := p.observeCapacity(); got.reads.MemoryAvailableBytes != 0 || got.ready {
+		t.Fatalf("stale pair retained credit: %+v", got)
+	}
+}

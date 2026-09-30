@@ -68,6 +68,10 @@ type historyRangeQueuedPruneGuardSource interface {
 	WithStateDomainChangePruneGuard(context.Context, uint64, uint64, common.Hash, func() error) (bool, error)
 }
 
+type historyRangePruneGuardProbeSource interface {
+	TryStateDomainChangePruneGuardReady(context.Context) (bool, error)
+}
+
 type PrunerConfig struct {
 	Policy Policy
 
@@ -748,6 +752,7 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 	}
 	var rangeGuard func(context.Context, uint64, func() error) (bool, error)
 	var queuedRangeGuard func(context.Context, uint64, func() error) (bool, error)
+	var rangeGuardProbe func(context.Context) (bool, error)
 	if p.cfg.HistoryRangePrune || p.cfg.HistorySharedChunkGC {
 		source, ok := p.chain.(historyRangePruneGuardSource)
 		if !ok || !pruneHeadHasHash || !postingProofAvailable {
@@ -755,6 +760,9 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		}
 		rangeGuard = func(ctx context.Context, through uint64, work func() error) (bool, error) {
 			return source.TryWithStateDomainChangePruneGuard(ctx, through, pruneHead, pruneHeadHash, work)
+		}
+		if probe, ok := p.chain.(historyRangePruneGuardProbeSource); ok {
+			rangeGuardProbe = probe.TryStateDomainChangePruneGuardReady
 		}
 		if p.cfg.HistoryRangeQueue {
 			queued, ok := p.chain.(historyRangeQueuedPruneGuardSource)
@@ -776,6 +784,7 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 		HistoryRangeQueuedGuard: queuedRangeGuard,
 		HistorySharedChunkGC:    p.cfg.HistorySharedChunkGC,
 		historyChunkGC:          &p.historyChunkGC,
+		HistoryRangeGuardProbe:  rangeGuardProbe,
 		ShouldDeferStateCodePrune: func() bool {
 			return p.cfg.DeferStateCodePruneWhileSyncing && p.syncActive()
 		},

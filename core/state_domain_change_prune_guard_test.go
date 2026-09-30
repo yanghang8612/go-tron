@@ -41,6 +41,46 @@ func TestStateDomainChangePruneGuardOnlyBusyAllowsFallback(t *testing.T) {
 	}
 }
 
+func TestStateDomainChangePruneGuardReadyIsOnlyALockHint(t *testing.T) {
+	f := newPostingPruneGuardFixture(t)
+	for _, name := range []string{"index", "chain"} {
+		t.Run(name, func(t *testing.T) {
+			unlock := f.bc.stateHistoryIndexMu.Unlock
+			if name == "index" {
+				f.bc.stateHistoryIndexMu.Lock()
+			} else {
+				f.bc.chainmu.Lock()
+				unlock = f.bc.chainmu.Unlock
+			}
+			ready, err := f.bc.TryStateDomainChangePruneGuardReady(context.Background())
+			unlock()
+			if ready || err != nil {
+				t.Fatalf("busy %s hint = %v, %v", name, ready, err)
+			}
+		})
+	}
+	ready, err := f.bc.TryStateDomainChangePruneGuardReady(context.Background())
+	if !ready || err != nil {
+		t.Fatalf("uncontended hint = %v, %v", ready, err)
+	}
+	assertStateDomainChangeGuardUnlocked(t, f)
+	// A ready hint does not validate proof state or authorize a callback.
+	called := false
+	admitted, err := f.bc.TryWithStateDomainChangePruneGuard(context.Background(), 2, 4, common.Hash{9}, func() error {
+		called = true
+		return nil
+	})
+	if admitted || err == nil || called {
+		t.Fatalf("changed proof after ready hint: admitted=%v err=%v called=%v", admitted, err, called)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ready, err = f.bc.TryStateDomainChangePruneGuardReady(ctx)
+	if ready || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled hint = %v, %v", ready, err)
+	}
+}
+
 func TestStateDomainChangePruneGuardRejectsUnprovenWork(t *testing.T) {
 	for _, entry := range []string{"try", "queued"} {
 		t.Run(entry, func(t *testing.T) {
