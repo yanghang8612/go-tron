@@ -41,6 +41,17 @@ func TestRestartSyncFromHeightSurfacesColdBlockReadErrors(t *testing.T) {
 	}
 }
 
+func TestPreflightRestartSyncBlocksRejectsMissingInteriorBody(t *testing.T) {
+	chain := rawdb.NewMemoryChainDB()
+	genesis := testRestartBlock(0)
+	if err := rawdb.WriteBlock(chain, genesis); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preflightRestartSyncBlocks(chain, 2, tcommon.Hash{2}); err == nil || !strings.Contains(err.Error(), "canonical block 1 not found") {
+		t.Fatalf("preflight error = %v, want missing block 1 before reset", err)
+	}
+}
+
 func TestReadRestartSyncStateRootSurfacesColdLookupErrors(t *testing.T) {
 	chain := rawdb.NewMemoryChainDB()
 	wantErr := errors.New("cold chain index corrupt")

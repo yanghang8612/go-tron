@@ -12,7 +12,7 @@ REMOTE = 'a' * 40
 
 
 class StartMainnetTests(unittest.TestCase):
-    def run_start(self, verify_status):
+    def run_start(self, verify_status, staging_guard_status=0):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / 'go-tron'
@@ -28,6 +28,7 @@ class StartMainnetTests(unittest.TestCase):
             fake('git', 'case "$1" in rev-parse) echo ' + REMOTE +
                  ';; symbolic-ref) echo master;; esac\nexit 0')
             fake('sudo', 'echo "$@" >> "$MOCK_CALLS"\n'
+                 'case "$*" in *" check-deploy") exit "$MOCK_STAGING_GUARD_STATUS";; esac\n'
                  'case "$*" in *" verify --source "*) '
                  'if [ "$MOCK_VERIFY_STATUS" = 4 ]; then '
                  'if [ ! -f "$MOCK_SECOND_VERIFY" ]; then touch "$MOCK_SECOND_VERIFY"; exit 4; fi; '
@@ -45,6 +46,7 @@ class StartMainnetTests(unittest.TestCase):
                         'MOCK_CALLS': str(root / 'calls'),
                         'MOCK_SECOND_VERIFY': str(root / 'second-verify'),
                         'MOCK_VERIFY_STATUS': str(verify_status),
+                        'MOCK_STAGING_GUARD_STATUS': str(staging_guard_status),
                         'PATH': str(fake_bin) + os.pathsep + env['PATH']})
             result = subprocess.run(['/bin/bash', str(SCRIPT)], cwd=str(root), env=env,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -79,6 +81,22 @@ class StartMainnetTests(unittest.TestCase):
         self.assertEqual(state, REMOTE + '\n')
         self.assertEqual(calls.count('verify --source ' + REMOTE), 2)
         self.assertIn('systemctl restart gtron.service', calls)
+        self.assertNotIn('make ', calls)
+
+    def test_inactive_stop_intent_exits_successfully_before_fetch_or_restart(self):
+        status, output, state, calls = self.run_start(3, staging_guard_status=3)
+        self.assertEqual(status, 0, output)
+        self.assertIsNone(state)
+        self.assertIn('check-deploy', calls)
+        self.assertNotIn('verify --source', calls)
+        self.assertNotIn('systemctl restart', calls)
+        self.assertNotIn('make ', calls)
+
+    def test_migration_guard_failure_blocks_all_deployment_paths(self):
+        status, output, state, calls = self.run_start(3, staging_guard_status=1)
+        self.assertNotEqual(status, 0, output)
+        self.assertIsNone(state)
+        self.assertNotIn('verify --source', calls)
         self.assertNotIn('make ', calls)
 
 

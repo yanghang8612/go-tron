@@ -26,6 +26,9 @@ type Worker struct {
 	Policy      Policy
 	MaxBlocks   int
 	SnapshotDir string
+	// HistoryStaging takes over payload retirement once routes are enabled.
+	// The legacy pruner cannot delete a source-owned or claimed bucket.
+	HistoryStaging *rawdb.HistoryStagingManager
 
 	// HistoryRangePrune changes only the expression of already-authorized hot
 	// history deletes. Cold coverage and progress publication remain unchanged.
@@ -276,106 +279,108 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 		return Stats{}, nil
 	}
 	var stats Stats
-	coverageCtx := ctx
-	if w.coverageVerificationContext != nil {
-		coverageCtx = w.coverageVerificationContext
-	}
-	coverageDone := w.coverageVerificationDone
-	defer func() {
-		if coverageDone != nil {
-			coverageDone()
+	if w.HistoryStaging == nil {
+		coverageCtx := ctx
+		if w.coverageVerificationContext != nil {
+			coverageCtx = w.coverageVerificationContext
 		}
-	}()
-	metadataStarted := time.Now()
-	coverage, err := w.newSnapshotStateDomainChangeCoverageGate(coverageCtx)
-	stats.HistoryMetadataDuration += time.Since(metadataStarted)
-	if err != nil {
-		return Stats{}, err
-	}
-	if len(coverage.segments) == 0 && coverageDone != nil {
-		coverageDone()
-		coverageDone = nil
-	}
-	historyCfg, err := w.hotHistoryDomainConfig()
-	if err != nil {
-		return Stats{}, err
-	}
-	var historyDeletes rawdb.StateDomainChangeDeleteStats
-	historyStore, flushHistory := newPruneBatchStoreWithRanges(w.DB, maxPruneBatchValueSize, w.HistoryRangePrune)
-	if w.HistoryRangePrune {
-		if w.Policy.Mode != ModeSnap || w.SnapshotDir == "" {
-			return Stats{}, errors.New("pruning: history range pruning requires snap mode with cold snapshots")
-		}
-		if w.HistoryRangeGuard == nil {
-			return Stats{}, errors.New("pruning: history range pruning requires a writer guard")
-		}
-		historyCfg.DeleteHotHistoryBlocks = w.historyRangeBlockDeleter(ctx, flushHistory, &stats, &historyDeletes)
-	}
-	metadataStarted = time.Now()
-	hotPruneStartBlock, err := w.hotHistoryPruneStartBlock()
-	stats.HistoryMetadataDuration += time.Since(metadataStarted)
-	if err != nil {
-		return Stats{}, err
-	}
-	stats.DomainChangeStartBlock = hotPruneStartBlock
-	hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
-		MaxBlocks:  w.MaxBlocks,
-		StartBlock: hotPruneStartBlock,
-		Decide: func(row rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
-			if err := ctx.Err(); err != nil {
-				return snapshots.HotHistoryPruneDecision{}, err
+		coverageDone := w.coverageVerificationDone
+		defer func() {
+			if coverageDone != nil {
+				coverageDone()
 			}
-			if w.Policy.RetainHotHistory(row.BlockNum, headNum) {
-				return snapshots.HotHistoryPruneDecision{}, nil
-			}
-			switch w.Policy.Mode {
-			case ModeFull, ModeBlocks, ModeMinimal:
-				return snapshots.HotHistoryPruneDecision{DeleteTxRange: true, DeleteHistoryBlock: true}, nil
-			case ModeSnap, ModeArchive:
-				covered, err := coverage.covers(row.BeginTxNum, row.EndTxNum)
-				if err != nil {
-					return snapshots.HotHistoryPruneDecision{}, err
-				}
-				if !covered {
-					return snapshots.HotHistoryPruneDecision{Stop: true}, nil
-				}
-				return snapshots.HotHistoryPruneDecision{DeleteHistoryBlock: true}, nil
-			}
-			return snapshots.HotHistoryPruneDecision{}, nil
-		},
-	})
-	if err != nil {
-		return Stats{}, err
-	}
-	if err := flushHistory(); err != nil {
-		return Stats{}, fmt.Errorf("pruning: flush hot history delete batch: %w", err)
-	}
-	if w.HistorySharedChunkGC {
-		gcStarted := time.Now()
-		stats.HistoryChunkGC = w.pruneHistorySharedChunks(ctx, coverage, headNum)
-		stats.HistoryChunkGCDuration = time.Since(gcStarted)
-		if err := ctx.Err(); err != nil {
+		}()
+		metadataStarted := time.Now()
+		coverage, err := w.newSnapshotStateDomainChangeCoverageGate(coverageCtx)
+		stats.HistoryMetadataDuration += time.Since(metadataStarted)
+		if err != nil {
 			return Stats{}, err
 		}
-	}
-	if coverageDone != nil {
-		coverageDone()
-		coverageDone = nil
-	}
-	stats.HistoryDeletes = historyDeletes
-	stats.DeletedTxRanges = hotStats.DeletedTxRanges
-	stats.DeletedDomainChangeBlocks = hotStats.DeletedHistoryBlocks
-	stats.DomainChangePrunedThrough = hotStats.MaxDeletedHistoryBlock
-	stats.DomainChangePrunedThroughTx = hotStats.MaxDeletedHistoryBlockTx
-	if hotStats.MaxDeletedHistoryBlockTx != 0 && w.SnapshotDir != "" {
-		metadataStarted = time.Now()
-		progressErr := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlock, hotStats.MaxDeletedHistoryBlockTx)
-		stats.HistoryMetadataDuration += time.Since(metadataStarted)
-		if progressErr != nil {
-			return Stats{}, progressErr
+		if len(coverage.segments) == 0 && coverageDone != nil {
+			coverageDone()
+			coverageDone = nil
 		}
-		if err := newRawDBStageProgressStore(w.DB).Write(rawdb.StageSnapshotHotPrune, hotStats.MaxDeletedHistoryBlockTx); err != nil {
-			return Stats{}, fmt.Errorf("pruning: write snapshot/hot-prune stage progress: %w", err)
+		historyCfg, err := w.hotHistoryDomainConfig()
+		if err != nil {
+			return Stats{}, err
+		}
+		var historyDeletes rawdb.StateDomainChangeDeleteStats
+		historyStore, flushHistory := newPruneBatchStoreWithRanges(w.DB, maxPruneBatchValueSize, w.HistoryRangePrune)
+		if w.HistoryRangePrune {
+			if w.Policy.Mode != ModeSnap || w.SnapshotDir == "" {
+				return Stats{}, errors.New("pruning: history range pruning requires snap mode with cold snapshots")
+			}
+			if w.HistoryRangeGuard == nil {
+				return Stats{}, errors.New("pruning: history range pruning requires a writer guard")
+			}
+			historyCfg.DeleteHotHistoryBlocks = w.historyRangeBlockDeleter(ctx, flushHistory, &stats, &historyDeletes)
+		}
+		metadataStarted = time.Now()
+		hotPruneStartBlock, err := w.hotHistoryPruneStartBlock()
+		stats.HistoryMetadataDuration += time.Since(metadataStarted)
+		if err != nil {
+			return Stats{}, err
+		}
+		stats.DomainChangeStartBlock = hotPruneStartBlock
+		hotStats, err := historyCfg.PruneHotHistory(historyStore, snapshots.HotHistoryPruneOptions{
+			MaxBlocks:  w.MaxBlocks,
+			StartBlock: hotPruneStartBlock,
+			Decide: func(row rawdb.StateTxRange) (snapshots.HotHistoryPruneDecision, error) {
+				if err := ctx.Err(); err != nil {
+					return snapshots.HotHistoryPruneDecision{}, err
+				}
+				if w.Policy.RetainHotHistory(row.BlockNum, headNum) {
+					return snapshots.HotHistoryPruneDecision{}, nil
+				}
+				switch w.Policy.Mode {
+				case ModeFull, ModeBlocks, ModeMinimal:
+					return snapshots.HotHistoryPruneDecision{DeleteTxRange: true, DeleteHistoryBlock: true}, nil
+				case ModeSnap, ModeArchive:
+					covered, err := coverage.covers(row.BeginTxNum, row.EndTxNum)
+					if err != nil {
+						return snapshots.HotHistoryPruneDecision{}, err
+					}
+					if !covered {
+						return snapshots.HotHistoryPruneDecision{Stop: true}, nil
+					}
+					return snapshots.HotHistoryPruneDecision{DeleteHistoryBlock: true}, nil
+				}
+				return snapshots.HotHistoryPruneDecision{}, nil
+			},
+		})
+		if err != nil {
+			return Stats{}, err
+		}
+		if err := flushHistory(); err != nil {
+			return Stats{}, fmt.Errorf("pruning: flush hot history delete batch: %w", err)
+		}
+		if w.HistorySharedChunkGC {
+			gcStarted := time.Now()
+			stats.HistoryChunkGC = w.pruneHistorySharedChunks(ctx, coverage, headNum)
+			stats.HistoryChunkGCDuration = time.Since(gcStarted)
+			if err := ctx.Err(); err != nil {
+				return Stats{}, err
+			}
+		}
+		if coverageDone != nil {
+			coverageDone()
+			coverageDone = nil
+		}
+		stats.HistoryDeletes = historyDeletes
+		stats.DeletedTxRanges = hotStats.DeletedTxRanges
+		stats.DeletedDomainChangeBlocks = hotStats.DeletedHistoryBlocks
+		stats.DomainChangePrunedThrough = hotStats.MaxDeletedHistoryBlock
+		stats.DomainChangePrunedThroughTx = hotStats.MaxDeletedHistoryBlockTx
+		if hotStats.MaxDeletedHistoryBlockTx != 0 && w.SnapshotDir != "" {
+			metadataStarted = time.Now()
+			progressErr := snapshots.UpdateHotPruneProgress(w.SnapshotDir, hotStats.MaxDeletedHistoryBlock, hotStats.MaxDeletedHistoryBlockTx)
+			stats.HistoryMetadataDuration += time.Since(metadataStarted)
+			if progressErr != nil {
+				return Stats{}, progressErr
+			}
+			if err := newRawDBStageProgressStore(w.DB).Write(rawdb.StageSnapshotHotPrune, hotStats.MaxDeletedHistoryBlockTx); err != nil {
+				return Stats{}, fmt.Errorf("pruning: write snapshot/hot-prune stage progress: %w", err)
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

@@ -9,6 +9,8 @@ import (
 )
 
 type PruneRetiredSegmentFilesResult struct {
+	DeferredForReaders    bool
+	DeferredForStaging    bool
 	RetiredSegments       int
 	FilesDeleted          int
 	FilesMissing          int
@@ -65,6 +67,24 @@ func PruneRetiredSegmentFilesContextWithVerifier(ctx context.Context, dir string
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	binding, staging := historyStagingRetentionFor(dir)
+	if staging {
+		if !binding.isReady() {
+			if err := ReconcileHistoryStagingColdDependencies(ctx, dir); err != nil {
+				return &PruneRetiredSegmentFilesResult{DeferredForStaging: true}, err
+			}
+		}
+		binding.mu.Lock()
+		defer binding.mu.Unlock()
+		if !binding.ready {
+			return &PruneRetiredSegmentFilesResult{DeferredForStaging: true}, nil
+		}
+	}
+	release, ok := tryHistoryRetirement()
+	if !ok {
+		return &PruneRetiredSegmentFilesResult{DeferredForReaders: true}, nil
+	}
+	defer release()
 	inspection, err := inspectRetiredSegmentFiles(ctx, dir, "retired prune", verifyActive)
 	if err != nil {
 		return nil, err
@@ -75,9 +95,50 @@ func PruneRetiredSegmentFilesContextWithVerifier(ctx context.Context, dir string
 		FilesSkippedActive:    inspection.FilesSkippedActive,
 		FilesSkippedPublished: inspection.FilesSkippedPublished,
 	}
+	var retiredIDs map[string][32]byte
+	var stateHistoryPaths map[string]struct{}
+	if staging {
+		manifest, err := LoadProductionManifest(dir)
+		if err != nil {
+			return result, err
+		}
+		retiredIDs, _, err = retiredHistoryStagingTrios(manifest)
+		if err != nil {
+			return result, err
+		}
+		stateHistoryPaths = make(map[string]struct{})
+		for _, ref := range manifest.Retired {
+			if ref.NormalizedDataset() == SegmentDatasetStateDomainChange && (ref.Kind == SegmentHistory || ref.Kind == SegmentInverted || ref.Kind == SegmentAccessor) {
+				stateHistoryPaths[ref.Path] = struct{}{}
+			}
+		}
+	}
 	for _, file := range inspection.PresentFiles {
 		if err := ctx.Err(); err != nil {
 			return result, err
+		}
+		if staging {
+			if _, isHistory := stateHistoryPaths[file.Path]; isHistory {
+				id, known := retiredIDs[file.Path]
+				if !known {
+					result.DeferredForStaging = true
+					continue
+				}
+				removed, err := binding.manager.WithColdGCLease(id, func() error {
+					return os.Remove(filepath.Join(dir, file.Path))
+				})
+				if err != nil {
+					return result, fmt.Errorf("snapshots: remove retired segment %q: %w", file.Path, err)
+				}
+				if !removed {
+					result.DeferredForStaging = true
+					continue
+				}
+				result.FilesDeleted++
+				result.BytesDeleted += file.Size
+				result.DeletedPaths = append(result.DeletedPaths, file.Path)
+				continue
+			}
 		}
 		if err := os.Remove(filepath.Join(dir, file.Path)); err != nil {
 			return result, fmt.Errorf("snapshots: remove retired segment %q: %w", file.Path, err)

@@ -7,6 +7,7 @@ It never edits chain data, the space guard, service flags, or Nile.
 """
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -29,6 +30,11 @@ MARKER = Path('/data/gtron/main/HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json')
 SPACE_GUARD = '/usr/local/libexec/gtron-mainnet-space-guard.py'
 SHARED_GUARD = '/usr/local/libexec/gtron-history-shared-reader-guard.py'
 REFERENCE_GUARD = '/usr/local/libexec/gtron-history-reference-reader-guard.py'
+STAGING_GUARD = '/usr/local/libexec/gtron-history-staging-guard.py'
+STAGING_PREPARED = Path('/data/gtron/main/HISTORY_STAGING_PREPARED.json')
+STAGING_LATCH = Path('/data/gtron/main/MIGRATION_IN_PROGRESS.json')
+STAGING_REQUIRED = Path('/data/gtron/main/HISTORY_STAGING_READER_REQUIRED.json')
+STAGING_ACTIVATION = Path('/data/gtron/main/HISTORY_STAGING_ACTIVATION_INTENT.json')
 LOCK = Path('/run/lock/gtron-mainnet-release.lock')
 HEALTH = 'http://127.0.0.1:8090/wallet/getnodeinfo'
 MAX_BINARY = 512 << 20
@@ -140,6 +146,30 @@ def shared_marker(binary, digest, source):
 def reference_marker(binary, digest, source):
     return {'version': 1, 'container_format': 'GTHREF01',
             'binary': binary, 'binary_sha256': digest, 'source_commit': source}
+
+
+def staging_marker(digest, source, stop_intent=False, prune_mode=None, history_window=None):
+    require(prune_mode in ('snap', 'archive') and
+            type(history_window) is int and 0 < history_window < (1 << 64),
+            'history-staging reader marker requires frozen mode/window')
+    return {'version': 1, 'format_version': 1, 'binary_sha256': digest,
+            'source_commit': source, 'stop_intent': stop_intent,
+            'prune_mode': prune_mode, 'history_window': history_window}
+
+
+def require_ordinary_deploy_allowed():
+    require(not os.path.lexists(STAGING_LATCH),
+            'history-staging migration latch blocks ordinary release and rollback')
+    require(not os.path.lexists(STAGING_PREPARED) or os.path.lexists(STAGING_REQUIRED),
+            'unmigrated history-staging source is pinned to its legacy reader')
+
+
+def require_staging_capability(binary):
+    raw = command([binary, 'db', 'history-staging', 'capability'], 30)
+    require(json.loads(raw) == {'format_version': 1,
+                                'history_staging_reader': True,
+                                'protocol_version': 1},
+            'candidate lacks required history-staging reader capability')
 
 
 def systemd_exec(value):
@@ -270,6 +300,15 @@ def inspect():
             shared.count(source.encode()) == len(guards), 'drop-in identity is ambiguous')
     require(props.get('ExecStartPre', '').count(SPACE_GUARD) == 1,
             'mainnet space guard is missing/duplicated')
+    staging = None
+    if os.path.lexists(STAGING_REQUIRED):
+        staging = root_bytes(STAGING_REQUIRED, 4096)
+        marker = json.loads(staging[0])
+        require(marker == staging_marker(digest, source, marker.get('stop_intent', False),
+                                         marker.get('prune_mode'), marker.get('history_window')),
+                'history-staging reader marker differs')
+        require(props.get('ExecStartPre', '').count(STAGING_GUARD) == 1,
+                'history-staging startup guard is missing/duplicated')
     active = props.get('ActiveState') == 'active'
     pid = int(props.get('MainPID', '0'))
     if active:
@@ -279,7 +318,8 @@ def inspect():
     return {'binary': binary, 'sha': digest, 'source': source, 'argv': argv,
             'active': active, 'memory': (memory, memory_mode),
             'shared': (shared, shared_mode), 'marker': (marker_raw, marker_mode),
-            'guards': guards, 'reference': reference, 'space_pre': props.get('ExecStartPre', '')}
+            'guards': guards, 'reference': reference, 'staging': staging,
+            'space_pre': props.get('ExecStartPre', '')}
 
 
 def replace_once(raw, old, new, count, label):
@@ -298,7 +338,14 @@ def plan(old, new_binary, new_sha, source):
     if old['reference'] is not None:
         new_reference = Path(new_binary).parent / 'reference-reader-required.json'
         shared = replace_once(shared, str(old['reference']), str(new_reference), 1, 'reference marker')
-    return {'memory': memory, 'shared': shared,
+    staging = None
+    if old.get('staging') is not None:
+        old_marker = json.loads(old['staging'][0])
+        staging = json_bytes(staging_marker(new_sha, source,
+                                            old_marker.get('stop_intent', False),
+                                            old_marker.get('prune_mode'),
+                                            old_marker.get('history_window')))
+    return {'memory': memory, 'shared': shared, 'staging': staging,
             'marker': json_bytes(shared_marker(new_binary, new_sha, source)),
             'reference': new_reference}
 
@@ -358,6 +405,8 @@ def verify(source):
                               (old['source'], source))
     for _, guard_argv, _ in old['guards']:
         command(guard_argv, 60)
+    if old.get('staging') is not None:
+        command(['/usr/bin/python3', STAGING_GUARD, 'check-service'], 60)
     if not old['active']:
         raise SameSourceUnhealthy('requested source is configured but service is inactive')
     try:
@@ -369,15 +418,20 @@ def verify(source):
 
 
 def restore(old):
+    require(not os.path.lexists(STAGING_LATCH),
+            'migration latch forbids rollback to the old release')
     atomic_root(MEMORY, *old['memory'])
     atomic_root(SHARED, *old['shared'])
     atomic_root(MARKER, *old['marker'])
+    if old.get('staging') is not None:
+        atomic_root(STAGING_REQUIRED, *old['staging'])
     command(['/bin/systemctl', 'daemon-reload'], 30)
     command(['/bin/systemctl', 'start', SERVICE], 120)
     wait_healthy(old['binary'], old['sha'], old['argv'])
 
 
 def deploy(source, candidate, digest):
+    require_ordinary_deploy_allowed()
     require(re.fullmatch(r'[0-9a-f]{40}', source or ''), 'invalid source commit')
     head = command(['/usr/bin/git', '--git-dir=' + str(REPO / '.git'),
                     'rev-parse', 'HEAD'], 30).strip()
@@ -387,9 +441,14 @@ def deploy(source, candidate, digest):
                   '\tCGO_ENABLED=1', '\tGOOS=linux', '\tGOARCH=amd64'):
         require(token in buildinfo, 'candidate build info differs: ' + token.strip())
     old = inspect()
+    if old.get('staging') is not None:
+        require(not json.loads(old['staging'][0]).get('stop_intent', False),
+                'persistent inactive intent blocks ordinary deployment')
     for _, guard_argv, _ in old['guards']:
         command(guard_argv, 60)
     binary_data = candidate_bytes(candidate, digest)
+    if old.get('staging') is not None:
+        require_staging_capability(candidate)
     new_binary = install_release(source, digest, binary_data, old['reference'] is not None)
     changes = plan(old, new_binary, digest, source)
     switched = False
@@ -400,6 +459,8 @@ def deploy(source, candidate, digest):
         atomic_root(MEMORY, changes['memory'], old['memory'][1])
         atomic_root(SHARED, changes['shared'], old['shared'][1])
         atomic_root(MARKER, changes['marker'], old['marker'][1])
+        if changes['staging'] is not None:
+            atomic_root(STAGING_REQUIRED, changes['staging'], old['staging'][1])
         command(['/bin/systemctl', 'daemon-reload'], 30)
         effective = show('ExecStart', 'ExecStartPre')
         configured, argv = systemd_exec(effective.get('ExecStart', ''))
@@ -413,6 +474,8 @@ def deploy(source, candidate, digest):
                 'effective reader guards differ')
         for _, guard_argv, _ in guard_commands(changes['shared']):
             command(guard_argv, 60)
+        if changes['staging'] is not None:
+            command(['/usr/bin/python3', STAGING_GUARD, 'check-service'], 60)
         command(['/bin/systemctl', 'start', SERVICE], 120)
         pid = wait_healthy(new_binary, digest, argv)
         result = {'deployed': True, 'source_commit': source, 'binary': new_binary,
@@ -435,6 +498,130 @@ def deploy(source, candidate, digest):
         raise
 
 
+def activate_staging(source, candidate, digest):
+    """Publish only the SHA-pinned capable reader after offline verification.
+
+    Failure intentionally leaves the migration latch and stopped service in
+    place. The old reader must never be restored after source adoption.
+    """
+    latch = json.loads(root_bytes(STAGING_LATCH, 16384)[0])
+    prepared = json.loads(root_bytes(STAGING_PREPARED, 16384)[0])
+    require(latch.get('version') == 1 and
+            latch.get('state') == 'VERIFIED_PENDING_ACTIVATION' and
+            latch.get('candidate_sha256') == digest and
+            latch.get('source_commit') == source and
+            type(latch.get('service_was_active')) is bool,
+            'pending activation latch identity differs')
+    require(prepared.get('version') == 1 and
+            re.fullmatch(r'[0-9a-f]{64}', prepared.get('legacy_binary_sha256', '')),
+            'invalid prepared reader pin')
+    require(re.fullmatch(r'[0-9a-f]{40}', source or '') and
+            re.fullmatch(r'[0-9a-f]{64}', digest or ''),
+            'invalid candidate source/SHA')
+    candidate = Path(candidate)
+    require(candidate.is_absolute() and
+            candidate.parent.parent == RELEASES and candidate.name == 'gtron' and
+            candidate.parent.name.startswith('staging-') and
+            root_sha(candidate) == digest,
+            'candidate must be the pinned root-owned staging release')
+    require_staging_capability(str(candidate))
+    buildinfo = command(['/data/go/bin/go', 'version', '-m', str(candidate)], 30)
+    for token in ('\tvcs.revision=' + source, '\t-tags=sapling',
+                  '\tCGO_ENABLED=1', '\tGOOS=linux', '\tGOARCH=amd64'):
+        require(token in buildinfo, 'candidate build info differs: ' + token.strip())
+    intent_sha = latch.get('activation_intent_sha256')
+    if intent_sha is None:
+        old = inspect()
+        require(not old['active'] and old['sha'] == prepared['legacy_binary_sha256'] and
+                old.get('staging') is None,
+                'migration activation requires the stopped pinned legacy service')
+        require(old.get('space_pre', '').count(STAGING_GUARD) == 1,
+                'effective history-staging startup guard is missing/duplicated')
+        changes = plan(old, str(candidate), digest, source)
+        require(changes['staging'] is None, 'unexpected existing staging reader marker')
+        def encoded(data, mode):
+            return {'bytes': base64.b64encode(data).decode('ascii'), 'mode': mode}
+        intent = {'version': 1, 'candidate_sha256': digest,
+                  'source_commit': source, 'binary': str(candidate),
+                  'old_argv': old['argv'],
+                  'files': {
+                      'memory': {'old': encoded(*old['memory']),
+                                 'new': encoded(changes['memory'], old['memory'][1])},
+                      'shared': {'old': encoded(*old['shared']),
+                                 'new': encoded(changes['shared'], old['shared'][1])},
+                      'marker': {'old': encoded(*old['marker']),
+                                 'new': encoded(changes['marker'], old['marker'][1])},
+                      'required': {'old': None,
+                                   'new': encoded(json_bytes(staging_marker(
+                                       digest, source, not latch['service_was_active'],
+                                       latch.get('prune_mode'), latch.get('history_window'))), 0o644)}}}
+        intent_raw = json_bytes(intent)
+        require(len(intent_raw) <= 1 << 20, 'activation intent too large')
+        atomic_root(STAGING_ACTIVATION, intent_raw, 0o600)
+        latch['activation_intent_sha256'] = hashlib.sha256(intent_raw).hexdigest()
+        atomic_root(STAGING_LATCH, json_bytes(latch), 0o644)
+    else:
+        require(re.fullmatch(r'[0-9a-f]{64}', intent_sha), 'invalid activation intent SHA')
+    intent_raw, _ = root_bytes(STAGING_ACTIVATION, 1 << 20)
+    require(hashlib.sha256(intent_raw).hexdigest() == latch['activation_intent_sha256'],
+            'activation intent changed')
+    intent = json.loads(intent_raw)
+    require(intent.get('version') == 1 and intent.get('candidate_sha256') == digest and
+            intent.get('source_commit') == source and intent.get('binary') == str(candidate) and
+            isinstance(intent.get('old_argv'), list) and intent['old_argv'] and
+            intent['old_argv'][0] != str(candidate), 'activation intent identity differs')
+    argv = [str(candidate)] + intent['old_argv'][1:]
+    files = intent['files']
+    require(set(files) == {'memory', 'shared', 'marker', 'required'},
+            'activation intent file set differs')
+    paths = {'memory': MEMORY, 'shared': SHARED, 'marker': MARKER,
+             'required': STAGING_REQUIRED}
+    def decoded(value):
+        require(isinstance(value, dict) and type(value.get('mode')) is int and
+                0 < value['mode'] <= 0o777 and isinstance(value.get('bytes'), str),
+                'invalid activation file entry')
+        return base64.b64decode(value['bytes'], validate=True), value['mode']
+    # The intent is durable before the first replacement. Every retry accepts
+    # exactly the old or new bytes, then converges deterministically to new.
+    for name, path in paths.items():
+        target = decoded(files[name]['new'])
+        original = decoded(files[name]['old']) if files[name]['old'] is not None else None
+        current = root_bytes(path, 1 << 20) if os.path.lexists(path) else None
+        require(current == original or current == target,
+                'activation file differs from both pinned states: ' + str(path))
+    require(not show('ActiveState').get('ActiveState') == 'active' or
+            root_bytes(STAGING_REQUIRED, 4096) == decoded(files['required']['new']),
+            'unmarked active service during activation')
+    # Reader guard marker files must exist before the changed drop-in can run.
+    atomic_root(candidate.parent / 'reader-required.json',
+                json_bytes(shared_marker(str(candidate), digest, source)), 0o644)
+    if REFERENCE_GUARD.encode() in decoded(files['shared']['new'])[0]:
+        atomic_root(candidate.parent / 'reference-reader-required.json',
+                    json_bytes(reference_marker(str(candidate), digest, source)), 0o644)
+    try:
+        for name, path in paths.items():
+            atomic_root(path, *decoded(files[name]['new']))
+        command(['/bin/systemctl', 'daemon-reload'], 30)
+        effective = show('ExecStart', 'ExecStartPre')
+        configured, effective_argv = systemd_exec(effective.get('ExecStart', ''))
+        require(configured == str(candidate) and effective_argv == argv and
+                effective.get('ExecStartPre', '').count(STAGING_GUARD) == 1,
+                'effective staging reader identity or guard differs')
+        pid = None
+        if latch['service_was_active']:
+            command(['/usr/bin/python3', STAGING_GUARD, 'check-service'], 60)
+            command(['/bin/systemctl', 'start', SERVICE], 120)
+            pid = wait_healthy(str(candidate), digest, argv)
+        return {'activated': True, 'source_commit': source, 'binary': str(candidate),
+                'binary_sha256': digest, 'pid': pid, 'service_was_active': latch['service_was_active']}
+    except Exception:
+        try:
+            command(['/bin/systemctl', 'stop', SERVICE], 120)
+        except Exception:
+            pass
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action')
@@ -444,15 +631,21 @@ def main():
     publish.add_argument('--source', required=True)
     publish.add_argument('--candidate', required=True)
     publish.add_argument('--sha256', required=True)
+    activate = sub.add_parser('activate-staging')
+    activate.add_argument('--source', required=True)
+    activate.add_argument('--candidate', required=True)
+    activate.add_argument('--sha256', required=True)
     args = parser.parse_args()
-    require(args.action in ('verify', 'deploy'), 'verify or deploy action required')
+    require(args.action in ('verify', 'deploy', 'activate-staging'), 'verify, deploy or activate-staging action required')
     require(os.geteuid() == 0, 'root required')
     lockfd = os.open(str(LOCK), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if args.action == 'verify':
         result = verify(args.source)
-    else:
+    elif args.action == 'deploy':
         result = deploy(args.source, args.candidate, args.sha256)
+    else:
+        result = activate_staging(args.source, args.candidate, args.sha256)
     print(json.dumps(result, sort_keys=True))
 
 

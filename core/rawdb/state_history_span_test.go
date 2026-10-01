@@ -88,6 +88,10 @@ func spanRows(t *testing.T, b *StateHistorySpanBlock, mutate bool) []*StateDomai
 		if uint64(len(c.Prev)) != row.PrevLength {
 			t.Fatal("Prev length differs")
 		}
+		var streamed bytes.Buffer
+		if err := b.WritePrevTo(row, &streamed); err != nil || !bytes.Equal(streamed.Bytes(), c.Prev) {
+			t.Fatal("streamed Prev differs from authenticated chunks", err)
+		}
 		rows = append(rows, c)
 		if mutate {
 			for i := range row.Change.Key {

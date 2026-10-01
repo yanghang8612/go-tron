@@ -14,6 +14,7 @@ HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 RUN_TESTS="${RUN_TESTS:-1}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 MAINNET_RELEASE_HELPER="/usr/local/libexec/gtron-mainnet-release.py"
+MAINNET_STAGING_GUARD="/usr/local/libexec/gtron-history-staging-guard.py"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -72,6 +73,19 @@ exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   log "another deploy is already running; skipping"
   exit 0
+fi
+
+if [[ "$SERVICE_NAME" == "gtron.service" ]]; then
+  # This check runs before fetch, build, the unhealthy-service restart path,
+  # and publication through the root-owned helper. A prepared but unmigrated
+  # source is pinned to its old reader even if the timer fires unexpectedly.
+  staging_guard_status=0
+  sudo -n /usr/bin/python3 "$MAINNET_STAGING_GUARD" check-deploy || staging_guard_status=$?
+  case "$staging_guard_status" in
+    0) ;;
+    3) log "history-staging stop intent: skipping mainnet deployment"; exit 0 ;;
+    *) die "history-staging deployment fence denied mainnet deployment (status $staging_guard_status)" ;;
+  esac
 fi
 
 [[ -d "$REPO_DIR/.git" ]] ||

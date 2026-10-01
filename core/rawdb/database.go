@@ -1,6 +1,10 @@
 package rawdb
 
 import (
+	"errors"
+	"path/filepath"
+	"strings"
+
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -54,6 +58,51 @@ func NewPebbleDBWithOptions(path string, cache int, handles int, tune PebbleOpti
 // inspect; Pebble still requires the node process to release the database lock.
 func NewPebbleDBReadOnly(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
 	return pebbledb.New(path, cache, handles, "", true, pebbledb.DefaultOptions())
+}
+
+// NewHistoryStagingPebbleDB opens the separate history-payload store with its
+// own metrics namespace and a deliberately smaller write/compaction budget.
+// cache is part of the process-wide Pebble cache allowance, not an additional
+// copy of the main DB budget.
+func NewHistoryStagingPebbleDB(path string, cache int, handles int, readOnly bool) (ethdb.KeyValueStore, error) {
+	if path == "" || cache <= 0 || handles <= 0 {
+		return nil, errors.New("rawdb: invalid history staging database options")
+	}
+	tune := pebbledb.DefaultOptions()
+	tune.MemTableSizeBytes = 32 << 20
+	tune.MaxConcurrentCompactions = 1
+	if !readOnly {
+		var err error
+		tune, err = withDiskSpaceObservation(tune)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return pebbledb.New(path, cache, handles, "history-staging/", readOnly, tune)
+}
+
+// ValidateHistoryStagingPaths prevents a store from containing another store
+// or the cold directory. Callers still need OS locks and stable path identity.
+func ValidateHistoryStagingPaths(source, target, cold string) error {
+	paths := []string{source, target, cold}
+	for i := range paths {
+		if paths[i] == "" {
+			return errors.New("rawdb: empty history staging path")
+		}
+		abs, err := filepath.Abs(paths[i])
+		if err != nil {
+			return err
+		}
+		paths[i] = filepath.Clean(abs)
+	}
+	for i := range paths {
+		for j := i + 1; j < len(paths); j++ {
+			if paths[i] == paths[j] || strings.HasPrefix(paths[i], paths[j]+string(filepath.Separator)) || strings.HasPrefix(paths[j], paths[i]+string(filepath.Separator)) {
+				return errors.New("rawdb: history staging paths overlap")
+			}
+		}
+	}
+	return nil
 }
 
 func NewMemoryDatabase() ethdb.KeyValueStore {

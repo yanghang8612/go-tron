@@ -35,6 +35,115 @@ def old_state():
 
 
 class MainnetReleaseTests(unittest.TestCase):
+    def test_prepared_or_migrating_source_blocks_ordinary_release(self):
+        with mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path == release.STAGING_PREPARED):
+            with self.assertRaisesRegex(RuntimeError, 'pinned to its legacy reader'):
+                release.require_ordinary_deploy_allowed()
+        with mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path == release.STAGING_LATCH):
+            with self.assertRaisesRegex(RuntimeError, 'migration latch'):
+                release.require_ordinary_deploy_allowed()
+
+    def test_pending_activation_start_failure_does_not_restore_old_binary(self):
+        candidate = str(release.RELEASES / 'staging-test' / 'gtron')
+        latch = {'version': 1, 'state': 'VERIFIED_PENDING_ACTIVATION',
+                 'candidate_sha256': SHA, 'source_commit': SOURCE,
+                 'service_was_active': True, 'prune_mode': 'snap',
+                 'history_window': 65536}
+        prepared = {'version': 1, 'legacy_binary_sha256': OLD_SHA}
+        old = old_state()
+        old['active'] = False
+        old['space_pre'] = release.SPACE_GUARD + ' ' + release.STAGING_GUARD
+        buildinfo = ('\tvcs.revision=' + SOURCE + '\n\t-tags=sapling\n'
+                     '\tCGO_ENABLED=1\n\tGOOS=linux\n\tGOARCH=amd64\n')
+        actions = []
+        files = {release.STAGING_LATCH: (release.json_bytes(latch), 0o644),
+                 release.STAGING_PREPARED: (release.json_bytes(prepared), 0o644),
+                 release.MEMORY: old['memory'], release.SHARED: old['shared'],
+                 release.MARKER: old['marker']}
+
+        def command(argv, timeout=60):
+            actions.append(argv)
+            if argv[:4] == ['/data/go/bin/go', 'version', '-m', candidate]:
+                return buildinfo
+            if argv[:2] == ['/bin/systemctl', 'start']:
+                raise RuntimeError('new reader did not start')
+            return ''
+
+        effective = {'ExecStart': '{ path=' + candidate + ' ; argv[]=' + candidate +
+                     ' --history.shared-chunk-cache=true --p2p.port=18890 ; ignore_errors=no }',
+                     'ExecStartPre': release.STAGING_GUARD}
+        def write(path, data, mode):
+            actions.append(['write', str(path)])
+            files[path] = (data, mode)
+
+        with mock.patch.object(release, 'root_bytes', side_effect=lambda path, limit: files[path]), \
+                mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path in files), \
+                mock.patch.object(release, 'root_sha', return_value=SHA), \
+                mock.patch.object(release, 'require_staging_capability'), \
+                mock.patch.object(release, 'inspect', return_value=old), \
+                mock.patch.object(release, 'atomic_root', side_effect=write), \
+                mock.patch.object(release, 'show', return_value=effective), \
+                mock.patch.object(release, 'command', side_effect=command), \
+                mock.patch.object(release, 'restore') as restore:
+            with self.assertRaisesRegex(RuntimeError, 'new reader did not start'):
+                release.activate_staging(SOURCE, candidate, SHA)
+        restore.assert_not_called()
+        self.assertIn(['/bin/systemctl', 'stop', release.SERVICE], actions)
+
+    def test_pending_activation_retries_after_partial_atomic_replacement(self):
+        candidate = str(release.RELEASES / 'staging-test' / 'gtron')
+        latch = {'version': 1, 'state': 'VERIFIED_PENDING_ACTIVATION',
+                 'candidate_sha256': SHA, 'source_commit': SOURCE,
+                 'service_was_active': True, 'prune_mode': 'snap',
+                 'history_window': 65536}
+        prepared = {'version': 1, 'legacy_binary_sha256': OLD_SHA}
+        old = old_state()
+        old['active'] = False
+        old['space_pre'] = release.SPACE_GUARD + ' ' + release.STAGING_GUARD
+        files = {release.STAGING_LATCH: (release.json_bytes(latch), 0o644),
+                 release.STAGING_PREPARED: (release.json_bytes(prepared), 0o644),
+                 release.MEMORY: old['memory'], release.SHARED: old['shared'],
+                 release.MARKER: old['marker']}
+        buildinfo = ('\tvcs.revision=' + SOURCE + '\n\t-tags=sapling\n'
+                     '\tCGO_ENABLED=1\n\tGOOS=linux\n\tGOARCH=amd64\n')
+        writes = []
+        fail_after = [6]
+
+        def write(path, data, mode):
+            files[path] = (data, mode)
+            writes.append(path)
+            if fail_after[0] == len(writes):
+                raise RuntimeError('simulated crash after durable replacement')
+
+        def command(argv, timeout=60):
+            if argv[:4] == ['/data/go/bin/go', 'version', '-m', candidate]:
+                return buildinfo
+            return ''
+
+        effective = {'ExecStart': '{ path=' + candidate + ' ; argv[]=' + candidate +
+                     ' --history.shared-chunk-cache=true --p2p.port=18890 ; ignore_errors=no }',
+                     'ExecStartPre': release.STAGING_GUARD}
+        with mock.patch.object(release, 'root_bytes', side_effect=lambda path, limit: files[path]), \
+                mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path in files), \
+                mock.patch.object(release, 'root_sha', return_value=SHA), \
+                mock.patch.object(release, 'require_staging_capability'), \
+                mock.patch.object(release, 'inspect', return_value=old) as inspect, \
+                mock.patch.object(release, 'atomic_root', side_effect=write), \
+                mock.patch.object(release, 'show', return_value=effective), \
+                mock.patch.object(release, 'command', side_effect=command), \
+                mock.patch.object(release, 'wait_healthy', return_value=42), \
+                mock.patch.object(release, 'restore') as restore:
+            with self.assertRaisesRegex(RuntimeError, 'simulated crash'):
+                release.activate_staging(SOURCE, candidate, SHA)
+            fail_after[0] = -1
+            result = release.activate_staging(SOURCE, candidate, SHA)
+        self.assertEqual(result['pid'], 42)
+        self.assertEqual(inspect.call_count, 1)
+        restore.assert_not_called()
+        self.assertEqual(files[release.STAGING_REQUIRED][0],
+                         release.json_bytes(release.staging_marker(
+                             SHA, SOURCE, False, 'snap', 65536)))
+
     def test_wallet_probe_reads_small_node_info_and_rejects_missing_head(self):
         class Response(io.BytesIO):
             status = 200

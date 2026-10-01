@@ -1,6 +1,9 @@
 package core
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -216,6 +219,15 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if genesis == nil || genesis.Config == nil {
 		return errors.New("restart sync: genesis with chain config is required")
 	}
+	if bc.historyStagingReady.Load() {
+		return errors.New("restart sync: staging reset is offline-only after runtime readiness")
+	}
+	// This operation is an offline startup workflow. Once the mover lifecycle
+	// has started, silently stopping it here would leave a running node with no
+	// migration worker; a reset also needs to drain the cold Runner first.
+	if mover := bc.historyStagingMover.Load(); mover != nil && mover.hasStarted() {
+		return errors.New("restart sync: staging reset requires an offline node before the mover starts")
+	}
 
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
@@ -230,7 +242,21 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if current == nil {
 		return errors.New("restart sync: current block is nil")
 	}
-	if height > current.Number() {
+	manager := bc.historyStaging.Load()
+	var resetIntent rawdb.HistoryStagingResetIntent
+	var pendingReset bool
+	if manager != nil {
+		var err error
+		resetIntent, pendingReset, err = manager.ReadResetIntent()
+		if err != nil {
+			return fmt.Errorf("restart sync: read staging reset intent: %w", err)
+		}
+		pendingReset = pendingReset && !resetIntent.Complete
+		if pendingReset && resetIntent.TargetHeight != height {
+			return fmt.Errorf("restart sync: pending staging reset targets %d, not %d", resetIntent.TargetHeight, height)
+		}
+	}
+	if height > current.Number() && !pendingReset {
 		return fmt.Errorf("restart sync: target height %d exceeds current head %d", height, current.Number())
 	}
 	target, err := readRestartSyncBlock(bc.chaindb, height, fmt.Sprintf("canonical block %d not found", height))
@@ -254,7 +280,7 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 
 	// Fast incremental path: skip reset+replay when changesets cover the full
 	// (height, materializedHead] window.
-	if bc.canIncrementalUnwind(height, materializedHead) {
+	if !pendingReset && bc.canIncrementalUnwind(height, materializedHead) {
 		if err := bc.incrementalUnwindTo(target, materializedHead, ancient, emit); err != nil {
 			return fmt.Errorf("restart sync: incremental unwind to %d: %w", height, err)
 		}
@@ -267,6 +293,38 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 
 	// Conservative reset+replay path (always correct; taken when history is off
 	// or changeset window is incomplete).
+	// Check the complete stored replay source before touching mutable state or
+	// the ancient head. Once staging routes have moved old history out of the
+	// source DB, discovering a missing body halfway through replay would leave
+	// no safe inverse-delta path back to the old state.
+	blockDigest, err := preflightRestartSyncBlocks(bc.chaindb, height, target.Hash())
+	if err != nil {
+		return fmt.Errorf("restart sync: preflight stored blocks: %w", err)
+	}
+	if manager != nil {
+		if pendingReset {
+			if resetIntent.TargetHash != target.Hash() || resetIntent.BlockDigest != blockDigest {
+				return errors.New("restart sync: stored replay source differs from pending staging reset")
+			}
+		} else {
+			epoch, err := manager.CurrentEpoch()
+			if err != nil || epoch == 0 || epoch == ^uint64(0) {
+				return fmt.Errorf("restart sync: read staging epoch: %w", err)
+			}
+			resetIntent = rawdb.HistoryStagingResetIntent{
+				Version: rawdb.HistoryStagingFormatVersion, OldEpoch: epoch, NewEpoch: epoch + 1,
+				TargetHeight: height, TargetHash: target.Hash(), BlockDigest: blockDigest,
+			}
+			if err := manager.BeginResetIntent(context.Background(), resetIntent); err != nil {
+				return fmt.Errorf("restart sync: begin staging reset: %w", err)
+			}
+		}
+		if err := manager.PrepareResetReplay(context.Background(), resetIntent); err != nil {
+			return fmt.Errorf("restart sync: prepare staging replay: %w", err)
+		}
+		bc.historyStagingReplayEpoch.Store(resetIntent.NewEpoch)
+		defer bc.historyStagingReplayEpoch.Store(0)
+	}
 	bc.buffer.Discard()
 	if ancient != nil {
 		if _, err := ancient.TruncateHead(height + 1); err != nil {
@@ -378,7 +436,93 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if err := syncKeyValueStore(bc.db); err != nil {
 		return fmt.Errorf("restart sync: sync rewind completion: %w", err)
 	}
+	if manager != nil {
+		for fromBucket := uint64(0); fromBucket <= height/rawdb.StateHistoryChunkBucketBlocks; {
+			toBucket := fromBucket + 127
+			if end := height / rawdb.StateHistoryChunkBucketBlocks; toBucket > end || toBucket < fromBucket {
+				toBucket = end
+			}
+			if err := manager.WriteReplaySourceRoutes(context.Background(), resetIntent.NewEpoch, fromBucket, toBucket, height); err != nil {
+				return fmt.Errorf("restart sync: publish replay source routes: %w", err)
+			}
+			fromBucket = toBucket + 1
+		}
+		if err := manager.VerifyReplayRouteCoverage(resetIntent.NewEpoch, height); err != nil {
+			return fmt.Errorf("restart sync: verify replay routes: %w", err)
+		}
+		resetIntent.ReadyThrough = height
+		resetIntent.Complete = true
+		if err := manager.CompleteResetIntent(context.Background(), resetIntent, func() error {
+			return bc.verifyHistoryStagingReplayCompletion(height, target.Hash(), resetIntent.NewEpoch)
+		}); err != nil {
+			return fmt.Errorf("restart sync: complete staging reset: %w", err)
+		}
+	}
 	emit("done", height)
+	return nil
+}
+
+// preflightRestartSyncBlocks proves that the complete canonical replay input
+// exists and forms one parent-linked chain. The digest is persisted with a
+// staging RESETTING intent when that protocol is enabled; it also prevents a
+// non-staging reset from first discovering a missing body after destruction.
+func preflightRestartSyncBlocks(db *rawdb.ChainDB, height uint64, targetHash tcommon.Hash) ([32]byte, error) {
+	var digest [32]byte
+	if db == nil {
+		return digest, errors.New("missing chain database")
+	}
+	h := sha256.New()
+	var previous tcommon.Hash
+	var heightRaw [8]byte
+	for number := uint64(0); ; number++ {
+		block, err := readRestartSyncBlock(db, number, fmt.Sprintf("canonical block %d not found", number))
+		if err != nil {
+			return digest, err
+		}
+		if number != 0 && block.ParentHash() != previous {
+			return digest, fmt.Errorf("block %d parent mismatch during replay preflight", number)
+		}
+		previous = block.Hash()
+		binary.BigEndian.PutUint64(heightRaw[:], number)
+		_, _ = h.Write(heightRaw[:])
+		_, _ = h.Write(previous[:])
+		if number == height {
+			break
+		}
+	}
+	if previous != targetHash {
+		return digest, fmt.Errorf("target block hash changed during replay preflight: %x != %x", previous, targetHash)
+	}
+	copy(digest[:], h.Sum(nil))
+	return digest, nil
+}
+
+// verifyHistoryStagingReplayCompletion runs while the chain writer guard is
+// held, after the canonical replay batch has been synced and before the new
+// epoch is made readable. A route alone is insufficient: each replayed block
+// must have its atomic history receipt and both execution/index stages must
+// name the exact target head.
+func (bc *BlockChain) verifyHistoryStagingReplayCompletion(height uint64, targetHash tcommon.Hash, epoch uint64) error {
+	current := bc.CurrentBlock()
+	if current == nil || current.Number() != height || current.Hash() != targetHash {
+		return errors.New("restart sync: staging replay head changed before completion")
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageFinish, rawdb.StageStateHistoryIndex} {
+		row, present, err := rawdb.ReadStageProgressRow(bc.db, stage)
+		if err != nil || !present || !row.HasBlockHash || row.BlockNum != height || row.BlockHash != targetHash {
+			return fmt.Errorf("restart sync: staging replay stage %s is incomplete: %w", stage, err)
+		}
+	}
+	for number := uint64(1); number <= height; number++ {
+		hash, present := rawdb.ReadBlockHash(bc.chaindb, number)
+		if !present {
+			return fmt.Errorf("restart sync: staging replay canonical block %d missing", number)
+		}
+		receipt, present, err := rawdb.ReadHistoryStagingBlockComplete(bc.db, epoch, number)
+		if err != nil || !present || receipt.BlockHash != hash || receipt.BlockNum != number || receipt.Epoch != epoch {
+			return fmt.Errorf("restart sync: staging replay block %d receipt missing or mismatched: %w", number, err)
+		}
+	}
 	return nil
 }
 
@@ -402,6 +546,17 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 	if height >= currentHead {
 		return false // nothing to unwind, or invalid
+	}
+	// A route and tx-range alone cannot distinguish a legal zero-change block
+	// from a missing/pruned payload. The staging manager requires an atomic
+	// per-block completeness receipt and verifies every source row in this
+	// bounded window. Older heights without receipts take reset+replay.
+	if manager := bc.historyStaging.Load(); manager != nil {
+		if !bc.canIncrementalUnwindCycleRewards(height, currentHead) {
+			return false
+		}
+		covered, err := manager.IsSourceOwnedUnpruned(height+1, currentHead)
+		return err == nil && covered
 	}
 	if !bc.canIncrementalUnwindCycleRewards(height, currentHead) {
 		return false

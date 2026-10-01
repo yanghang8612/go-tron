@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -228,6 +229,14 @@ type BlockChain struct {
 	// stateHistoryIndexMu serializes snapshot-based history-index passes while
 	// allowing chainmu to be released during their read-only ETL work.
 	stateHistoryIndexMu sync.Mutex
+	// historyStaging is installed once before any runtime reader or maintenance
+	// lifecycle starts. It never replaces the canonical chaindata writer.
+	historyStaging atomic.Pointer[rawdb.HistoryStagingManager]
+	// Nonzero only while RestartSyncFromHeight replays a durable RESETTING
+	// intent. Ordinary canonical writes must never bypass the route fence.
+	historyStagingReplayEpoch atomic.Uint64
+	historyStagingReady       atomic.Bool
+	historyStagingMover       atomic.Pointer[HistoryStagingMover]
 
 	currentBlock atomic.Pointer[types.Block]
 	// archiveHead is the newest block whose async state layer has been fully
@@ -1472,6 +1481,29 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if err := plan.Validate(block, historyEnabled); err != nil {
 		return err
 	}
+	if historyEnabled {
+		if manager := bc.historyStaging.Load(); manager != nil {
+			bucket := block.Number() / rawdb.StateHistoryChunkBucketBlocks
+			if replayEpoch := bc.historyStagingReplayEpoch.Load(); replayEpoch != 0 {
+				if err := manager.CheckReplayBucketWritable(replayEpoch, bucket); err != nil {
+					return fmt.Errorf("history staging: replay bucket %d is not writable: %w", bucket, err)
+				}
+			} else {
+				epoch, err := manager.CurrentEpoch()
+				if err != nil {
+					return fmt.Errorf("history staging: read canonical epoch: %w", err)
+				}
+				if block.Number()%rawdb.StateHistoryChunkBucketBlocks == 0 {
+					if err := manager.EnsureCanonicalSourceRoute(context.Background(), epoch, bucket); err != nil {
+						return fmt.Errorf("history staging: initialize source bucket %d: %w", bucket, err)
+					}
+				}
+				if err := manager.CheckHistoryStagingBucketWritable(bucket); err != nil {
+					return fmt.Errorf("history staging: canonical bucket %d is not writable: %w", bucket, err)
+				}
+			}
+		}
+	}
 
 	// When this block runs maintenance, ProcessProposals records terminal
 	// proposal marks against the state it produces. If the apply then fails,
@@ -1715,8 +1747,14 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 	}()
 	var domainChangeStage *state.DomainChangeStage
+	var historyStagingHasher *rawdb.HistoryStagingBlockHasher
 	if historyEnabled {
-		domainChangeStage, err = plan.BeginDomainChangeStage(bc.buffer)
+		stageWriter := ethdb.KeyValueWriter(bc.buffer)
+		if bc.historyStaging.Load() != nil {
+			historyStagingHasher = rawdb.NewHistoryStagingBlockHasher(block.Number())
+			stageWriter = &historyStagingRecordingWriter{Buffer: bc.buffer, hasher: historyStagingHasher}
+		}
+		domainChangeStage, err = plan.BeginDomainChangeStage(stageWriter)
 		if err != nil {
 			return fmt.Errorf("begin domain change stage: %w", err)
 		}
@@ -1981,6 +2019,25 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if domainChangeStage != nil {
 		if err := domainChangeStage.FlushFinal(); err != nil {
 			return fmt.Errorf("flush block-final domain changes: %w", err)
+		}
+		if manager := bc.historyStaging.Load(); manager != nil {
+			epoch := bc.historyStagingReplayEpoch.Load()
+			if epoch == 0 {
+				epoch, err = manager.CurrentEpoch()
+				if err != nil {
+					return fmt.Errorf("history staging: read canonical epoch: %w", err)
+				}
+			}
+			if historyStagingHasher == nil || plan.txRange == nil {
+				return errors.New("history staging: canonical history receipt has no block journal or tx range")
+			}
+			complete, err := historyStagingHasher.Finish(block.Hash(), epoch, plan.txRange.BeginTxNum, plan.txRange.EndTxNum)
+			if err != nil {
+				return fmt.Errorf("history staging: complete canonical block %d: %w", block.Number(), err)
+			}
+			if err := rawdb.WriteHistoryStagingBlockComplete(bc.buffer, complete); err != nil {
+				return fmt.Errorf("history staging: write canonical block completion: %w", err)
+			}
 		}
 	}
 	var balanceTraceData *blockBalanceTraceData

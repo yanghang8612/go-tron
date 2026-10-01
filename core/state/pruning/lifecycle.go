@@ -674,6 +674,18 @@ func (s snapshotChainSource) DB() snapshots.AggregatorDB {
 	return s.chain.DB()
 }
 
+func (s snapshotChainSource) AcquireStateHistorySourceView(ctx context.Context) (snapshots.AggregatorDB, func() error, error) {
+	if s.chain == nil || s.chain.DB() == nil {
+		return nil, nil, errors.New("pruning: unavailable history source")
+	}
+	if source, ok := s.chain.(interface {
+		AcquireStateHistorySourceView(context.Context) (snapshots.AggregatorDB, func() error, error)
+	}); ok {
+		return source.AcquireStateHistorySourceView(ctx)
+	}
+	return rawdb.AcquireStateHistoryReadView(s.chain.DB())
+}
+
 type eventLogDBSource interface {
 	EventLogDB() *rawdb.ChainDB
 }

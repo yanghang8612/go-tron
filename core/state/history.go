@@ -384,6 +384,19 @@ func (r *PersistentHistoryReader) SetHotHistoryBlockRange(targetBlock, headBlock
 	if r == nil {
 		return nil
 	}
+	// Check the original requested span before advancing over the cold-pruned
+	// prefix. Otherwise a cold-only routed bucket could disappear behind the
+	// hot-prune boundary without a binding-to-manifest proof.
+	if targetBlock < headBlock {
+		if routed, ok := r.db.(interface{ RequireRoutedRange(uint64, uint64) error }); ok {
+			if err := routed.RequireRoutedRange(targetBlock+1, headBlock); err != nil {
+				return fmt.Errorf("state history: archive range [%d,%d] lacks a routed source: %w", targetBlock+1, headBlock, err)
+			}
+			if err := r.verifyPinnedColdBindings(targetBlock+1, headBlock); err != nil {
+				return err
+			}
+		}
+	}
 	if boundary, ok := r.coldHistory.(StateDomainChangeHotPruneBoundary); ok {
 		prunedThrough, present, err := boundary.HotPrunedThroughBlock()
 		if err != nil {
@@ -396,6 +409,49 @@ func (r *PersistentHistoryReader) SetHotHistoryBlockRange(targetBlock, headBlock
 	r.hotHistoryFromBlock = targetBlock
 	r.hotHistoryToBlock = headBlock
 	r.hotHistoryBounded = true
+	return nil
+}
+
+func (r *PersistentHistoryReader) verifyPinnedColdBindings(first, last uint64) error {
+	routed, ok := r.db.(interface {
+		PinnedColdBinding(uint64) (rawdb.HistoryStagingColdBinding, bool, error)
+	})
+	if !ok {
+		return fmt.Errorf("state history: staged source lacks pinned cold bindings")
+	}
+	verifier, ok := r.coldHistory.(interface {
+		VerifyHistoryStagingPinnedBinding(context.Context, rawdb.HistoryStagingColdBinding, func() ([]rawdb.HistoryStagingBlockProof, error)) error
+	})
+	if !ok {
+		return fmt.Errorf("state history: staged cold reader lacks binding verifier")
+	}
+	for bucket := first / rawdb.StateHistoryChunkBucketBlocks; bucket <= last/rawdb.StateHistoryChunkBucketBlocks; bucket++ {
+		binding, present, err := routed.PinnedColdBinding(bucket)
+		if err != nil {
+			return err
+		}
+		if !present {
+			continue
+		}
+		loadBlocks := func() ([]rawdb.HistoryStagingBlockProof, error) {
+			bucketFirst, bucketLast, err := rawdb.StateHistoryChunkBucketBounds(bucket)
+			if err != nil {
+				return nil, err
+			}
+			blocks := make([]rawdb.HistoryStagingBlockProof, 0, rawdb.StateHistoryChunkBucketBlocks)
+			for number := bucketFirst; number <= bucketLast; number++ {
+				row, present, err := rawdb.ReadStateTxRange(r.db, number)
+				if err != nil || !present || row.BlockHash == (tcommon.Hash{}) {
+					return nil, fmt.Errorf("state history: pinned tx range %d missing or invalid: %w", number, err)
+				}
+				blocks = append(blocks, rawdb.HistoryStagingBlockProof{Number: number, Hash: row.BlockHash, BeginTxNum: row.BeginTxNum, EndTxNum: row.EndTxNum})
+			}
+			return blocks, nil
+		}
+		if err := verifier.VerifyHistoryStagingPinnedBinding(r.ctx, binding, loadBlocks); err != nil {
+			return fmt.Errorf("state history: cold bucket %d binding authentication: %w", bucket, err)
+		}
+	}
 	return nil
 }
 

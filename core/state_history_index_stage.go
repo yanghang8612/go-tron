@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
 // Keep posting runs compact so duplicate latest-key/block candidates collapse
@@ -105,6 +107,25 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	if bc == nil {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: nil blockchain")
 	}
+	// Admission precedes index/chain locks; release it once route and hot/cold
+	// source generations have been captured, before the long ETL pass.
+	var releasePublication func()
+	if bc.historyStaging.Load() != nil {
+		coldManager, ok := bc.stateCodeColdHistory.(*snapshots.Manager)
+		if !ok || coldManager == nil {
+			return StateHistoryIndexStageResult{}, errors.New("state history index stage: cold manager is not pinnable")
+		}
+		var err error
+		releasePublication, err = snapshots.AcquireHistoryStagingPublicationRead(context.Background(), coldManager.HistoryStagingDir())
+		if err != nil {
+			return StateHistoryIndexStageResult{}, err
+		}
+		defer func() {
+			if releasePublication != nil {
+				releasePublication()
+			}
+		}()
+	}
 	bc.stateHistoryIndexMu.Lock()
 	defer bc.stateHistoryIndexMu.Unlock()
 
@@ -177,7 +198,34 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	// tx-range rows are append-only, so a durable base already flushed beyond
 	// toBlock is harmless; excluding in-flight/newer overlay layers makes the
 	// source topology immutable while canonical import continues.
-	snapshot, snapshotErr := bc.buffer.NewReadSnapshotThrough(toBlock)
+	var snapshot *blockbuffer.ReadSnapshot
+	var historyView *rawdb.HistoryStagingView
+	var snapshotErr error
+	if manager := bc.historyStaging.Load(); manager != nil {
+		historyView, snapshotErr = manager.AcquireView(func() (rawdb.StateHistoryReadView, func() error, error) {
+			view, err := bc.buffer.NewReadSnapshotThrough(toBlock)
+			if err != nil {
+				return nil, nil, err
+			}
+			snapshot = view
+			return view, view.Close, nil
+		}, nil)
+		if snapshotErr != nil {
+			bc.chainmu.Unlock()
+			return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: pin routed source through %d: %w", toBlock, snapshotErr)
+		}
+		if err := historyView.RequireHotRange(fromBlock, toBlock); err != nil {
+			_ = historyView.Close()
+			bc.chainmu.Unlock()
+			return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: range [%d,%d] lacks hot source: %w", fromBlock, toBlock, err)
+		}
+	} else {
+		snapshot, snapshotErr = bc.buffer.NewReadSnapshotThrough(toBlock)
+	}
+	if releasePublication != nil {
+		releasePublication()
+		releasePublication = nil
+	}
 	if errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) {
 		// memorydb and minimal test stores cannot pin MVCC. Preserve the original
 		// fully-locked path for those backends.
@@ -196,8 +244,17 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	}
 	bc.chainmu.Unlock()
 
-	rebuilt, err := rawdb.RebuildStateHistoryIndexInterruptible(snapshot, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
-	closeErr := snapshot.Close()
+	historySource := rawdb.StateKVHistoryReader(snapshot)
+	if historyView != nil {
+		historySource = historyView
+	}
+	rebuilt, err := rawdb.RebuildStateHistoryIndexInterruptible(historySource, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+	var closeErr error
+	if historyView != nil {
+		closeErr = historyView.Close()
+	} else {
+		closeErr = snapshot.Close()
+	}
 	if err != nil {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: rebuild [%d,%d]: %w", fromBlock, toBlock, err)
 	}

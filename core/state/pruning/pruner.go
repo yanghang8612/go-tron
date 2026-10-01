@@ -60,6 +60,10 @@ type chainDBSource interface {
 	ChainDB() *rawdb.ChainDB
 }
 
+type historyStagingSource interface {
+	HistoryStagingManager() *rawdb.HistoryStagingManager
+}
+
 type historyRangePruneGuardSource interface {
 	TryWithStateDomainChangePruneGuard(context.Context, uint64, uint64, common.Hash, func() error) (bool, error)
 }
@@ -774,8 +778,13 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 			}
 		}
 	}
+	var historyStaging *rawdb.HistoryStagingManager
+	if source, ok := p.chain.(historyStagingSource); ok {
+		historyStaging = source.HistoryStagingManager()
+	}
 	stats, err = Worker{
 		DB:                      p.chain.DB(),
+		HistoryStaging:          historyStaging,
 		Policy:                  p.cfg.Policy,
 		MaxBlocks:               p.cfg.BatchSize,
 		SnapshotDir:             p.cfg.SnapshotDir,

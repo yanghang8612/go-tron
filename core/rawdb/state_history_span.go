@@ -112,6 +112,45 @@ func (b *StateHistorySpanBlock) CopyChunk(index int, dst []byte) (int, error) {
 	}
 	return copy(dst, b.chunks[index].raw), nil
 }
+
+// WritePrevTo streams one borrowed row's previous image from already
+// authenticated chunks. It is valid only inside that row's IterateRows
+// callback, does not allocate an owning Prev buffer, and rejects malformed
+// span metadata before writing any bytes.
+func (b *StateHistorySpanBlock) WritePrevTo(row *StateHistorySpanRow, dst io.Writer) error {
+	if err := b.check(); err != nil {
+		return err
+	}
+	if row == nil || dst == nil {
+		return errors.New("rawdb: missing history Prev stream input")
+	}
+	var length uint64
+	for _, span := range row.PrevSpans {
+		if int(span.ChunkIndex) >= len(b.chunks) {
+			return errors.New("rawdb: history Prev chunk index outside authenticated block")
+		}
+		chunk := b.chunks[span.ChunkIndex].raw
+		end := uint64(span.Offset) + uint64(span.Length)
+		if end > uint64(len(chunk)) || length > ^uint64(0)-uint64(span.Length) {
+			return errors.New("rawdb: history Prev span outside authenticated chunk")
+		}
+		length += uint64(span.Length)
+	}
+	if length != row.PrevLength {
+		return errors.New("rawdb: history Prev spans do not match declared length")
+	}
+	for _, span := range row.PrevSpans {
+		chunk := b.chunks[span.ChunkIndex].raw[span.Offset : span.Offset+span.Length]
+		n, err := dst.Write(chunk)
+		if err != nil {
+			return err
+		}
+		if n != len(chunk) {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
 func (b *StateHistorySpanBlock) discard() {
 	pooled := b.pooled
 	*b = StateHistorySpanBlock{}

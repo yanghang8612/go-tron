@@ -103,6 +103,16 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	if dir == "" {
 		return HistoryCompactionResult{}, errors.New("snapshots: compaction directory is empty")
 	}
+	if dataset == SegmentDatasetStateDomainChange {
+		if binding, present := historyStagingRetentionFor(dir); present && !binding.isReady() {
+			// A prior G+1 publication may have survived while its hot binding
+			// Sync failed. Repair that transition before selecting or writing
+			// another merge; the published manifest is now the source of truth.
+			if err := ReconcileHistoryStagingColdDependencies(ctx, dir); err != nil {
+				return HistoryCompactionResult{}, err
+			}
+		}
+	}
 	maxSteps := cfg.MaxSteps
 	if maxSteps == 0 {
 		maxSteps = defaultCompactionMaxSteps
@@ -125,6 +135,12 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	historyCfg, ok := DefaultDomainRegistry().Dataset(dataset)
 	if !ok || !historyCfg.HasHistory {
 		return HistoryCompactionResult{}, nil
+	}
+	if dataset == SegmentDatasetStateDomainChange && manifest.HistoryStagingResetEpoch != 0 {
+		// A reset retired old trios without deleting published catalogs or
+		// pinned readers. Every replacement, including a later merge of new
+		// leaves, needs an epoch-private path to avoid overwriting those files.
+		historyCfg.HistoryPathStem = filepath.Join(fmt.Sprintf("history-staging-epoch-%d", manifest.HistoryStagingResetEpoch), historyCfg.HistoryPathStem)
 	}
 	if historyCfg.CompactHistoryContext == nil && historyCfg.CompactHistory == nil && (historyCfg.OpenHistory == nil || historyCfg.WriteHistory == nil) {
 		return HistoryCompactionResult{}, fmt.Errorf("snapshots: history domain %s missing compaction codec", historyCfg.Dataset)
@@ -241,8 +257,37 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		}
 		return HistoryCompactionResult{}, err
 	}
-	if _, err := NewAggregator(dir).Integrate(selection.fromTxNum, selection.toTxNum, refs); err != nil {
+	var stagingBinding *historyStagingRetentionBinding
+	if historyCfg.Dataset == SegmentDatasetStateDomainChange {
+		if bound, present := historyStagingRetentionFor(dir); present {
+			// Only the short publication/rebind phase excludes new snapshot
+			// captures. The expensive merge build above admits readers.
+			releasePublication, err := bound.publication.acquireWrite(ctx)
+			if err != nil {
+				return HistoryCompactionResult{}, err
+			}
+			defer releasePublication()
+			bound.mu.Lock()
+			defer bound.mu.Unlock()
+			if !bound.ready {
+				return HistoryCompactionResult{}, errors.New("snapshots: history staging cold dependencies not reconciled")
+			}
+			stagingBinding = bound
+		}
+	}
+	mergedManifest, err := NewAggregator(dir).Integrate(selection.fromTxNum, selection.toTxNum, refs)
+	if err != nil {
 		return HistoryCompactionResult{}, err
+	}
+	if stagingBinding != nil {
+		stagingBinding.ready = false // publication is invisible until durable rebind
+		if err := reconcileHistoryStagingColdDependencies(ctx, dir, mergedManifest, stagingBinding.manager); err != nil {
+			return HistoryCompactionResult{}, fmt.Errorf("snapshots: merged manifest published but staging cold rebind pending: %w", err)
+		}
+		stagingBinding.ready, err = stagingBinding.resetColdIsolated(mergedManifest)
+		if err != nil || !stagingBinding.ready {
+			return HistoryCompactionResult{}, errors.New("snapshots: merged manifest lost reset cold isolation")
+		}
 	}
 
 	result := HistoryCompactionResult{
@@ -406,6 +451,15 @@ func historySegmentsAreContiguous(prev, next SegmentRef) bool {
 }
 
 func deleteObsoleteHistoryCompactionFiles(dir string, candidates []historyCompactionCandidate, newRefs []SegmentRef) error {
+	binding, staging := historyStagingRetentionFor(dir)
+	if staging && !binding.ready {
+		return nil
+	}
+	release, ok := tryHistoryRetirement()
+	if !ok {
+		return nil // retired metadata retains the files for a later GC pass
+	}
+	defer release()
 	keep := make(map[string]struct{}, len(newRefs))
 	for _, ref := range newRefs {
 		if ref.Path != "" {
@@ -425,9 +479,39 @@ func deleteObsoleteHistoryCompactionFiles(dir string, candidates []historyCompac
 			keep[ref.Path] = struct{}{}
 		}
 	}
+	var retiredIDs map[string][32]byte
+	if staging {
+		manifest, err := LoadProductionManifest(dir)
+		if err != nil {
+			return err
+		}
+		retiredIDs, _, err = retiredHistoryStagingTrios(manifest)
+		if err != nil {
+			return err
+		}
+	}
 	for _, candidate := range candidates {
 		for _, ref := range append([]SegmentRef{candidate.history}, candidate.companions...) {
 			if _, ok := keep[ref.Path]; ok {
+				continue
+			}
+			if staging && ref.NormalizedDataset() == SegmentDatasetStateDomainChange {
+				id, known := retiredIDs[ref.Path]
+				if !known {
+					continue
+				}
+				removed, err := binding.manager.WithColdGCLease(id, func() error {
+					if err := os.Remove(filepath.Join(dir, ref.Path)); err != nil && !os.IsNotExist(err) {
+						return err
+					}
+					return nil
+				})
+				if err != nil {
+					return fmt.Errorf("snapshots: remove obsolete segment %q: %w", ref.Path, err)
+				}
+				if !removed {
+					continue
+				}
 				continue
 			}
 			if err := os.Remove(filepath.Join(dir, ref.Path)); err != nil && !os.IsNotExist(err) {

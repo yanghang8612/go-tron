@@ -15,6 +15,7 @@ import time
 
 CONFIG = "/etc/gtron/mainnet-space-guard.json"
 HOLD = "/var/lib/gtron-mainnet-disk-stop.hold"
+MIGRATION = "/data/gtron/main/MIGRATION_IN_PROGRESS.json"
 DATA = "/data"
 DATADIR = "/data/gtron/main/datadir"
 SYSTEMCTL = "/bin/systemctl"
@@ -76,6 +77,22 @@ def inspect_space(starting):
     reasons = []
     if os.path.lexists(HOLD):
         reasons.append("mainnet stop latch exists")
+    if os.path.lexists(MIGRATION):
+        # During VERIFIED_PENDING_ACTIVATION the fixed candidate may start
+        # under its separate SHA/capability guard. Unknown or damaged latch
+        # contents must still prevent this guard from approving startup.
+        try:
+            fd = os.open(MIGRATION, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+                        info.st_mode & 0o022 or info.st_size > 16384):
+                    raise ValueError("unsafe migration latch")
+                latch = json.loads(stream.read(16385))
+            if latch.get("version") != 1 or latch.get("state") != "VERIFIED_PENDING_ACTIVATION":
+                reasons.append("history-staging migration in progress")
+        except Exception as exc:
+            reasons.append("history-staging migration latch unreadable: " + str(exc)[:256])
     if result["free_bytes"] <= result["threshold_bytes"]:
         reasons.append("free byte reserve reached")
     if result["free_inodes"] <= result["min_free_inodes"]:

@@ -668,6 +668,9 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 	}
 	manifest := NewManifest(visibleStart, visibleEnd, segments)
 	manifest.Generation = generation
+	if old != nil {
+		manifest.HistoryStagingResetEpoch = old.HistoryStagingResetEpoch
+	}
 	manifest.Chain = chain
 	manifest.Progress = mergeProgress(progress, progressFromRefs(refs, visibleEnd))
 	if preserveGeneralLatestProgress {

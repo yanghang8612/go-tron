@@ -568,7 +568,107 @@ var (
 	// publish new external references after their chunks have been reclaimed.
 	stateHistorySharedChunkPrefix  = []byte("state-history-chunk-v1-")
 	stateHistorySharedBucketPrefix = []byte("state-history-chunk-bucket-v1-")
+
+	// Independent history-staging metadata. Payload keys in the staging DB
+	// retain their original changeset/chunk/tx-range encoding; these prefixes
+	// are metadata only and never overlap canonical state or shared chunks.
+	historyStagingIdentityKey           = []byte("history-staging-identity-v1")
+	historyStagingRoutePrefix           = []byte("history-staging-route-v1-")
+	historyStagingClaimPrefix           = []byte("history-staging-claim-v1-")
+	historyStagingReceiptPrefix         = []byte("history-staging-receipt-v1-")
+	historyStagingPayloadPrefix         = []byte("history-staging-payload-v1-")
+	historyStagingEpochKey              = []byte("history-staging-epoch-v1")
+	historyStagingColdBindingPrefix     = []byte("history-staging-cold-binding-v1-")
+	historyStagingColdRefPrefix         = []byte("history-staging-cold-ref-v1-")
+	historyStagingClaimColdRefPrefix    = []byte("history-staging-claim-cold-ref-v1-")
+	historyStagingResetIntentKey        = []byte("history-staging-reset-intent-v1")
+	historyStagingRouteBarrierKey       = []byte("history-staging-route-barrier-v1")
+	historyStagingBlockCompletePrefix   = []byte("history-staging-block-complete-v1-")
+	historyStagingOldTargetGCPrefix     = []byte("history-staging-old-target-gc-v1-")
+	historyStagingOldColdRefGCPrefix    = []byte("history-staging-old-cold-ref-gc-v1-")
+	historyStagingOldColdRefsDonePrefix = []byte("history-staging-old-cold-refs-done-v1-")
+	historyStagingOldHotGCPrefix        = []byte("history-staging-old-hot-gc-v1-")
 )
+
+func historyStagingBucketKey(prefix []byte, bucket uint64) []byte {
+	k := make([]byte, len(prefix), len(prefix)+8)
+	copy(k, prefix)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func historyStagingColdRefKey(contentID [32]byte, epoch, bucket uint64) []byte {
+	k := make([]byte, len(historyStagingColdRefPrefix), len(historyStagingColdRefPrefix)+48)
+	copy(k, historyStagingColdRefPrefix)
+	k = append(k, contentID[:]...)
+	k = binary.BigEndian.AppendUint64(k, epoch)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func historyStagingClaimColdRefKey(contentID [32]byte, epoch, bucket uint64) []byte {
+	k := make([]byte, len(historyStagingClaimColdRefPrefix), len(historyStagingClaimColdRefPrefix)+48)
+	copy(k, historyStagingClaimColdRefPrefix)
+	k = append(k, contentID[:]...)
+	k = binary.BigEndian.AppendUint64(k, epoch)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func historyStagingColdBindingKey(epoch, bucket uint64) []byte {
+	k := make([]byte, len(historyStagingColdBindingPrefix), len(historyStagingColdBindingPrefix)+16)
+	copy(k, historyStagingColdBindingPrefix)
+	k = binary.BigEndian.AppendUint64(k, epoch)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func historyStagingReceiptKey(epoch, bucket uint64) []byte {
+	k := make([]byte, len(historyStagingReceiptPrefix), len(historyStagingReceiptPrefix)+16)
+	copy(k, historyStagingReceiptPrefix)
+	k = binary.BigEndian.AppendUint64(k, epoch)
+	return binary.BigEndian.AppendUint64(k, bucket)
+}
+
+func historyStagingReceiptEpochPrefix(epoch uint64) []byte {
+	k := make([]byte, len(historyStagingReceiptPrefix), len(historyStagingReceiptPrefix)+8)
+	copy(k, historyStagingReceiptPrefix)
+	return binary.BigEndian.AppendUint64(k, epoch)
+}
+
+func historyStagingPayloadKey(epoch uint64, original []byte) []byte {
+	k := make([]byte, len(historyStagingPayloadPrefix), len(historyStagingPayloadPrefix)+8+len(original))
+	copy(k, historyStagingPayloadPrefix)
+	k = binary.BigEndian.AppendUint64(k, epoch)
+	return append(k, original...)
+}
+
+func historyStagingPayloadEpochPrefix(epoch uint64) []byte {
+	k := make([]byte, len(historyStagingPayloadPrefix), len(historyStagingPayloadPrefix)+8)
+	copy(k, historyStagingPayloadPrefix)
+	return binary.BigEndian.AppendUint64(k, epoch)
+}
+
+func historyStagingOldTargetGCKey(epoch uint64) []byte {
+	k := make([]byte, len(historyStagingOldTargetGCPrefix), len(historyStagingOldTargetGCPrefix)+8)
+	copy(k, historyStagingOldTargetGCPrefix)
+	return binary.BigEndian.AppendUint64(k, epoch)
+}
+
+func historyStagingOldColdRefGCKey(epoch uint64) []byte {
+	return historyStagingBucketKey(historyStagingOldColdRefGCPrefix, epoch)
+}
+
+func historyStagingOldColdRefsDoneKey(epoch uint64) []byte {
+	return historyStagingBucketKey(historyStagingOldColdRefsDonePrefix, epoch)
+}
+
+func historyStagingOldHotGCKey(epoch uint64) []byte {
+	return historyStagingBucketKey(historyStagingOldHotGCPrefix, epoch)
+}
+
+func historyStagingBlockCompleteKey(epoch, block uint64) []byte {
+	k := make([]byte, len(historyStagingBlockCompletePrefix), len(historyStagingBlockCompletePrefix)+16)
+	copy(k, historyStagingBlockCompletePrefix)
+	k = binary.BigEndian.AppendUint64(k, epoch)
+	return binary.BigEndian.AppendUint64(k, block)
+}
 
 // StateHistoryChunkBucketBlocks is part of the shared history v3 format. A
 // different width requires a new format, never a runtime tuning change.

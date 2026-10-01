@@ -58,6 +58,13 @@ type ChainSource interface {
 	LatestSolidifiedBlockNum() int64
 }
 
+// historySourceViewSource optionally pins a single canonical history-source
+// generation across cutoff selection, all history scans, and publication.
+// Other datasets continue to read the canonical chain database directly.
+type historySourceViewSource interface {
+	AcquireStateHistorySourceView(context.Context) (AggregatorDB, func() error, error)
+}
+
 type canonicalHashSource interface {
 	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
 }
@@ -1321,7 +1328,7 @@ func (r *Runner) onePassWithPressure(pressure HistoryPressure) (PassResult, erro
 	return r.onePassWithPressureContext(context.Background(), pressure)
 }
 
-func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure HistoryPressure) (PassResult, error) {
+func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure HistoryPressure) (result PassResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return PassResult{}, err
 	}
@@ -1355,12 +1362,24 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	if hasFinishStage && finishStage < cutoffBlock {
 		cutoffBlock = finishStage
 	}
-	result := PassResult{
+	result = PassResult{
 		SolidifiedBlock:     uint64(solidified),
 		CutoffBlock:         cutoffBlock,
 		EligibleCutoffBlock: cutoffBlock,
 	}
-	cutoffRange, ok, err := historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
+	historyDB := AggregatorDB(db)
+	if source, ok := r.chain.(historySourceViewSource); ok {
+		view, release, openErr := source.AcquireStateHistorySourceView(ctx)
+		if openErr != nil {
+			return result, fmt.Errorf("snapshots: acquire history source view: %w", openErr)
+		}
+		if view == nil || release == nil {
+			return result, errors.New("snapshots: history source view is incomplete")
+		}
+		historyDB = view
+		defer func() { err = errors.Join(err, release()) }()
+	}
+	cutoffRange, ok, err := historyCfg.HotHistoryTxRangeForBlock(historyDB, cutoffBlock)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -1372,9 +1391,14 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	}
 
 	metadataStarted := time.Now()
-	productionManifest, err := loadOptionalProductionManifest(r.cfg.Dir)
-	if err != nil {
-		return PassResult{}, err
+	var productionManifest *Manifest
+	if pinned, ok := historyDB.(interface{ PinnedColdManifest() *Manifest }); ok {
+		productionManifest = pinned.PinnedColdManifest()
+	} else {
+		productionManifest, err = loadOptionalProductionManifest(r.cfg.Dir)
+		if err != nil {
+			return PassResult{}, err
+		}
 	}
 	visibleEnd, err := coldSnapshotVisibleTxEndFromManifest(productionManifest, r.cfg.HistoryDataset)
 	result.HistoryMetadataDuration = coldSnapshotPhaseDuration(metadataStarted)
@@ -1387,7 +1411,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	}
 	searchFromBlock := uint64(0)
 	if visibleEnd > 0 {
-		previousBuildBlock, hasPreviousBuild, err := r.reconcileSnapshotBuildStageBlock(historyCfg, db, visibleEnd, cutoffBlock)
+		previousBuildBlock, hasPreviousBuild, err := r.reconcileSnapshotBuildStageBlock(historyCfg, historyDB, db, visibleEnd, cutoffBlock)
 		if err != nil {
 			return PassResult{}, err
 		}
@@ -1405,7 +1429,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	}
 
 	toTxNum := cutoffRange.EndTxNum
-	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, searchFromBlock, cutoffBlock)
+	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, historyDB, fromTxNum, searchFromBlock, cutoffBlock)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -1504,7 +1528,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		if batchCutoffBlock != cutoffBlock {
 			cutoffBlock = batchCutoffBlock
 			result.CutoffBlock = cutoffBlock
-			cutoffRange, ok, err = historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
+			cutoffRange, ok, err = historyCfg.HotHistoryTxRangeForBlock(historyDB, cutoffBlock)
 			if err != nil {
 				return result, err
 			}
@@ -1522,14 +1546,14 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		if targetTxNum < fromTxNum {
 			targetTxNum = ^uint64(0)
 		}
-		txCutoffBlock, found, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, targetTxNum, startBlock, cutoffBlock)
+		txCutoffBlock, found, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, historyDB, targetTxNum, startBlock, cutoffBlock)
 		if err != nil {
 			return result, err
 		}
 		if found && txCutoffBlock < cutoffBlock {
 			cutoffBlock = txCutoffBlock
 			result.CutoffBlock = cutoffBlock
-			cutoffRange, ok, err = historyCfg.HotHistoryTxRangeForBlock(db, cutoffBlock)
+			cutoffRange, ok, err = historyCfg.HotHistoryTxRangeForBlock(historyDB, cutoffBlock)
 			if err != nil {
 				return result, err
 			}
@@ -1544,6 +1568,11 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	}
 	if fromTxNum > toTxNum {
 		return result, nil
+	}
+	if routed, ok := historyDB.(interface{ RequireHotRange(uint64, uint64) error }); ok {
+		if err := routed.RequireHotRange(startBlock, cutoffBlock); err != nil {
+			return result, fmt.Errorf("snapshots: source range [%d,%d] is not entirely staged-hot: %w", startBlock, cutoffBlock, err)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -1602,16 +1631,24 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		return nil
 	}
 	buildHistory := func() ([]SegmentRef, error) {
+		relPath := historyCfg.HistoryPath(fromTxNum, toTxNum)
+		if historyCfg.Dataset == SegmentDatasetStateDomainChange && productionManifest != nil && productionManifest.HistoryStagingResetEpoch != 0 {
+			// Reset isolation retires the old epoch's immutable trios, but
+			// published catalogs and pinned readers may still reference their
+			// files. A replayed SOURCE range can have identical tx numbers;
+			// give its rebuilt trio a distinct on-disk path.
+			relPath = filepath.Join(fmt.Sprintf("history-staging-epoch-%d", productionManifest.HistoryStagingResetEpoch), relPath)
+		}
 		if historyCfg.BuildHistoryBlockRangeContext != nil {
-			return historyCfg.BuildHistoryBlockRangeContext(ctx, db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum), readOptions)
+			return historyCfg.BuildHistoryBlockRangeContext(ctx, historyDB, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, relPath, readOptions)
 		}
 		if readOptions.enabled() {
 			return nil, errors.New("snapshots: enhanced history reader requires a context-aware bounded builder")
 		}
 		if historyCfg.BuildHistoryBlockRange != nil {
-			return historyCfg.BuildHistoryBlockRange(db, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, historyCfg.HistoryPath(fromTxNum, toTxNum))
+			return historyCfg.BuildHistoryBlockRange(historyDB, r.cfg.Dir, fromTxNum, toTxNum, startBlock, cutoffBlock, relPath)
 		}
-		return historyCfg.BuildHistory(db, r.cfg.Dir, fromTxNum, toTxNum, historyCfg.HistoryPath(fromTxNum, toTxNum))
+		return historyCfg.BuildHistory(historyDB, r.cfg.Dir, fromTxNum, toTxNum, relPath)
 	}
 	buildEvents := func() ([]SegmentRef, error) {
 		return buildEventLogPairFromChain(chainDB, r.cfg.Dir, startBlock, cutoffBlock, EventLogBuildOptions{Version: r.cfg.EventLogVersion, ETL: r.cfg.ETL})
@@ -2223,14 +2260,14 @@ func (r *Runner) verifiedSnapshotBuildStageBlock(db AggregatorDB) (uint64, bool,
 // crash boundary. Snap history always publishes complete blocks and retains
 // StateTxRange rows, so the manifest's contiguous visible tx end maps back to
 // exactly one block even if the hash-bound stage write was lost or stale.
-func (r *Runner) reconcileSnapshotBuildStageBlock(cfg DomainCfg, db AggregatorDB, visibleEnd, cutoffBlock uint64) (uint64, bool, error) {
-	stageBlock, hasStage, err := r.verifiedSnapshotBuildStageBlock(db)
+func (r *Runner) reconcileSnapshotBuildStageBlock(cfg DomainCfg, historyDB, stageDB AggregatorDB, visibleEnd, cutoffBlock uint64) (uint64, bool, error) {
+	stageBlock, hasStage, err := r.verifiedSnapshotBuildStageBlock(stageDB)
 	if err != nil {
 		return 0, false, err
 	}
 	recoveryFromBlock := uint64(0)
 	if hasStage && cfg.ReadHotHistoryTxRange != nil {
-		row, ok, readErr := cfg.ReadHotHistoryTxRange(db, stageBlock)
+		row, ok, readErr := cfg.ReadHotHistoryTxRange(historyDB, stageBlock)
 		if readErr != nil {
 			return 0, false, readErr
 		}
@@ -2244,25 +2281,25 @@ func (r *Runner) reconcileSnapshotBuildStageBlock(cfg DomainCfg, db AggregatorDB
 	if cfg.ReadHotHistoryTxRange == nil {
 		return stageBlock, hasStage, nil
 	}
-	recovered, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(cfg, db, visibleEnd, recoveryFromBlock, cutoffBlock)
+	recovered, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(cfg, historyDB, visibleEnd, recoveryFromBlock, cutoffBlock)
 	if err != nil {
 		return 0, false, err
 	}
 	if !ok {
 		return stageBlock, hasStage, nil
 	}
-	row, ok, err := cfg.ReadHotHistoryTxRange(db, recovered)
+	row, ok, err := cfg.ReadHotHistoryTxRange(historyDB, recovered)
 	if err != nil {
 		return 0, false, err
 	}
 	if !ok || row == nil || row.BeginTxNum > visibleEnd || row.EndTxNum != visibleEnd {
 		return 0, false, fmt.Errorf("snapshots: visible history tx %d does not end recovered block %d", visibleEnd, recovered)
 	}
-	hash, err := r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotBuild, recovered)
+	hash, err := r.snapshotBuildStageBoundaryHash(stageDB, rawdb.StageSnapshotBuild, recovered)
 	if err != nil {
 		return 0, false, err
 	}
-	if writer, ok := db.(ethdb.KeyValueWriter); ok {
+	if writer, ok := stageDB.(ethdb.KeyValueWriter); ok {
 		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotBuild, recovered, hash); err != nil {
 			return 0, false, err
 		}

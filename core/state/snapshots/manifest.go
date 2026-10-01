@@ -71,15 +71,18 @@ const (
 )
 
 type Manifest struct {
-	Version        uint32         `json:"version"`
-	Generation     uint64         `json:"generation,omitempty"`
-	PublishedUnix  int64          `json:"publishedUnix"`
-	VisibleTxStart uint64         `json:"visibleTxStart"`
-	VisibleTxEnd   uint64         `json:"visibleTxEnd"`
-	Chain          *ChainIdentity `json:"chain,omitempty"`
-	Progress       *Progress      `json:"progress,omitempty"`
-	Segments       []SegmentRef   `json:"segments"`
-	Retired        []SegmentRef   `json:"retired,omitempty"`
+	Version    uint32 `json:"version"`
+	Generation uint64 `json:"generation,omitempty"`
+	// HistoryStagingResetEpoch records a durable cold-history isolation after
+	// a complete genesis replay. Subsequent cold publications must retain it.
+	HistoryStagingResetEpoch uint64         `json:"historyStagingResetEpoch,omitempty"`
+	PublishedUnix            int64          `json:"publishedUnix"`
+	VisibleTxStart           uint64         `json:"visibleTxStart"`
+	VisibleTxEnd             uint64         `json:"visibleTxEnd"`
+	Chain                    *ChainIdentity `json:"chain,omitempty"`
+	Progress                 *Progress      `json:"progress,omitempty"`
+	Segments                 []SegmentRef   `json:"segments"`
+	Retired                  []SegmentRef   `json:"retired,omitempty"`
 
 	lookup *manifestLookup // private immutable read views only; excluded from JSON
 }
@@ -194,6 +197,15 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	sortSegments(manifest.Retired)
 	if err := manifest.Validate(); err != nil {
 		return err
+	}
+	if historyStagingColdRetentionActive(dir) {
+		prior, err := LoadProductionManifest(dir)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil && manifest.HistoryStagingResetEpoch < prior.HistoryStagingResetEpoch {
+			return errors.New("snapshots: cold publication dropped durable history staging reset epoch")
+		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

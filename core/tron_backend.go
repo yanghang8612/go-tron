@@ -3556,6 +3556,23 @@ func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64,
 }
 
 func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks ...uint64) (*state.PersistentHistoryReader, uint64, tcommon.Hash, func(), error) {
+	var releasePublication func()
+	if b.chain.historyStaging.Load() != nil {
+		coldManager, ok := b.stateColdHistory.(*snapshots.Manager)
+		if !ok || coldManager == nil {
+			return nil, 0, tcommon.Hash{}, nil, errors.New("archive history staging requires a pinnable cold manager")
+		}
+		var err error
+		releasePublication, err = snapshots.AcquireHistoryStagingPublicationRead(ctx, coldManager.HistoryStagingDir())
+		if err != nil {
+			return nil, 0, tcommon.Hash{}, nil, err
+		}
+		defer func() {
+			if releasePublication != nil {
+				releasePublication()
+			}
+		}()
+	}
 	if err := lockMutexContext(ctx, &b.chain.chainmu); err != nil {
 		return nil, 0, tcommon.Hash{}, nil, err
 	}
@@ -3577,7 +3594,52 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 	}
 	headNum := head.Number()
 	var snapshot *blockbuffer.ReadSnapshot
-	snapshot, snapshotErr := b.chain.buffer.NewReadSnapshotThrough(headNum)
+	var historyView *rawdb.HistoryStagingView
+	readerColdHistory := b.stateColdHistory
+	var snapshotErr error
+	if manager := b.chain.historyStaging.Load(); manager != nil {
+		coldManager, ok := b.stateColdHistory.(*snapshots.Manager)
+		if !ok || coldManager == nil {
+			b.chain.chainmu.Unlock()
+			return nil, 0, tcommon.Hash{}, nil, errors.New("archive history staging requires a pinnable cold manager")
+		}
+		// The manager captures the hot snapshot under its route-generation lock
+		// while chainmu holds the canonical head fixed. A previously captured hot
+		// snapshot paired with a later route could otherwise lose a transferred
+		// bucket between the two Pebble databases.
+		historyView, snapshotErr = manager.AcquireView(func() (rawdb.StateHistoryReadView, func() error, error) {
+			view, err := b.chain.buffer.NewReadSnapshotThrough(headNum)
+			if err != nil {
+				return nil, nil, err
+			}
+			snapshot = view
+			return view, view.Close, nil
+		}, func() (func() error, error) {
+			pinned, release, err := coldManager.PinHistoryReadView()
+			if err != nil {
+				return nil, err
+			}
+			readerColdHistory = pinned
+			return func() error { release(); return nil }, nil
+		})
+		if snapshotErr != nil {
+			b.chain.chainmu.Unlock()
+			return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("snapshot staged archive history: %w", snapshotErr)
+		}
+	} else {
+		snapshot, snapshotErr = b.chain.buffer.NewReadSnapshotThrough(headNum)
+	}
+	if releasePublication != nil {
+		releasePublication()
+		releasePublication = nil
+	}
+	closeSnapshot := func() {
+		if historyView != nil {
+			_ = historyView.Close()
+		} else if snapshot != nil {
+			_ = snapshot.Close()
+		}
+	}
 	if errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) && b.chain.commitPending != nil {
 		// Backends without durable MVCC snapshots must retain chainmu for the
 		// whole query. Settle first so their moving Buffer view cannot gain a
@@ -3592,40 +3654,38 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 	}
 	root, ok, err := b.chain.stateRootAtBlockStrict(headNum)
 	if err != nil {
-		if snapshot != nil {
-			_ = snapshot.Close()
-		}
+		closeSnapshot()
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, err
 	}
 	if !ok {
-		if snapshot != nil {
-			_ = snapshot.Close()
-		}
+		closeSnapshot()
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("state root for head block %d not available", headNum)
 	}
 	live, err := b.chain.openState(root)
 	if err != nil {
-		if snapshot != nil {
-			_ = snapshot.Close()
-		}
+		closeSnapshot()
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("open head state: %w", err)
 	}
 	historyDB := stateHistoryReaderDB(b.chain.buffer)
 	release := b.chain.chainmu.Unlock
 	if snapshotErr == nil {
-		historyDB = snapshot
+		if historyView != nil {
+			historyDB = historyView
+		} else {
+			historyDB = snapshot
+		}
 		live.SetStateCodeReader(snapshot)
 		live.SetAccountKVIndexStore(snapshot)
 		b.chain.chainmu.Unlock()
-		release = func() { _ = snapshot.Close() }
+		release = closeSnapshot
 	} else if !errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) {
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("snapshot archive state: %w", snapshotErr)
 	}
-	reader := state.NewPersistentHistoryReaderWithColdHistory(historyDB, live, headNum, b.stateColdHistory)
+	reader := state.NewPersistentHistoryReaderWithColdHistory(historyDB, live, headNum, readerColdHistory)
 	reader.SetContext(ctx)
 	return reader, headNum, root, release, nil
 }
