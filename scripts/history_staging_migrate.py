@@ -82,11 +82,14 @@ def unit_state(unit):
 
 
 def verify_stopped(unit):
-    props = command(['/bin/systemctl', 'show', unit,
-                     '--property=ActiveState', '--property=MainPID', '--no-pager'], 30)
+    fields = ['--property=ActiveState']
+    if not unit.endswith('.timer'):
+        fields.append('--property=MainPID')
+    props = command(['/bin/systemctl', 'show', unit, *fields, '--no-pager'], 30)
     parsed = dict(line.split('=', 1) for line in props.splitlines() if '=' in line)
-    require(parsed.get('ActiveState') not in ('active', 'activating') and
-            parsed.get('MainPID') in ('0', ''), unit + ' still has a running process')
+    require(parsed.get('ActiveState') in ('inactive', 'failed') and
+            (unit.endswith('.timer') or parsed.get('MainPID') == '0'),
+            unit + ' still has a running process or timer')
 
 
 def sha_file(path):

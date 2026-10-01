@@ -22,6 +22,32 @@ SPEC.loader.exec_module(migrate)
 
 
 class HistoryStagingMigrateTests(unittest.TestCase):
+    def test_verify_stopped_timer_avoids_unsupported_mainpid_property(self):
+        calls = []
+        def old_systemd(argv, timeout):
+            calls.append(argv)
+            if '--property=MainPID' in argv:
+                raise RuntimeError('Unknown property MainPID for timer unit')
+            return 'ActiveState=inactive\n'
+        with mock.patch.object(migrate, 'command', side_effect=old_systemd):
+            migrate.verify_stopped(migrate.TIMER)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], ['/bin/systemctl', 'show', migrate.TIMER,
+                                    '--property=ActiveState', '--no-pager'])
+
+    def test_verify_stopped_rejects_active_timer_and_service_pid(self):
+        with mock.patch.object(migrate, 'command', return_value='ActiveState=active\n'):
+            with self.assertRaisesRegex(RuntimeError, 'running process or timer'):
+                migrate.verify_stopped(migrate.TIMER)
+        with mock.patch.object(migrate, 'command',
+                               return_value='ActiveState=inactive\nMainPID=123\n') as run:
+            with self.assertRaisesRegex(RuntimeError, 'running process or timer'):
+                migrate.verify_stopped(migrate.SERVICE)
+        self.assertIn('--property=MainPID', run.call_args[0][0])
+        with mock.patch.object(migrate, 'command', return_value='ActiveState=inactive\n'):
+            with self.assertRaisesRegex(RuntimeError, 'running process or timer'):
+                migrate.verify_stopped(migrate.SERVICE)
+
     def repin_fixture(self, root):
         source, target, cold = (root / name for name in ('source', 'target', 'cold'))
         for path in (source, target, cold):
