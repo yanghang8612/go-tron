@@ -147,8 +147,16 @@ type HistoryStagingRouteBarrier struct {
 	RouteDigest     [32]byte
 }
 
-// Limits are mandatory hard limits. A zero field is invalid except
-// MinFreeBytes, which is meaningful only with a caller-supplied space check.
+// HistoryStagingMaxDecodedBytes is the shared changeset codec's per-block
+// decoded ceiling. The CLI must not offer a migration budget above this limit.
+const HistoryStagingMaxDecodedBytes = stateDomainChangeBlockMaxDecodedBytes
+
+// HistoryStagingMaxCopyPhysicalBytes leaves room for all bounded source,
+// copy, and verification passes under the total per-bucket work budget.
+func HistoryStagingMaxCopyPhysicalBytes(maxWorkBytes uint64) uint64 { return maxWorkBytes / 4 }
+
+// HistoryStagingLimits are mandatory hard limits. Every numeric field and the
+// caller-supplied free-space check must be nonzero or nonnil, respectively.
 type HistoryStagingLimits struct {
 	MaxRowBytes     uint64
 	MaxBucketBytes  uint64
@@ -233,7 +241,7 @@ func (p HistoryStagingProof) digest() ([32]byte, error) {
 }
 
 func (l HistoryStagingLimits) validate() error {
-	if l.MaxRowBytes == 0 || l.MaxBucketBytes == 0 || l.MaxBatchBytes == 0 || l.MaxWorkBytes == 0 || l.MaxDecodedBytes == 0 || l.MaxDecodedBytes > stateDomainChangeBlockMaxDecodedBytes || l.MinFreeBytes == 0 || l.FreeBytes == nil || l.MaxRowBytes > l.MaxBatchBytes || l.MaxBatchBytes > l.MaxBucketBytes || l.MaxBucketBytes > l.MaxWorkBytes {
+	if l.MaxRowBytes == 0 || l.MaxBucketBytes == 0 || l.MaxBatchBytes == 0 || l.MaxWorkBytes == 0 || l.MaxDecodedBytes == 0 || l.MaxDecodedBytes > HistoryStagingMaxDecodedBytes || l.MinFreeBytes == 0 || l.FreeBytes == nil || l.MaxRowBytes > l.MaxBatchBytes || l.MaxBatchBytes > l.MaxBucketBytes || l.MaxBucketBytes > l.MaxWorkBytes {
 		return errors.New("rawdb: invalid history staging work limits")
 	}
 	return nil

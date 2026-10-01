@@ -441,7 +441,7 @@ func (m *HistoryStagingManager) CopyClaim(ctx context.Context, claim HistoryStag
 	if err != nil {
 		return zero, err
 	}
-	if preflight.Bytes > limits.MaxWorkBytes/4 {
+	if preflight.Bytes > HistoryStagingMaxCopyPhysicalBytes(limits.MaxWorkBytes) {
 		return zero, errors.New("rawdb: staging source exceeds total bounded scan/copy/verify work")
 	}
 	free, err = limits.FreeBytes()

@@ -441,6 +441,44 @@ func TestHistoryStagingCLILegacyManifestScopedAdmission(t *testing.T) {
 	}
 }
 
+func TestHistoryStagingCLIDefaultLimitsReachPhysicalInventory(t *testing.T) {
+	f := newHistoryStagingE2EFixture(t)
+	for i := len(f.args) - 2; i >= 0; i-- {
+		switch f.args[i] {
+		case "--max-row-mib", "--max-batch-mib", "--max-bucket-mib",
+			"--max-work-mib", "--max-decoded-mib", "--min-free-gib":
+			f.args = slices.Delete(f.args, i, i+2)
+		}
+	}
+	invalid := f
+	invalid.args = append(slices.Clone(f.args), "--max-decoded-mib", "129")
+	if _, err := invalid.command(t, "migrate", "--max-buckets", "1"); err == nil ||
+		!strings.Contains(err.Error(), "invalid --max-decoded-mib") {
+		t.Fatalf("129 MiB was not rejected before inventory: %v", err)
+	}
+	if _, err := os.Stat(historyStagingPlanDirectory(f.datadir)); !os.IsNotExist(err) {
+		t.Fatalf("invalid decoded budget created a plan: %v", err)
+	}
+	plan, err := f.command(t, "migrate", "--max-buckets", "1")
+	if err != nil || plan.PlanID == "" || plan.Bucket != 1 {
+		t.Fatalf("default limits failed real first-bucket inventory: %+v %v", plan, err)
+	}
+	data, err := os.ReadFile(filepath.Join(historyStagingPlanDirectory(f.datadir), plan.PlanID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header historyStagingPlanHeader
+	if err := json.Unmarshal(bytes.SplitN(data, []byte{'\n'}, 2)[0], &header); err != nil {
+		t.Fatal(err)
+	}
+	if header.Limits.MaxDecodedBytes != rawdb.HistoryStagingMaxDecodedBytes ||
+		header.Limits.MaxRowBytes != 16<<20 || header.Limits.MaxBatchBytes != 32<<20 ||
+		header.Limits.MaxBucketBytes != 4096<<20 || header.Limits.MaxWorkBytes != 8192<<20 ||
+		header.Limits.MinFreeBytes != 16<<30 {
+		t.Fatalf("frozen plan did not use actual CLI defaults: %+v", header.Limits)
+	}
+}
+
 func historyStagingE2EPlanBucket(t *testing.T, f historyStagingE2EFixture, planID string) historyStagingPlanBucket {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(historyStagingPlanDirectory(f.datadir), planID+".jsonl"))

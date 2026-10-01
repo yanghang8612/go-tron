@@ -234,7 +234,8 @@ func (p *historyStagingPlanReader) Next(ctx context.Context) (historyStagingPlan
 		row.Proof.FinishHash != p.header.Head.HeadHash ||
 		row.Proof.IndexBlock != p.header.IndexBlock ||
 		row.Proof.IndexHash != p.header.IndexHash ||
-		row.Physical.Bytes > p.header.Limits.MaxBucketBytes {
+		row.Physical.Bytes > p.header.Limits.MaxBucketBytes ||
+		row.Physical.Bytes > rawdb.HistoryStagingMaxCopyPhysicalBytes(p.header.Limits.MaxWorkBytes) {
 		return row, false, fmt.Errorf("history staging plan bucket %d identity/budget differs", p.rows)
 	}
 	if err := rawdb.VerifyHistoryStagingProof(row.Proof); err != nil {

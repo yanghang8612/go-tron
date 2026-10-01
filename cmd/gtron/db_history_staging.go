@@ -36,7 +36,7 @@ func dbHistoryStagingCommand() *cli.Command {
 		&cli.Uint64Flag{Name: "max-bucket-mib", Value: 4096, Usage: "Maximum physical source bucket size in MiB"},
 		&cli.Uint64Flag{Name: "max-batch-mib", Value: 32, Usage: "Maximum copy/delete batch size in MiB"},
 		&cli.Uint64Flag{Name: "max-work-mib", Value: 8192, Usage: "Maximum per-bucket copy work in MiB"},
-		&cli.Uint64Flag{Name: "max-decoded-mib", Value: 1024, Usage: "Maximum decoded row work in MiB"},
+		&cli.Uint64Flag{Name: "max-decoded-mib", Value: rawdb.HistoryStagingMaxDecodedBytes >> 20, Usage: "Maximum decoded row work in MiB"},
 		&cli.Uint64Flag{Name: "min-free-gib", Value: 16, Usage: "Free-space reserve above per-bucket work"},
 	}
 	flags := func(extra ...cli.Flag) []cli.Flag { return append(append([]cli.Flag{}, common...), extra...) }
@@ -155,6 +155,9 @@ func historyStagingCLIWorkLimits(ctx *cli.Context, source, target string) (rawdb
 	if err != nil {
 		return rawdb.HistoryStagingLimits{}, historyStagingPlanLimits{}, err
 	}
+	if decoded > rawdb.HistoryStagingMaxDecodedBytes {
+		return rawdb.HistoryStagingLimits{}, historyStagingPlanLimits{}, fmt.Errorf("invalid --max-decoded-mib: exceeds codec limit of %d MiB", rawdb.HistoryStagingMaxDecodedBytes>>20)
+	}
 	freeGiB := ctx.Uint64("min-free-gib")
 	if freeGiB == 0 || freeGiB > ^uint64(0)>>30 {
 		return rawdb.HistoryStagingLimits{}, historyStagingPlanLimits{}, errors.New("invalid --min-free-gib")
@@ -222,6 +225,9 @@ func newHistoryStagingCLIContext(ctx *cli.Context) (*historyStagingCLIContext, e
 	}
 	if pin := ctx.String("legacy-manifest-sha256"); pin != "" && !historyStagingSHAPattern.MatchString(pin) {
 		return nil, errors.New("history staging legacy manifest pin must be a 64-hex SHA256")
+	}
+	if decoded := ctx.Uint64("max-decoded-mib"); decoded == 0 || decoded > rawdb.HistoryStagingMaxDecodedBytes>>20 {
+		return nil, fmt.Errorf("invalid --max-decoded-mib: codec limit is %d MiB", rawdb.HistoryStagingMaxDecodedBytes>>20)
 	}
 	actual, err := runningHistoryStagingExecutableSHA256()
 	if err != nil {
@@ -562,6 +568,9 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 		physical, err := rawdb.InspectHistoryStagingPhysicalBucket(c.ctx, hotView, proof, limits)
 		if err != nil {
 			return fmt.Errorf("history staging bucket %d physical inventory: %w", bucket, err)
+		}
+		if physical.Bytes > rawdb.HistoryStagingMaxCopyPhysicalBytes(limits.MaxWorkBytes) {
+			return fmt.Errorf("history staging bucket %d exceeds bounded scan/copy/verify work budget", bucket)
 		}
 		if err := encodeHistoryStagingPlanRow(buffer, historyStagingPlanBucket{Proof: proof, Physical: physical}); err != nil {
 			return err

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 func TestHistoryStagingJobPlanRecoversAfterPublishCrash(t *testing.T) {
@@ -72,5 +77,31 @@ func TestHistoryStagingPlanRowRejectsUnknownAndTrailingJSON(t *testing.T) {
 	}
 	if err := encodeHistoryStagingPlanRow(io.Discard, strings.Repeat("x", historyStagingMaxPlanRowBytes)); err == nil {
 		t.Fatal("oversized JSONL row accepted")
+	}
+}
+
+func TestHistoryStagingPlanRejectsPhysicalBucketAboveCopyWorkBudget(t *testing.T) {
+	const work = uint64(1024)
+	if got := rawdb.HistoryStagingMaxCopyPhysicalBytes(work); got != 256 {
+		t.Fatalf("copy physical ceiling = %d", got)
+	}
+	row := historyStagingPlanBucket{
+		Proof: rawdb.HistoryStagingProof{Bucket: 1, Epoch: 1},
+		Physical: rawdb.HistoryStagingPhysicalStats{
+			Bytes: rawdb.HistoryStagingMaxCopyPhysicalBytes(work) + 1,
+		},
+	}
+	var encoded bytes.Buffer
+	if err := encodeHistoryStagingPlanRow(&encoded, row); err != nil {
+		t.Fatal(err)
+	}
+	reader := &historyStagingPlanReader{
+		header: historyStagingPlanHeader{LastBucket: 1, Limits: historyStagingPlanLimits{
+			MaxBucketBytes: work, MaxWorkBytes: work,
+		}},
+		scan: bufio.NewScanner(&encoded),
+	}
+	if _, _, err := reader.Next(context.Background()); err == nil || !strings.Contains(err.Error(), "budget differs") {
+		t.Fatalf("plan reader accepted source that CopyClaim must reject: %v", err)
 	}
 }
