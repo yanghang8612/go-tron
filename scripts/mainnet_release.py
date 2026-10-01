@@ -3,18 +3,24 @@
 
 The user-owned build script may request a release, but this program verifies the
 existing guarded service before changing its pinned binary and reader markers.
-It never edits chain data, the space guard, service flags, or Nile.
+Staging activation may transfer verified Pebble file ownership to the non-root
+service user; it never edits database payload, the space guard, flags, or Nile.
 """
 
 import argparse
 import base64
+from contextlib import ExitStack
+import errno
 import fcntl
+import grp
 import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -36,6 +42,14 @@ STAGING_PREPARED = Path('/data/gtron/main/HISTORY_STAGING_PREPARED.json')
 STAGING_LATCH = Path('/data/gtron/main/MIGRATION_IN_PROGRESS.json')
 STAGING_REQUIRED = Path('/data/gtron/main/HISTORY_STAGING_READER_REQUIRED.json')
 STAGING_ACTIVATION = Path('/data/gtron/main/HISTORY_STAGING_ACTIVATION_INTENT.json')
+STAGING_HANDOFF = Path('/data/gtron/main/HISTORY_STAGING_STORAGE_HANDOFF.json')
+STAGING_START_LOCK = Path('/data/gtron/start.lock')
+STAGING_SOURCE = Path('/data/gtron/main/datadir/gtron/chaindata')
+STAGING_TARGET = Path('/data/gtron/main/datadir/gtron/history-staging')
+STAGING_COLD = Path('/data/gtron/main/datadir/gtron/state-snapshots')
+STAGING_ANCIENT = Path('/data/gtron/main/datadir/gtron/ancient')
+STAGING_STORAGE_LOCK = '.history-staging-migration.lock'
+STAGING_PEBBLE_MAX_FILES = 200000
 LOCK = Path('/run/lock/gtron-mainnet-release.lock')
 HEALTH = 'http://127.0.0.1:8090/wallet/getnodeinfo'
 MAX_BINARY = 512 << 20
@@ -142,6 +156,438 @@ def atomic_root(path, data, mode):
     finally:
         if os.path.lexists(str(temporary)):
             os.unlink(str(temporary))
+
+
+_STAGING_PEBBLE_NAME = re.compile(
+    r'(?:CURRENT|FORMAT-MAJOR-VERSION|LOCK|LOG(?:\.old)?|'
+    r'MANIFEST-[0-9]+|OPTIONS-[0-9]+|[0-9]+\.(?:sst|log|blob)|'
+    r'CURRENT\.[0-9]+\.dbtmp|temporary\.[0-9]+\.dbtmp|'
+    r'marker\.manifest\.[0-9]+\.MANIFEST-[0-9]+|'
+    r'marker\.format-version\.[0-9]+\.[0-9]+)\Z')
+
+
+def _staging_parent_identity(pid):
+    require(pid > 1, 'staging migration has no parent orchestrator')
+    with open('/proc/%d/status' % pid, 'r') as stream:
+        status = stream.read(1 << 20)
+    match = re.search(r'^Uid:\s+(\d+)\s+(\d+)\s+', status, re.MULTILINE)
+    require(match is not None and int(match.group(1)) == 0 and int(match.group(2)) == 0,
+            'staging migration parent is not root')
+    with open('/proc/%d/stat' % pid, 'r') as stream:
+        value = stream.read(4096)
+    close = value.rfind(')')
+    fields = value[close + 2:].split() if close >= 0 else []
+    require(len(fields) > 19 and fields[19].isdigit(),
+            'staging migration parent start time unavailable')
+    return fields[19]
+
+
+def _staging_parent_lock_matches(listing, pid, stats):
+    held = set()
+    for line in listing.splitlines():
+        words = line.split()
+        if len(words) < 8 or words[1:4] != ['FLOCK', 'ADVISORY', 'WRITE'] or words[4] != str(pid):
+            continue
+        parts = words[5].split(':')
+        if len(parts) != 3:
+            continue
+        try:
+            held.add((int(parts[0], 16), int(parts[1], 16), int(parts[2])))
+        except ValueError:
+            continue
+    return all((os.major(item.st_dev), os.minor(item.st_dev), item.st_ino) in held for item in stats)
+
+
+def _staging_root_lock_owned(info):
+    return (stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and
+            info.st_nlink == 1 and not info.st_mode & 0o077)
+
+
+def _staging_require_parent_locks(latch, pid, started):
+    require(_staging_parent_identity(pid) == started,
+            'staging migration parent changed during activation')
+    paths = [STAGING_START_LOCK] + [Path(latch[name]) / STAGING_STORAGE_LOCK
+                                    for name in ('source', 'target', 'cold')]
+    stats = []
+    for path in paths:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            named = os.stat(str(path), follow_symlinks=False)
+            require(_staging_root_lock_owned(info) and
+                    (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino),
+                    'unsafe staging migration lock: ' + str(path))
+            stats.append(info)
+        finally:
+            os.close(fd)
+    with open('/proc/locks', 'r') as stream:
+        listing = stream.read(16 << 20)
+    require(_staging_parent_lock_matches(listing, pid, stats),
+            'staging migration parent does not hold all four exact locks')
+    require(_staging_parent_identity(pid) == started,
+            'staging migration parent changed after lock proof')
+
+
+def _staging_require_stopped(unit, timer=False):
+    fields = ['--property=ActiveState']
+    if not timer:
+        fields.append('--property=MainPID')
+    output = command(['/bin/systemctl', 'show', unit] + fields + ['--no-pager'], 30)
+    props = dict(line.split('=', 1) for line in output.splitlines() if '=' in line)
+    require(props.get('ActiveState') in ('inactive', 'failed') and
+            (timer or props.get('MainPID') == '0'),
+            'staging handoff requires stopped ' + unit)
+
+
+def _staging_service_owner(active=False):
+    props = show('ActiveState', 'MainPID', 'User', 'Group', 'DynamicUser')
+    state_ok = (props.get('ActiveState') == 'active' and
+                props.get('MainPID', '0').isdigit() and int(props['MainPID']) > 0) if active else (
+                    props.get('ActiveState') in ('inactive', 'failed') and props.get('MainPID') == '0')
+    require(state_ok and props.get('User') == 'java-tron' and
+            props.get('Group') == 'java-tron' and props.get('DynamicUser', 'no') in ('no', ''),
+            'staging handoff requires pinned java-tron service User/Group and state')
+    user = pwd.getpwnam('java-tron')
+    group = grp.getgrnam('java-tron')
+    require(user.pw_uid > 0 and group.gr_gid > 0 and user.pw_gid == group.gr_gid,
+            'staging service numeric User/Group differs')
+    return user.pw_uid, group.gr_gid
+
+
+def _staging_owner_allowed(info, uid, gid):
+    return (info.st_uid, info.st_gid) in ((0, 0), (0, gid), (uid, gid))
+
+
+def _staging_file_identity(info):
+    return info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size
+
+
+def _staging_inventory_pebble(stack, path, uid, gid):
+    fd = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    stack.callback(os.close, fd)
+    root = os.fstat(fd)
+    named = os.stat(str(path), follow_symlinks=False)
+    require(stat.S_ISDIR(root.st_mode) and not root.st_mode & 0o7000 and
+            _staging_owner_allowed(root, uid, gid) and
+            root.st_mode & 0o700 == 0o700 and not root.st_mode & 0o022 and
+            (root.st_dev, root.st_ino) == (named.st_dev, named.st_ino),
+            'unsafe staging Pebble directory: ' + str(path))
+    lockfd = os.open('LOCK', os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    stack.callback(os.close, lockfd)
+    try:
+        # Pebble uses POSIX F_SETLK, not BSD flock. Never reopen/close LOCK
+        # while this fd is held: POSIX locks are process-wide per inode.
+        fcntl.lockf(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError) as error:
+        if error.errno in (errno.EACCES, errno.EAGAIN):
+            raise RuntimeError('staging Pebble LOCK is held by another process: ' + str(path))
+        raise
+    names = sorted(os.listdir(fd))
+    require(len(names) <= STAGING_PEBBLE_MAX_FILES and 'LOCK' in names and
+            any(name == 'CURRENT' or name.startswith('marker.manifest.') for name in names),
+            'staging Pebble directory has no bounded complete file inventory')
+    inventory = []
+    for name in names:
+        if name == STAGING_STORAGE_LOCK:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            require(_staging_root_lock_owned(info),
+                    'unsafe root-only staging migration lock')
+            continue
+        require(_STAGING_PEBBLE_NAME.fullmatch(name) is not None,
+                'foreign file or nested directory in staging Pebble store: ' + name)
+        if name == 'LOCK':
+            info = os.fstat(lockfd)
+            named = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            require((info.st_dev, info.st_ino) == (named.st_dev, named.st_ino),
+                    'staging Pebble LOCK changed before inventory')
+        else:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        mutable = name == 'LOCK' or name.startswith('MANIFEST-') or name.endswith('.log') or name == 'LOG'
+        require(stat.S_ISREG(info.st_mode) and not info.st_mode & 0o7000 and
+                info.st_nlink == 1 and
+                info.st_dev == root.st_dev and _staging_owner_allowed(info, uid, gid) and
+                info.st_mode & 0o400 and not info.st_mode & 0o022 and
+                (not mutable or info.st_mode & 0o200),
+                'unsafe staging Pebble file: ' + name)
+        inventory.append((name, info))
+    return {'path': path, 'fd': fd, 'lockfd': lockfd, 'root': root, 'files': inventory}
+
+
+def _staging_handoff_file(store, name, before, uid, gid):
+    fd = store['lockfd'] if name == 'LOCK' else os.open(
+        name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=store['fd'])
+    try:
+        current = os.fstat(fd)
+        require(_staging_file_identity(current) == _staging_file_identity(before) and
+                _staging_owner_allowed(current, uid, gid),
+                'staging Pebble file changed during handoff: ' + name)
+        if (current.st_uid, current.st_gid) != (uid, gid):
+            os.fchown(fd, uid, gid)
+            os.fsync(fd)
+        current = os.fstat(fd)
+        require(_staging_file_identity(current) == _staging_file_identity(before) and
+                (current.st_uid, current.st_gid) == (uid, gid) and
+                current.st_mode & 0o400 and
+                (name != 'LOCK' or current.st_mode & 0o200),
+                'staging Pebble file did not become service-readable: ' + name)
+    finally:
+        if name != 'LOCK':
+            os.close(fd)
+
+
+def _staging_handoff_dir(store, uid, gid):
+    current = os.fstat(store['fd'])
+    require(_staging_file_identity(current) == _staging_file_identity(store['root']) and
+            _staging_owner_allowed(current, uid, gid),
+            'staging Pebble directory changed during handoff')
+    if (current.st_uid, current.st_gid) != (uid, gid):
+        os.fchown(store['fd'], uid, gid)
+        os.fsync(store['fd'])
+    current = os.fstat(store['fd'])
+    named = os.stat(str(store['path']), follow_symlinks=False)
+    require(_staging_file_identity(current) == _staging_file_identity(store['root']) and
+            (current.st_uid, current.st_gid) == (uid, gid) and
+            current.st_mode & 0o700 == 0o700 and
+            (current.st_dev, current.st_ino) == (named.st_dev, named.st_ino),
+            'staging Pebble directory did not become service-accessible')
+
+
+def _staging_optional_ancient(stack, uid, gid):
+    if not os.path.lexists(str(STAGING_ANCIENT)):
+        return None
+    directory = os.open(str(STAGING_ANCIENT), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    stack.callback(os.close, directory)
+    info = os.fstat(directory)
+    named = os.stat(str(STAGING_ANCIENT), follow_symlinks=False)
+    require(stat.S_ISDIR(info.st_mode) and not info.st_mode & 0o7000 and
+            (info.st_uid, info.st_gid) == (uid, gid) and
+            info.st_mode & 0o700 == 0o700 and not info.st_mode & 0o022 and
+            (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino),
+            'ancient directory is not owned by the service')
+    if 'FLOCK' not in os.listdir(directory):
+        return {'directory': directory, 'flock': None, 'info': None}
+    flock = os.open('FLOCK', os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    stack.callback(os.close, flock)
+    row = os.fstat(flock)
+    require(stat.S_ISREG(row.st_mode) and not row.st_mode & 0o7000 and row.st_nlink == 1 and
+            row.st_dev == info.st_dev and _staging_owner_allowed(row, uid, gid) and
+            row.st_mode & 0o600 == 0o600 and not row.st_mode & 0o022,
+            'unsafe ancient/FLOCK ownership')
+    return {'directory': directory, 'flock': flock, 'info': row}
+
+
+def _staging_cold_etl(stack, uid, gid):
+    cold = os.open(str(STAGING_COLD), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    stack.callback(os.close, cold)
+    root = os.fstat(cold)
+    named = os.stat(str(STAGING_COLD), follow_symlinks=False)
+    require(stat.S_ISDIR(root.st_mode) and not root.st_mode & 0o7000 and
+            (root.st_uid, root.st_gid) == (uid, gid) and
+            root.st_mode & 0o700 == 0o700 and not root.st_mode & 0o022 and
+            (root.st_dev, root.st_ino) == (named.st_dev, named.st_ino),
+            'cold directory is not service-writable')
+    if 'etl' not in os.listdir(cold):
+        return {'cold': cold, 'etl': None, 'info': None}
+    etl = os.open('etl', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cold)
+    stack.callback(os.close, etl)
+    info = os.fstat(etl)
+    named_etl = os.stat('etl', dir_fd=cold, follow_symlinks=False)
+    require(stat.S_ISDIR(info.st_mode) and not info.st_mode & 0o7000 and
+            (info.st_dev, info.st_ino) == (named_etl.st_dev, named_etl.st_ino) and
+            info.st_dev == root.st_dev and
+            _staging_owner_allowed(info, uid, gid) and info.st_mode & 0o700 == 0o700 and
+            not info.st_mode & 0o022 and
+            ((info.st_uid, info.st_gid) == (uid, gid) or not os.listdir(etl)),
+            'unsafe cold/etl directory or root-owned residual collector')
+    return {'cold': cold, 'etl': etl, 'info': info}
+
+
+def _staging_handoff_ancillary(ancient, cold, uid, gid):
+    if ancient is not None and ancient['flock'] is not None:
+        current = os.fstat(ancient['flock'])
+        require(_staging_file_identity(current) == _staging_file_identity(ancient['info']) and
+                _staging_owner_allowed(current, uid, gid), 'ancient/FLOCK changed during handoff')
+        if (current.st_uid, current.st_gid) != (uid, gid):
+            os.fchown(ancient['flock'], uid, gid)
+            os.fsync(ancient['flock'])
+    if cold['etl'] is not None:
+        current = os.fstat(cold['etl'])
+        require(_staging_file_identity(current) == _staging_file_identity(cold['info']) and
+                _staging_owner_allowed(current, uid, gid), 'cold/etl changed during handoff')
+        if (current.st_uid, current.st_gid) != (uid, gid):
+            require(not os.listdir(cold['etl']), 'root-owned cold/etl gained residual files')
+            os.fchown(cold['etl'], uid, gid)
+            os.fsync(cold['etl'])
+
+
+def _staging_probe_service_access(paths):
+    runuser = shutil.which('runuser')
+    require(runuser is not None, 'runuser is required for staging service access proof')
+    # A killed probe cannot leave a foreign entry in the Pebble directory.
+    # The child checks effective service permissions without creating files.
+    program = ('import os,sys\n'
+               'count=int(sys.argv[1]); dirs=sys.argv[2:2+count]; files=sys.argv[2+count:]\n'
+               'for path in dirs:\n'
+               '  if not os.access(path,os.R_OK|os.W_OK|os.X_OK): raise RuntimeError(path)\n'
+               'for path in files:\n'
+               '  fd=os.open(path,os.O_RDWR|os.O_NOFOLLOW); os.close(fd)\n')
+    command([runuser, '-u', 'java-tron', '--', '/usr/bin/python3', '-c', program,
+             str(len(paths['writable']))] +
+            [str(path) for path in paths['writable']] + [str(path) for path in paths['files']], 60)
+
+
+def _staging_dir_identity(path, uid, gid):
+    fd = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        named = os.stat(str(path), follow_symlinks=False)
+        require(stat.S_ISDIR(info.st_mode) and not info.st_mode & 0o7000 and
+                (info.st_uid, info.st_gid) == (uid, gid) and
+                info.st_mode & 0o700 == 0o700 and not info.st_mode & 0o022 and
+                (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino),
+                'active staging store directory differs: ' + str(path))
+        return [info.st_dev, info.st_ino]
+    finally:
+        os.close(fd)
+
+
+def _staging_handoff_identity(latch, intent_sha, uid, gid, inodes):
+    identity = {'version': 1, 'job_id': latch.get('job_id'),
+                'candidate_sha256': latch.get('candidate_sha256'),
+                'source_commit': latch.get('source_commit'),
+                'activation_intent_sha256': intent_sha, 'uid': uid, 'gid': gid,
+                'source': str(STAGING_SOURCE), 'target': str(STAGING_TARGET),
+                'cold': str(STAGING_COLD), 'source_inode': inodes['source'],
+                'target_inode': inodes['target'], 'cold_inode': inodes['cold']}
+    require(re.fullmatch(r'[0-9a-f]{32}', identity['job_id'] or '') is not None and
+            re.fullmatch(r'[0-9a-f]{64}', identity['candidate_sha256'] or '') is not None and
+            re.fullmatch(r'[0-9a-f]{40}', identity['source_commit'] or '') is not None,
+            'invalid staging storage handoff identity')
+    return identity
+
+
+def _staging_check_handoff_journal(identity, allowed):
+    require(os.path.lexists(str(STAGING_HANDOFF)), 'staging handoff journal is missing')
+    prior = json.loads(root_bytes(STAGING_HANDOFF, 16384)[0])
+    require(isinstance(prior, dict) and prior.get('phase') in allowed and
+            {key: prior.get(key) for key in identity} == identity,
+            'staging storage handoff journal identity differs')
+
+
+def _staging_postflight(stores, ancient, cold, uid, gid):
+    for store in stores:
+        directory = os.fstat(store['fd'])
+        named = os.stat(str(store['path']), follow_symlinks=False)
+        require((directory.st_dev, directory.st_ino) == (named.st_dev, named.st_ino) and
+                (directory.st_uid, directory.st_gid) == (uid, gid) and
+                directory.st_mode == store['root'].st_mode,
+                'staging Pebble directory changed after handoff')
+        actual = sorted(os.listdir(store['fd']))
+        expected = sorted([name for name, _ in store['files']] + [STAGING_STORAGE_LOCK])
+        require(actual == expected, 'staging Pebble inventory changed during handoff')
+        for name, before in store['files']:
+            current = os.stat(name, dir_fd=store['fd'], follow_symlinks=False)
+            if name == 'LOCK':
+                held = os.fstat(store['lockfd'])
+                require((current.st_dev, current.st_ino) == (held.st_dev, held.st_ino),
+                        'staging Pebble LOCK replaced after handoff')
+            require(_staging_file_identity(current) == _staging_file_identity(before) and
+                    (current.st_uid, current.st_gid) == (uid, gid),
+                    'staging Pebble file changed after handoff: ' + name)
+    if ancient is not None:
+        current = os.fstat(ancient['directory'])
+        named = os.stat(str(STAGING_ANCIENT), follow_symlinks=False)
+        require((current.st_dev, current.st_ino) == (named.st_dev, named.st_ino) and
+                (current.st_uid, current.st_gid) == (uid, gid), 'ancient directory changed')
+        if ancient['flock'] is not None:
+            current = os.fstat(ancient['flock'])
+            named = os.stat(str(STAGING_ANCIENT / 'FLOCK'), follow_symlinks=False)
+            require(_staging_file_identity(current) == _staging_file_identity(ancient['info']) and
+                    (current.st_dev, current.st_ino) == (named.st_dev, named.st_ino) and
+                    (current.st_uid, current.st_gid) == (uid, gid), 'ancient/FLOCK changed')
+    current = os.fstat(cold['cold'])
+    named = os.stat(str(STAGING_COLD), follow_symlinks=False)
+    require((current.st_dev, current.st_ino) == (named.st_dev, named.st_ino) and
+            (current.st_uid, current.st_gid) == (uid, gid), 'cold directory changed')
+    if cold['etl'] is not None:
+        current = os.fstat(cold['etl'])
+        named = os.stat(str(STAGING_COLD / 'etl'), follow_symlinks=False)
+        require(_staging_file_identity(current) == _staging_file_identity(cold['info']) and
+                (current.st_dev, current.st_ino) == (named.st_dev, named.st_ino) and
+                (current.st_uid, current.st_gid) == (uid, gid), 'cold/etl changed')
+
+
+def handoff_staging_storage(latch, prepared, intent_sha):
+    """Fail-closed ownership handoff under the parent's four migration locks.
+
+    The durable activation intent precedes the first ownership mutation.
+    A separate root journal pins immutable job/path/UID identity; retries scan
+    current Pebble files afresh because a previously started reader may have
+    published new MANIFEST/WAL/SST files before the migration journal was DONE.
+    """
+    require(os.geteuid() == 0 and latch.get('state') == 'VERIFIED_PENDING_ACTIVATION' and
+            latch.get('service_was_active') is True and
+            re.fullmatch(r'[0-9a-f]{64}', intent_sha or '') is not None,
+            'staging storage handoff requires active-service verified activation')
+    expected = {'source': STAGING_SOURCE, 'target': STAGING_TARGET, 'cold': STAGING_COLD}
+    for name, path in expected.items():
+        raw = os.path.abspath(str(path))
+        require(raw == os.path.realpath(raw) and latch.get(name) == raw and
+                prepared.get(name) == raw,
+                'staging storage path differs from the pinned physical directory: ' + name)
+    service_state = show('ActiveState', 'MainPID')
+    active = service_state.get('ActiveState') == 'active'
+    uid, gid = _staging_service_owner(active=active)
+    _staging_require_stopped('gtron-deploy.timer', timer=True)
+    _staging_require_stopped(DEPLOY_SERVICE)
+    pid = os.getppid()
+    started = _staging_parent_identity(pid)
+    _staging_require_parent_locks(latch, pid, started)
+    if active:
+        inodes = {name: _staging_dir_identity(path, uid, gid)
+                  for name, path in expected.items()}
+        identity = _staging_handoff_identity(latch, intent_sha, uid, gid, inodes)
+        _staging_check_handoff_journal(identity, ('DONE',))
+        _staging_require_stopped('gtron-deploy.timer', timer=True)
+        _staging_require_stopped(DEPLOY_SERVICE)
+        _staging_require_parent_locks(latch, pid, started)
+        return True
+    with ExitStack() as stack:
+        source = _staging_inventory_pebble(stack, STAGING_SOURCE, uid, gid)
+        target = _staging_inventory_pebble(stack, STAGING_TARGET, uid, gid)
+        cold = _staging_cold_etl(stack, uid, gid)
+        ancient = _staging_optional_ancient(stack, uid, gid)
+        _staging_require_parent_locks(latch, pid, started)
+        stores = (source, target)
+        identity = _staging_handoff_identity(latch, intent_sha, uid, gid, {
+            'source': [source['root'].st_dev, source['root'].st_ino],
+            'target': [target['root'].st_dev, target['root'].st_ino],
+            'cold': [os.fstat(cold['cold']).st_dev, os.fstat(cold['cold']).st_ino]})
+        if os.path.lexists(str(STAGING_HANDOFF)):
+            _staging_check_handoff_journal(identity, ('IN_PROGRESS', 'DONE'))
+        atomic_root(STAGING_HANDOFF, json_bytes(dict(identity, phase='IN_PROGRESS')), 0o600)
+        for store in stores:
+            for name, before in store['files']:
+                _staging_handoff_file(store, name, before, uid, gid)
+            _staging_handoff_dir(store, uid, gid)
+        _staging_handoff_ancillary(ancient, cold, uid, gid)
+        _staging_require_parent_locks(latch, pid, started)
+        writable = [STAGING_SOURCE, STAGING_TARGET, STAGING_COLD]
+        if cold['etl'] is not None:
+            writable.append(STAGING_COLD / 'etl')
+        if ancient is not None:
+            writable.append(STAGING_ANCIENT)
+        files = [STAGING_SOURCE / 'LOCK', STAGING_TARGET / 'LOCK']
+        if ancient is not None and ancient['flock'] is not None:
+            files.append(STAGING_ANCIENT / 'FLOCK')
+        _staging_probe_service_access({'writable': writable, 'files': files})
+        _staging_postflight(stores, ancient, cold, uid, gid)
+        _staging_service_owner()
+        _staging_require_stopped('gtron-deploy.timer', timer=True)
+        _staging_require_stopped(DEPLOY_SERVICE)
+        _staging_require_parent_locks(latch, pid, started)
+        atomic_root(STAGING_HANDOFF, json_bytes(dict(identity, phase='DONE')), 0o600)
+    return False
 
 
 def json_bytes(value):
@@ -687,6 +1133,40 @@ def activate_staging(source, candidate, digest, health_timeout=None):
     require(not show('ActiveState').get('ActiveState') == 'active' or
             root_bytes(STAGING_REQUIRED, 4096) == decoded(files['required']['new']),
             'unmarked active service during activation')
+    current_state = show('ActiveState', 'MainPID')
+    active_retry = current_state.get('ActiveState') == 'active'
+    if active_retry:
+        require(all((root_bytes(path, 1 << 20) if os.path.lexists(path) else None) ==
+                    decoded(files[name]['new']) for name, path in paths.items()),
+                'active staging reader does not have all pinned activation files')
+        effective = show('ExecStart', 'ExecStartPre')
+        configured, effective_argv = systemd_exec(effective.get('ExecStart', ''))
+        require(configured == str(candidate) and effective_argv == argv and
+                effective.get('ExecStartPre', '').count(STAGING_GUARD) == 1,
+                'active staging reader effective identity differs')
+        require(current_state.get('MainPID', '0').isdigit() and
+                int(current_state['MainPID']) > 1, 'active staging reader has no MainPID')
+        live_pid = int(current_state['MainPID'])
+        live_binary, live_argv = proc_identity(live_pid)
+        require(live_binary == str(candidate) and live_argv == argv and
+                proc_sha(live_pid) == digest,
+                'active staging reader process identity differs')
+    handoff_was_active = handoff_staging_storage(
+        latch, prepared, latch['activation_intent_sha256'])
+    require(handoff_was_active == active_retry,
+            'staging service changed state during ownership handoff')
+    if active_retry:
+        try:
+            pid = wait_healthy(str(candidate), digest, argv,
+                               timeout=health_timeout or staging_health_timeout())
+        except Exception:
+            try:
+                command(['/bin/systemctl', 'stop', SERVICE], 120)
+            except Exception:
+                pass
+            raise
+        return {'activated': True, 'source_commit': source, 'binary': str(candidate),
+                'binary_sha256': digest, 'pid': pid, 'service_was_active': True}
     # Reader guard marker files must exist before the changed drop-in can run.
     atomic_root(candidate.parent / 'reader-required.json',
                 json_bytes(shared_marker(str(candidate), digest, source)), 0o644)

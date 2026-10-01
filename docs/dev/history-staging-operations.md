@@ -54,6 +54,22 @@ canonical/Finish/Index/solid/retention 和冷段语义校验通过，编排器�
   --job-id 32位jobID
 ```
 
+现有主网服务以固定 `java-tron:java-tron` 身份运行，而离线 root CLI 会在
+源库和暂存库生成 root 所有的 Pebble 文件。已验证且原服务本来运行中的
+job 在激活前由独立 root release helper 执行所有权移交：核对持久激活
+intent、候选和三库固定路径，证明父编排器仍持有启动锁和三库迁移锁，
+并取得源、目标各自的 POSIX Pebble `LOCK`。它对两库平面文件实行严格
+名称、类型、硬链接和所有权清单预检，仅把已核定的 Pebble 文件及目录
+交给固定服务 UID/GID；root 专用迁移锁保持原主。冷库仅检查服务写入
+权限，必要时只移交已核定的空 `etl` 目录；ancient 仅处理 `FLOCK`。
+过程保留原文件内容和权限，并用 root-only `IN_PROGRESS`/`DONE` journal
+允许部分移交后同一身份重试。开始服务前以服务身份检查实际访问。
+若 reader 已经启动而编排器尚未写 `DONE`，重试只接受匹配的移交
+`DONE` journal、已发布 marker 和当前进程精确身份，随后继续健康检查，
+不会在运行中的 Pebble 库上重新 chown。此次 helper 热修明确拒绝原服务
+未运行的迁移 job，因为现有 inactive 完成分支会在移交后再次用 root
+打开数据库做最终校验；该分支需另行调整，不能套用此操作流程。
+
 仅在首个 `inspect` 失败、尚无 plan 或任何迁移写入，且 gtron、部署服务及
 timer 都已停止时，可以由 root 给同一 job 更换经过审查的新候选：
 

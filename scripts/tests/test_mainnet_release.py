@@ -127,6 +127,7 @@ class MainnetReleaseTests(unittest.TestCase):
                 mock.patch.object(release, 'atomic_root', side_effect=write), \
                 mock.patch.object(release, 'show', return_value=effective), \
                 mock.patch.object(release, 'command', side_effect=command), \
+                mock.patch.object(release, 'handoff_staging_storage', return_value=False), \
                 mock.patch.object(release, 'restore') as restore:
             with self.assertRaisesRegex(RuntimeError, 'new reader did not start'):
                 release.activate_staging(SOURCE, candidate, SHA)
@@ -174,6 +175,7 @@ class MainnetReleaseTests(unittest.TestCase):
                 mock.patch.object(release, 'atomic_root', side_effect=write), \
                 mock.patch.object(release, 'show', return_value=effective), \
                 mock.patch.object(release, 'command', side_effect=command), \
+                mock.patch.object(release, 'handoff_staging_storage', return_value=False), \
                 mock.patch.object(release, 'wait_healthy', return_value=42), \
                 mock.patch.object(release, 'restore') as restore:
             with self.assertRaisesRegex(RuntimeError, 'simulated crash'):
@@ -186,6 +188,68 @@ class MainnetReleaseTests(unittest.TestCase):
         self.assertEqual(files[release.STAGING_REQUIRED][0],
                          release.json_bytes(release.staging_marker(
                              SHA, SOURCE, False, 'snap', 65536)))
+
+    def test_active_pending_retry_reuses_done_handoff_without_restart(self):
+        candidate = str(release.RELEASES / 'staging-test' / 'gtron')
+        intent = {'version': 1, 'candidate_sha256': SHA, 'source_commit': SOURCE,
+                  'binary': candidate, 'old_argv': [OLD_BINARY, '--p2p.port=18890'],
+                  'files': {}}
+        paths = {'memory': release.MEMORY, 'shared': release.SHARED,
+                 'marker': release.MARKER, 'required': release.STAGING_REQUIRED}
+        files = {}
+        for name, path in paths.items():
+            raw = (name + '-new').encode()
+            entry = {'bytes': release.base64.b64encode(raw).decode('ascii'), 'mode': 0o644}
+            intent['files'][name] = {'old': None, 'new': entry}
+            files[path] = (raw, 0o644)
+        intent_raw = release.json_bytes(intent)
+        latch = {'version': 1, 'state': 'VERIFIED_PENDING_ACTIVATION',
+                 'candidate_sha256': SHA, 'source_commit': SOURCE,
+                 'service_was_active': True,
+                 'activation_intent_sha256': release.hashlib.sha256(intent_raw).hexdigest()}
+        files[release.STAGING_LATCH] = (release.json_bytes(latch), 0o644)
+        files[release.STAGING_PREPARED] = (release.json_bytes({
+            'version': 1, 'legacy_binary_sha256': OLD_SHA}), 0o600)
+        files[release.STAGING_ACTIVATION] = (intent_raw, 0o600)
+        effective = {'ActiveState': 'active', 'MainPID': '41',
+                     'ExecStart': '{ path=' + candidate + ' ; argv[]=' + candidate +
+                                  ' --p2p.port=18890 ; ignore_errors=no }',
+                     'ExecStartPre': release.STAGING_GUARD}
+        buildinfo = ('\tvcs.revision=' + SOURCE + '\n\t-tags=sapling\n'
+                     '\tCGO_ENABLED=1\n\tGOOS=linux\n\tGOARCH=amd64\n')
+        with mock.patch.object(release, 'root_bytes', side_effect=lambda path, limit: files[path]), \
+                mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path in files), \
+                mock.patch.object(release, 'root_sha', return_value=SHA), \
+                mock.patch.object(release, 'require_staging_capability'), \
+                mock.patch.object(release, 'command', return_value=buildinfo) as command, \
+                mock.patch.object(release, 'show', return_value=effective), \
+                mock.patch.object(release, 'proc_identity', return_value=(candidate,
+                    [candidate, '--p2p.port=18890'])), \
+                mock.patch.object(release, 'proc_sha', return_value=SHA), \
+                mock.patch.object(release, 'handoff_staging_storage', return_value=True) as handoff, \
+                mock.patch.object(release, 'atomic_root') as write, \
+                mock.patch.object(release, 'wait_healthy', return_value=41):
+            self.assertEqual(release.activate_staging(SOURCE, candidate, SHA)['pid'], 41)
+            handoff.assert_called_once()
+            write.assert_not_called()
+            self.assertNotIn(['/bin/systemctl', 'start', release.SERVICE],
+                             [call[0][0] for call in command.call_args_list])
+
+        with mock.patch.object(release, 'root_bytes', side_effect=lambda path, limit: files[path]), \
+                mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path in files), \
+                mock.patch.object(release, 'root_sha', return_value=SHA), \
+                mock.patch.object(release, 'require_staging_capability'), \
+                mock.patch.object(release, 'command', return_value=buildinfo) as command, \
+                mock.patch.object(release, 'show', return_value=effective), \
+                mock.patch.object(release, 'proc_identity', return_value=(candidate,
+                    [candidate, '--p2p.port=18890'])), \
+                mock.patch.object(release, 'proc_sha', return_value=SHA), \
+                mock.patch.object(release, 'handoff_staging_storage', return_value=True), \
+                mock.patch.object(release, 'wait_healthy', side_effect=RuntimeError('unhealthy')):
+            with self.assertRaisesRegex(RuntimeError, 'unhealthy'):
+                release.activate_staging(SOURCE, candidate, SHA)
+            self.assertIn(['/bin/systemctl', 'stop', release.SERVICE],
+                          [call[0][0] for call in command.call_args_list])
 
     def test_wallet_probe_reads_small_node_info_and_rejects_missing_head(self):
         class Response(io.BytesIO):
