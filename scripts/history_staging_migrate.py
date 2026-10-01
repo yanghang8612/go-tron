@@ -480,8 +480,13 @@ def finalize_done(job_id):
 def migrate_under_latch(latch):
     require(not os.path.lexists(REPIN_INTENT),
             'pending pre-plan repin intent requires an exact repin-preplan retry')
-    cli_result(latch, 'inspect')
     if latch.get('state') == 'MIGRATION_IN_PROGRESS':
+        # The fixed legacy-manifest SHA belongs to offline planning and copy.
+        # A reader may already have published a newer manifest when pending
+        # activation is retried. activate-staging checks its durable intent
+        # and fixed candidate; the new reader verifies the persisted route
+        # barrier during startup before it can pass the health check.
+        cli_result(latch, 'inspect')
         if latch.get('plan_id'):
             progress = cli_result(latch, 'resume', '--plan-id', latch['plan_id'])
         else:

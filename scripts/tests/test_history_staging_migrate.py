@@ -537,6 +537,45 @@ class HistoryStagingMigrateTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'invalid migration identity'):
                     migrate.cli_result(latch, 'inspect')
 
+    def test_pending_activation_retry_uses_durable_intent_without_legacy_manifest_inspect(self):
+        latch = {'state': 'VERIFIED_PENDING_ACTIVATION', 'job_id': 'a' * 32,
+                 'source_commit': 'c' * 40, 'candidate': '/fixed/candidate',
+                 'candidate_sha256': 'b' * 64, 'service_was_active': True,
+                 'activation_intent_sha256': 'd' * 64}
+        result = {'activated': True, 'binary_sha256': latch['candidate_sha256'],
+                  'service_was_active': True}
+        with mock.patch.object(migrate.os.path, 'lexists', return_value=False), \
+                mock.patch.object(migrate, 'cli_result') as cli, \
+                mock.patch.object(migrate.release, 'staging_health_timeout', return_value=300), \
+                mock.patch.object(migrate, 'command', return_value=json.dumps(result)) as activate, \
+                mock.patch.object(migrate, 'atomic_json') as journal, \
+                mock.patch.object(migrate, 'remove_latch') as remove, \
+                mock.patch.object(migrate, 'finalize_done', return_value={'state': 'DONE'}) as finish:
+            self.assertEqual(migrate.migrate_under_latch(latch), {'state': 'DONE'})
+        cli.assert_not_called()
+        activate.assert_called_once()
+        self.assertIn('activate-staging', activate.call_args[0][0])
+        self.assertEqual(journal.call_args[0][1]['state'], 'DONE')
+        remove.assert_called_once()
+        finish.assert_called_once_with(latch['job_id'])
+
+    def test_pending_activation_failure_retains_latch_without_replanning(self):
+        latch = {'state': 'VERIFIED_PENDING_ACTIVATION', 'job_id': 'a' * 32,
+                 'source_commit': 'c' * 40, 'candidate': '/fixed/candidate',
+                 'candidate_sha256': 'b' * 64, 'service_was_active': True,
+                 'activation_intent_sha256': 'd' * 64}
+        with mock.patch.object(migrate.os.path, 'lexists', return_value=False), \
+                mock.patch.object(migrate, 'cli_result') as cli, \
+                mock.patch.object(migrate.release, 'staging_health_timeout', return_value=300), \
+                mock.patch.object(migrate, 'command', side_effect=RuntimeError('activation intent differs')), \
+                mock.patch.object(migrate, 'atomic_json') as journal, \
+                mock.patch.object(migrate, 'remove_latch') as remove:
+            with self.assertRaisesRegex(RuntimeError, 'activation intent differs'):
+                migrate.migrate_under_latch(latch)
+        cli.assert_not_called()
+        journal.assert_not_called()
+        remove.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

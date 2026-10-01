@@ -147,7 +147,10 @@ func (m *HistoryStagingManager) PublishHistoryStagingRouteBarrier(ctx context.Co
 // VerifyHistoryStagingStartup checks the immutable first-cutover marker and
 // every route through the current head. Later owner changes and capable
 // binary upgrades do not have to reproduce the original route digest or SHA.
-// verify authenticates live target payload and pinned cold manifest content.
+// The route checks bind TARGET to its durable receipt digest, but do not
+// rescan every physical target row at startup. The caller's verify callback
+// authenticates pinned cold dependencies; core separately checks its chain
+// head, and offline verify-complete performs the full target-payload scan.
 func (m *HistoryStagingManager) VerifyHistoryStagingStartup(ctx context.Context, headHeight uint64, verify func(uint64, HistoryStagingRoute) error) error {
 	if m == nil || ctx == nil || verify == nil {
 		return ErrHistoryStagingConflict

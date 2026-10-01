@@ -35,6 +35,58 @@ type historyStagingAtomicTestBatch struct {
 	pending map[string][]byte
 }
 
+func TestHistoryStagingConstructorAcceptsLaggingCanonicalIndex(t *testing.T) {
+	f := newHistoryStagingE2EFixture(t)
+	hot, err := rawdb.NewPebbleDB(chainDataDir(f.datadir), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hot.Close()
+	canonical := rawdb.NewChainDB(hot, rawdb.NoopAncient{})
+	boundary, err := readOfflineChainBoundary(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBlock := boundary.HeadBlock - 11
+	indexHash, present, err := rawdb.ReadBlockHashByNumberStrict(canonical, indexBlock)
+	if err != nil || !present {
+		t.Fatalf("index canonical hash: present=%v err=%v", present, err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageStateHistoryIndex, indexBlock, indexHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHistoryStagingConstructorIndex(hot, canonical, boundary); err != nil {
+		t.Fatalf("valid lagging indexed prefix rejected: %v", err)
+	}
+	if row, present, err := rawdb.ReadStageProgressRow(hot, rawdb.StageStateHistoryIndex); err != nil || !present || row.BlockNum != indexBlock || row.BlockHash != indexHash {
+		t.Fatalf("constructor guard mutated lagging stage: row=%+v present=%v err=%v", row, present, err)
+	}
+	if err := rawdb.WriteStageProgress(hot, rawdb.StageStateHistoryIndex, indexBlock); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHistoryStagingConstructorIndex(hot, canonical, boundary); err == nil {
+		t.Fatal("unhashed legacy stage accepted")
+	}
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageStateHistoryIndex, indexBlock, common.Hash{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHistoryStagingConstructorIndex(hot, canonical, boundary); err == nil {
+		t.Fatal("wrong canonical stage hash accepted")
+	}
+	if err := rawdb.WriteStageProgressWithHash(hot, rawdb.StageStateHistoryIndex, boundary.HeadBlock+1, indexHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHistoryStagingConstructorIndex(hot, canonical, boundary); err == nil {
+		t.Fatal("index ahead of head accepted")
+	}
+	if err := rawdb.DeleteStageProgress(hot, rawdb.StageStateHistoryIndex); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHistoryStagingConstructorIndex(hot, canonical, boundary); err == nil {
+		t.Fatal("missing index stage accepted")
+	}
+}
+
 func (b *historyStagingAtomicTestBatch) StateHistoryChunkWritesAtomic() bool { return true }
 func (b *historyStagingAtomicTestBatch) Put(key, value []byte) error {
 	if err := b.batch.Put(key, value); err != nil {

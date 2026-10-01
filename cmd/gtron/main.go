@@ -906,10 +906,9 @@ func gtron(ctx *cli.Context) error {
 					closeStores()
 					return fmt.Errorf("history staging pre-constructor boundary: %w", err)
 				}
-				index, present, err := rawdb.ReadStageProgressRow(db, rawdb.StageStateHistoryIndex)
-				if err != nil || !present || !index.HasBlockHash || index.BlockNum != boundary.HeadBlock || index.BlockHash != boundary.HeadHash {
+				if err := verifyHistoryStagingConstructorIndex(db, rawdb.NewChainDB(db, ancientReader), boundary); err != nil {
 					closeStores()
-					return errors.New("history staging requires hash-bound StateHistoryIndex at head before constructor")
+					return err
 				}
 				finish, present, err := rawdb.ReadStageProgressRow(db, rawdb.StageFinish)
 				if err != nil || !present || !finish.HasBlockHash || finish.BlockNum != boundary.HeadBlock || finish.BlockHash != boundary.HeadHash {
@@ -1823,6 +1822,24 @@ func gtron(ctx *cli.Context) error {
 		log.Error("Blockchain close failed", "err", err)
 	}
 	closeStores()
+	return nil
+}
+
+// An indexed prefix may legitimately lag the executed head. The constructor
+// preserves and verifies that prefix; later index passes advance it. Require
+// a present, canonical hash-bound row no higher than head before construction
+// so a missing or corrupt row cannot be silently initialized at genesis.
+func verifyHistoryStagingConstructorIndex(hot ethdb.KeyValueReader, canonical ethdb.KeyValueReader, boundary offlineChainBoundary) error {
+	index, present, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(hot,
+		rawdb.StageStateHistoryIndex, func(number uint64) (common.Hash, bool, error) {
+			return rawdb.ReadBlockHashByNumberStrict(canonical, number)
+		})
+	if err != nil {
+		return fmt.Errorf("history staging requires canonical hash-bound StateHistoryIndex at or below head before constructor: %w", err)
+	}
+	if !present || index > boundary.HeadBlock {
+		return errors.New("history staging requires canonical hash-bound StateHistoryIndex at or below head before constructor")
+	}
 	return nil
 }
 

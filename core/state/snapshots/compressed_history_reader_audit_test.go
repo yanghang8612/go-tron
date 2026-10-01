@@ -21,6 +21,7 @@ func TestStateDomainHistoryRecordReadersUseCompressedOpeners(t *testing.T) {
 		"readStateDomainChangeBinarySegment":                         {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinarySegmentByAccessorEntries":        {"openHistorySegmentForRead"},
 		"readStateDomainChangeBinarySegmentTxRange":                  {"openHistorySegmentForRead"},
+		"readStateDomainChangeBinaryRecordAtBoundedIndex":            nil,
 		"readStateDomainChangeBinaryTxRangeForBlockByIndexFile":      {"openHistorySegmentForRead"},
 		"stateDomainChangeBinaryIndexBlockLowerBound":                nil,
 		"validateHistorySegmentReadable":                             {"openHistorySegmentForSequentialRead"},
@@ -70,7 +71,7 @@ func callsStateDomainRecordReader(body *ast.BlockStmt) bool {
 			return true
 		}
 		switch ident.Name {
-		case "readStateDomainChangeBinaryRecordAtBoundedIndex":
+		case "readStateDomainChangeBinaryRecordAtBoundedIndex", "readStateDomainChangeBinaryRecordFrame":
 			found = true
 			return false
 		default:

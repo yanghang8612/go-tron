@@ -1662,7 +1662,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 			collectors.Close()
 			_ = os.RemoveAll(scratch)
 		}()
-		if err := verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, indexReader, indexHeader.count, collectors.Collect); err != nil {
+		if err := verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader, indexReader, indexHeader.count, collectors.Collect); err != nil {
 			return err
 		}
 		return verifyStateDomainChangeBinaryAccessorV4CollectedContext(ctx, scratch, accessorRef, segmentHeader.count, accessorReader, accessorSize, accessorHeader, collectors)
@@ -1686,7 +1686,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		// would decode the entire (often billion-row) accessor twice.
 		return verifyStateDomainChangeBinaryV7CoverageSequential(ctx, dir, historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader, indexReader, indexHeader.count, accessorReader, accessorSize)
 	}
-	if err := verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader.count, indexReader, indexHeader.count); err != nil {
+	if err := verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef, segmentReader, segmentSize, recordOffset, segmentHeader, indexReader, indexHeader.count); err != nil {
 		return err
 	}
 	if accessorHeader.version == stateDomainChangeBinaryVersionV3 {
@@ -1865,11 +1865,23 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 	return nil
 }
 
-func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64) error {
-	return verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef, segment, segmentSize, recordOffset, recordCount, index, indexCount, nil)
+func verifyStateDomainChangeBinaryIndexCoverage(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset uint64, header stateDomainChangeBinaryHeader, index io.ReaderAt, indexCount uint64) error {
+	return verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef, segment, segmentSize, recordOffset, header, index, indexCount, nil)
 }
 
-func verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset, recordCount uint64, index io.ReaderAt, indexCount uint64, visit func(*rawdb.StateDomainChange, uint64, uint64) error) error {
+func verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef SegmentRef, segment io.ReaderAt, segmentSize, recordOffset uint64, header stateDomainChangeBinaryHeader, index io.ReaderAt, indexCount uint64, visit func(*rawdb.StateDomainChange, uint64, uint64) error) error {
+	recordCount := header.count
+	// The caller has already authenticated the file and validated this header's
+	// range table. The cancellation wrapper hides the concrete history reader's
+	// header/range cache, so hydrate V5/V6 records using one forward cursor.
+	var ranges *stateDomainChangeTxRangeCursor
+	if header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 {
+		var err error
+		ranges, err = newStateDomainChangeTxRangeCursor(segment, segmentSize, historyRef, header)
+		if err != nil {
+			return err
+		}
+	}
 	expectedRecordIndex := uint64(0)
 	expectedOffset := recordOffset
 	var previousTxNum uint64
@@ -1905,9 +1917,18 @@ func verifyStateDomainChangeBinaryIndexCoverageWithVisitor(historyRef, indexRef 
 		var previousSeq uint64
 		for j := uint64(0); j < entry.count; j++ {
 			recordIndex := entry.recordIndex + j
-			change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, offset, segmentSize, recordIndex)
+			change, next, err := readStateDomainChangeBinaryRecordFrame(segment, offset, segmentSize, header.version, recordIndex, false)
 			if err != nil {
 				return err
+			}
+			if ranges != nil {
+				row, err := ranges.txRangeForTxNum(change.TxNum)
+				if err != nil {
+					return err
+				}
+				if err := hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, change); err != nil {
+					return err
+				}
 			}
 			if change.TxNum != entry.txNum {
 				return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d read segment tx %d", indexRef.Path, entry.txNum, change.TxNum)

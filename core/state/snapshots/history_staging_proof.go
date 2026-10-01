@@ -790,6 +790,17 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 	}
 	history := contextReaderAt{ctx: ctx, r: open.history}
 	index := contextReaderAt{ctx: ctx, r: open.index}
+	// The context wrapper preserves cancellation but hides the concrete
+	// history reader's cached header and forward StateTxRange cursor. Keep one
+	// validated range cursor for this span instead of rediscovering the header
+	// and binary-searching the range table for every V5/V6 record.
+	var ranges *stateDomainChangeTxRangeCursor
+	if open.header.version == stateDomainChangeBinaryVersionV5 || open.header.version == stateDomainChangeBinaryVersionV6 {
+		ranges, err = newStateDomainChangeTxRangeCursor(history, open.historySize, ref, open.header)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, block := range blocks {
 		cold, table, found, err := findStateDomainChangeBinaryTxRangeForBlock(history,
 			open.historySize, ref, open.header, block.Number)
@@ -825,13 +836,23 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 			}
 			offset := entry.offset
 			for j := uint64(0); j < entry.count; j++ {
-				change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(history,
-					offset, open.historySize, entry.recordIndex+j)
+				recordIndex := entry.recordIndex + j
+				change, next, err := readStateDomainChangeBinaryRecordFrame(history,
+					offset, open.historySize, open.header.version, recordIndex, false)
 				if err != nil {
 					return nil, err
 				}
 				if change == nil {
 					return nil, errors.New("snapshots: nil cold proof record")
+				}
+				if ranges != nil {
+					row, err := ranges.txRangeForTxNum(change.TxNum)
+					if err != nil {
+						return nil, err
+					}
+					if err := hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, change); err != nil {
+						return nil, err
+					}
 				}
 				if change.TxNum != entry.txNum {
 					return nil, errors.New("snapshots: cold proof index/record tx mismatch")
