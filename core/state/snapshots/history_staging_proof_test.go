@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -42,6 +44,345 @@ func historyStagingProofFixture(t *testing.T) (string, *Manifest, []rawdb.Histor
 		t.Fatal(err)
 	}
 	return dir, manifest, blocks
+}
+
+func historyStagingTwoBucketProofFixture(t *testing.T) (string, *Manifest, []rawdb.HistoryStagingBlockProof) {
+	t.Helper()
+	dir := t.TempDir()
+	blocks := make([]rawdb.HistoryStagingBlockProof, 2*rawdb.StateHistoryChunkBucketBlocks)
+	ranges := make([]*rawdb.StateTxRange, len(blocks))
+	for i := range blocks {
+		number := uint64(i + 1024)
+		hash := common.Hash{byte(number >> 8), byte(number)}
+		blocks[i] = rawdb.HistoryStagingBlockProof{Number: number, Hash: hash,
+			BeginTxNum: number, EndTxNum: number}
+		ranges[i] = &rawdb.StateTxRange{BlockNum: number, BlockHash: hash,
+			BeginTxNum: number, EndTxNum: number}
+	}
+	changes := make([]*rawdb.StateDomainChange, 0, 2)
+	for _, offset := range []int{5, 1029} {
+		change := binaryStateDomainChange(blocks[offset].Number, blocks[offset].BeginTxNum, 1, "cold-prev")
+		change.BlockHash = blocks[offset].Hash
+		changes = append(changes, change)
+	}
+	ref := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: blocks[0].BeginTxNum, ToTxNum: blocks[len(blocks)-1].EndTxNum,
+		Path: stateDomainChangeHistorySegmentPath(blocks[0].BeginTxNum, blocks[len(blocks)-1].EndTxNum)}
+	history, index, accessor, err := writeHistorySegmentFiles(dir, ref, changes, ranges)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := NewManifestForChain(ref.FromTxNum, ref.ToTxNum,
+		[]SegmentRef{history, index, accessor}, ChainIdentity{ChainID: 1, NetworkID: 1, GenesisHash: "0x01"})
+	return dir, manifest, blocks
+}
+
+func TestHistoryStagingColdProverReusesOneAuthenticatedReaderAcrossBuckets(t *testing.T) {
+	dir, manifest, blocks := historyStagingTwoBucketProofFixture(t)
+	p, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.EnableReaderReuse()
+	defer p.Close()
+	mask := make([]bool, rawdb.StateHistoryChunkBucketBlocks)
+	for i := range mask {
+		mask[i] = true
+	}
+	first := blocks[:rawdb.StateHistoryChunkBucketBlocks]
+	second := blocks[rawdb.StateHistoryChunkBucketBlocks:]
+	for _, bucket := range [][]rawdb.HistoryStagingBlockProof{first, second} {
+		spans, err := p.Build(context.Background(), bucket, mask)
+		if err != nil || len(spans) != 1 || spans[0].RowCount != 1 {
+			t.Fatalf("bucket proof = %+v, %v", spans, err)
+		}
+	}
+	stats := p.Stats()
+	if stats.HistoryOpens != 1 || stats.IndexOpens != 1 || stats.ReaderReuses != 1 ||
+		stats.FullTrioAuthenticates != 1 {
+		t.Fatalf("not one authenticated reader pair: %+v", stats)
+	}
+	// The original immutable bytes at a new inode are not silently accepted by
+	// an already pinned reader, even when the manifest checksum still matches.
+	path := filepath.Join(dir, manifest.Segments[0].Path)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := path + ".replacement"
+	if err := os.WriteFile(replacement, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Build(context.Background(), second, mask); err == nil {
+		t.Fatal("replaced trio was accepted by a reused reader")
+	}
+	if p.open != nil {
+		t.Fatal("changed trio left a reader open")
+	}
+}
+
+func TestHistoryStagingColdProverCachedReaderStillRejectsWrongSemanticRange(t *testing.T) {
+	dir, manifest, blocks := historyStagingTwoBucketProofFixture(t)
+	p, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.EnableReaderReuse()
+	defer p.Close()
+	mask := make([]bool, rawdb.StateHistoryChunkBucketBlocks)
+	for i := range mask {
+		mask[i] = true
+	}
+	first := blocks[:rawdb.StateHistoryChunkBucketBlocks]
+	if _, err := p.Build(context.Background(), first, mask); err != nil {
+		t.Fatal(err)
+	}
+	wrong := append([]rawdb.HistoryStagingBlockProof(nil), first...)
+	wrong[5].Hash[0] ^= 1
+	if _, err := p.Build(context.Background(), wrong, mask); err == nil {
+		t.Fatal("wrong canonical hash passed through the cached reader")
+	}
+}
+
+func TestHistoryStagingColdProverReferenceReaderMatchesPublicIterator(t *testing.T) {
+	dir, _, blocks := historyStagingTwoBucketProofFixture(t)
+	changes := make([]*rawdb.StateDomainChange, 0, len(blocks))
+	for _, block := range blocks {
+		change := binaryStateDomainChange(block.Number, block.BeginTxNum, 1, "cold-prev")
+		change.BlockHash = block.Hash
+		changes = append(changes, change)
+	}
+	oldRefs := writeV6StateDomainHistorySegmentForTest(t, dir,
+		blocks[0].BeginTxNum, blocks[len(blocks)-1].EndTxNum, changes)
+	newRefs, _, err := ReencodeHistoryReferenceTrioContext(context.Background(), dir,
+		oldRefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := *NewManifestForChain(blocks[0].BeginTxNum, blocks[len(blocks)-1].EndTxNum,
+		newRefs, ChainIdentity{ChainID: 1, NetworkID: 1, GenesisHash: "0x01"})
+	if err := manifest.ValidateProduction(); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewHistoryStagingColdProver(dir, &manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.EnableReaderReuse()
+	defer p.Close()
+	mask := make([]bool, rawdb.StateHistoryChunkBucketBlocks)
+	for i := range mask {
+		mask[i] = true
+	}
+	for _, bucket := range [][]rawdb.HistoryStagingBlockProof{
+		blocks[:rawdb.StateHistoryChunkBucketBlocks],
+		blocks[rawdb.StateHistoryChunkBucketBlocks:],
+	} {
+		spans, err := p.Build(context.Background(), bucket, mask)
+		if err != nil || len(spans) != 1 {
+			t.Fatalf("reference proof = %+v, %v", spans, err)
+		}
+		var records [][32]byte
+		var previousTx, ordinal uint64
+		var havePrevious bool
+		cfg, ok := DefaultDomainRegistry().ConfigForRef(newRefs[0])
+		if !ok {
+			t.Fatal("reference history has no domain config")
+		}
+		err = cfg.IterateHistoryRange(dir, &manifest, newRefs[0],
+			bucket[0].BeginTxNum, bucket[len(bucket)-1].EndTxNum,
+			func(change *rawdb.StateDomainChange) (bool, error) {
+				if !havePrevious || change.TxNum != previousTx {
+					ordinal = 0
+				} else {
+					ordinal++
+				}
+				previousTx, havePrevious = change.TxNum, true
+				records = append(records, historyStagingRecordDigest(change, ordinal))
+				return true, nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rangeDigest, semantic := historyStagingSemanticDigest(bucket, records)
+		if spans[0].TxRangeDigest != rangeDigest || spans[0].SemanticHash != semantic ||
+			spans[0].RowCount != uint64(len(records)) {
+			t.Fatalf("reference proof differs from public iterator: %+v", spans[0])
+		}
+	}
+	stats := p.Stats()
+	if stats.HistoryOpens != 1 || stats.IndexOpens != 1 || stats.ReaderReuses != 1 {
+		t.Fatalf("reference reader did not reuse one trio: %+v", stats)
+	}
+}
+
+func TestHistoryStagingColdProverEvictsReaderWhenTrioChanges(t *testing.T) {
+	dir, _, blocks := historyStagingTwoBucketProofFixture(t)
+	var refs []SegmentRef
+	for _, bucket := range [][]rawdb.HistoryStagingBlockProof{
+		blocks[:rawdb.StateHistoryChunkBucketBlocks],
+		blocks[rawdb.StateHistoryChunkBucketBlocks:],
+	} {
+		ranges := make([]*rawdb.StateTxRange, len(bucket))
+		for i, block := range bucket {
+			ranges[i] = &rawdb.StateTxRange{BlockNum: block.Number, BlockHash: block.Hash,
+				BeginTxNum: block.BeginTxNum, EndTxNum: block.EndTxNum}
+		}
+		ref := SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+			FromTxNum: bucket[0].BeginTxNum, ToTxNum: bucket[len(bucket)-1].EndTxNum,
+			Path: stateDomainChangeHistorySegmentPath(bucket[0].BeginTxNum,
+				bucket[len(bucket)-1].EndTxNum)}
+		history, index, accessor, err := writeHistorySegmentFiles(dir, ref, nil, ranges)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, history, index, accessor)
+	}
+	manifest := NewManifestForChain(blocks[0].BeginTxNum, blocks[len(blocks)-1].EndTxNum,
+		refs, ChainIdentity{ChainID: 1, NetworkID: 1, GenesisHash: "0x01"})
+	p, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.EnableReaderReuse()
+	defer p.Close()
+	mask := make([]bool, rawdb.StateHistoryChunkBucketBlocks)
+	for i := range mask {
+		mask[i] = true
+	}
+	for _, bucket := range [][]rawdb.HistoryStagingBlockProof{
+		blocks[:rawdb.StateHistoryChunkBucketBlocks],
+		blocks[rawdb.StateHistoryChunkBucketBlocks:],
+		blocks[:rawdb.StateHistoryChunkBucketBlocks],
+	} {
+		if _, err := p.Build(context.Background(), bucket, mask); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := p.Stats(); got.HistoryOpens != 3 || got.IndexOpens != 3 ||
+		got.FullTrioAuthenticates != 2 {
+		t.Fatalf("reader eviction and auth counts = %+v", got)
+	}
+	if err := p.Close(); err != nil || p.open != nil {
+		t.Fatalf("evicted reader remained open: %v", err)
+	}
+}
+
+func TestHistoryStagingTrioAuthenticationCancelledLeaderLetsWaiterRetry(t *testing.T) {
+	dir, manifest, _ := historyStagingProofFixture(t)
+	leader, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, id, err := leader.trio(leader.refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	waiting := make(chan struct{})
+	var once sync.Once
+	leader.testAuth = func(ctx context.Context, _ [3]SegmentRef) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	waiter.testWait = func() { once.Do(func() { close(waiting) }) }
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderResult := make(chan error, 1)
+	waiterResult := make(chan error, 1)
+	go func() { leaderResult <- leader.authenticate(leaderCtx, refs, id) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader never entered full trio authentication")
+	}
+	go func() { waiterResult <- waiter.authenticate(context.Background(), refs, id) }()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter never observed the in-flight authentication")
+	}
+	cancelLeader()
+	select {
+	case err := <-leaderResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("leader = %v, want cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled leader remained blocked")
+	}
+	select {
+	case err := <-waiterResult:
+		if err != nil {
+			t.Fatalf("live waiter did not retry its own full audit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter was not awakened by cancelled leader")
+	}
+	if waiter.Stats().FullTrioAuthenticates != 1 {
+		t.Fatalf("waiter authentication work = %+v", waiter.Stats())
+	}
+}
+
+func TestHistoryStagingTrioAuthenticationWaiterCancellation(t *testing.T) {
+	dir, manifest, _ := historyStagingProofFixture(t)
+	leader, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := NewHistoryStagingColdProver(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, id, err := leader.trio(leader.refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	waiting := make(chan struct{})
+	leader.testAuth = func(ctx context.Context, trio [3]SegmentRef) error {
+		close(started)
+		<-release
+		return VerifyHistorySegmentWithCompanionsContext(ctx, dir, manifest, trio[0])
+	}
+	waiter.testWait = func() { close(waiting) }
+	leaderResult := make(chan error, 1)
+	waiterResult := make(chan error, 1)
+	go func() { leaderResult <- leader.authenticate(context.Background(), refs, id) }()
+	<-started
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	go func() { waiterResult <- waiter.authenticate(waiterCtx, refs, id) }()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter never observed the in-flight authentication")
+	}
+	cancelWaiter()
+	select {
+	case err := <-waiterResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter = %v, want cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled waiter remained blocked")
+	}
+	close(release)
+	select {
+	case err := <-leaderResult:
+		if err != nil {
+			t.Fatalf("leader full audit = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader did not complete")
+	}
 }
 
 func TestHistoryStagingTargetColdEquivalenceChecksPrevAndZeroBlocks(t *testing.T) {

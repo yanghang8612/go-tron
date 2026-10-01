@@ -48,6 +48,7 @@ HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 CLI_STDERR_LIMIT = 16 << 20
 CLI_RUN_TIMEOUT = 24 * 60 * 60
 REPIN_INTENT = MAIN / 'HISTORY_STAGING_REPIN_INTENT.json'
+PLAN_DIR = DATADIR / 'gtron' / 'history-staging-plans'
 
 
 def require(ok, message):
@@ -550,6 +551,8 @@ def repin_preplan(job_id, candidate, source_commit, expected_sha, legacy_manifes
         require(latch['job_id'] == job_id and latch['state'] == 'MIGRATION_IN_PROGRESS' and
                 not latch.get('plan_id'),
                 'repin requires the same unfinished pre-plan migration job')
+        require(latch.get('legacy_manifest_sha256', legacy_manifest_sha) == legacy_manifest_sha,
+                'repin legacy manifest pin differs from durable latch')
         require(canonical_paths() == {key: latch[key] for key in ('source', 'target', 'cold')},
                 'repin storage paths differ from durable latch')
         storage_locks(stack, latch)
@@ -616,6 +619,132 @@ def repin_preplan(job_id, candidate, source_commit, expected_sha, legacy_manifes
                 'source_commit': source_commit, 'candidate_sha256': expected_sha,
                 'candidate': str(pinned), 'legacy_manifest_sha256': legacy_manifest_sha,
                 'pristine': True}
+
+
+def checked_unpublished_job_temps(plan_dir, latch, manifest_sha, owner=0):
+    """Identify only exact, unpublished temporary plans for this frozen job."""
+    if not os.path.lexists(plan_dir):
+        return []
+    directory = os.lstat(plan_dir)
+    require(stat.S_ISDIR(directory.st_mode) and directory.st_uid == owner and
+            stat.S_IMODE(directory.st_mode) == 0o700,
+            'unsafe history-staging plan directory')
+    pattern = re.compile(r'\.' + re.escape(latch['job_id']) + r'\.plan\.[A-Za-z0-9]+\.tmp\Z')
+    result = []
+    with os.scandir(plan_dir) as entries:
+        for entry in entries:
+            require(len(result) < 128, 'too many unpublished plan temporaries')
+            require(pattern.fullmatch(entry.name) is not None,
+                    'published, foreign, or unexpected history-staging plan file exists')
+            path = Path(plan_dir) / entry.name
+            info = entry.stat(follow_symlinks=False)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == owner and
+                    info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600 and
+                    0 < info.st_size <= 16 << 30,
+                    'unsafe or unbounded unpublished plan temporary')
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                opened = os.fstat(fd)
+                require((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) ==
+                        (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns),
+                        'unpublished plan temporary changed before inspection')
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    first = stream.readline((1 << 20) + 1)
+                require(first.endswith(b'\n') and len(first) <= 1 << 20,
+                        'unpublished plan has no bounded durable header')
+                header = json.loads(first)
+                require(isinstance(header, dict) and header.get('version') == VERSION and
+                        header.get('job_id') == latch['job_id'] and
+                        header.get('candidate_sha256') == latch['candidate_sha256'] and
+                        header.get('manifest_sha256') == manifest_sha and
+                        header.get('paths') == {key: latch[key] for key in
+                                                ('source', 'target', 'cold')},
+                        'unpublished plan header differs from frozen old job')
+            finally:
+                os.close(fd)
+            result.append((path, info))
+    return sorted(result, key=lambda item: str(item[0]))
+
+
+def discard_preplan_tmp(job_id, candidate, source_commit, expected_sha, legacy_manifest_sha):
+    """Remove only old-job plan temp files after an independent storage proof."""
+    require(os.geteuid() == 0 and re.fullmatch(r'[0-9a-f]{32}', job_id or '') and
+            isinstance(source_commit, str) and HEX40.fullmatch(source_commit) and
+            isinstance(expected_sha, str) and HEX64.fullmatch(expected_sha) and
+            isinstance(legacy_manifest_sha, str) and HEX64.fullmatch(legacy_manifest_sha),
+            'invalid root pre-plan temporary cleanup identity')
+    require(os.path.lexists(release.STAGING_LATCH) and
+            not os.path.lexists(release.STAGING_REQUIRED) and
+            not os.path.lexists(REPIN_INTENT),
+            'temporary cleanup requires a migration latch without active reader or repin')
+    for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+        verify_stopped(unit)
+    with ExitStack() as stack:
+        flock_file(stack, LOCK)
+        for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+            verify_stopped(unit)
+        latch = load_latch()
+        require(latch['job_id'] == job_id and latch['state'] == 'MIGRATION_IN_PROGRESS' and
+                not latch.get('plan_id'),
+                'temporary cleanup requires the same unfinished pre-plan job')
+        require(latch.get('legacy_manifest_sha256', legacy_manifest_sha) == legacy_manifest_sha,
+                'temporary cleanup legacy manifest pin differs from durable latch')
+        require(canonical_paths() == {key: latch[key] for key in ('source', 'target', 'cold')},
+                'temporary cleanup storage paths differ from durable latch')
+        storage_locks(stack, latch)
+        prepared = read_prepared()
+        require(all(prepared.get(key) == latch[key] for key in
+                    ('source', 'target', 'cold', 'service_was_active',
+                     'timer_was_active', 'timer_was_enabled',
+                     'source_commit', 'candidate_sha256')),
+                'temporary cleanup prepared fence differs from old migration identity')
+        require(GUARD_INSTALL.is_file() and DROPIN.is_file() and
+                (APP / 'start.sh').is_file(),
+                'persistent startup/deployment guards are missing')
+        manifest = Path(latch['cold']) / 'manifest.json'
+        require(stable_manifest_sha(manifest) == legacy_manifest_sha,
+                'legacy cold manifest SHA differs from stopped bytes')
+        temps = checked_unpublished_job_temps(PLAN_DIR, latch, legacy_manifest_sha)
+        pinned = pinned_candidate(Path(candidate), source_commit, expected_sha)
+        probe = dict(latch, source_commit=source_commit, candidate_sha256=expected_sha,
+                     candidate=str(pinned), legacy_manifest_sha256=legacy_manifest_sha)
+        storage = cli_result(probe, 'inspect', '--verify-pristine-storage')
+        require(storage.get('storage_pristine') is True,
+                'new candidate did not prove source and staging stores pristine')
+        require(stable_manifest_sha(manifest) == legacy_manifest_sha,
+                'legacy cold manifest changed during storage inspection')
+        for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+            verify_stopped(unit)
+        require(load_latch() == latch and read_prepared() == prepared and
+                not os.path.lexists(release.STAGING_REQUIRED) and
+                not os.path.lexists(REPIN_INTENT),
+                'migration identity changed during temporary cleanup proof')
+        after_inventory = checked_unpublished_job_temps(PLAN_DIR, latch, legacy_manifest_sha)
+        require(len(after_inventory) == len(temps) and
+                all(path == later_path and
+                    (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) ==
+                    (later.st_dev, later.st_ino, later.st_size, later.st_mtime_ns)
+                    for (path, before), (later_path, later) in zip(temps, after_inventory)),
+                'unpublished plan inventory changed during storage proof')
+        for path, before in temps:
+            current = os.lstat(path)
+            require((current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) ==
+                    (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) and
+                    stat.S_ISREG(current.st_mode) and current.st_uid == before.st_uid and
+                    stat.S_IMODE(current.st_mode) == 0o600 and current.st_nlink == 1,
+                    'unpublished plan temporary changed before removal')
+            os.unlink(path)
+        if temps:
+            fd = os.open(str(PLAN_DIR), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        strict = cli_result(probe, 'inspect', '--verify-pristine')
+        require(strict.get('pristine') is True,
+                'old job is not strictly pristine after temporary cleanup')
+        return {'version': VERSION, 'phase': 'discard-preplan-tmp',
+                'job_id': job_id, 'removed': len(temps), 'pristine': True}
 
 
 def run_new(candidate, source_commit, expected_sha, health_timeout=None,
@@ -741,9 +870,15 @@ def main():
     repin.add_argument('--source', required=True)
     repin.add_argument('--sha256', required=True)
     repin.add_argument('--legacy-manifest-sha256', required=True)
+    discard = modes.add_parser('discard-preplan-tmp')
+    discard.add_argument('--job-id', required=True)
+    discard.add_argument('--candidate', type=Path, required=True)
+    discard.add_argument('--source', required=True)
+    discard.add_argument('--sha256', required=True)
+    discard.add_argument('--legacy-manifest-sha256', required=True)
     args = parser.parse_args()
-    require(args.mode in ('run', 'resume', 'repin-preplan'),
-            'run, resume or repin-preplan action required')
+    require(args.mode in ('run', 'resume', 'repin-preplan', 'discard-preplan-tmp'),
+            'run, resume, repin-preplan or discard-preplan-tmp action required')
     if args.mode == 'run':
         health_timeout = (release.staging_health_timeout(args.staging_health_timeout_sec)
                           if args.staging_health_timeout_sec is not None else None)
@@ -751,9 +886,12 @@ def main():
                          args.legacy_manifest_sha256)
     elif args.mode == 'resume':
         result = resume(args.job_id)
-    else:
+    elif args.mode == 'repin-preplan':
         result = repin_preplan(args.job_id, args.candidate, args.source,
                                args.sha256, args.legacy_manifest_sha256)
+    else:
+        result = discard_preplan_tmp(args.job_id, args.candidate, args.source,
+                                     args.sha256, args.legacy_manifest_sha256)
     print(json.dumps(result, sort_keys=True))
 
 

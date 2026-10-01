@@ -73,6 +73,16 @@ timer 都已停止时，可以由 root 给同一 job 更换经过审查的新候
 越过未完成换针。换针成功后再用原 job ID 执行上面的 `resume`；换针本身
 不执行计划、复制、服务启动或 timer 恢复。
 
+若旧计划进程中断时留下同一 job 的未发布隐藏临时计划，严格 pristine
+检查会拒绝换针。仅在未发布任何正式计划、没有源或目标库迁移痕迹时，
+可先运行独立的 `discard-preplan-tmp`，参数与上面的 `repin-preplan` 完全相同。
+它先用新候选的 `inspect --verify-pristine-storage` 确认热库和暂存库未迁移，
+再只删除该 job 名下、root 所有、单硬链接、首行标识精确匹配旧 job、旧候选、
+三库路径与停机 manifest SHA 的隐藏 `*.tmp` 文件，并同步计划目录。目录中
+任何正式计划、其他 job 文件或无法验证首行的临时文件都会阻止清理。随后
+再次要求完整 `inspect --verify-pristine` 成功，才可执行 `repin-preplan`。
+此动作不删数据库、已发布计划或其他作业文件；若中途断电，可用相同参数重试。
+
 计划仅迁移部分 bucket 时不能通过完整验收，也不能激活 staged reader。
 不要用旧版二进制或旧版发布脚本绕过 latch；正常发布和回滚必须通过
 reader capability 与服务启动 guard。初次迁移使用的 candidate SHA 是

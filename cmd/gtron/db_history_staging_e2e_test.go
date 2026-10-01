@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -61,7 +62,14 @@ type historyStagingE2EFixture struct {
 }
 
 func newHistoryStagingE2EFixture(t *testing.T) historyStagingE2EFixture {
+	return newHistoryStagingE2EFixtureWithHead(t, 3073)
+}
+
+func newHistoryStagingE2EFixtureWithHead(t *testing.T, head uint64) historyStagingE2EFixture {
 	t.Helper()
+	if head < 3073 {
+		t.Fatal("history staging fixture head must cover the repair and cold rows")
+	}
 	root := t.TempDir()
 	datadir := filepath.Join(root, "datadir")
 	cold := stateSnapshotsDir(datadir)
@@ -85,7 +93,6 @@ func newHistoryStagingE2EFixture(t *testing.T) historyStagingE2EFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const head = uint64(3073)
 	var headHash, solidHash common.Hash
 	for number := uint64(1); number <= head; number++ {
 		block := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{
@@ -380,6 +387,9 @@ func TestHistoryStagingCLILegacyManifestScopedAdmission(t *testing.T) {
 	if _, err := f.command(t, "migrate", "--max-buckets", "0"); err == nil {
 		t.Fatal("corrupt cold history admitted by full migration proof")
 	}
+	if _, err := os.Stat(filepath.Join(historyStagingPlanDirectory(f.datadir), f.job+".jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("failed parallel proof published a job plan: %v", err)
+	}
 	coldBytes[len(coldBytes)-1] ^= 1
 	if err := os.WriteFile(coldHistoryPath, coldBytes, 0o600); err != nil {
 		t.Fatal(err)
@@ -476,6 +486,109 @@ func TestHistoryStagingCLIDefaultLimitsReachPhysicalInventory(t *testing.T) {
 		header.Limits.MaxBucketBytes != 4096<<20 || header.Limits.MaxWorkBytes != 8192<<20 ||
 		header.Limits.MinFreeBytes != 16<<30 {
 		t.Fatalf("frozen plan did not use actual CLI defaults: %+v", header.Limits)
+	}
+}
+
+func TestHistoryStagingCLIParallelPlanMatchesSerialBytes(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(8)
+	defer runtime.GOMAXPROCS(previousProcs)
+	// Eight complete eligible buckets exercise eight real pinned Pebble views
+	// and cold provers, including mixed cold/hot and hot-only buckets.
+	f := newHistoryStagingE2EFixtureWithHead(t, 9217)
+	serial, err := f.command(t, "migrate", "--max-buckets", "0", "--plan-workers", "1")
+	if err != nil || serial.PlanID == "" {
+		t.Fatalf("serial plan: %+v %v", serial, err)
+	}
+	if serial.Bucket < 8 {
+		t.Fatalf("fixture did not cover eight complete buckets: %d", serial.Bucket)
+	}
+	planDir := historyStagingPlanDirectory(f.datadir)
+	serialBytes, err := os.ReadFile(filepath.Join(planDir, serial.PlanID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Remove only this test's two hard links so the same frozen source is
+	// actually planned again by parallel workers, rather than recovered.
+	for _, name := range []string{f.job + ".jsonl", serial.PlanID + ".jsonl"} {
+		if err := os.Remove(filepath.Join(planDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parallel, err := f.command(t, "migrate", "--max-buckets", "0", "--plan-workers", "8")
+	if err != nil || parallel.PlanID != serial.PlanID {
+		t.Fatalf("parallel plan differs from serial: %+v, serial=%+v, err=%v", parallel, serial, err)
+	}
+	parallelBytes, err := os.ReadFile(filepath.Join(planDir, parallel.PlanID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(serialBytes, parallelBytes) {
+		t.Fatal("parallel workers changed the frozen JSONL bytes or digest")
+	}
+	if _, err := f.command(t, "migrate", "--plan-workers", "9"); err == nil ||
+		!strings.Contains(err.Error(), "plan-workers") {
+		t.Fatalf("worker count above hard cap accepted: %v", err)
+	}
+}
+
+func TestHistoryStagingCLIStoragePristineIgnoresOnlyUnpublishedPlan(t *testing.T) {
+	f := newHistoryStagingE2EFixture(t)
+	for _, modes := range [][]string{
+		{"--verify-pristine", "--verify-pristine-storage"},
+		{"--verify-complete", "--verify-pristine-storage"},
+	} {
+		if _, err := f.command(t, "inspect", modes...); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("combined inspect modes accepted %v: %v", modes, err)
+		}
+	}
+	planDir := historyStagingPlanDirectory(f.datadir)
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planDir, ".unpublished.plan.tmp"), []byte("incomplete"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := f.command(t, "inspect", "--verify-pristine-storage")
+	if err != nil || !storage.StoragePristine || storage.Pristine {
+		t.Fatalf("storage-only proof over unpublished plan: %+v %v", storage, err)
+	}
+	if _, err := f.command(t, "inspect", "--verify-pristine"); err == nil {
+		t.Fatal("strict pristine proof ignored an unpublished plan")
+	}
+	stage := defaultHistoryStagingDir(f.datadir)
+	if err := os.MkdirAll(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, "CURRENT"), []byte("dirty"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.command(t, "inspect", "--verify-pristine-storage"); err == nil {
+		t.Fatal("storage proof ignored target Pebble marker")
+	}
+	if err := os.Remove(filepath.Join(stage, "CURRENT")); err != nil {
+		t.Fatal(err)
+	}
+	hot, err := rawdb.NewPebbleDB(chainDataDir(f.datadir), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, present, err := rawdb.ReadBlockHashByNumberStrict(hot, 1)
+	if err != nil || !present {
+		t.Fatalf("canonical block 1: %v", err)
+	}
+	receipt, err := rawdb.NewHistoryStagingBlockHasher(1).Finish(hash, 1, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteHistoryStagingBlockComplete(hot, receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := hot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.command(t, "inspect", "--verify-pristine-storage"); err == nil ||
+		!strings.Contains(err.Error(), "source contains migration metadata") {
+		t.Fatalf("storage proof ignored source metadata: %v", err)
 	}
 }
 

@@ -22,6 +22,171 @@ SPEC.loader.exec_module(migrate)
 
 
 class HistoryStagingMigrateTests(unittest.TestCase):
+    def test_checked_unpublished_job_temps_requires_bounded_exact_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_dir = root / 'history-staging-plans'
+            plan_dir.mkdir(mode=0o700)
+            plan_dir.chmod(0o700)
+            latch = {'job_id': 'a' * 32, 'candidate_sha256': 'b' * 64,
+                     'source': '/source', 'target': '/target', 'cold': '/cold'}
+            header = {'version': 1, 'job_id': latch['job_id'],
+                      'candidate_sha256': latch['candidate_sha256'],
+                      'manifest_sha256': 'c' * 64,
+                      'paths': {key: latch[key] for key in ('source', 'target', 'cold')}}
+            temporary = plan_dir / ('.' + latch['job_id'] + '.plan.123456789.tmp')
+            temporary.write_text(json.dumps(header) + '\n' + 'partial row')
+            temporary.chmod(0o600)
+            self.assertEqual(len(migrate.checked_unpublished_job_temps(
+                plan_dir, latch, 'c' * 64, owner=migrate.os.geteuid())), 1)
+            with self.assertRaisesRegex(RuntimeError, 'header differs'):
+                migrate.checked_unpublished_job_temps(plan_dir, latch, 'd' * 64,
+                                                       owner=migrate.os.geteuid())
+            bad = dict(header, candidate_sha256='d' * 64)
+            temporary.write_text(json.dumps(bad) + '\n')
+            temporary.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, 'header differs'):
+                migrate.checked_unpublished_job_temps(plan_dir, latch, 'c' * 64,
+                                                       owner=migrate.os.geteuid())
+            temporary.write_text(json.dumps(header) + '\n')
+            temporary.chmod(0o600)
+            (plan_dir / (latch['job_id'] + '.jsonl')).write_text('published')
+            with self.assertRaisesRegex(RuntimeError, 'published, foreign'):
+                migrate.checked_unpublished_job_temps(plan_dir, latch, 'c' * 64,
+                                                       owner=migrate.os.geteuid())
+            (plan_dir / (latch['job_id'] + '.jsonl')).unlink()
+            (plan_dir / ('.' + 'b' * 32 + '.plan.123456789.tmp')).write_text('foreign')
+            with self.assertRaisesRegex(RuntimeError, 'published, foreign'):
+                migrate.checked_unpublished_job_temps(plan_dir, latch, 'c' * 64,
+                                                       owner=migrate.os.geteuid())
+
+    def test_discard_preplan_tmp_only_after_storage_proof_then_strict_pristine(self):
+        for storage_pristine in (False, True):
+            with self.subTest(storage_pristine=storage_pristine), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, prepared, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                    self.repin_fixture(root)
+                plan_dir = root / 'history-staging-plans'
+                plan_dir.mkdir(mode=0o700)
+                plan_dir.chmod(0o700)
+                header = {'version': 1, 'job_id': old['job_id'],
+                          'candidate_sha256': old['candidate_sha256'],
+                          'manifest_sha256': legacy_sha, 'paths': paths}
+                temporary = plan_dir / ('.' + old['job_id'] + '.plan.123456789.tmp')
+                temporary.write_text(json.dumps(header) + '\npartial')
+                temporary.chmod(0o600)
+                actions = []
+                def cli(probe, action, *options):
+                    actions.append(options)
+                    if options == ('--verify-pristine-storage',):
+                        return {'phase': 'inspect', 'storage_pristine': storage_pristine}
+                    self.assertFalse(temporary.exists())
+                    return {'phase': 'inspect', 'pristine': True}
+                patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                             required_path, cli)
+                real_checker = migrate.checked_unpublished_job_temps
+                actual_owner = migrate.os.geteuid()
+                with ExitStack() as stack:
+                    for patch in patches:
+                        stack.enter_context(patch)
+                    stack.enter_context(mock.patch.object(migrate, 'PLAN_DIR', plan_dir))
+                    stack.enter_context(mock.patch.object(
+                        migrate, 'checked_unpublished_job_temps',
+                        side_effect=lambda directory, latch, digest: real_checker(
+                            directory, latch, digest, owner=actual_owner)))
+                    if storage_pristine:
+                        result = migrate.discard_preplan_tmp(old['job_id'], root / 'new',
+                                                             'e' * 40, 'f' * 64, legacy_sha)
+                        self.assertEqual(result['removed'], 1)
+                        self.assertFalse(temporary.exists())
+                        self.assertEqual(actions, [('--verify-pristine-storage',),
+                                                   ('--verify-pristine',)])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'did not prove'):
+                            migrate.discard_preplan_tmp(old['job_id'], root / 'new',
+                                                       'e' * 40, 'f' * 64, legacy_sha)
+                        self.assertTrue(temporary.exists())
+                        self.assertEqual(actions, [('--verify-pristine-storage',)])
+                    self.assertEqual(json.loads(latch_path.read_text()), old)
+                    self.assertEqual(json.loads(prepared_path.read_text()), prepared)
+
+    def test_discard_preplan_tmp_rechecks_file_before_unlink_and_retries_partial_unlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, _, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                self.repin_fixture(root)
+            plan_dir = root / 'history-staging-plans'
+            plan_dir.mkdir(mode=0o700)
+            plan_dir.chmod(0o700)
+            header = {'version': 1, 'job_id': old['job_id'],
+                      'candidate_sha256': old['candidate_sha256'],
+                      'manifest_sha256': legacy_sha, 'paths': paths}
+            temps = [plan_dir / ('.' + old['job_id'] + '.plan.%09d.tmp' % index)
+                     for index in (1, 2)]
+            for temporary in temps:
+                temporary.write_text(json.dumps(header) + '\npartial')
+                temporary.chmod(0o600)
+            mutate = [True]
+            def cli(probe, action, *options):
+                if options == ('--verify-pristine-storage',):
+                    if mutate[0]:
+                        temps[0].write_text(json.dumps(header) + '\nchanged after inventory')
+                        temps[0].chmod(0o600)
+                    return {'phase': 'inspect', 'storage_pristine': True}
+                return {'phase': 'inspect', 'pristine': True}
+            patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                         required_path, cli)
+            checker = migrate.checked_unpublished_job_temps
+            actual_owner = migrate.os.geteuid()
+            with ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(mock.patch.object(migrate, 'PLAN_DIR', plan_dir))
+                stack.enter_context(mock.patch.object(
+                    migrate, 'checked_unpublished_job_temps',
+                    side_effect=lambda directory, latch, digest: checker(
+                        directory, latch, digest, owner=actual_owner)))
+                with self.assertRaisesRegex(RuntimeError, 'changed during storage proof'):
+                    migrate.discard_preplan_tmp(old['job_id'], root / 'new',
+                                               'e' * 40, 'f' * 64, legacy_sha)
+                self.assertTrue(all(path.exists() for path in temps))
+                mutate[0] = False
+                real_unlink = migrate.os.unlink
+                removed = [0]
+                def fail_after_one(path):
+                    if removed[0] == 1:
+                        raise RuntimeError('simulated unlink interruption')
+                    removed[0] += 1
+                    real_unlink(path)
+                with mock.patch.object(migrate.os, 'unlink', side_effect=fail_after_one):
+                    with self.assertRaisesRegex(RuntimeError, 'unlink interruption'):
+                        migrate.discard_preplan_tmp(old['job_id'], root / 'new',
+                                                   'e' * 40, 'f' * 64, legacy_sha)
+                self.assertEqual(sum(path.exists() for path in temps), 1)
+                result = migrate.discard_preplan_tmp(old['job_id'], root / 'new',
+                                                     'e' * 40, 'f' * 64, legacy_sha)
+                self.assertEqual(result['removed'], 1)
+                self.assertFalse(any(path.exists() for path in temps))
+
+    def test_discard_preplan_tmp_rejects_changed_latch_manifest_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, prepared, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                self.repin_fixture(root)
+            old['legacy_manifest_sha256'] = '0' * 64
+            latch_path.write_text(json.dumps(old))
+            patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                         required_path,
+                                         lambda *args: self.fail('CLI must not run'))
+            with ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                with self.assertRaisesRegex(RuntimeError, 'pin differs from durable latch'):
+                    migrate.discard_preplan_tmp(old['job_id'], root / 'new',
+                                               'e' * 40, 'f' * 64, legacy_sha)
+                self.assertEqual(json.loads(latch_path.read_text()), old)
+                self.assertEqual(json.loads(prepared_path.read_text()), prepared)
+
     def test_verify_stopped_timer_avoids_unsupported_mainpid_property(self):
         calls = []
         def old_systemd(argv, timeout):

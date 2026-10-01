@@ -31,6 +31,65 @@ type HistoryStagingColdProver struct {
 	refs     []SegmentRef
 	trios    map[string]historyStagingTrio
 	verified map[[32]byte][3]historyStagingFileState
+	open     *historyStagingOpenTrio
+	reuse    bool
+	stats    HistoryStagingProverStats
+	// testAuth intercepts only the expensive full-file audit in focused
+	// concurrency tests; production provers always use the real verifier.
+	testAuth func(context.Context, [3]SegmentRef) error
+	testWait func()
+}
+
+// HistoryStagingProverStats counts real opens and full trio audits in this
+// worker. Counts describe work, not cache correctness or user-visible hits.
+type HistoryStagingProverStats struct {
+	HistoryOpens          uint64
+	IndexOpens            uint64
+	ReaderReuses          uint64
+	FullTrioAuthenticates uint64
+}
+
+// EnableReaderReuse opts into retaining at most one history/index pair across
+// adjacent Build calls. The caller must Close the prover when its job ends.
+func (p *HistoryStagingColdProver) EnableReaderReuse() {
+	if p != nil {
+		p.reuse = true
+	}
+}
+
+func (p *HistoryStagingColdProver) Stats() HistoryStagingProverStats {
+	if p == nil {
+		return HistoryStagingProverStats{}
+	}
+	return p.stats
+}
+
+// A prover is worker-local. Keep only one history/index pair open so adjacent
+// buckets share reference metadata and decoded chunks without multiplying the
+// cache by the number of cold trios in a large manifest.
+type historyStagingOpenTrio struct {
+	id          [32]byte
+	refs        [3]SegmentRef
+	states      [3]historyStagingFileState
+	history     historySegmentReader
+	historySize uint64
+	header      stateDomainChangeBinaryHeader
+	index       historySegmentReader
+	indexHeader stateDomainChangeBinaryHeader
+}
+
+func (p *HistoryStagingColdProver) Close() error {
+	if p == nil || p.open == nil {
+		return nil
+	}
+	open := p.open
+	p.open = nil
+	first := open.index.Close()
+	second := open.history.Close()
+	if first != nil {
+		return first
+	}
+	return second
 }
 
 // HistoryStagingDir exposes the canonical cold directory of a pinned read
@@ -68,10 +127,12 @@ var historyStagingPinnedProofCache = struct {
 	entries map[[32]byte]historyStagingPinnedProofCacheEntry
 	trios   map[[32]byte][3]historyStagingFileState
 	indexes map[historyStagingManifestIndexKey]map[[32]byte][3]SegmentRef
+	flights map[[32]byte]chan struct{}
 	clock   uint64
 }{entries: make(map[[32]byte]historyStagingPinnedProofCacheEntry),
 	trios:   make(map[[32]byte][3]historyStagingFileState),
-	indexes: make(map[historyStagingManifestIndexKey]map[[32]byte][3]SegmentRef)}
+	indexes: make(map[historyStagingManifestIndexKey]map[[32]byte][3]SegmentRef),
+	flights: make(map[[32]byte]chan struct{})}
 
 type historyStagingManifestIndexKey struct {
 	dir        string
@@ -331,6 +392,7 @@ func BuildHistoryStagingColdSpans(ctx context.Context, dir string, manifest *Man
 	if err != nil {
 		return nil, err
 	}
+	defer prover.Close()
 	return prover.Build(ctx, blocks, needed)
 }
 
@@ -409,6 +471,16 @@ func historyStagingFileFingerprint(dir string, ref SegmentRef) (historyStagingFi
 	return historyStagingFileState{info: info}, nil
 }
 
+func historyStagingCheckFileStates(dir string, refs [3]SegmentRef, states [3]historyStagingFileState) error {
+	for i, ref := range refs {
+		after, err := historyStagingFileFingerprint(dir, ref)
+		if err != nil || !after.same(states[i]) {
+			return fmt.Errorf("snapshots: cold trio changed during proof: %s", ref.Path)
+		}
+	}
+	return nil
+}
+
 func (p *HistoryStagingColdProver) authenticate(ctx context.Context, refs [3]SegmentRef, id [32]byte) error {
 	var states [3]historyStagingFileState
 	for i, ref := range refs {
@@ -428,39 +500,93 @@ func (p *HistoryStagingColdProver) authenticate(ctx context.Context, refs [3]Seg
 		}
 	}
 	globalKey := sha256.Sum256(append(append([]byte("gtron-history-staging-trio-auth-v1\x00"), p.dir...), id[:]...))
-	historyStagingPinnedProofCache.Lock()
-	shared, sharedHit := historyStagingPinnedProofCache.trios[globalKey]
-	historyStagingPinnedProofCache.Unlock()
-	if sharedHit {
-		match := true
-		for i := range states {
-			match = match && shared[i].same(states[i])
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if match {
+		historyStagingPinnedProofCache.Lock()
+		shared, hit := historyStagingPinnedProofCache.trios[globalKey]
+		if hit {
+			match := true
+			for i := range states {
+				match = match && shared[i].same(states[i])
+			}
+			if match {
+				historyStagingPinnedProofCache.Unlock()
+				p.verified[id] = states
+				return nil
+			}
+		}
+		if flight := historyStagingPinnedProofCache.flights[globalKey]; flight != nil {
+			historyStagingPinnedProofCache.Unlock()
+			if p.testWait != nil {
+				p.testWait()
+			}
+			select {
+			case <-flight:
+				// A cancelled or failed owner never installs a success; retry with
+				// this waiter's own context and file fingerprint.
+				if err := historyStagingCheckFileStates(p.dir, refs, states); err != nil {
+					return err
+				}
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if len(historyStagingPinnedProofCache.flights) >= 8 {
+			var flight chan struct{}
+			for _, pending := range historyStagingPinnedProofCache.flights {
+				flight = pending
+				break
+			}
+			historyStagingPinnedProofCache.Unlock()
+			select {
+			case <-flight:
+				if err := historyStagingCheckFileStates(p.dir, refs, states); err != nil {
+					return err
+				}
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		flight := make(chan struct{})
+		historyStagingPinnedProofCache.flights[globalKey] = flight
+		historyStagingPinnedProofCache.Unlock()
+
+		p.stats.FullTrioAuthenticates++
+		var err error
+		if p.testAuth != nil {
+			err = p.testAuth(ctx, refs)
+		} else {
+			err = VerifyHistorySegmentWithCompanionsContext(ctx, p.dir, p.manifest, refs[0])
+		}
+		if err == nil {
+			for i, ref := range refs {
+				after, fingerprintErr := historyStagingFileFingerprint(p.dir, ref)
+				if fingerprintErr != nil || !after.same(states[i]) {
+					err = fmt.Errorf("snapshots: cold trio changed during authentication: %s", ref.Path)
+					break
+				}
+			}
+		}
+		historyStagingPinnedProofCache.Lock()
+		if err == nil {
+			if len(historyStagingPinnedProofCache.trios) >= historyStagingPinnedProofCacheEntries {
+				for key := range historyStagingPinnedProofCache.trios {
+					delete(historyStagingPinnedProofCache.trios, key)
+					break
+				}
+			}
+			historyStagingPinnedProofCache.trios[globalKey] = states
 			p.verified[id] = states
-			return nil
 		}
-	}
-	if err := VerifyHistorySegmentWithCompanionsContext(ctx, p.dir, p.manifest, refs[0]); err != nil {
+		delete(historyStagingPinnedProofCache.flights, globalKey)
+		close(flight)
+		historyStagingPinnedProofCache.Unlock()
 		return err
 	}
-	for i, ref := range refs {
-		after, err := historyStagingFileFingerprint(p.dir, ref)
-		if err != nil || !after.same(states[i]) {
-			return fmt.Errorf("snapshots: cold trio changed during authentication: %s", ref.Path)
-		}
-	}
-	p.verified[id] = states
-	historyStagingPinnedProofCache.Lock()
-	if len(historyStagingPinnedProofCache.trios) >= historyStagingPinnedProofCacheEntries {
-		for key := range historyStagingPinnedProofCache.trios {
-			delete(historyStagingPinnedProofCache.trios, key)
-			break
-		}
-	}
-	historyStagingPinnedProofCache.trios[globalKey] = states
-	historyStagingPinnedProofCache.Unlock()
-	return nil
 }
 
 func historyStagingRangeDigest(blocks []rawdb.HistoryStagingBlockProof) [32]byte {
@@ -590,51 +716,157 @@ func (p *HistoryStagingColdProver) Build(ctx context.Context, blocks []rawdb.His
 	return spans, nil
 }
 
-func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref SegmentRef, blocks []rawdb.HistoryStagingBlockProof) ([][32]byte, error) {
-	expected := make([]rawdb.StateTxRange, len(blocks))
-	for i, block := range blocks {
-		expected[i] = rawdb.StateTxRange{BlockNum: block.Number, BlockHash: block.Hash,
-			BeginTxNum: block.BeginTxNum, EndTxNum: block.EndTxNum}
-	}
-	if err := VerifyOfflineHistoryBlockRangesContext(ctx, p.dir, []SegmentRef{ref}, expected); err != nil {
+func (p *HistoryStagingColdProver) openSpanTrio(ctx context.Context, ref SegmentRef, id [32]byte) (*historyStagingOpenTrio, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
-	if !ok || cfg.IterateHistoryRange == nil {
-		return nil, errors.New("snapshots: cold history iterator unavailable")
+	refs, actualID, err := p.trio(ref)
+	if err != nil || actualID != id {
+		return nil, errors.New("snapshots: cold proof trio identity changed")
+	}
+	if p.open != nil {
+		if p.open.id == id {
+			if err := historyStagingCheckFileStates(p.dir, refs, p.open.states); err != nil {
+				_ = p.Close()
+				return nil, err
+			}
+			p.stats.ReaderReuses++
+			return p.open, nil
+		}
+		if err := p.Close(); err != nil {
+			return nil, err
+		}
+	}
+	var states [3]historyStagingFileState
+	for i, item := range refs {
+		states[i], err = historyStagingFileFingerprint(p.dir, item)
+		if err != nil {
+			return nil, err
+		}
+	}
+	verified, ok := p.verified[id]
+	if !ok {
+		return nil, errors.New("snapshots: cold proof trio was not authenticated")
+	}
+	for i := range states {
+		if !states[i].same(verified[i]) {
+			return nil, errors.New("snapshots: cold proof trio changed after authentication")
+		}
+	}
+	history, size, header, err := openHistorySegmentForReadWithCacheLimit(p.dir, ref, 4)
+	if err != nil {
+		return nil, err
+	}
+	p.stats.HistoryOpens++
+	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(p.dir, refs[1])
+	if err != nil {
+		_ = history.Close()
+		return nil, err
+	}
+	p.stats.IndexOpens++
+	if indexHeader.fromTxNum != ref.FromTxNum || indexHeader.toTxNum != ref.ToTxNum {
+		_ = index.Close()
+		_ = history.Close()
+		return nil, errors.New("snapshots: cold proof history/index range mismatch")
+	}
+	if err := historyStagingCheckFileStates(p.dir, refs, states); err != nil {
+		_ = index.Close()
+		_ = history.Close()
+		return nil, err
+	}
+	p.open = &historyStagingOpenTrio{id: id, refs: refs, states: states,
+		history: history, historySize: size, header: header,
+		index: index, indexHeader: indexHeader}
+	return p.open, nil
+}
+
+func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref SegmentRef, id [32]byte, blocks []rawdb.HistoryStagingBlockProof) ([][32]byte, error) {
+	open, err := p.openSpanTrio(ctx, ref, id)
+	if err != nil {
+		return nil, err
+	}
+	if !p.reuse {
+		defer p.Close()
+	}
+	history := contextReaderAt{ctx: ctx, r: open.history}
+	index := contextReaderAt{ctx: ctx, r: open.index}
+	for _, block := range blocks {
+		cold, table, found, err := findStateDomainChangeBinaryTxRangeForBlock(history,
+			open.historySize, ref, open.header, block.Number)
+		want := rawdb.StateTxRange{BlockNum: block.Number, BlockHash: block.Hash,
+			BeginTxNum: block.BeginTxNum, EndTxNum: block.EndTxNum}
+		if err != nil {
+			return nil, err
+		}
+		if !table || !found || cold == nil || *cold != want ||
+			block.BeginTxNum < ref.FromTxNum || block.EndTxNum > ref.ToTxNum {
+			return nil, fmt.Errorf("snapshots: offline cold block range mismatch at block %d", block.Number)
+		}
 	}
 	var records [][32]byte
 	var previousTx, ordinal uint64
 	var havePrevious bool
 	first, last := blocks[0], blocks[len(blocks)-1]
-	err := cfg.IterateHistoryRange(p.dir, p.manifest, ref, first.BeginTxNum, last.EndTxNum,
-		func(change *rawdb.StateDomainChange) (bool, error) {
-			if err := ctx.Err(); err != nil {
-				return false, err
-			}
-			if change == nil || change.BlockNum < first.Number || change.BlockNum > last.Number {
-				return false, errors.New("snapshots: cold record outside certified block span")
-			}
-			block := blocks[change.BlockNum-first.Number]
-			if change.BlockHash != block.Hash || change.TxNum < block.BeginTxNum || change.TxNum > block.EndTxNum ||
-				len(records) >= historyStagingProofMaxRecords {
-				return false, errors.New("snapshots: cold record mismatch or staging proof row limit exceeded")
-			}
-			if havePrevious && change.TxNum < previousTx {
-				return false, errors.New("snapshots: cold record transaction order regressed")
-			}
-			if !havePrevious || change.TxNum != previousTx {
-				ordinal = 0
-			} else if ordinal == ^uint64(0) {
-				return false, errors.New("snapshots: cold record ordinal overflow")
-			} else {
-				ordinal++
-			}
-			previousTx, havePrevious = change.TxNum, true
-			records = append(records, historyStagingRecordDigest(change, ordinal))
-			return true, nil
-		})
+	start, found, err := stateDomainChangeBinaryIndexLowerBound(index, open.indexHeader.count, first.BeginTxNum)
 	if err != nil {
+		return nil, err
+	}
+	if found {
+		for i := start; i < open.indexHeader.count; i++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			entry, err := readStateDomainChangeBinaryIndexEntryAt(index, i)
+			if err != nil {
+				return nil, err
+			}
+			if entry.txNum > last.EndTxNum {
+				break
+			}
+			offset := entry.offset
+			for j := uint64(0); j < entry.count; j++ {
+				change, next, err := readStateDomainChangeBinaryRecordAtBoundedIndex(history,
+					offset, open.historySize, entry.recordIndex+j)
+				if err != nil {
+					return nil, err
+				}
+				if change == nil {
+					return nil, errors.New("snapshots: nil cold proof record")
+				}
+				if change.TxNum != entry.txNum {
+					return nil, errors.New("snapshots: cold proof index/record tx mismatch")
+				}
+				if change.TxNum >= first.BeginTxNum {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+					if change == nil || change.BlockNum < first.Number || change.BlockNum > last.Number {
+						return nil, errors.New("snapshots: cold record outside certified block span")
+					}
+					block := blocks[change.BlockNum-first.Number]
+					if change.BlockHash != block.Hash || change.TxNum < block.BeginTxNum || change.TxNum > block.EndTxNum ||
+						len(records) >= historyStagingProofMaxRecords {
+						return nil, errors.New("snapshots: cold record mismatch or staging proof row limit exceeded")
+					}
+					if havePrevious && change.TxNum < previousTx {
+						return nil, errors.New("snapshots: cold record transaction order regressed")
+					}
+					if !havePrevious || change.TxNum != previousTx {
+						ordinal = 0
+					} else if ordinal == ^uint64(0) {
+						return nil, errors.New("snapshots: cold record ordinal overflow")
+					} else {
+						ordinal++
+					}
+					previousTx, havePrevious = change.TxNum, true
+					records = append(records, historyStagingRecordDigest(change, ordinal))
+				}
+				offset = next
+			}
+		}
+	}
+	if err := historyStagingCheckFileStates(p.dir, open.refs, open.states); err != nil {
+		_ = p.Close()
 		return nil, err
 	}
 	return records, nil
@@ -658,7 +890,7 @@ func historyStagingSemanticDigest(blocks []rawdb.HistoryStagingBlockProof, recor
 }
 
 func (p *HistoryStagingColdProver) buildSpan(ctx context.Context, ref SegmentRef, id [32]byte, blocks []rawdb.HistoryStagingBlockProof) (rawdb.HistoryStagingColdSpan, error) {
-	records, err := p.collectSpanRecords(ctx, ref, blocks)
+	records, err := p.collectSpanRecords(ctx, ref, id, blocks)
 	if err != nil {
 		return rawdb.HistoryStagingColdSpan{}, err
 	}
@@ -795,13 +1027,20 @@ func verifyHistoryStagingSourceColdMask(ctx context.Context, source rawdb.StateH
 // VerifyHistoryStagingColdBinding reauthenticates the current manifest's
 // physical trio and semantic content without trusting its generation number.
 func VerifyHistoryStagingColdBinding(ctx context.Context, dir string, manifest *Manifest, binding rawdb.HistoryStagingColdBinding, blocks []rawdb.HistoryStagingBlockProof) error {
-	if len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) || len(binding.Spans) == 0 ||
-		binding.Bucket != blocks[0].Number/rawdb.StateHistoryChunkBucketBlocks {
-		return errors.New("snapshots: invalid cold binding proof coverage")
-	}
 	prover, err := NewHistoryStagingColdProver(dir, manifest)
 	if err != nil {
 		return err
+	}
+	defer prover.Close()
+	return prover.VerifyBinding(ctx, binding, blocks)
+}
+
+// VerifyBinding keeps the complete per-span semantic check while allowing an
+// offline worker to reuse its authenticated reader between adjacent buckets.
+func (p *HistoryStagingColdProver) VerifyBinding(ctx context.Context, binding rawdb.HistoryStagingColdBinding, blocks []rawdb.HistoryStagingBlockProof) error {
+	if len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) || len(binding.Spans) == 0 ||
+		binding.Bucket != blocks[0].Number/rawdb.StateHistoryChunkBucketBlocks {
+		return errors.New("snapshots: invalid cold binding proof coverage")
 	}
 	var previous uint64
 	for i, span := range binding.Spans {
@@ -814,7 +1053,7 @@ func VerifyHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 		for j := int(span.From - blocks[0].Number); j <= int(span.To-blocks[0].Number); j++ {
 			needed[j] = true
 		}
-		got, err := prover.Build(ctx, blocks, needed)
+		got, err := p.Build(ctx, blocks, needed)
 		if err != nil {
 			return err
 		}
@@ -836,6 +1075,7 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 	if err != nil {
 		return zero, err
 	}
+	defer prover.Close()
 	if len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) ||
 		binding.BindingEpoch == ^uint64(0) || len(binding.Spans) == 0 {
 		return zero, errors.New("snapshots: invalid old cold binding for rebind")
@@ -879,7 +1119,7 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 			if err != nil || id != span.ContentID {
 				return zero, errors.New("snapshots: rebound cold trio identity differs")
 			}
-			part, err := prover.collectSpanRecords(ctx, ref, blocks[a:b])
+			part, err := prover.collectSpanRecords(ctx, ref, id, blocks[a:b])
 			if err != nil {
 				return zero, err
 			}

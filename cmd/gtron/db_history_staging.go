@@ -51,10 +51,12 @@ func dbHistoryStagingCommand() *cli.Command {
 				}{rawdb.HistoryStagingFormatVersion, true, 1})
 			}},
 			{Name: "inspect", Usage: "Read-only source/cold inventory or verify a completed plan",
-				Flags:  flags(&cli.BoolFlag{Name: "verify-complete"}, &cli.BoolFlag{Name: "verify-pristine"}, &cli.StringFlag{Name: "plan-id"}),
+				Flags: flags(&cli.BoolFlag{Name: "verify-complete"}, &cli.BoolFlag{Name: "verify-pristine"},
+					&cli.BoolFlag{Name: "verify-pristine-storage"}, &cli.StringFlag{Name: "plan-id"}),
 				Action: dbHistoryStagingInspect},
 			{Name: "migrate", Usage: "Freeze a bounded, authenticated JSONL plan without changing either Pebble store",
-				Flags:  flags(&cli.Uint64Flag{Name: "max-buckets", Usage: "Maximum complete buckets; 0 means all"}),
+				Flags: flags(&cli.Uint64Flag{Name: "max-buckets", Usage: "Maximum complete buckets; 0 means all"},
+					&cli.UintFlag{Name: "plan-workers", Usage: "Parallel proof workers; 0 uses up to 8 available Go CPUs"}),
 				Action: dbHistoryStagingMigrate},
 			{Name: "apply", Usage: "Apply a frozen plan using durable claim/copy/adopt/clear phases",
 				Flags: flags(&cli.StringFlag{Name: "plan-id", Required: true}), Action: dbHistoryStagingApply},
@@ -80,6 +82,7 @@ type historyStagingCLIEvent struct {
 	Durable          bool   `json:"durable,omitempty"`
 	VerifiedComplete bool   `json:"verified_complete,omitempty"`
 	Pristine         bool   `json:"pristine,omitempty"`
+	StoragePristine  bool   `json:"storage_pristine,omitempty"`
 	HistoryWindow    uint64 `json:"history_window,omitempty"`
 	PruneMode        string `json:"prune_mode,omitempty"`
 }
@@ -368,8 +371,14 @@ func dbHistoryStagingInspect(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	if ctx.Bool("verify-complete") && ctx.Bool("verify-pristine") {
-		return errors.New("history staging inspect cannot combine complete and pristine checks")
+	modeCount := 0
+	for _, name := range []string{"verify-complete", "verify-pristine", "verify-pristine-storage"} {
+		if ctx.Bool(name) {
+			modeCount++
+		}
+	}
+	if modeCount > 1 {
+		return errors.New("history staging inspect verification modes are mutually exclusive")
 	}
 	if ctx.Bool("verify-complete") {
 		return verifyHistoryStagingComplete(ctx)
@@ -395,6 +404,16 @@ func dbHistoryStagingInspect(ctx *cli.Context) error {
 			boundary.HeadBlock, boundary.SolidifiedBlock, eligible
 		return c.emit("inspect")
 	}
+	if ctx.Bool("verify-pristine-storage") {
+		progress.stage.Store("verify-pristine-storage")
+		if err := c.verifyStoragePristine(source); err != nil {
+			return err
+		}
+		c.event.StoragePristine = true
+		c.event.Head, c.event.Solid, c.event.EligibleThrough =
+			boundary.HeadBlock, boundary.SolidifiedBlock, eligible
+		return c.emit("inspect")
+	}
 	progress.stage.Store("cold-admission")
 	if _, err := c.inspectCold(ctx, source); err != nil {
 		return err
@@ -406,6 +425,10 @@ func dbHistoryStagingInspect(ctx *cli.Context) error {
 
 func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	c, err := newHistoryStagingCLIContext(ctx)
+	if err != nil {
+		return err
+	}
+	workerCount, err := historyStagingPlanWorkerCount(ctx)
 	if err != nil {
 		return err
 	}
@@ -421,10 +444,6 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 		return err
 	}
 	manifest, err := c.inspectCold(ctx, source)
-	if err != nil {
-		return err
-	}
-	prover, err := statesnapshots.NewHistoryStagingColdProver(c.paths.Cold, manifest)
 	if err != nil {
 		return err
 	}
@@ -446,6 +465,12 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	lastBucket := fullEligibleLastBucket
 	if maxBuckets := ctx.Uint64("max-buckets"); maxBuckets > 0 && lastBucket > maxBuckets {
 		lastBucket = maxBuckets
+	}
+	if lastBucket > 0 && lastBucket < uint64(workerCount) {
+		workerCount = int(lastBucket)
+	}
+	if lastBucket == 0 {
+		workerCount = 1
 	}
 	progress.total.Store(lastBucket)
 	manifestSHA, err := historyStagingFileSHA256(filepath.Join(c.paths.Cold, statesnapshots.ManifestFile))
@@ -522,61 +547,41 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 		return err
 	}
 	defer closeAncient()
-	canonical := rawdb.NewChainDB(source, ancient)
-	hotView, releaseHot, err := rawdb.AcquireStateHistoryReadView(source)
-	if err != nil {
+	workers := make([]*historyStagingPlanWorker, 0, workerCount)
+	defer func() {
+		for _, worker := range workers {
+			worker.close()
+		}
+	}()
+	for i := 0; i < workerCount; i++ {
+		hotView, releaseHot, err := rawdb.AcquireStateHistoryReadView(source)
+		if err != nil {
+			return err
+		}
+		prover, err := statesnapshots.NewHistoryStagingColdProver(c.paths.Cold, manifest)
+		if err != nil {
+			_ = releaseHot()
+			return err
+		}
+		prover.EnableReaderReuse()
+		workers = append(workers, &historyStagingPlanWorker{hotView: hotView,
+			release: releaseHot, prover: prover, chain: rawdb.NewChainDB(source, ancient)})
+	}
+	progress.stage.Store("plan-buckets")
+	if err := writeHistoryStagingPlanBuckets(c.ctx, lastBucket, workerCount,
+		func(workCtx context.Context, workerID int, bucket uint64) (historyStagingPlanBucket, error) {
+			return workers[workerID].build(workCtx, bucket, eligible, pruneTx, boundary, index, limits)
+		}, func(row historyStagingPlanBucket) error {
+			if err := encodeHistoryStagingPlanRow(buffer, row); err != nil {
+				return err
+			}
+			c.event.Bucket = row.Proof.Bucket
+			return nil
+		}, progress); err != nil {
 		return err
 	}
-	defer releaseHot()
-	progress.stage.Store("plan-buckets")
-	for bucket := uint64(1); bucket <= lastBucket; bucket++ {
-		progress.bucket.Store(bucket)
-		if err := c.ctx.Err(); err != nil {
-			return err
-		}
-		first, last, err := rawdb.StateHistoryChunkBucketBounds(bucket)
-		if err != nil {
-			return err
-		}
-		proof := rawdb.HistoryStagingProof{Bucket: bucket, Epoch: 1,
-			EligibleThrough: eligible, FinishBlock: boundary.HeadBlock,
-			FinishHash: boundary.HeadHash, IndexBlock: index.BlockNum,
-			IndexHash: index.BlockHash,
-			Blocks:    make([]rawdb.HistoryStagingBlockProof, 0, rawdb.StateHistoryChunkBucketBlocks)}
-		missing := make([]bool, rawdb.StateHistoryChunkBucketBlocks)
-		for number := first; number <= last; number++ {
-			canonicalHash, present, err := rawdb.ReadBlockHashByNumberStrict(canonical, number)
-			if err != nil || !present || canonicalHash == (common.Hash{}) {
-				return fmt.Errorf("history staging canonical block %d unavailable: %w", number, err)
-			}
-			rangeRow, present, err := rawdb.ReadStateTxRange(hotView, number)
-			if err != nil || !present || rangeRow == nil || rangeRow.BlockHash != canonicalHash {
-				return fmt.Errorf("history staging tx range %d unavailable or noncanonical: %w", number, err)
-			}
-			proof.Blocks = append(proof.Blocks, rawdb.HistoryStagingBlockProof{
-				Number: number, Hash: canonicalHash,
-				BeginTxNum: rangeRow.BeginTxNum, EndTxNum: rangeRow.EndTxNum})
-			missing[number-first] = rangeRow.EndTxNum <= pruneTx
-		}
-		proof.ColdSpans, err = prover.Build(c.ctx, proof.Blocks, missing)
-		if err != nil {
-			return fmt.Errorf("history staging bucket %d cold proof: %w", bucket, err)
-		}
-		if err := rawdb.VerifyHistoryStagingProof(proof); err != nil {
-			return err
-		}
-		physical, err := rawdb.InspectHistoryStagingPhysicalBucket(c.ctx, hotView, proof, limits)
-		if err != nil {
-			return fmt.Errorf("history staging bucket %d physical inventory: %w", bucket, err)
-		}
-		if physical.Bytes > rawdb.HistoryStagingMaxCopyPhysicalBytes(limits.MaxWorkBytes) {
-			return fmt.Errorf("history staging bucket %d exceeds bounded scan/copy/verify work budget", bucket)
-		}
-		if err := encodeHistoryStagingPlanRow(buffer, historyStagingPlanBucket{Proof: proof, Physical: physical}); err != nil {
-			return err
-		}
-		c.event.Bucket = bucket
-		progress.completed.Store(bucket)
+	if err := c.ctx.Err(); err != nil {
+		return err
 	}
 	progress.stage.Store("publish-plan")
 	if err := buffer.Flush(); err != nil {
@@ -596,6 +601,9 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	if _, err := os.Lstat(jobPlan); err == nil {
 		return errors.New("history staging job plan appeared during build")
 	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := c.ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, jobPlan); err != nil {

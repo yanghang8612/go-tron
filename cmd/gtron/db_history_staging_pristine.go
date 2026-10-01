@@ -10,10 +10,9 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-// verifyPristine is a read-only repin preflight, not migration admission. The
-// caller has already checked configured genesis, canonical head, Finish,
-// index and prune mode. No cold manifest identity is inferred or written.
-func (c *historyStagingCLIContext) verifyPristine(source ethdb.KeyValueStore, datadir string) error {
+// verifyStoragePristine only checks the two stores. The caller has already
+// proved the canonical boundary. It never admits, deletes or ignores a plan.
+func (c *historyStagingCLIContext) verifyStoragePristine(source ethdb.KeyValueStore) error {
 	present, err := rawdb.HistoryStagingMetadataPresent(source)
 	if err != nil {
 		return err
@@ -33,6 +32,16 @@ func (c *historyStagingCLIContext) verifyPristine(source ethdb.KeyValueStore, da
 		if err != nil || !info.Mode().IsRegular() {
 			return errors.New("history staging migration lock is not a regular file")
 		}
+	}
+	return nil
+}
+
+// verifyPristine is the strict read-only repin preflight: storage must be
+// pristine and no job plan, including an unpublished temporary plan, may
+// remain. No cold manifest identity is inferred or written.
+func (c *historyStagingCLIContext) verifyPristine(source ethdb.KeyValueStore, datadir string) error {
+	if err := c.verifyStoragePristine(source); err != nil {
+		return err
 	}
 	planDir := historyStagingPlanDirectory(datadir)
 	info, err := os.Lstat(planDir)

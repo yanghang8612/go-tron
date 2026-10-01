@@ -56,6 +56,7 @@ func openHistoryStagingApply(ctx *cli.Context) (_ *historyStagingApplySession, e
 	if err != nil {
 		return nil, err
 	}
+	s.prover.EnableReaderReuse()
 	s.limits, _, err = historyStagingCLIWorkLimits(ctx, c.paths.Source, c.paths.Target)
 	if err != nil {
 		return nil, err
@@ -84,6 +85,9 @@ func openHistoryStagingApply(ctx *cli.Context) (_ *historyStagingApplySession, e
 func (s *historyStagingApplySession) Close() {
 	if s == nil {
 		return
+	}
+	if s.prover != nil {
+		_ = s.prover.Close()
 	}
 	if s.stage != nil {
 		s.stage.Close()
@@ -157,22 +161,9 @@ func (s *historyStagingApplySession) verifyCold(ctx context.Context, proof rawdb
 	if len(proof.ColdSpans) == 0 {
 		return nil
 	}
-	mask := make([]bool, len(proof.Blocks))
-	for _, span := range proof.ColdSpans {
-		for i := range proof.Blocks {
-			if proof.Blocks[i].Number >= span.From && proof.Blocks[i].Number <= span.To {
-				mask[i] = true
-			}
-		}
-	}
-	got, err := s.prover.Build(ctx, proof.Blocks, mask)
-	if err != nil {
-		return err
-	}
-	if !reflect.DeepEqual(got, proof.ColdSpans) {
-		return errors.New("history staging cold proof differs from frozen plan")
-	}
-	return nil
+	return s.prover.VerifyBinding(ctx, rawdb.HistoryStagingColdBinding{
+		Bucket: proof.Bucket, Spans: proof.ColdSpans,
+	}, proof.Blocks)
 }
 
 func (s *historyStagingApplySession) applyBucket(ctx context.Context, plan historyStagingPlanBucket, planID string) error {
