@@ -1,10 +1,13 @@
 """Fail-closed migration orchestration tests without touching the host."""
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -18,6 +21,49 @@ SPEC.loader.exec_module(migrate)
 
 
 class HistoryStagingMigrateTests(unittest.TestCase):
+    def test_cli_stderr_heartbeat_is_visible_before_process_completes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gate = root / 'continue'
+            script = root / 'fake-cli.py'
+            script.write_text('import pathlib, sys, time\n'
+                              'sys.stderr.write("phase=copy bucket=7\\n")\n'
+                              'sys.stderr.flush()\n'
+                              'while not pathlib.Path(sys.argv[1]).exists(): time.sleep(.01)\n'
+                              'sys.stdout.write("done\\n")\n')
+            latch = {'job_id': 'a' * 32}
+            output = tempfile.TemporaryFile()
+            observed = io.StringIO()
+            result = []
+            errors = []
+            def run():
+                try:
+                    result.append(migrate.stream_cli_stderr(
+                        [sys.executable, str(script), str(gate)], output, latch, 'apply'))
+                except Exception as error:
+                    errors.append(error)
+            with mock.patch.object(migrate, 'CLI_LOG_DIR', root / 'logs'), \
+                    mock.patch.object(migrate.sys, 'stderr', observed):
+                worker = threading.Thread(target=run)
+                worker.start()
+                try:
+                    deadline = time.monotonic() + 5
+                    while 'phase=copy bucket=7' not in observed.getvalue() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertIn('phase=copy bucket=7', observed.getvalue(),
+                                  'worker=%r errors=%r result=%r' % (worker.is_alive(), errors, result))
+                    self.assertTrue(worker.is_alive(), 'heartbeat appeared only after CLI exit')
+                finally:
+                    gate.write_text('continue')
+                    worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(errors)
+            self.assertEqual(result[0][0], 0)
+            output.seek(0)
+            self.assertEqual(output.read(), b'done\n')
+            output.close()
+            self.assertIn(b'phase=copy bucket=7', (root / 'logs' / ('a' * 32 + '_apply.stderr.log')).read_bytes())
+
     def test_pre_latch_fence_failure_leaves_service_running_and_timer_stopped(self):
         old = {'binary': '/data/gtron/releases/legacy/gtron',
                'sha': 'a' * 64, 'source': 'b' * 40, 'active': True,
@@ -95,8 +141,9 @@ class HistoryStagingMigrateTests(unittest.TestCase):
                      'candidate_sha256': 'b' * 64,
                      'source': '/source', 'target': '/target', 'cold': '/cold',
                      'source_config_args': [], 'source_config_sha256': ''}
-            with self.assertRaisesRegex(RuntimeError, 'invalid migration identity'):
-                migrate.cli_result(latch, 'inspect')
+            with mock.patch.object(migrate, 'CLI_LOG_DIR', Path(directory) / 'logs'):
+                with self.assertRaisesRegex(RuntimeError, 'invalid migration identity'):
+                    migrate.cli_result(latch, 'inspect')
 
 
 if __name__ == '__main__':

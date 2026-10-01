@@ -12,7 +12,7 @@ REMOTE = 'a' * 40
 
 
 class StartMainnetTests(unittest.TestCase):
-    def run_start(self, verify_status, staging_guard_status=0):
+    def run_start(self, verify_status, staging_guard_status=0, staged=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / 'go-tron'
@@ -29,6 +29,7 @@ class StartMainnetTests(unittest.TestCase):
                  ';; symbolic-ref) echo master;; esac\nexit 0')
             fake('sudo', 'echo "$@" >> "$MOCK_CALLS"\n'
                  'case "$*" in *" check-deploy") exit "$MOCK_STAGING_GUARD_STATUS";; esac\n'
+                 'case "$*" in *" staging-timeout "*) echo 43200; exit 0;; esac\n'
                  'case "$*" in *" verify --source "*) '
                  'if [ "$MOCK_VERIFY_STATUS" = 4 ]; then '
                  'if [ ! -f "$MOCK_SECOND_VERIFY" ]; then touch "$MOCK_SECOND_VERIFY"; exit 4; fi; '
@@ -38,7 +39,11 @@ class StartMainnetTests(unittest.TestCase):
             fake('curl', 'exit 0')
             fake('make', 'echo "make $*" >> "$MOCK_CALLS"\nexit 7')
             env = os.environ.copy()
+            required = root / 'reader-required.json'
+            if staged:
+                required.write_text('{}')
             env.update({'APP_ROOT': str(root), 'REPO_DIR': str(repo),
+                        'MAINNET_STAGING_REQUIRED': str(required),
                         'STATE_FILE': str(root / 'deployed.rev'),
                         'LOCK_FILE': str(root / 'start.lock'),
                         'LOG_FILE': str(root / 'start.log'),
@@ -98,6 +103,12 @@ class StartMainnetTests(unittest.TestCase):
         self.assertIsNone(state)
         self.assertNotIn('verify --source', calls)
         self.assertNotIn('make ', calls)
+
+    def test_staged_reader_uses_validated_extended_health_wait(self):
+        status, output, state, calls = self.run_start(0, staged=True)
+        self.assertEqual(status, 0, output)
+        self.assertIn('staging-timeout --staging-health-timeout-sec 43200', calls)
+        self.assertIn('staging startup health timeout: 43200s', output)
 
 
 if __name__ == '__main__':

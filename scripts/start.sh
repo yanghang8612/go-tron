@@ -11,10 +11,13 @@ STATE_FILE="${STATE_FILE:-$APP_ROOT/deployed-$BRANCH.rev}"
 RELEASE_DIR="${RELEASE_DIR:-$APP_ROOT/releases}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8090/wallet/getnowblock}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
+STAGING_HEALTH_TIMEOUT_SEC="${STAGING_HEALTH_TIMEOUT_SEC:-43200}"
 RUN_TESTS="${RUN_TESTS:-1}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 MAINNET_RELEASE_HELPER="/usr/local/libexec/gtron-mainnet-release.py"
 MAINNET_STAGING_GUARD="/usr/local/libexec/gtron-history-staging-guard.py"
+MAINNET_STAGING_REQUIRED="${MAINNET_STAGING_REQUIRED:-/data/gtron/main/HISTORY_STAGING_READER_REQUIRED.json}"
+release_health_arg=()
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -41,10 +44,32 @@ wallet_healthy() {
 
 wait_healthy() {
   local deadline=$((SECONDS + HEALTH_TIMEOUT))
+  local started=$SECONDS next_progress=$((SECONDS + 60)) pinned_pid="" state pid props
 
   while ((SECONDS < deadline)); do
+    props="$(sudo systemctl show "$SERVICE_NAME" --property=ActiveState --property=MainPID --no-pager)" || return 1
+    state="$(sed -n 's/^ActiveState=//p' <<<"$props")"
+    pid="$(sed -n 's/^MainPID=//p' <<<"$props")"
+    if [[ "$state" == failed || "$state" == inactive || "$state" == deactivating ]]; then
+      log "$SERVICE_NAME exited during startup verification: $state"
+      return 1
+    fi
+    if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+      if [[ -n "$pinned_pid" && "$pid" != "$pinned_pid" ]]; then
+        log "$SERVICE_NAME PID changed during startup verification: $pinned_pid -> $pid"
+        return 1
+      fi
+      pinned_pid="$pid"
+    elif [[ -n "$pinned_pid" ]]; then
+      log "$SERVICE_NAME lost PID $pinned_pid during startup verification"
+      return 1
+    fi
     if service_active && wallet_healthy; then
       return 0
+    fi
+    if ((SECONDS >= next_progress)); then
+      log "waiting for $SERVICE_NAME Wallet API: elapsed=$((SECONDS - started))s pid=${pinned_pid:-none} state=${state:-unknown}"
+      next_progress=$((SECONDS + 60))
     fi
     sleep 2
   done
@@ -86,6 +111,13 @@ if [[ "$SERVICE_NAME" == "gtron.service" ]]; then
     3) log "history-staging stop intent: skipping mainnet deployment"; exit 0 ;;
     *) die "history-staging deployment fence denied mainnet deployment (status $staging_guard_status)" ;;
   esac
+  if [[ -f "$MAINNET_STAGING_REQUIRED" ]]; then
+    HEALTH_TIMEOUT="$(sudo -n /usr/bin/python3 "$MAINNET_RELEASE_HELPER" staging-timeout \
+      --staging-health-timeout-sec "$STAGING_HEALTH_TIMEOUT_SEC")" ||
+      die "staging health timeout or effective deploy unit timeout is invalid"
+    log "staging startup health timeout: ${HEALTH_TIMEOUT}s"
+    release_health_arg=(--staging-health-timeout-sec "$HEALTH_TIMEOUT")
+  fi
 fi
 
 [[ -d "$REPO_DIR/.git" ]] ||
@@ -214,7 +246,8 @@ if [[ "$SERVICE_NAME" == "gtron.service" ]]; then
   candidate_sha="${candidate_sha%% *}"
   log "publishing root-owned mainnet release for $remote_rev"
   sudo -n /usr/bin/python3 "$MAINNET_RELEASE_HELPER" deploy \
-    --source "$remote_rev" --candidate "$deploy_build_dir/gtron" --sha256 "$candidate_sha"
+    --source "$remote_rev" --candidate "$deploy_build_dir/gtron" --sha256 "$candidate_sha" \
+    "${release_health_arg[@]}"
   # The helper returns only after the effective systemd command, configured
   # reader guards, process executable SHA, and Wallet API have been verified.
   state_tmp="$STATE_FILE.tmp.$$"

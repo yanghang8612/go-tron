@@ -22,6 +22,7 @@ import time
 import urllib.request
 
 SERVICE = 'gtron.service'
+DEPLOY_SERVICE = 'gtron-deploy.service'
 REPO = Path('/data/gtron/go-tron')
 RELEASES = Path('/data/gtron/releases')
 MEMORY = Path('/etc/systemd/system/gtron.service.d/zz-memory-budget-20260918.conf')
@@ -38,6 +39,10 @@ STAGING_ACTIVATION = Path('/data/gtron/main/HISTORY_STAGING_ACTIVATION_INTENT.js
 LOCK = Path('/run/lock/gtron-mainnet-release.lock')
 HEALTH = 'http://127.0.0.1:8090/wallet/getnodeinfo'
 MAX_BINARY = 512 << 20
+STAGING_HEALTH_DEFAULT = 12 * 60 * 60
+STAGING_HEALTH_MAX = 24 * 60 * 60
+STAGING_HEALTH_MIN = 10 * 60
+STAGING_DEPLOY_MARGIN = 2 * 60 * 60
 
 
 class SourceDifferent(Exception):
@@ -45,6 +50,11 @@ class SourceDifferent(Exception):
 
 
 class SameSourceUnhealthy(Exception):
+    pass
+
+
+class StartupIdentityError(RuntimeError):
+    """The single pinned startup process cannot become the accepted reader."""
     pass
 
 
@@ -249,22 +259,102 @@ def wallet_head():
     return number
 
 
+def staging_health_timeout(value=None):
+    """Bound the slow cold-trio startup audit without changing old readers."""
+    if value is None:
+        return STAGING_HEALTH_DEFAULT
+    require(isinstance(value, str) and re.fullmatch(r'[0-9]+', value),
+            'invalid staging health timeout')
+    seconds = int(value)
+    require(STAGING_HEALTH_MIN <= seconds <= STAGING_HEALTH_MAX,
+            'staging health timeout must be 600..86400 seconds')
+    return seconds
+
+
+def systemd_duration_seconds(raw):
+    """Parse the human-readable TimeoutStartUSec value from systemd 219."""
+    raw = raw.strip()
+    if re.fullmatch(r'[0-9]+', raw):
+        return int(raw) / 1000000.0
+    units = {'d': 86400, 'h': 3600, 'min': 60, 's': 1,
+             'ms': 0.001, 'us': 0.000001}
+    parts = list(re.finditer(r'([0-9]+)(min|ms|us|d|h|s)', raw))
+    if not parts or re.sub(r'([0-9]+)(min|ms|us|d|h|s)', '', raw).strip():
+        raise RuntimeError('unrecognized deploy TimeoutStartUSec: ' + raw)
+    return sum(int(part.group(1)) * units[part.group(2)] for part in parts)
+
+
+def require_staging_deploy_timeout(health_timeout):
+    raw = command(['/bin/systemctl', 'show', DEPLOY_SERVICE,
+                   '--property=TimeoutStartUSec', '--no-pager'], 30)
+    field = raw.strip().split('=', 1)
+    require(len(field) == 2 and field[0] == 'TimeoutStartUSec',
+            'deploy service did not report effective TimeoutStartUSec')
+    actual = systemd_duration_seconds(field[1])
+    # A changed release may use one full wait and then a second full wait to
+    # prove its rollback. The oneshot unit must not kill that recovery.
+    minimum = 2 * health_timeout + STAGING_DEPLOY_MARGIN
+    require(actual >= minimum,
+            'deploy TimeoutStartUSec=%s is below two staging health waits + build margin %ds; '
+            'extend the effective gtron-deploy.service timeout before deployment' %
+            (field[1], minimum))
+    return actual
+
+
+def proc_exe_fingerprint(pid):
+    info = os.stat('/proc/%d/exe' % pid)
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
 def wait_healthy(binary, digest, expected_args, timeout=180):
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    next_progress = started + 60
     last = 'service did not start'
-    while time.time() < deadline:
+    state = 'unknown'
+    pinned_pid = None
+    verified_sha = False
+    pinned_exe = None
+    while time.monotonic() < deadline:
         try:
             props = show('ActiveState', 'MainPID')
-            require(props.get('ActiveState') == 'active', 'service not active')
+            state = props.get('ActiveState')
+            if state in ('inactive', 'failed', 'deactivating'):
+                raise StartupIdentityError('service exited during startup verification: ' + str(state))
+            require(state == 'active', 'service not active yet: ' + str(state))
             pid = int(props.get('MainPID', '0'))
+            if pinned_pid is not None and pid != pinned_pid:
+                raise StartupIdentityError('service PID changed during startup verification: %d -> %d' %
+                                           (pinned_pid, pid))
+            require(pid > 0, 'service has no main PID')
+            pinned_pid = pid
             exe, argv = proc_identity(pid)
-            require(exe == binary and argv == expected_args, 'running process path/flags differ')
-            require(proc_sha(pid) == digest, 'running executable SHA differs')
+            if exe != binary or argv != expected_args:
+                raise StartupIdentityError('running process path/flags differ')
+            fingerprint = proc_exe_fingerprint(pid)
+            if pinned_exe is not None and fingerprint != pinned_exe:
+                raise StartupIdentityError('running executable changed during startup verification')
+            pinned_exe = fingerprint
+            if not verified_sha:
+                if proc_sha(pid) != digest:
+                    raise StartupIdentityError('running executable SHA differs')
+                verified_sha = True
             wallet_head()
+            if proc_sha(pid) != digest or proc_exe_fingerprint(pid) != pinned_exe:
+                raise StartupIdentityError('running executable changed before health acceptance')
             return pid
+        except StartupIdentityError:
+            raise
         except Exception as error:
             last = str(error)
-            time.sleep(2)
+            now = time.monotonic()
+            if now >= next_progress:
+                print('mainnet release: waiting for startup verification '
+                      'elapsed=%ds pid=%s state=%s last=%s' %
+                      (int(now - started), pinned_pid or '-', state, last),
+                      file=sys.stderr, flush=True)
+                next_progress = now + 60
+            time.sleep(min(2, max(0, deadline - now)))
     raise RuntimeError('service health/identity timeout: ' + last)
 
 
@@ -417,7 +507,7 @@ def verify(source):
             'binary_sha256': old['sha'], 'verified': True}
 
 
-def restore(old):
+def restore(old, health_timeout=None):
     require(not os.path.lexists(STAGING_LATCH),
             'migration latch forbids rollback to the old release')
     atomic_root(MEMORY, *old['memory'])
@@ -427,10 +517,12 @@ def restore(old):
         atomic_root(STAGING_REQUIRED, *old['staging'])
     command(['/bin/systemctl', 'daemon-reload'], 30)
     command(['/bin/systemctl', 'start', SERVICE], 120)
-    wait_healthy(old['binary'], old['sha'], old['argv'])
+    if health_timeout is None:
+        health_timeout = staging_health_timeout() if old.get('staging') is not None else 180
+    wait_healthy(old['binary'], old['sha'], old['argv'], timeout=health_timeout)
 
 
-def deploy(source, candidate, digest):
+def deploy(source, candidate, digest, health_timeout=None):
     require_ordinary_deploy_allowed()
     require(re.fullmatch(r'[0-9a-f]{40}', source or ''), 'invalid source commit')
     head = command(['/usr/bin/git', '--git-dir=' + str(REPO / '.git'),
@@ -444,6 +536,7 @@ def deploy(source, candidate, digest):
     if old.get('staging') is not None:
         require(not json.loads(old['staging'][0]).get('stop_intent', False),
                 'persistent inactive intent blocks ordinary deployment')
+        require_staging_deploy_timeout(health_timeout or staging_health_timeout())
     for _, guard_argv, _ in old['guards']:
         command(guard_argv, 60)
     binary_data = candidate_bytes(candidate, digest)
@@ -477,7 +570,9 @@ def deploy(source, candidate, digest):
         if changes['staging'] is not None:
             command(['/usr/bin/python3', STAGING_GUARD, 'check-service'], 60)
         command(['/bin/systemctl', 'start', SERVICE], 120)
-        pid = wait_healthy(new_binary, digest, argv)
+        if health_timeout is None:
+            health_timeout = staging_health_timeout() if changes['staging'] is not None else 180
+        pid = wait_healthy(new_binary, digest, argv, timeout=health_timeout)
         result = {'deployed': True, 'source_commit': source, 'binary': new_binary,
                   'binary_sha256': digest, 'pid': pid}
         atomic_root(Path(new_binary).parent / 'DEPLOYED.json', json_bytes(result), 0o644)
@@ -491,14 +586,14 @@ def deploy(source, candidate, digest):
                     # A failed stop can still have killed the process. Always
                     # restore files and try to start/verify the old release.
                     pass
-                restore(old)
+                restore(old, health_timeout=health_timeout)
             except Exception as rollback_error:
                 raise RuntimeError('deployment failed: %s; rollback failed: %s' %
                                    (error, rollback_error))
         raise
 
 
-def activate_staging(source, candidate, digest):
+def activate_staging(source, candidate, digest, health_timeout=None):
     """Publish only the SHA-pinned capable reader after offline verification.
 
     Failure intentionally leaves the migration latch and stopped service in
@@ -611,7 +706,8 @@ def activate_staging(source, candidate, digest):
         if latch['service_was_active']:
             command(['/usr/bin/python3', STAGING_GUARD, 'check-service'], 60)
             command(['/bin/systemctl', 'start', SERVICE], 120)
-            pid = wait_healthy(str(candidate), digest, argv)
+            pid = wait_healthy(str(candidate), digest, argv,
+                               timeout=health_timeout or staging_health_timeout())
         return {'activated': True, 'source_commit': source, 'binary': str(candidate),
                 'binary_sha256': digest, 'pid': pid, 'service_was_active': latch['service_was_active']}
     except Exception:
@@ -631,21 +727,35 @@ def main():
     publish.add_argument('--source', required=True)
     publish.add_argument('--candidate', required=True)
     publish.add_argument('--sha256', required=True)
+    publish.add_argument('--staging-health-timeout-sec')
     activate = sub.add_parser('activate-staging')
     activate.add_argument('--source', required=True)
     activate.add_argument('--candidate', required=True)
     activate.add_argument('--sha256', required=True)
+    activate.add_argument('--staging-health-timeout-sec')
+    timeout_check = sub.add_parser('staging-timeout')
+    timeout_check.add_argument('--staging-health-timeout-sec')
     args = parser.parse_args()
-    require(args.action in ('verify', 'deploy', 'activate-staging'), 'verify, deploy or activate-staging action required')
+    require(args.action in ('verify', 'deploy', 'activate-staging', 'staging-timeout'),
+            'verify, deploy, activate-staging or staging-timeout action required')
     require(os.geteuid() == 0, 'root required')
     lockfd = os.open(str(LOCK), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    health_timeout = None
+    if args.action in ('deploy', 'activate-staging', 'staging-timeout') and args.staging_health_timeout_sec is not None:
+        health_timeout = staging_health_timeout(args.staging_health_timeout_sec)
+    if args.action == 'staging-timeout':
+        seconds = health_timeout or staging_health_timeout()
+        require_staging_deploy_timeout(seconds)
+        print(seconds)
+        return
     if args.action == 'verify':
         result = verify(args.source)
     elif args.action == 'deploy':
-        result = deploy(args.source, args.candidate, args.sha256)
+        result = deploy(args.source, args.candidate, args.sha256, health_timeout=health_timeout)
     else:
-        result = activate_staging(args.source, args.candidate, args.sha256)
+        result = activate_staging(args.source, args.candidate, args.sha256,
+                                  health_timeout=health_timeout)
     print(json.dumps(result, sort_keys=True))
 
 

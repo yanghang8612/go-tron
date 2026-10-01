@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -354,6 +355,8 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	progress := startHistoryStagingCLIProgress(ctx.App.ErrWriter, "migrate", "inspect-boundary", 30*time.Second)
+	defer progress.close()
 	source, err := c.openSource()
 	if err != nil {
 		return err
@@ -390,6 +393,7 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	if maxBuckets := ctx.Uint64("max-buckets"); maxBuckets > 0 && lastBucket > maxBuckets {
 		lastBucket = maxBuckets
 	}
+	progress.total.Store(lastBucket)
 	manifestSHA, err := historyStagingFileSHA256(filepath.Join(c.paths.Cold, statesnapshots.ManifestFile))
 	if err != nil {
 		return err
@@ -463,7 +467,9 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 		return err
 	}
 	defer releaseHot()
+	progress.stage.Store("plan-buckets")
 	for bucket := uint64(1); bucket <= lastBucket; bucket++ {
+		progress.bucket.Store(bucket)
 		if err := c.ctx.Err(); err != nil {
 			return err
 		}
@@ -506,7 +512,9 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 			return err
 		}
 		c.event.Bucket = bucket
+		progress.completed.Store(bucket)
 	}
+	progress.stage.Store("publish-plan")
 	if err := buffer.Flush(); err != nil {
 		return err
 	}

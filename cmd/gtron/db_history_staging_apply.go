@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -100,9 +101,10 @@ func historyStagingFrozenLimits(l rawdb.HistoryStagingLimits) historyStagingPlan
 		l.MaxWorkBytes, l.MaxDecodedBytes, l.MinFreeBytes}
 }
 
-func (s *historyStagingApplySession) seedRoutes(ctx context.Context) error {
+func (s *historyStagingApplySession) seedRoutes(ctx context.Context, progress *historyStagingCLIProgress) error {
 	through := s.reader.header.Head.HeadBlock / rawdb.StateHistoryChunkBucketBlocks
 	for bucket := uint64(1); bucket <= through; {
+		progress.bucket.Store(bucket)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -255,14 +257,19 @@ func runHistoryStagingApply(ctx *cli.Context, action string) error {
 	if action != "apply" && action != "resume" {
 		return errors.New("invalid history staging migration action")
 	}
+	progress := startHistoryStagingCLIProgress(ctx.App.ErrWriter, action, "open-plan", 30*time.Second)
+	defer progress.close()
 	s, err := openHistoryStagingApply(ctx)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	if err := s.seedRoutes(s.cli.ctx); err != nil {
+	progress.total.Store(s.reader.header.LastBucket)
+	progress.stage.Store("seed-routes")
+	if err := s.seedRoutes(s.cli.ctx, progress); err != nil {
 		return err
 	}
+	progress.stage.Store("apply-buckets")
 	for {
 		row, more, err := s.reader.Next(s.cli.ctx)
 		if err != nil {
@@ -271,11 +278,14 @@ func runHistoryStagingApply(ctx *cli.Context, action string) error {
 		if !more {
 			break
 		}
+		progress.bucket.Store(row.Proof.Bucket)
 		if err := s.applyBucket(s.cli.ctx, row, s.cli.event.PlanID); err != nil {
 			return fmt.Errorf("history staging bucket %d: %w", row.Proof.Bucket, err)
 		}
 		s.cli.event.Bucket = row.Proof.Bucket
+		progress.completed.Add(1)
 	}
+	progress.stage.Store("emit-durable-result")
 	s.cli.event.Head = s.reader.header.Head.HeadBlock
 	s.cli.event.Solid = s.reader.header.Head.SolidifiedBlock
 	s.cli.event.EligibleThrough = s.reader.header.EligibleThrough
@@ -288,6 +298,8 @@ func verifyHistoryStagingComplete(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	progress := startHistoryStagingCLIProgress(ctx.App.ErrWriter, "inspect", "verify-complete", 30*time.Second)
+	defer progress.close()
 	preflight, err := openHistoryStagingPlan(ctx, c)
 	if err != nil {
 		return err
@@ -316,6 +328,7 @@ func verifyHistoryStagingComplete(ctx *cli.Context) error {
 		return err
 	}
 	header := s.reader.header
+	progress.total.Store(header.LastBucket)
 	barrier := rawdb.HistoryStagingRouteBarrier{
 		Version: rawdb.HistoryStagingFormatVersion, Epoch: 1,
 		ThroughBucket:   header.Head.HeadBlock / rawdb.StateHistoryChunkBucketBlocks,
@@ -323,7 +336,7 @@ func verifyHistoryStagingComplete(ctx *cli.Context) error {
 		PlanDigest:      planDigest, CandidateSHA: candidate,
 	}
 	if err := s.manager.PublishHistoryStagingRouteBarrier(s.cli.ctx, barrier, func() error {
-		return s.verifyCompleteRows(ctx)
+		return s.verifyCompleteRows(ctx, progress)
 	}); err != nil {
 		return err
 	}
@@ -337,7 +350,7 @@ func verifyHistoryStagingComplete(ctx *cli.Context) error {
 	return s.cli.emit("inspect")
 }
 
-func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context) error {
+func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context, progress *historyStagingCLIProgress) error {
 	if !s.reader.CompleteEligibleCoverage() {
 		return errors.New("history staging partial plan cannot verify complete")
 	}
@@ -355,6 +368,7 @@ func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context) error 
 		return err
 	}
 	defer release()
+	progress.stage.Store("verify-buckets")
 	for {
 		row, more, err := s.reader.Next(s.cli.ctx)
 		if err != nil {
@@ -364,6 +378,7 @@ func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context) error 
 			break
 		}
 		proof := row.Proof
+		progress.bucket.Store(proof.Bucket)
 		for _, block := range proof.Blocks {
 			hash, present, err := rawdb.ReadBlockHashByNumberStrict(canonical, block.Number)
 			if err != nil || !present || hash != block.Hash {
@@ -405,7 +420,9 @@ func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context) error 
 		default:
 			return fmt.Errorf("history staging bucket %d remains source-owned", proof.Bucket)
 		}
+		progress.completed.Add(1)
 	}
+	progress.stage.Store("verify-routes")
 	_, err = s.manager.VerifyOfflineRouteCoverage(s.cli.ctx, 1,
 		s.reader.header.FullEligibleLastBucket,
 		s.reader.header.Head.HeadBlock/rawdb.StateHistoryChunkBucketBlocks)

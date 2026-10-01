@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,13 +231,18 @@ func (f historyStagingE2EFixture) command(t *testing.T, name string, extra ...st
 
 func (f historyStagingE2EFixture) commandRaw(t *testing.T, name string, extra ...string) ([]byte, error) {
 	t.Helper()
-	var out bytes.Buffer
-	app := &cli.App{Writer: &out, ErrWriter: &out, Commands: []*cli.Command{dbHistoryStagingCommand()}}
+	var out, errOut bytes.Buffer
+	app := &cli.App{Writer: &out, ErrWriter: &errOut, Commands: []*cli.Command{dbHistoryStagingCommand()}}
 	args := append([]string{"gtron", "history-staging", name}, f.args...)
 	args = append(args, extra...)
 	err := app.Run(args)
 	if err != nil {
 		return nil, err
+	}
+	if (name == "migrate" || name == "apply" || name == "resume" ||
+		(name == "inspect" && slices.Contains(extra, "--verify-complete"))) &&
+		!strings.Contains(errOut.String(), "history-staging progress phase="+name) {
+		t.Fatalf("%s produced no stderr progress: %q", name, errOut.String())
 	}
 	return append([]byte(nil), out.Bytes()...), nil
 }

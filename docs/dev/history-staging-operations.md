@@ -16,6 +16,23 @@ commit，由 root 执行：
   --sha256 64位二进制SHA256
 ```
 
+首次 staged reader 启动要重新认证已发布冷段；认证缓存仅在当前进程内，
+不能沿用旧库的 180 秒健康等待。迁移及后续主网发布默认给一次启动
+12 小时的有界等待，旧库仍为 180 秒。预封锁安装的
+`gtron-deploy.service` drop-in 设置 `TimeoutStartSec=26h`，覆盖新进程、
+失败回滚进程各一次 12 小时认证及 2 小时构建余量。迁移可用
+`--staging-health-timeout-sec` 指定 600–86400 秒；后续自动发布可配置
+`STAGING_HEALTH_TIMEOUT_SEC`。超过默认值前须另设更高优先级的 root-owned
+deploy unit timeout，并核有效 `TimeoutStartUSec ≥ 2 × 健康等待 + 2 小时`；
+不足会在重启前拒绝。迁移 `activate-staging` 外层等待为一次健康上限
+加 15 分钟。这些上限是故障边界，不是启动耗时预测。
+
+校验期间固定进程 PID、身份和 `/proc/<pid>/exe` 指纹；服务退出、PID
+变化或身份不符立即失败，API 尚未就绪时每 60 秒输出状态。离线 CLI
+进度 stderr 实时转发，最新一次动作在 root-only 的
+`/data/gtron/history-staging-ops/<job>_<action>.stderr.log` 保留至多
+16 MiB；stdout 仍按最终 JSONL 身份和持久阶段核验。
+
 编排器先安装旧版启动和自动部署的 guard，再停 timer、排空部署、获得
 `/data/gtron/start.lock` 并写 durable migration latch。固定二进制执行
 `gtron db history-staging migrate` 生成可恢复的 JSONL 计划，随后执行

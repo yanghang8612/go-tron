@@ -35,6 +35,49 @@ def old_state():
 
 
 class MainnetReleaseTests(unittest.TestCase):
+    def test_staging_wait_is_bounded_and_deploy_unit_covers_rollback(self):
+        self.assertEqual(release.staging_health_timeout(), 43200)
+        self.assertEqual(release.staging_health_timeout('86400'), 86400)
+        for invalid in ('599', '86401', '-1', '1.5', ''):
+            with self.assertRaises(RuntimeError):
+                release.staging_health_timeout(invalid)
+        self.assertEqual(release.systemd_duration_seconds('26h'), 26 * 3600)
+        self.assertEqual(release.systemd_duration_seconds('1d 2h'), 26 * 3600)
+        with mock.patch.object(release, 'command', return_value='TimeoutStartUSec=26h\n'):
+            self.assertEqual(release.require_staging_deploy_timeout(43200), 26 * 3600)
+        with mock.patch.object(release, 'command', return_value='TimeoutStartUSec=14h\n'):
+            with self.assertRaisesRegex(RuntimeError, 'two staging health waits'):
+                release.require_staging_deploy_timeout(43200)
+
+    def test_health_wait_rejects_pid_change_before_timeout(self):
+        values = iter(({'ActiveState': 'active', 'MainPID': '41'},
+                       {'ActiveState': 'active', 'MainPID': '42'}))
+        with mock.patch.object(release, 'show', side_effect=lambda *args: next(values)), \
+                mock.patch.object(release, 'proc_identity', return_value=('/binary', ['/binary'])), \
+                mock.patch.object(release, 'proc_exe_fingerprint', return_value=(1, 2, 3, 4)), \
+                mock.patch.object(release, 'proc_sha', return_value='a' * 64) as sha, \
+                mock.patch.object(release, 'wallet_head', side_effect=RuntimeError('API warming')), \
+                mock.patch.object(release.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'PID changed'):
+                release.wait_healthy('/binary', 'a' * 64, ['/binary'], timeout=43200)
+        sha.assert_called_once()
+
+    def test_health_wait_hashes_once_during_warmup_and_again_on_acceptance(self):
+        heads = iter((RuntimeError('API warming'), 123))
+        def wallet():
+            value = next(heads)
+            if isinstance(value, Exception):
+                raise value
+            return value
+        with mock.patch.object(release, 'show', return_value={'ActiveState': 'active', 'MainPID': '41'}), \
+                mock.patch.object(release, 'proc_identity', return_value=('/binary', ['/binary'])), \
+                mock.patch.object(release, 'proc_exe_fingerprint', return_value=(1, 2, 3, 4)), \
+                mock.patch.object(release, 'proc_sha', return_value='a' * 64) as sha, \
+                mock.patch.object(release, 'wallet_head', side_effect=wallet), \
+                mock.patch.object(release.time, 'sleep'):
+            self.assertEqual(release.wait_healthy('/binary', 'a' * 64, ['/binary'], timeout=60), 41)
+        self.assertEqual(sha.call_count, 2)
+
     def test_prepared_or_migrating_source_blocks_ordinary_release(self):
         with mock.patch.object(release.os.path, 'lexists', side_effect=lambda path: path == release.STAGING_PREPARED):
             with self.assertRaisesRegex(RuntimeError, 'pinned to its legacy reader'):
@@ -261,7 +304,7 @@ class MainnetReleaseTests(unittest.TestCase):
                         mock.patch.object(release, 'wait_healthy', return_value=100):
                     with self.assertRaises(subprocess.TimeoutExpired):
                         release.deploy(SOURCE, '/candidate', SHA)
-                restore.assert_called_once_with(old)
+                restore.assert_called_once_with(old, health_timeout=None)
                 self.assertIn(['/usr/bin/git', '--git-dir=' + str(release.REPO / '.git'),
                                'rev-parse', 'HEAD'], attempts)
 
@@ -270,7 +313,7 @@ class MainnetReleaseTests(unittest.TestCase):
         events = []
         with mock.patch.object(release, 'atomic_root', side_effect=lambda *args: events.append(('write', args))), \
                 mock.patch.object(release, 'command', side_effect=lambda argv, timeout=60: events.append(('command', argv))), \
-                mock.patch.object(release, 'wait_healthy', side_effect=lambda *args: events.append(('healthy', args))):
+                mock.patch.object(release, 'wait_healthy', side_effect=lambda *args, **kwargs: events.append(('healthy', args, kwargs))):
             release.restore(old)
         self.assertEqual([item[0] for item in events],
                          ['write', 'write', 'write', 'command', 'command', 'healthy'])

@@ -14,6 +14,8 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,7 @@ import mainnet_release as release
 
 APP = Path('/data/gtron')
 MAIN = APP / 'main'
+CLI_LOG_DIR = APP / 'history-staging-ops'
 REPO = APP / 'go-tron'
 DATADIR = MAIN / 'datadir'
 SOURCE = DATADIR / 'gtron' / 'chaindata'
@@ -38,9 +41,12 @@ GUARD_INSTALL = Path('/usr/local/libexec/gtron-history-staging-guard.py')
 RELEASE_INSTALL = Path('/usr/local/libexec/gtron-mainnet-release.py')
 SPACE_INSTALL = Path('/usr/local/libexec/gtron-mainnet-space-guard.py')
 DROPIN = Path('/etc/systemd/system/gtron.service.d/zz-history-staging-guard.conf')
+DEPLOY_TIMEOUT_DROPIN = Path('/etc/systemd/system/gtron-deploy.service.d/zz-history-staging-deploy-timeout.conf')
 VERSION = 1
 HEX40 = re.compile(r'[0-9a-f]{40}\Z')
 HEX64 = re.compile(r'[0-9a-f]{64}\Z')
+CLI_STDERR_LIMIT = 16 << 20
+CLI_RUN_TIMEOUT = 24 * 60 * 60
 
 
 def require(ok, message):
@@ -48,13 +54,15 @@ def require(ok, message):
         raise RuntimeError(message)
 
 
-def command(argv, timeout=120):
+def command(argv, timeout=120, stream_stderr=False):
     result = subprocess.run(argv, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=None if stream_stderr else subprocess.PIPE,
                             timeout=timeout, check=False)
     require(result.returncode == 0,
             '%s failed (%d): %s' % (' '.join(map(str, argv)), result.returncode,
-                                    result.stderr.decode('utf-8', 'replace')[-2000:]))
+                                    result.stderr.decode('utf-8', 'replace')[-2000:]
+                                    if result.stderr is not None else 'see streamed stderr'))
     return result.stdout.decode('utf-8', 'replace')
 
 
@@ -107,6 +115,9 @@ def safe_identity(data):
             type(data.get('service_was_active')) is bool and
             type(data.get('timer_was_active')) is bool and
             type(data.get('timer_was_enabled')) is bool and
+            ('staging_health_timeout_sec' not in data or
+             type(data.get('staging_health_timeout_sec')) is int and
+             release.STAGING_HEALTH_MIN <= data['staging_health_timeout_sec'] <= release.STAGING_HEALTH_MAX) and
             isinstance(data.get('source_config_args'), list) and
             all(isinstance(arg, str) for arg in data['source_config_args']) and
             isinstance(data.get('source_config_sha256'), str),
@@ -222,7 +233,8 @@ def canonical_paths():
     return paths
 
 
-def install_startup_fences(old_sha, candidate_sha, source_commit, paths, service_state, timer_state):
+def install_startup_fences(old_sha, candidate_sha, source_commit, paths, service_state,
+                           timer_state, health_timeout=None):
     prepared = {'version': VERSION, 'legacy_binary_sha256': old_sha,
                 'candidate_sha256': candidate_sha, 'source_commit': source_commit,
                 'source': paths['source'], 'target': paths['target'], 'cold': paths['cold'],
@@ -235,7 +247,11 @@ def install_startup_fences(old_sha, candidate_sha, source_commit, paths, service
     install_checked(REPO / 'scripts' / 'dev' / 'mainnet_space_guard.py', SPACE_INSTALL, 0o755)
     install_checked(REPO / 'scripts' / 'start.sh', APP / 'start.sh', 0o755)
     install_checked(REPO / 'deploy' / 'systemd' / 'zz-history-staging-guard.conf', DROPIN, 0o644)
+    DEPLOY_TIMEOUT_DROPIN.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    install_checked(REPO / 'deploy' / 'systemd' / 'zz-history-staging-deploy-timeout.conf',
+                    DEPLOY_TIMEOUT_DROPIN, 0o644)
     systemctl('daemon-reload', timeout=30)
+    release.require_staging_deploy_timeout(health_timeout or release.staging_health_timeout())
     pre = release.show('ExecStartPre').get('ExecStartPre', '')
     require(pre.count(str(GUARD_INSTALL)) == 1 and
             pre.count(str(SPACE_INSTALL)) == 1,
@@ -266,14 +282,11 @@ def cli_result(latch, action, *options):
                    '--candidate-sha256', latch['candidate_sha256'],
                    *latch['source_config_args'], *options]
     last = None
-    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        result = subprocess.run(commandline, stdin=subprocess.DEVNULL,
-                                stdout=output, stderr=errors,
-                                timeout=24 * 60 * 60, check=False)
-        errors.seek(0)
-        require(result.returncode == 0,
+    with tempfile.TemporaryFile() as output:
+        returncode, error_tail = stream_cli_stderr(commandline, output, latch, action)
+        require(returncode == 0,
                 'gtron %s failed (%d): %s' %
-                (action, result.returncode, errors.read(2000).decode('utf-8', 'replace')))
+                (action, returncode, error_tail.decode('utf-8', 'replace')))
         require(output.tell() <= 256 << 20, 'gtron progress output exceeded 256 MiB')
         output.seek(0)
         for line in output:
@@ -287,6 +300,55 @@ def cli_result(latch, action, *options):
     require(last is not None and last.get('phase') == action,
             'gtron did not return a final durable ' + action + ' result')
     return last
+
+
+def stream_cli_stderr(commandline, output, latch, action):
+    """Bound, persist and forward heartbeat stderr without changing JSONL stdout."""
+    require(action in ('inspect', 'migrate', 'apply', 'resume') and
+            re.fullmatch(r'[0-9a-f]{32}', latch['job_id']) is not None,
+            'invalid migration log identity')
+    CLI_LOG_DIR.mkdir(mode=0o700, exist_ok=True)
+    directory = CLI_LOG_DIR.lstat()
+    require(stat.S_ISDIR(directory.st_mode) and directory.st_uid == os.geteuid() and
+            stat.S_IMODE(directory.st_mode) == 0o700,
+            'unsafe root-owned history-staging operation log directory')
+    path = CLI_LOG_DIR / ('%s_%s.stderr.log' % (latch['job_id'], action))
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    process = None
+    tail = b''
+    try:
+        with os.fdopen(fd, 'wb') as log:
+            process = subprocess.Popen(commandline, stdin=subprocess.DEVNULL,
+                                       stdout=output, stderr=subprocess.PIPE)
+            deadline = time.monotonic() + CLI_RUN_TIMEOUT
+            total = 0
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stderr, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    require(remaining > 0, 'gtron %s exceeded bounded 24 h run' % action)
+                    if not selector.select(timeout=min(30, remaining)):
+                        continue
+                    chunk = os.read(process.stderr.fileno(), 8192)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    require(total <= CLI_STDERR_LIMIT,
+                            'gtron %s stderr exceeded bounded 16 MiB log' % action)
+                    log.write(chunk)
+                    log.flush()
+                    sys.stderr.write(chunk.decode('utf-8', 'replace'))
+                    sys.stderr.flush()
+                    tail = (tail + chunk)[-2000:]
+            return process.wait(timeout=max(1, deadline - time.monotonic())), tail
+    except Exception:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=30)
+        raise
+    finally:
+        if process is not None and process.stderr is not None:
+            process.stderr.close()
 
 
 def validate_cli_record(latch, record):
@@ -366,10 +428,13 @@ def migrate_under_latch(latch):
         latch['history_window'] = verified['history_window']
         latch['state'] = 'VERIFIED_PENDING_ACTIVATION'
         write_latch(latch)
+    health_timeout = latch.get('staging_health_timeout_sec', release.staging_health_timeout())
     result = json.loads(command(['/usr/bin/python3', str(RELEASE_INSTALL),
                                  'activate-staging', '--source', latch['source_commit'],
                                  '--candidate', latch['candidate'],
-                                 '--sha256', latch['candidate_sha256']], 300))
+                                 '--sha256', latch['candidate_sha256'],
+                                 '--staging-health-timeout-sec', str(health_timeout)],
+                                health_timeout + 15 * 60, stream_stderr=True))
     require(result.get('activated') is True and
             result.get('binary_sha256') == latch['candidate_sha256'] and
             result.get('service_was_active') == latch['service_was_active'],
@@ -386,13 +451,14 @@ def migrate_under_latch(latch):
     return finalize_done(latch['job_id'])
 
 
-def run_new(candidate, source_commit, expected_sha):
+def run_new(candidate, source_commit, expected_sha, health_timeout=None):
     require(os.geteuid() == 0, 'root required')
     require(not os.path.lexists(release.STAGING_LATCH) and
             not os.path.lexists(release.STAGING_REQUIRED),
             'migration already entered or reader already active; use resume')
     paths = canonical_paths()
     pinned = pinned_candidate(Path(candidate), source_commit, expected_sha)
+    health_timeout = health_timeout or release.staging_health_timeout()
     old = release.inspect()
     config_args, config_sha = source_config_from_argv(old['argv'])
     service_state, timer_state = unit_state(SERVICE), unit_state(TIMER)
@@ -406,7 +472,7 @@ def run_new(candidate, source_commit, expected_sha):
         systemctl('stop', DEPLOY_SERVICE, timeout=600)
         verify_stopped(DEPLOY_SERVICE)
         install_startup_fences(old['sha'], expected_sha, source_commit,
-                               paths, service_state, timer_state)
+                               paths, service_state, timer_state, health_timeout)
         fences_verified = True
         with ExitStack() as stack:
             flock_file(stack, LOCK)
@@ -423,6 +489,7 @@ def run_new(candidate, source_commit, expected_sha):
                          service_was_active=service_state['active'],
                          timer_was_active=timer_state['active'],
                          timer_was_enabled=timer_state['enabled'],
+                         staging_health_timeout_sec=health_timeout,
                          source_config_args=config_args,
                          source_config_sha256=config_sha)
             write_latch(latch)
@@ -486,12 +553,16 @@ def main():
     start.add_argument('--candidate', type=Path, required=True)
     start.add_argument('--source', required=True)
     start.add_argument('--sha256', required=True)
+    start.add_argument('--staging-health-timeout-sec',
+                       help='bounded capable-reader health wait (600..86400 seconds; default 43200)')
     again = modes.add_parser('resume')
     again.add_argument('--job-id', required=True)
     args = parser.parse_args()
     require(args.mode in ('run', 'resume'), 'run or resume action required')
     if args.mode == 'run':
-        result = run_new(args.candidate, args.source, args.sha256)
+        health_timeout = (release.staging_health_timeout(args.staging_health_timeout_sec)
+                          if args.staging_health_timeout_sec is not None else None)
+        result = run_new(args.candidate, args.source, args.sha256, health_timeout)
     else:
         result = resume(args.job_id)
     print(json.dumps(result, sort_keys=True))

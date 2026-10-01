@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
@@ -14,7 +16,7 @@ import (
 // materialized head and authenticates each persisted cold binding against one
 // pinned manifest. The frozen offline CandidateSHA is not compared with a
 // later, legitimately advancing canonical database.
-func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) error {
+func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (result error) {
 	if bc == nil || ctx == nil {
 		return errors.New("history staging startup: missing blockchain or context")
 	}
@@ -52,8 +54,42 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) erro
 	if release != nil {
 		defer release()
 	}
+	// A single large trio can take much longer than a bucket to authenticate.
+	// Report the current bucket on a timer so a silent pre-API startup does not
+	// look hung while the full physical checksum and coverage scan is running.
+	started := time.Now()
+	headBucket := current.Number() / rawdb.StateHistoryChunkBucketBlocks
+	var currentBucket, verifiedBuckets, coldBindings atomic.Uint64
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	log.Info("History staging startup audit started", "headBucket", headBucket)
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				log.Info("History staging startup audit in progress",
+					"currentBucket", currentBucket.Load(), "verifiedBuckets", verifiedBuckets.Load(),
+					"headBucket", headBucket, "coldBindings", coldBindings.Load(),
+					"elapsed", time.Since(started))
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-stopped
+		log.Info("History staging startup audit finished", "verifiedBuckets", verifiedBuckets.Load(),
+			"headBucket", headBucket, "coldBindings", coldBindings.Load(),
+			"elapsed", time.Since(started), "err", result)
+	}()
 	if err := manager.VerifyHistoryStagingStartup(ctx, current.Number(), func(bucket uint64, route rawdb.HistoryStagingRoute) error {
+		currentBucket.Store(bucket)
 		if route.ColdBindingEpoch == 0 {
+			verifiedBuckets.Add(1)
 			return nil
 		}
 		if pinned == nil {
@@ -69,7 +105,12 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) erro
 		if !ok {
 			return errors.New("history staging startup: cold verifier is unavailable")
 		}
-		return verifier.VerifyHistoryStagingPinnedBindingReceipt(ctx, binding)
+		if err := verifier.VerifyHistoryStagingPinnedBindingReceipt(ctx, binding); err != nil {
+			return err
+		}
+		coldBindings.Add(1)
+		verifiedBuckets.Add(1)
+		return nil
 	}); err != nil {
 		return err
 	}
