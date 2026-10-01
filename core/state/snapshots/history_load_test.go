@@ -82,7 +82,7 @@ func TestHistoryLoadDebtAndSharedDevicePressure(t *testing.T) {
 	p.CompactionDebt = 3 << 30
 	r.cfg.HistoryLoadProbe = func() maintenance.StoragePressure { return p }
 	r.refreshHistoryLoad(now)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 6; i++ {
 		now = now.Add(5 * time.Second)
 		p.SampledAt, p.DeviceSampledAt = now, now
 		p.CompactionDebt += 1 << 20
@@ -399,10 +399,10 @@ func TestHistoryLoadReasonMetricsDebtAndSimultaneousPressure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Unix(1_700_000_000, 123)
 			p := healthyHistoryLoad(now)
-			p.CompactionDebt = tc.finalDebt - 2
+			p.CompactionDebt = tc.finalDebt - 6
 			r := historyLoadMetricsFixture(t, &p)
 			r.refreshHistoryLoad(now)
-			for i := 1; i <= 2; i++ {
+			for i := 1; i <= 6; i++ {
 				now = now.Add(5 * time.Second)
 				p.SampledAt, p.DeviceSampledAt = now, now
 				p.CompactionDebt++

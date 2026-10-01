@@ -111,7 +111,7 @@ func TestHistoryBusyObservationTraceDebtGrowthCadence(t *testing.T) {
 		name               string
 		interval, pressure time.Duration
 	}{
-		{"five second consumer", 5 * time.Second, 10 * time.Second},
+		{"five second consumer", 5 * time.Second, 30 * time.Second},
 		{"minute consumer", time.Minute, 2 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,8 +122,13 @@ func TestHistoryBusyObservationTraceDebtGrowthCadence(t *testing.T) {
 			pressure := firstBusyHistoryTraceState(t, states, func(s busyHistoryTraceState) bool {
 				return s.reasons&historyLoadReasonDebtGrowth != 0
 			})
-			if pressure.elapsed != tc.pressure || pressure.level != 1 || pressure.hard || pressure.rises != 2 || pressure.good != 0 || pressure.sequence != 3 {
-				t.Fatalf("debt pressure transition: %+v, want elapsed %s after two observed rises", pressure, tc.pressure)
+			wantRises := 2
+			wantSequence := uint64(3)
+			if tc.interval == 5*time.Second {
+				wantRises, wantSequence = 6, 7
+			}
+			if pressure.elapsed != tc.pressure || pressure.level != 1 || pressure.hard || pressure.rises != wantRises || pressure.good != 0 || pressure.sequence != wantSequence {
+				t.Fatalf("debt pressure transition: %+v, want elapsed %s after sustained observed growth", pressure, tc.pressure)
 			}
 		})
 	}

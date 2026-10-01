@@ -20,7 +20,7 @@ import (
 const (
 	defaultStateReadAheadQueueBlocks = 64
 	defaultStateReadAheadQueueBytes  = 16 << 20
-	maxTransferAssetPrefetchRows     = 128
+	maxTransferAssetPrefetchRows     = 256
 	maxStateReadAheadWorkers         = 4
 	maxStateReadAheadPlanRows        = 4096
 )
@@ -462,7 +462,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 	// bandwidth, operation time, and metadata rows. Numeric names may mean a
 	// literal pre-fork name or a post-fork V2 ID, so retain both balance forms;
 	// putting all V2 balances first ensures a dense modern block does not spend
-	// its 128-row budget on less useful ancillary or legacy rows.
+	// its bounded asset-row budget on less useful ancillary or legacy rows.
 	seenCapacity := len(assetTransfers) * 8
 	if seenCapacity > maxTransferAssetPrefetchRows {
 		seenCapacity = maxTransferAssetPrefetchRows
@@ -481,7 +481,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		}
 		if len(seenKV) >= maxTransferAssetPrefetchRows {
 			// Rejected hints are not retained; repeated rejected keys count
-			// again. This keeps the tracking set bounded at 128 entries.
+			// again. This keeps the tracking set bounded at the asset-row limit.
 			cappedAttempts++
 			return
 		}

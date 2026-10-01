@@ -14,6 +14,9 @@ import (
 const (
 	historyLoadRetry        = 5 * time.Second
 	historyCPUBurstRecovery = 250 * time.Millisecond
+	historyDebtTrendPoints  = 7
+	historyDebtTrendSpan    = 30 * time.Second
+	historyDebtTrendMaxGap  = 90 * time.Second
 )
 
 type historyLoadReason uint16
@@ -55,6 +58,25 @@ type historyWorkSample struct {
 	work                  time.Duration
 }
 
+type historyDebtPoint struct {
+	at   time.Time
+	debt uint64
+}
+
+type historyDebtWindow struct {
+	points   int
+	span     time.Duration
+	net      int64
+	positive int
+}
+
+type historyDebtTrend struct {
+	recent   historyDebtWindow
+	growth   historyDebtWindow
+	mature   bool
+	pressure bool
+}
+
 // All controller state is owned by Runner.passMu. Engine pressure protects
 // writes; device observations include other services and are used only to
 // reduce discretionary work, never to assert spare hardware bandwidth.
@@ -66,6 +88,8 @@ type historyLoadState struct {
 	lastDebt             uint64
 	lastStalls           uint64
 	debtRises            int
+	debtTrend            [historyDebtTrendPoints]historyDebtPoint
+	debtTrendCount       int
 	good                 int
 	level                int // 0 unknown, 1 pressured, 2 recovering, 3 healthy
 	hard                 bool
@@ -87,7 +111,7 @@ func (r *Runner) initHistoryLoadMetrics() {
 	}
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
 	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_gc_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery",
-		"reason_bits", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
+		"reason_bits", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "debt_trend_points", "debt_trend_span_ns", "debt_trend_net_bytes", "debt_trend_positive_steps", "debt_trend_growth_points", "debt_trend_growth_span_ns", "debt_trend_growth_net_bytes", "debt_trend_growth_positive_steps", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
 		r.historyLoad.metrics[name] = metrics.GetOrRegisterGauge(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/"+name, nil)
 	}
 	for i, reason := range historyLoadReasonMetrics {
@@ -119,6 +143,61 @@ func freshHistoryLoad(sampled, now time.Time) bool {
 	return !sampled.IsZero() && now.Sub(sampled) >= -time.Second && now.Sub(sampled) <= 15*time.Second
 }
 
+func (s *historyLoadState) appendDebtTrend(at time.Time, debt uint64) {
+	if s.debtTrendCount == len(s.debtTrend) {
+		copy(s.debtTrend[:], s.debtTrend[1:])
+		s.debtTrendCount--
+	}
+	s.debtTrend[s.debtTrendCount] = historyDebtPoint{at: at, debt: debt}
+	s.debtTrendCount++
+}
+
+func (s *historyLoadState) debtWindow(anchor int) historyDebtWindow {
+	first := s.debtTrend[anchor]
+	last := s.debtTrend[s.debtTrendCount-1]
+	w := historyDebtWindow{points: s.debtTrendCount - anchor, span: last.at.Sub(first.at)}
+	if last.debt >= first.debt {
+		w.net = coldSnapshotUintGauge(last.debt - first.debt)
+	} else {
+		w.net = -coldSnapshotUintGauge(first.debt - last.debt)
+	}
+	for i := anchor + 1; i < s.debtTrendCount; i++ {
+		if s.debtTrend[i].debt > s.debtTrend[i-1].debt {
+			w.positive++
+		}
+	}
+	return w
+}
+
+// First establish the direction of the newest geometrically mature suffix.
+// Only a positive recent direction may extend backwards to find a second
+// independent rise. A distant high cannot hide new growth after a drop, and
+// an old rise cannot keep pressure active after the recent window goes flat.
+func (s *historyLoadState) debtTrendPressure() historyDebtTrend {
+	if s.debtTrendCount == 0 {
+		return historyDebtTrend{}
+	}
+	trend := historyDebtTrend{recent: s.debtWindow(0)}
+	last := s.debtTrend[s.debtTrendCount-1]
+	for i := s.debtTrendCount - 3; i >= 0; i-- {
+		if last.at.Sub(s.debtTrend[i].at) >= historyDebtTrendSpan {
+			trend.recent, trend.mature = s.debtWindow(i), true
+			break
+		}
+	}
+	if !trend.mature || trend.recent.net <= 0 || last.debt < 2<<30 {
+		return trend
+	}
+	for i := s.debtTrendCount - trend.recent.points; i >= 0; i-- {
+		candidate := s.debtWindow(i)
+		if candidate.positive >= 2 && candidate.net > 0 {
+			trend.growth, trend.pressure = candidate, true
+			break
+		}
+	}
+	return trend
+}
+
 func (r *Runner) refreshHistoryLoad(now time.Time) {
 	r.refreshHistoryLoadFromProbe(now, r.cfg.HistoryLoadProbe)
 }
@@ -139,7 +218,7 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 	var reasons historyLoadReason
 	accepted := false
 	if !p.Available || !freshHistoryLoad(p.SampledAt, now) {
-		s.level, s.good, s.debtRises = 0, 0, 0
+		s.level, s.good, s.debtRises, s.debtTrendCount = 0, 0, 0, 0
 		if !p.Available {
 			reasons |= historyLoadReasonEngineUnavailable
 		} else {
@@ -150,24 +229,34 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 		newSample := s.lastAccepted.IsZero() || p.SampledAt.Sub(s.lastAccepted) >= 5*time.Second
 		reset := p.SampledAt.Before(s.lastAccepted) || p.StallCount < s.lastStalls
 		if reset {
-			s.good, s.debtRises, s.lastAccepted = 0, 0, time.Time{}
+			s.good, s.debtRises, s.debtTrendCount, s.lastAccepted = 0, 0, 0, time.Time{}
 			newSample = true
 		}
 		newStall := !s.lastAccepted.IsZero() && p.StallCount > s.lastStalls
+		deviceKnown := p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now)
 		if newSample {
-			if !s.lastAccepted.IsZero() && p.CompactionDebt > s.lastDebt {
+			comparable := !s.lastAccepted.IsZero() && p.SampledAt.Sub(s.lastAccepted) <= historyDebtTrendMaxGap
+			if !comparable {
+				s.debtTrendCount = 0
+			}
+			if comparable && p.CompactionDebt > s.lastDebt {
 				s.debtRises++
 			} else {
 				s.debtRises = 0
 			}
+			s.appendDebtTrend(p.SampledAt, p.CompactionDebt)
 		}
-		deviceKnown := p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now)
 		devicePressure := deviceKnown && p.DeviceBusyPPM >= 950_000 && p.DeviceQueueMilli >= 2_000 && p.DeviceAwait >= 5*time.Millisecond
 		l0Pressure := p.L0CompactionThreshold > 0 && p.L0Sublevels >= p.L0CompactionThreshold && p.L0Sublevels-p.L0CompactionThreshold >= p.L0CompactionThreshold
-		debtPressure := s.debtRises >= 2 && p.CompactionDebt >= 2<<30
+		trend := s.debtTrendPressure()
+		debtPressure := trend.pressure
 		soft := s.hard || newStall || devicePressure || l0Pressure || debtPressure
+		// A recovering compaction sawtooth may contain individual rises. Once
+		// independent observations establish a falling net trend, those rises
+		// should not indefinitely reset pressure hysteresis.
+		trendFalling := trend.mature && trend.recent.net <= 0
 		low := (p.L0CompactionThreshold <= 0 || p.L0Sublevels < p.L0CompactionThreshold) &&
-			(s.lastAccepted.IsZero() || p.CompactionDebt <= s.lastDebt)
+			(s.lastAccepted.IsZero() || p.CompactionDebt <= s.lastDebt || trendFalling)
 		if soft {
 			s.level, s.good = 1, 0
 			if s.hard {
@@ -230,6 +319,15 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 	s.metric("l0_compaction_threshold", int64(p.L0CompactionThreshold))
 	s.metric("l0_stop_writes_threshold", int64(p.L0StopWritesThreshold))
 	s.metric("debt_rises", int64(s.debtRises))
+	trend := s.debtTrendPressure()
+	s.metric("debt_trend_points", int64(trend.recent.points))
+	s.metric("debt_trend_span_ns", int64(trend.recent.span))
+	s.metric("debt_trend_net_bytes", trend.recent.net)
+	s.metric("debt_trend_positive_steps", int64(trend.recent.positive))
+	s.metric("debt_trend_growth_points", int64(trend.growth.points))
+	s.metric("debt_trend_growth_span_ns", int64(trend.growth.span))
+	s.metric("debt_trend_growth_net_bytes", trend.growth.net)
+	s.metric("debt_trend_growth_positive_steps", int64(trend.growth.positive))
 	s.metric("good", int64(s.good))
 	s.metric("sample_accepted", boolGauge(accepted))
 	s.metric("accepted_sequence", coldSnapshotUintGauge(s.acceptedSequence))

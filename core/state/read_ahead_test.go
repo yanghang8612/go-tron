@@ -177,7 +177,8 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 }
 
 func TestStateReadAheadTransferAssetCapPrioritizesV2Balances(t *testing.T) {
-	const transfers = 60 // 120 V2 balance rows fit; all 240 balance rows do not.
+	const transfers = 120 // 240 V2 balance rows fit the new cap but not the old 128-row cap.
+	const previousAssetRowLimit = 128
 	disk := rawdb.NewMemoryDatabase()
 	to, witness := readAheadAddress(0xe0), readAheadAddress(0xe1)
 	owners := make([]tcommon.Address, transfers)
@@ -214,28 +215,16 @@ func TestStateReadAheadTransferAssetCapPrioritizesV2Balances(t *testing.T) {
 		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
 		Transactions: transactions,
 	})
-	// Use the previous interleaved row order as a controlled cache-coverage
-	// baseline against the same fixture and 128-row limit.
+	// Compare against the previous V2-first order at its 128-row asset cap.
+	// The same canonical reads then expose how many V2 balances remained cold.
 	oldBase := &readAheadCountingReader{KeyValueReader: disk}
 	oldBuffer := blockbuffer.New(oldBase)
 	oldBuffer.SetBaseReadCacheSize(1 << 20)
-	oldPlan := rawdb.NewStatePrefetchPlan(maxTransferAssetPrefetchRows)
+	oldPlan := rawdb.NewStatePrefetchPlan(previousAssetRowLimit)
 	for i, owner := range owners {
 		name := []byte(strconv.Itoa(1000000 + i))
-		legacyMeta := assetBytesKey(assetLegacyTag, name)
-		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, legacyMeta)
-		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta))
-		oldPlan.AddKV(owner, 7, kvdomains.AccountAsset, name)
-		oldPlan.AddKV(to, 7, kvdomains.AccountAsset, name)
-		oldPlan.AddKV(owner, 7, kvdomains.AccountFreeAssetNetUsage, name)
-		oldPlan.AddKV(owner, 7, kvdomains.AccountAssetOperationTime, name)
-		v2Meta := assetIDKey(assetV2Tag, int64(1000000+i))
-		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, v2Meta)
-		oldPlan.AddKV(tcommon.SystemAccountAddress, 7, kvdomains.SystemAsset, assetBandwidthKey(v2Meta))
 		oldPlan.AddKV(owner, 7, kvdomains.AccountAssetV2, name)
 		oldPlan.AddKV(to, 7, kvdomains.AccountAssetV2, name)
-		oldPlan.AddKV(owner, 7, kvdomains.AccountFreeAssetNetUsageV2, name)
-		oldPlan.AddKV(owner, 7, kvdomains.AccountAssetOperationTimeV2, name)
 	}
 	if err := oldPlan.Execute(oldBuffer, func(_ int, _ []byte, _ bool, _ error) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -250,9 +239,8 @@ func TestStateReadAheadTransferAssetCapPrioritizesV2Balances(t *testing.T) {
 		}
 	}
 	oldDurableReads := oldBase.gets.Load() - oldBefore
-	t.Logf("canonical V2 balance durable reads with old interleaved plan: %d", oldDurableReads)
-	if oldDurableReads < 80 {
-		t.Fatalf("old interleaved ordering had only %d durable V2 balance reads; want at least 80", oldDurableReads)
+	if oldDurableReads != 2*transfers-previousAssetRowLimit {
+		t.Fatalf("canonical V2 balance durable reads with previous cap = %d, want %d", oldDurableReads, 2*transfers-previousAssetRowLimit)
 	}
 	base := &readAheadCountingReader{KeyValueReader: disk}
 	buffer := blockbuffer.New(base)
@@ -276,14 +264,97 @@ func TestStateReadAheadTransferAssetCapPrioritizesV2Balances(t *testing.T) {
 	if got := base.gets.Load(); got != before {
 		t.Fatalf("canonical V2 balance reads reached durable base: before=%d after=%d", before, got)
 	}
-	t.Log("canonical V2 balance durable reads with prioritized plan: 0")
+	t.Logf("canonical V2 balance durable reads: previous cap=%d, new cap=0", oldDurableReads)
 	legacyName := []byte(strconv.Itoa(1000000))
 	if _, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, owners[0], 7, kvdomains.AccountAsset, legacyName); err != nil || !ok || base.gets.Load() != before {
 		t.Fatalf("first numeric legacy balance was not warmed: ok=%t err=%v", ok, err)
 	}
 	stats := p.Stats()
-	if stats.AssetBalanceRows != maxTransferAssetPrefetchRows || stats.AssetV2Rows != 2*transfers || stats.AssetLegacyRows == 0 || stats.AssetCapBlocks != 1 || stats.AssetCappedAttempts == 0 {
+	if stats.AssetBalanceRows != maxTransferAssetPrefetchRows || stats.AssetV2Rows != 2*transfers || stats.AssetLegacyRows != maxTransferAssetPrefetchRows-2*transfers || stats.AssetCapBlocks != 1 || stats.AssetCappedAttempts == 0 || stats.AssetPlanFullRows != 0 || stats.Rows > 2*maxStateReadAheadPlanRows || stats.ProcessedBlocks != 1 || stats.CompletedBeforeApply != 1 || stats.QueuedBytes != 0 {
 		t.Fatalf("cap and balance coverage stats = %+v", stats)
+	}
+}
+
+func TestStateReadAheadTransferAssetRepeatedHintsDoNotConsumeCap(t *testing.T) {
+	const transfers = 120
+	disk := rawdb.NewMemoryDatabase()
+	owner, to, witness := readAheadAddress(0x51), readAheadAddress(0x52), readAheadAddress(0x53)
+	for _, address := range []tcommon.Address{owner, to, witness, tcommon.SystemAccountAddress} {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: 7}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, address, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := readAheadTransferAssetBlock(t, owner, to, witness, []byte("1000000"))
+	transactions := make([]*corepb.Transaction, transfers)
+	for i := range transactions {
+		transactions[i] = first.Proto().Transactions[0]
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: transactions,
+	})
+	p := NewStateReadAhead(disk, StateReadAheadConfig{Workers: 1})
+	defer p.Close()
+	if !p.EnqueueBlock(block, 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+	stats := p.Stats()
+	if stats.AssetBalanceRows != 4 || stats.AssetV2Rows != 6 || stats.AssetLegacyRows != 6 || stats.AssetCapBlocks != 0 || stats.AssetCappedAttempts != 0 || stats.AssetPlanFullRows != 0 || stats.ProcessedBlocks != 1 {
+		t.Fatalf("repeated transfer hints should result in only 12 distinct asset rows: %+v", stats)
+	}
+}
+
+func TestStateReadAheadTransferAssetRespectsFullSubrowPlan(t *testing.T) {
+	const owners = 1400 // Each owner contributes permission and resource subrows.
+	disk := rawdb.NewMemoryDatabase()
+	to, witness := readAheadAddress(0xe0), readAheadAddress(0xe1)
+	to[len(to)-3], witness[len(witness)-3] = 1, 1
+	transactions := make([]*corepb.Transaction, 0, owners+1)
+	writeAccount := func(address tcommon.Address) {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: 7}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, address, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range owners {
+		var owner tcommon.Address
+		owner[0] = tcommon.AddressPrefixMainnet
+		owner[len(owner)-2] = byte(i >> 8)
+		owner[len(owner)-1] = byte(i)
+		writeAccount(owner)
+		transfer, err := anypb.New(&contractpb.TransferContract{OwnerAddress: owner.Bytes(), ToAddress: to.Bytes(), Amount: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		transactions = append(transactions, &corepb.Transaction{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_TransferContract, Parameter: transfer}}}})
+	}
+	for _, address := range []tcommon.Address{to, witness, tcommon.SystemAccountAddress} {
+		writeAccount(address)
+	}
+	asset := readAheadTransferAssetBlock(t, readAheadAddress(0), to, witness, []byte("1000000"))
+	transactions = append(transactions, asset.Proto().Transactions[0])
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: transactions,
+	})
+	p := NewStateReadAhead(disk, StateReadAheadConfig{Workers: 1})
+	defer p.Close()
+	if !p.EnqueueBlock(block, 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+	stats := p.Stats()
+	if stats.Rows != owners+3+maxStateReadAheadPlanRows || stats.AssetBalanceRows != 0 || stats.AssetPlanFullRows == 0 || stats.AssetCapBlocks != 0 || stats.ProcessedBlocks != 1 {
+		t.Fatalf("full subrow plan exceeded its existing bound or admitted asset reads: %+v", stats)
 	}
 }
 

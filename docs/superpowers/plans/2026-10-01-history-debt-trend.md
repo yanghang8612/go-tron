@@ -1,0 +1,7 @@
+# Cold history debt trend implementation
+
+1. Extend `historyLoadState` with a fixed seven-point array of accepted `(SampledAt, CompactionDebt)` observations; append by shifting at most six entries. Reuse the existing pass mutex. Clear on bad engine observations, resets, or an accepted-sample gap over 90 seconds.
+2. Replace the two-rise pressure decision with the newest geometrically mature suffix in the seven-point window (at least three points and 30 seconds). Only when its net change is positive, extend backward at most six points to find two positive steps and positive extended net under the existing 2 GiB floor. Keep other pressure and unknown-state decisions intact. Use a mature recent nonpositive suffix as additional evidence for recovery hysteresis, without skipping its two/three accepted-sample requirements.
+3. Publish trend point/span/net/positive-step gauges; keep old reason bit positions and rise gauge. Add deterministic controller traces for positive and negative trends, sparse/repeated/invalid observations, unknown device, and recovery. Run focused snapshots tests, snapshots package tests, and race where feasible. Review the final diff against unchanged batch, cooldown, hard-limit and device admission behavior.
+
+Implementation is local to `core/state/snapshots/history_load.go` and its focused tests. This plan does not include online deployment or configuration changes.

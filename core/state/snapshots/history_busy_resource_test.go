@@ -112,9 +112,13 @@ func TestHistoryBusyResourceRequiresIndependentHeadroom(t *testing.T) {
 		{"L0 soft pressure", func(_ *Runner, p *maintenance.StoragePressure) { p.L0Sublevels = 16 }},
 		{"pressure recovery hysteresis", func(r *Runner, _ *maintenance.StoragePressure) { r.historyLoad.level = 1 }},
 		{"compaction debt growth", func(r *Runner, p *maintenance.StoragePressure) {
-			r.historyLoad.debtRises, r.historyLoad.lastDebt = 1, 2<<30
-			r.historyLoad.lastAccepted = p.SampledAt.Add(-6 * time.Second)
-			p.CompactionDebt = 3 << 30
+			last := p.SampledAt
+			for i := 0; i < historyDebtTrendPoints; i++ {
+				p.SampledAt = last.Add(time.Duration(i-6) * 5 * time.Second)
+				p.DeviceSampledAt = p.SampledAt
+				p.CompactionDebt = 3<<30 + uint64(i)*(1<<20)
+				r.refreshHistoryLoad(p.SampledAt)
+			}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
