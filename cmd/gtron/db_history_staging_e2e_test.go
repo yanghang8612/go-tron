@@ -19,6 +19,7 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	corestate "github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -297,6 +298,146 @@ func TestHistoryStagingCLIRealDualPebbleMigration(t *testing.T) {
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("actual Go JSON rejected by Python orchestrator: raw=%s expected job=%s source=%s target=%s python=%s: %v",
 			raw, f.job, source, target, output, err)
+	}
+}
+
+func TestHistoryStagingCLILegacyManifestScopedAdmission(t *testing.T) {
+	f := newHistoryStagingE2EFixture(t)
+	manifest, err := statesnapshots.LoadProductionManifest(f.cold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Chain = nil
+	if err := statesnapshots.PublishManifest(f.cold, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.command(t, "inspect"); err == nil || !strings.Contains(err.Error(), "legacy-manifest-sha256") {
+		t.Fatalf("unbound manifest admitted without explicit pin: %v", err)
+	}
+	f.args = append(f.args, "--legacy-manifest-sha256", strings.Repeat("0", 64))
+	if _, err := f.command(t, "inspect"); err == nil || !strings.Contains(err.Error(), "legacy-manifest-sha256") {
+		t.Fatalf("wrong manifest pin admitted: %v", err)
+	}
+	pin, err := historyStagingFileSHA256(filepath.Join(f.cold, statesnapshots.ManifestFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.args[len(f.args)-1] = pin
+	pristine, err := f.command(t, "inspect", "--verify-pristine")
+	if err != nil || !pristine.Pristine || pristine.Phase != "inspect" {
+		t.Fatalf("pristine preflight: %+v %v", pristine, err)
+	}
+	// The first cold trio endpoint must match the stopped canonical source.
+	hot, err := rawdb.NewPebbleDB(chainDataDir(f.datadir), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, present, err := rawdb.ReadStateTxRange(hot, 1024)
+	if err != nil || !present {
+		t.Fatalf("read endpoint: %v", err)
+	}
+	if err := rawdb.WriteStateTxRange(hot, 1024, common.Hash{1}, endpoint.BeginTxNum, endpoint.EndTxNum); err != nil {
+		t.Fatal(err)
+	}
+	if err := hot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.command(t, "inspect"); err == nil || !strings.Contains(err.Error(), "boundary proof") {
+		t.Fatalf("wrong cold/canonical endpoint admitted: %v", err)
+	}
+	hot, err = rawdb.NewPebbleDB(chainDataDir(f.datadir), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(hot, 1024, endpoint.BlockHash, endpoint.BeginTxNum, endpoint.EndTxNum); err != nil {
+		t.Fatal(err)
+	}
+	if err := hot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.command(t, "inspect"); err != nil {
+		t.Fatalf("valid scoped cold admission: %v", err)
+	}
+	var coldHistoryPath string
+	for _, ref := range manifest.Segments {
+		if ref.Kind == statesnapshots.SegmentHistory &&
+			ref.NormalizedDataset() == statesnapshots.SegmentDatasetStateDomainChange {
+			coldHistoryPath = filepath.Join(f.cold, ref.Path)
+			break
+		}
+	}
+	if coldHistoryPath == "" {
+		t.Fatal("fixture has no cold state-history segment")
+	}
+	coldBytes, err := os.ReadFile(coldHistoryPath)
+	if err != nil || len(coldBytes) == 0 {
+		t.Fatalf("read cold history: %v", err)
+	}
+	coldBytes[len(coldBytes)-1] ^= 1
+	if err := os.WriteFile(coldHistoryPath, coldBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.command(t, "migrate", "--max-buckets", "0"); err == nil {
+		t.Fatal("corrupt cold history admitted by full migration proof")
+	}
+	coldBytes[len(coldBytes)-1] ^= 1
+	if err := os.WriteFile(coldHistoryPath, coldBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := f.command(t, "migrate", "--max-buckets", "0")
+	if err != nil || plan.PlanID == "" {
+		t.Fatalf("unbound plan: %+v %v", plan, err)
+	}
+	if _, err := f.command(t, "inspect", "--verify-pristine"); err == nil {
+		t.Fatal("planned migration still reported pristine")
+	}
+	if _, err := f.command(t, "apply", "--plan-id", plan.PlanID); err != nil {
+		t.Fatal(err)
+	}
+	if verified, err := f.command(t, "inspect", "--verify-complete", "--plan-id", plan.PlanID); err != nil || !verified.VerifiedComplete {
+		t.Fatalf("unbound verify complete: %+v %v", verified, err)
+	}
+	finalManifest, err := statesnapshots.LoadProductionManifest(f.cold)
+	if err != nil || finalManifest.Chain != nil {
+		t.Fatalf("scoped admission relabeled global manifest: %+v %v", finalManifest, err)
+	}
+	hot, err = rawdb.NewPebbleDB(chainDataDir(f.datadir), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hot.Close()
+	stage, err := rawdb.NewHistoryStagingPebbleDB(defaultHistoryStagingDir(f.datadir), 16, 16, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stage.Close()
+	identity, present, err := rawdb.ReadHistoryStagingIdentity(hot)
+	if err != nil || !present {
+		t.Fatalf("staging identity: %v", err)
+	}
+	manager, err := rawdb.NewHistoryStagingManager(hot, stage, identity)
+	if err != nil || manager.VerifyIdentity() != nil {
+		t.Fatalf("staging manager: %v", err)
+	}
+	genesis := params.DefaultMainnetGenesis()
+	bc, err := core.NewBlockChainWithAncient(hot, corestate.NewDatabase(rawdb.WrapKeyValueStore(hot)), genesis.Config, rawdb.NoopAncient{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	coldManager, err := statesnapshots.OpenManager(f.cold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc.SetStateCodeColdHistory(coldManager)
+	if err := bc.SetHistoryStagingManager(manager); err != nil {
+		t.Fatal(err)
+	}
+	if err := statesnapshots.BindHistoryStagingColdRetention(f.cold, manager); err != nil {
+		t.Fatal(err)
+	}
+	if err := bc.VerifyHistoryStagingRuntimeReady(context.Background()); err != nil {
+		t.Fatalf("unbound manifest runtime startup: %v", err)
 	}
 }
 

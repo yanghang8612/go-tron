@@ -572,6 +572,7 @@ var (
 	// Independent history-staging metadata. Payload keys in the staging DB
 	// retain their original changeset/chunk/tx-range encoding; these prefixes
 	// are metadata only and never overlap canonical state or shared chunks.
+	historyStagingMetadataPrefix        = []byte("history-staging-")
 	historyStagingIdentityKey           = []byte("history-staging-identity-v1")
 	historyStagingRoutePrefix           = []byte("history-staging-route-v1-")
 	historyStagingClaimPrefix           = []byte("history-staging-claim-v1-")

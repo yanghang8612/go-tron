@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
@@ -53,6 +54,24 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 	}
 	if release != nil {
 		defer release()
+	}
+	if pinned != nil {
+		manifest := pinned.Manifest()
+		if manifest == nil {
+			return errors.New("history staging startup: pinned cold manifest is unavailable")
+		}
+		// Legacy unbound manifests are admitted only for staging state history
+		// through durable route/binding receipts and true ContentID file checks.
+		// Runtime knows the canonical chain, network and genesis, but not the
+		// operator's optional fork-config hash. Check only these primary fields;
+		// offline admission still compares the complete configured identity.
+		if manifest.Chain != nil {
+			if manifest.Chain.ChainID != expectedChain.ChainID ||
+				manifest.Chain.NetworkID != expectedChain.NetworkID ||
+				common.HexToHash(manifest.Chain.GenesisHash) != bc.genesisBlock.Hash() {
+				return errors.New("history staging startup: cold manifest primary chain identity mismatch")
+			}
+		}
 	}
 	// A single large trio can take much longer than a bucket to authenticate.
 	// Report the current bucket on a timer so a silent pre-API startup does not

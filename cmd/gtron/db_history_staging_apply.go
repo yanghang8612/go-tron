@@ -48,7 +48,7 @@ func openHistoryStagingApply(ctx *cli.Context) (_ *historyStagingApplySession, e
 	if err = verifyHistoryStagingPlanInputs(ctx, c, s.source, reader.header); err != nil {
 		return nil, err
 	}
-	s.manifest, err = c.inspectCold(ctx)
+	s.manifest, err = c.inspectCold(ctx, s.source)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +285,9 @@ func runHistoryStagingApply(ctx *cli.Context, action string) error {
 		s.cli.event.Bucket = row.Proof.Bucket
 		progress.completed.Add(1)
 	}
+	if err := verifyHistoryStagingPlanInputs(ctx, s.cli, s.source, s.reader.header); err != nil {
+		return err
+	}
 	progress.stage.Store("emit-durable-result")
 	s.cli.event.Head = s.reader.header.Head.HeadBlock
 	s.cli.event.Solid = s.reader.header.Head.SolidifiedBlock
@@ -421,6 +424,9 @@ func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context, progre
 			return fmt.Errorf("history staging bucket %d remains source-owned", proof.Bucket)
 		}
 		progress.completed.Add(1)
+	}
+	if err := verifyHistoryStagingPlanInputs(ctx, s.cli, s.source, s.reader.header); err != nil {
+		return err
 	}
 	progress.stage.Store("verify-routes")
 	_, err = s.manager.VerifyOfflineRouteCoverage(s.cli.ctx, 1,

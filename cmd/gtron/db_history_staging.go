@@ -31,6 +31,7 @@ func dbHistoryStagingCommand() *cli.Command {
 		&cli.StringFlag{Name: "staging-dir", Usage: "Separate history-staging Pebble directory"},
 		&cli.StringFlag{Name: "job-id", Usage: "Durable 32-hex offline migration job identity"},
 		&cli.StringFlag{Name: "candidate-sha256", Usage: "Required SHA256 of this running gtron executable"},
+		&cli.StringFlag{Name: "legacy-manifest-sha256", Usage: "Exact SHA256 of an unbound local cold manifest for scoped history admission"},
 		&cli.Uint64Flag{Name: "max-row-mib", Value: 16, Usage: "Maximum physical row size in MiB"},
 		&cli.Uint64Flag{Name: "max-bucket-mib", Value: 4096, Usage: "Maximum physical source bucket size in MiB"},
 		&cli.Uint64Flag{Name: "max-batch-mib", Value: 32, Usage: "Maximum copy/delete batch size in MiB"},
@@ -50,7 +51,7 @@ func dbHistoryStagingCommand() *cli.Command {
 				}{rawdb.HistoryStagingFormatVersion, true, 1})
 			}},
 			{Name: "inspect", Usage: "Read-only source/cold inventory or verify a completed plan",
-				Flags:  flags(&cli.BoolFlag{Name: "verify-complete"}, &cli.StringFlag{Name: "plan-id"}),
+				Flags:  flags(&cli.BoolFlag{Name: "verify-complete"}, &cli.BoolFlag{Name: "verify-pristine"}, &cli.StringFlag{Name: "plan-id"}),
 				Action: dbHistoryStagingInspect},
 			{Name: "migrate", Usage: "Freeze a bounded, authenticated JSONL plan without changing either Pebble store",
 				Flags:  flags(&cli.Uint64Flag{Name: "max-buckets", Usage: "Maximum complete buckets; 0 means all"}),
@@ -78,6 +79,7 @@ type historyStagingCLIEvent struct {
 	Bucket           uint64 `json:"bucket,omitempty"`
 	Durable          bool   `json:"durable,omitempty"`
 	VerifiedComplete bool   `json:"verified_complete,omitempty"`
+	Pristine         bool   `json:"pristine,omitempty"`
 	HistoryWindow    uint64 `json:"history_window,omitempty"`
 	PruneMode        string `json:"prune_mode,omitempty"`
 }
@@ -218,6 +220,9 @@ func newHistoryStagingCLIContext(ctx *cli.Context) (*historyStagingCLIContext, e
 	if !historyStagingJobIDPattern.MatchString(job) || !historyStagingSHAPattern.MatchString(claimed) {
 		return nil, errors.New("history staging requires valid --job-id and --candidate-sha256")
 	}
+	if pin := ctx.String("legacy-manifest-sha256"); pin != "" && !historyStagingSHAPattern.MatchString(pin) {
+		return nil, errors.New("history staging legacy manifest pin must be a 64-hex SHA256")
+	}
 	actual, err := runningHistoryStagingExecutableSHA256()
 	if err != nil {
 		return nil, err
@@ -306,7 +311,12 @@ func (c *historyStagingCLIContext) inspectBoundary(ctx *cli.Context, source ethd
 	return boundary, eligible, nil
 }
 
-func (c *historyStagingCLIContext) inspectCold(ctx *cli.Context) (*statesnapshots.Manifest, error) {
+func (c *historyStagingCLIContext) inspectCold(ctx *cli.Context, source ethdb.KeyValueStore) (*statesnapshots.Manifest, error) {
+	manifestPath := filepath.Join(c.paths.Cold, statesnapshots.ManifestFile)
+	beforeSHA, err := historyStagingFileSHA256(manifestPath)
+	if err != nil {
+		return nil, err
+	}
 	manifest, err := statesnapshots.LoadProductionManifest(c.paths.Cold)
 	if err != nil {
 		return nil, err
@@ -319,8 +329,30 @@ func (c *historyStagingCLIContext) inspectCold(ctx *cli.Context) (*statesnapshot
 	if err != nil {
 		return nil, err
 	}
-	if err := manifest.ValidateChainIdentity(expected); err != nil {
-		return nil, err
+	if manifest.Chain != nil {
+		if err := manifest.ValidateChainIdentity(expected); err != nil {
+			return nil, err
+		}
+	} else {
+		if pin := ctx.String("legacy-manifest-sha256"); pin == "" || pin != beforeSHA {
+			return nil, errors.New("history staging unbound cold manifest requires its exact --legacy-manifest-sha256")
+		}
+		ancient, closeAncient, err := openSnapshotPruneAncientReader(ctx.String("datadir"))
+		if err != nil {
+			return nil, err
+		}
+		defer closeAncient()
+		canonical := rawdb.NewChainDB(source, ancient)
+		if err := statesnapshots.VerifyLegacyStateDomainHistoryBoundariesContext(c.ctx,
+			source, c.paths.Cold, manifest, expected, func(number uint64) (common.Hash, bool, error) {
+				return rawdb.ReadBlockHashByNumberStrict(canonical, number)
+			}); err != nil {
+			return nil, fmt.Errorf("history staging legacy cold boundary proof: %w", err)
+		}
+	}
+	afterSHA, err := historyStagingFileSHA256(manifestPath)
+	if err != nil || beforeSHA != afterSHA {
+		return nil, errors.New("history staging cold manifest changed during admission")
 	}
 	return manifest, nil
 }
@@ -330,9 +362,14 @@ func dbHistoryStagingInspect(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	if ctx.Bool("verify-complete") && ctx.Bool("verify-pristine") {
+		return errors.New("history staging inspect cannot combine complete and pristine checks")
+	}
 	if ctx.Bool("verify-complete") {
 		return verifyHistoryStagingComplete(ctx)
 	}
+	progress := startHistoryStagingCLIProgress(ctx.App.ErrWriter, "inspect", "inspect-boundary", 30*time.Second)
+	defer progress.close()
 	source, err := c.openSource()
 	if err != nil {
 		return err
@@ -342,7 +379,18 @@ func dbHistoryStagingInspect(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.inspectCold(ctx); err != nil {
+	if ctx.Bool("verify-pristine") {
+		progress.stage.Store("verify-pristine")
+		if err := c.verifyPristine(source, ctx.String("datadir")); err != nil {
+			return err
+		}
+		c.event.Pristine = true
+		c.event.Head, c.event.Solid, c.event.EligibleThrough =
+			boundary.HeadBlock, boundary.SolidifiedBlock, eligible
+		return c.emit("inspect")
+	}
+	progress.stage.Store("cold-admission")
+	if _, err := c.inspectCold(ctx, source); err != nil {
 		return err
 	}
 	c.event.Head, c.event.Solid, c.event.EligibleThrough =
@@ -366,7 +414,7 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	manifest, err := c.inspectCold(ctx)
+	manifest, err := c.inspectCold(ctx, source)
 	if err != nil {
 		return err
 	}
@@ -398,7 +446,14 @@ func dbHistoryStagingMigrate(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	chain := manifest.Chain
+	forkHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return err
+	}
+	chain, err := snapshotExpectedChainIdentityFromContext(ctx, forkHash)
+	if err != nil {
+		return err
+	}
 	if chain.NetworkID < 0 {
 		return errors.New("history staging manifest network ID is negative")
 	}

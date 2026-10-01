@@ -19,9 +19,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-// HistoryStagingColdProver amortizes full immutable-trio authentication across
-// adjacent buckets in one pinned manifest. Construct a fresh prover after a
-// manifest change; a successful cached audit is never reused across epochs.
+// HistoryStagingColdProver amortizes full immutable state-history-trio
+// authentication across adjacent buckets in one pinned manifest. It does not
+// grant a legacy manifest chain identity: callers must separately establish
+// canonical block hashes and tx ranges for each bucket before admitting its
+// semantic proof. Construct a fresh prover after a manifest change; a
+// successful cached audit is never reused across epochs.
 type HistoryStagingColdProver struct {
 	dir      string
 	manifest *Manifest
@@ -291,8 +294,8 @@ func (s historyStagingFileState) same(other historyStagingFileState) bool {
 const historyStagingProofMaxRecords = 4_000_000
 
 func NewHistoryStagingColdProver(dir string, manifest *Manifest) (*HistoryStagingColdProver, error) {
-	if dir == "" || manifest == nil || manifest.Chain == nil {
-		return nil, errors.New("snapshots: history staging requires an authenticated chain manifest")
+	if dir == "" || manifest == nil {
+		return nil, errors.New("snapshots: history staging requires a production manifest")
 	}
 	if err := manifest.ValidateProduction(); err != nil {
 		return nil, err

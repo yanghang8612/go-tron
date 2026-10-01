@@ -16,6 +16,12 @@ commit，由 root 执行：
   --sha256 64位二进制SHA256
 ```
 
+若旧版生产 `manifest.json` 没有 `Chain` 元数据，必须额外传入停机后该文件的
+精确 SHA256：`--legacy-manifest-sha256 64位manifestSHA256`。新版 CLI
+仅在该显式 SHA 匹配时使用旧版边界认证，并继续逐桶核对冷文件 checksum、
+语义、canonical hash 和 txrange；不会给旧 manifest 补写或伪造 Chain。
+每次 `inspect`、`migrate`、`apply`、`resume` 都重新检查这份 SHA 和边界。
+
 首次 staged reader 启动要重新认证已发布冷段；认证缓存仅在当前进程内，
 不能沿用旧库的 180 秒健康等待。迁移及后续主网发布默认给一次启动
 12 小时的有界等待，旧库仍为 180 秒。预封锁安装的
@@ -47,6 +53,25 @@ canonical/Finish/Index/solid/retention 和冷段语义校验通过，编排器�
 /usr/bin/python3 /data/gtron/go-tron/scripts/history_staging_migrate.py resume \
   --job-id 32位jobID
 ```
+
+仅在首个 `inspect` 失败、尚无 plan 或任何迁移写入，且 gtron、部署服务及
+timer 都已停止时，可以由 root 给同一 job 更换经过审查的新候选：
+
+```bash
+/usr/bin/python3 /data/gtron/go-tron/scripts/history_staging_migrate.py repin-preplan \
+  --job-id 原32位jobID --candidate /absolute/path/to/new/gtron \
+  --source 新40位Git提交SHA --sha256 新64位二进制SHA256 \
+  --legacy-manifest-sha256 停机manifest的64位SHA256
+```
+
+编排器独占启动锁与三库锁、核对停机 manifest 的真实字节和固定候选能力，
+再由新 CLI `inspect --verify-pristine` 只读证明热库无 staging 元数据、
+目标库无 `CURRENT`、计划目录无已发布计划或摘要。任一证明失败就不换针。
+成功后按持久 repin intent、旧版启动 PREPARED pin、新 latch 的顺序原子
+写入；旧版二进制 pin、job ID 和原服务/timer 意图保持不变。写入中断时
+保留 intent，同一组参数重复 `repin-preplan` 收敛，普通 `resume` 会拒绝
+越过未完成换针。换针成功后再用原 job ID 执行上面的 `resume`；换针本身
+不执行计划、复制、服务启动或 timer 恢复。
 
 计划仅迁移部分 bucket 时不能通过完整验收，也不能激活 staged reader。
 不要用旧版二进制或旧版发布脚本绕过 latch；正常发布和回滚必须通过

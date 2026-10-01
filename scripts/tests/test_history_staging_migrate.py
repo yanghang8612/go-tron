@@ -1,6 +1,7 @@
 """Fail-closed migration orchestration tests without touching the host."""
 
 import importlib.util
+from contextlib import ExitStack
 import io
 import json
 from pathlib import Path
@@ -21,6 +22,206 @@ SPEC.loader.exec_module(migrate)
 
 
 class HistoryStagingMigrateTests(unittest.TestCase):
+    def repin_fixture(self, root):
+        source, target, cold = (root / name for name in ('source', 'target', 'cold'))
+        for path in (source, target, cold):
+            path.mkdir()
+        (cold / 'manifest.json').write_bytes(b'unchanged legacy manifest')
+        legacy_sha = migrate.sha_file(cold / 'manifest.json')
+        paths = {'source': str(source), 'target': str(target), 'cold': str(cold)}
+        latch = {'version': 1, 'state': 'MIGRATION_IN_PROGRESS',
+                 'job_id': 'a' * 32, 'source_commit': 'b' * 40,
+                 'candidate_sha256': 'c' * 64, 'candidate': str(root / 'old'),
+                 'service_was_active': True, 'timer_was_active': True,
+                 'timer_was_enabled': True, 'staging_health_timeout_sec': 43200,
+                 'source_config_args': [], 'source_config_sha256': '', **paths}
+        prepared = {'version': 1, 'legacy_binary_sha256': 'd' * 64,
+                    'candidate_sha256': latch['candidate_sha256'],
+                    'source_commit': latch['source_commit'],
+                    'service_was_active': True, 'timer_was_active': True,
+                    'timer_was_enabled': True, **paths}
+        latch_path = root / 'HISTORY_STAGING_MIGRATION.json'
+        prepared_path = root / 'HISTORY_STAGING_PREPARED.json'
+        required_path = root / 'HISTORY_STAGING_REQUIRED.json'
+        latch_path.write_text(json.dumps(latch))
+        prepared_path.write_text(json.dumps(prepared))
+        for name in ('guard', 'dropin', 'start.sh'):
+            (root / name).touch()
+        return latch, prepared, paths, legacy_sha, latch_path, prepared_path, required_path
+
+    def repin_patches(self, root, paths, latch_path, prepared_path, required_path, cli):
+        def root_bytes(path, limit):
+            data = Path(path).read_bytes()
+            self.assertLessEqual(len(data), limit)
+            return data, 0o644
+        def atomic(path, value):
+            Path(path).write_text(json.dumps(value))
+        return [mock.patch.object(migrate.os, 'geteuid', return_value=0),
+                mock.patch.object(migrate, 'APP', root),
+                mock.patch.object(migrate, 'GUARD_INSTALL', root / 'guard'),
+                mock.patch.object(migrate, 'DROPIN', root / 'dropin'),
+                mock.patch.object(migrate, 'LOCK', root / 'start.lock'),
+                mock.patch.object(migrate, 'REPIN_INTENT', root / 'REPIN_INTENT.json'),
+                mock.patch.object(migrate.release, 'STAGING_LATCH', latch_path),
+                mock.patch.object(migrate.release, 'STAGING_PREPARED', prepared_path),
+                mock.patch.object(migrate.release, 'STAGING_REQUIRED', required_path),
+                mock.patch.object(migrate.release, 'root_bytes', side_effect=root_bytes),
+                mock.patch.object(migrate, 'canonical_paths', return_value=paths),
+                mock.patch.object(migrate, 'flock_file'),
+                mock.patch.object(migrate, 'storage_locks'),
+                mock.patch.object(migrate, 'verify_stopped'),
+                mock.patch.object(migrate, 'pinned_candidate', return_value=root / 'new'),
+                mock.patch.object(migrate, 'cli_result', side_effect=cli),
+                mock.patch.object(migrate, 'atomic_json', side_effect=atomic)]
+
+    def test_repin_preplan_preserves_original_intent_and_requires_pristine(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, prepared, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                self.repin_fixture(root)
+            calls = []
+            def cli(probe, action, *options):
+                calls.append((probe['source_commit'], action, options,
+                              probe['legacy_manifest_sha256']))
+                return {'phase': 'inspect', 'pristine': True}
+            patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                         required_path, cli)
+            with ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                result = migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                               'f' * 64, legacy_sha)
+                self.assertTrue(result['pristine'])
+                self.assertEqual(calls, [('e' * 40, 'inspect', ('--verify-pristine',), legacy_sha)])
+                updated = json.loads(latch_path.read_text())
+                self.assertEqual(updated['job_id'], old['job_id'])
+                self.assertEqual(updated['service_was_active'], old['service_was_active'])
+                self.assertEqual(updated['timer_was_enabled'], old['timer_was_enabled'])
+                self.assertEqual(updated['legacy_manifest_sha256'], legacy_sha)
+                self.assertEqual(json.loads(prepared_path.read_text())['legacy_binary_sha256'],
+                                 prepared['legacy_binary_sha256'])
+                self.assertFalse((root / 'REPIN_INTENT.json').exists())
+
+    def test_repin_preplan_crash_after_prepared_retries_same_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, _, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                self.repin_fixture(root)
+            def cli(probe, action, *options):
+                return {'phase': 'inspect', 'pristine': True}
+            patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                         required_path, cli)
+            with ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                with mock.patch.object(migrate, 'write_latch', side_effect=RuntimeError('power loss')):
+                    with self.assertRaisesRegex(RuntimeError, 'power loss'):
+                        migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                              'f' * 64, legacy_sha)
+                self.assertTrue((root / 'REPIN_INTENT.json').exists())
+                self.assertEqual(json.loads(latch_path.read_text())['candidate_sha256'], 'c' * 64)
+                self.assertEqual(json.loads(prepared_path.read_text())['candidate_sha256'], 'f' * 64)
+                with self.assertRaisesRegex(RuntimeError, 'different durable repin intent'):
+                    migrate.repin_preplan(old['job_id'], root / 'new', '1' * 40,
+                                          '2' * 64, legacy_sha)
+                migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                      'f' * 64, legacy_sha)
+                self.assertEqual(json.loads(latch_path.read_text())['candidate_sha256'], 'f' * 64)
+                self.assertFalse((root / 'REPIN_INTENT.json').exists())
+
+    def test_repin_preplan_each_durable_write_boundary_retries(self):
+        for boundary in ('intent', 'prepared', 'latch'):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, prepared, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                    self.repin_fixture(root)
+                patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                             required_path,
+                                             lambda *args: {'phase': 'inspect', 'pristine': True})
+                with ExitStack() as stack:
+                    for patch in patches:
+                        stack.enter_context(patch)
+                    target = {'intent': root / 'REPIN_INTENT.json',
+                              'prepared': prepared_path, 'latch': latch_path}[boundary]
+                    tripped = [False]
+                    def interrupt_after_write(path, value):
+                        Path(path).write_text(json.dumps(value))
+                        if Path(path) == target and not tripped[0]:
+                            tripped[0] = True
+                            raise RuntimeError('simulated power loss')
+                    with mock.patch.object(migrate, 'atomic_json',
+                                           side_effect=interrupt_after_write):
+                        with self.assertRaisesRegex(RuntimeError, 'simulated power loss'):
+                            migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                                  'f' * 64, legacy_sha)
+                    self.assertTrue((root / 'REPIN_INTENT.json').exists())
+                    migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                          'f' * 64, legacy_sha)
+                    self.assertFalse((root / 'REPIN_INTENT.json').exists())
+                    self.assertEqual(json.loads(latch_path.read_text())['candidate_sha256'],
+                                     'f' * 64)
+                    self.assertEqual(json.loads(prepared_path.read_text())['candidate_sha256'],
+                                     'f' * 64)
+                    self.assertEqual(json.loads(prepared_path.read_text())['legacy_binary_sha256'],
+                                     prepared['legacy_binary_sha256'])
+
+    def test_repin_preplan_rejects_unproven_or_started_work_without_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, prepared, paths, legacy_sha, latch_path, prepared_path, required_path = \
+                self.repin_fixture(root)
+            patches = self.repin_patches(root, paths, latch_path, prepared_path,
+                                         required_path,
+                                         lambda *args: {'phase': 'inspect', 'pristine': False})
+            with ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                with self.assertRaisesRegex(RuntimeError, 'did not prove'):
+                    migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                          'f' * 64, legacy_sha)
+                self.assertEqual(json.loads(latch_path.read_text()), old)
+                self.assertEqual(json.loads(prepared_path.read_text()), prepared)
+                self.assertFalse((root / 'REPIN_INTENT.json').exists())
+                with self.assertRaisesRegex(RuntimeError, 'manifest SHA differs'):
+                    migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                          'f' * 64, '0' * 64)
+                planned = dict(old, plan_id='1' * 64)
+                latch_path.write_text(json.dumps(planned))
+                with self.assertRaisesRegex(RuntimeError, 'unfinished pre-plan'):
+                    migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                          'f' * 64, legacy_sha)
+                latch_path.write_text(json.dumps(old))
+                with mock.patch.object(migrate, 'verify_stopped',
+                                       side_effect=RuntimeError('gtron.service still active')):
+                    with self.assertRaisesRegex(RuntimeError, 'still active'):
+                        migrate.repin_preplan(old['job_id'], root / 'new', 'e' * 40,
+                                              'f' * 64, legacy_sha)
+                self.assertEqual(json.loads(latch_path.read_text()), old)
+                self.assertEqual(json.loads(prepared_path.read_text()), prepared)
+
+    def test_cli_result_passes_explicit_legacy_manifest_sha(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            latch = {'candidate': '/candidate', 'job_id': 'a' * 32,
+                     'candidate_sha256': 'b' * 64, 'legacy_manifest_sha256': 'c' * 64,
+                     'source': '/source', 'target': '/target', 'cold': '/cold',
+                     'source_config_args': [], 'source_config_sha256': ''}
+            commands = []
+            def stream(commandline, output, identity, action):
+                commands.append(commandline)
+                output.write((json.dumps({'version': 1, 'phase': action,
+                                          'job_id': identity['job_id'],
+                                          'candidate_sha256': identity['candidate_sha256'],
+                                          'source': identity['source'],
+                                          'target': identity['target']}) + '\n').encode())
+                return 0, b''
+            with mock.patch.object(migrate, 'stream_cli_stderr', side_effect=stream):
+                migrate.cli_result(latch, 'inspect', '--verify-pristine')
+            self.assertIn('--legacy-manifest-sha256', commands[0])
+            self.assertEqual(commands[0][commands[0].index('--legacy-manifest-sha256') + 1],
+                             'c' * 64)
+            self.assertIn('--verify-pristine', commands[0])
+
     def test_cli_stderr_heartbeat_is_visible_before_process_completes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

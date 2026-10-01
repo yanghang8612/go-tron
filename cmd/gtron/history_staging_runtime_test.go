@@ -91,6 +91,15 @@ func TestHistoryStagingFreshIdentitySurvivesRestartWithoutMarker(t *testing.T) {
 	if err := publishFreshHistoryStagingBarrier(manager, second.ExecutableSHA256, 0, genesisHash, genesisHash); err != nil {
 		t.Fatal(err)
 	}
+	// The runtime has no configured fork-config digest. A bound manifest may
+	// carry one, while its primary chain fields still have to match hot state.
+	chain := statesnapshots.ChainIdentity{ChainID: genesis.Config.ChainID,
+		NetworkID: int32(params.MainnetNetworkID), GenesisHash: genesisHash.Hex(),
+		ForkConfigHash: "sha256:" + strings.Repeat("a", 64)}
+	manifest := statesnapshots.NewManifestForChain(0, 0, nil, chain)
+	if err := statesnapshots.PublishManifest(second.Paths.Cold, manifest); err != nil {
+		t.Fatal(err)
+	}
 	coldManager, err := statesnapshots.OpenManager(second.Paths.Cold)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +118,20 @@ func TestHistoryStagingFreshIdentitySurvivesRestartWithoutMarker(t *testing.T) {
 	}
 	if err := bc.VerifyHistoryStagingRuntimeReady(context.Background()); err != nil {
 		t.Fatalf("restarted staged reader preflight: %v", err)
+	}
+	for _, wrong := range []statesnapshots.ChainIdentity{
+		{ChainID: chain.ChainID + 1, NetworkID: chain.NetworkID, GenesisHash: chain.GenesisHash, ForkConfigHash: chain.ForkConfigHash},
+		{ChainID: chain.ChainID, NetworkID: chain.NetworkID + 1, GenesisHash: chain.GenesisHash, ForkConfigHash: chain.ForkConfigHash},
+		{ChainID: chain.ChainID, NetworkID: chain.NetworkID, GenesisHash: strings.Repeat("b", 64), ForkConfigHash: chain.ForkConfigHash},
+	} {
+		manifest.Chain = &wrong
+		if err := statesnapshots.PublishManifest(second.Paths.Cold, manifest); err != nil {
+			t.Fatal(err)
+		}
+		if err := bc.VerifyHistoryStagingRuntimeReady(context.Background()); err == nil ||
+			!strings.Contains(err.Error(), "primary chain identity mismatch") {
+			t.Fatalf("wrong primary chain identity accepted: %+v: %v", wrong, err)
+		}
 	}
 }
 

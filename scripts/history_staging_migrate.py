@@ -47,6 +47,7 @@ HEX40 = re.compile(r'[0-9a-f]{40}\Z')
 HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 CLI_STDERR_LIMIT = 16 << 20
 CLI_RUN_TIMEOUT = 24 * 60 * 60
+REPIN_INTENT = MAIN / 'HISTORY_STAGING_REPIN_INTENT.json'
 
 
 def require(ok, message):
@@ -122,6 +123,10 @@ def safe_identity(data):
             all(isinstance(arg, str) for arg in data['source_config_args']) and
             isinstance(data.get('source_config_sha256'), str),
             'invalid durable migration latch')
+    if 'legacy_manifest_sha256' in data:
+        require(isinstance(data['legacy_manifest_sha256'], str) and
+                HEX64.fullmatch(data['legacy_manifest_sha256']),
+                'invalid pinned legacy manifest SHA')
     for key in ('source', 'target', 'cold', 'candidate'):
         require(isinstance(data.get(key), str) and os.path.isabs(data[key]),
                 'migration latch lacks absolute ' + key)
@@ -186,6 +191,69 @@ def remove_latch():
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def remove_durable_file(path):
+    os.unlink(path)
+    fd = os.open(str(path.parent), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def stable_manifest_sha(path):
+    """Hash the stopped manifest without accepting a symlink or concurrent rewrite."""
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode), 'legacy cold manifest is not regular')
+        digest = hashlib.sha256()
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            while True:
+                chunk = stream.read(1 << 20)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        after = os.fstat(fd)
+        named = os.stat(str(path), follow_symlinks=False)
+        require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) ==
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) ==
+                (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns),
+                'legacy cold manifest changed while hashing')
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def read_prepared():
+    raw, _ = release.root_bytes(release.STAGING_PREPARED, 16384)
+    prepared = json.loads(raw)
+    require(isinstance(prepared, dict) and prepared.get('version') == VERSION and
+            isinstance(prepared.get('legacy_binary_sha256'), str) and
+            HEX64.fullmatch(prepared['legacy_binary_sha256']),
+            'invalid existing prepared reader fence')
+    return prepared
+
+
+def repin_identity(latch):
+    return {key: latch[key] for key in ('job_id', 'source_commit', 'candidate_sha256',
+                                        'candidate', 'source', 'target', 'cold')}
+
+
+def read_repin_intent():
+    if not os.path.lexists(REPIN_INTENT):
+        return None
+    raw, _ = release.root_bytes(REPIN_INTENT, 16384)
+    intent = json.loads(raw)
+    require(isinstance(intent, dict) and intent.get('version') == VERSION and
+            intent.get('state') == 'REPIN_PREPLAN' and
+            isinstance(intent.get('old'), dict) and
+            isinstance(intent.get('new'), dict) and
+            isinstance(intent.get('legacy_manifest_sha256'), str) and
+            HEX64.fullmatch(intent['legacy_manifest_sha256']),
+            'invalid durable pre-plan repin intent')
+    return intent
 
 
 def install_checked(source, destination, mode):
@@ -279,8 +347,10 @@ def cli_result(latch, action, *options):
     commandline = [latch['candidate'], 'db', 'history-staging', action,
                    '--datadir', str(DATADIR), '--staging-dir', latch['target'],
                    '--snapshot.dir', latch['cold'], '--job-id', latch['job_id'],
-                   '--candidate-sha256', latch['candidate_sha256'],
-                   *latch['source_config_args'], *options]
+                   '--candidate-sha256', latch['candidate_sha256']]
+    if latch.get('legacy_manifest_sha256'):
+        commandline.extend(['--legacy-manifest-sha256', latch['legacy_manifest_sha256']])
+    commandline.extend([*latch['source_config_args'], *options])
     last = None
     with tempfile.TemporaryFile() as output:
         returncode, error_tail = stream_cli_stderr(commandline, output, latch, action)
@@ -375,6 +445,8 @@ def restore_timer(latch):
 
 def finalize_done(job_id):
     """Resume the timer-intent tail after the durable latch was removed."""
+    require(not os.path.lexists(REPIN_INTENT),
+            'pending pre-plan repin intent blocks completion and timer restoration')
     raw, _ = release.root_bytes(MAIN / 'HISTORY_STAGING_MIGRATION_DONE.json', 16384)
     done = json.loads(raw)
     require(isinstance(done, dict) and done.get('version') == VERSION and
@@ -402,6 +474,8 @@ def finalize_done(job_id):
 
 
 def migrate_under_latch(latch):
+    require(not os.path.lexists(REPIN_INTENT),
+            'pending pre-plan repin intent requires an exact repin-preplan retry')
     cli_result(latch, 'inspect')
     if latch.get('state') == 'MIGRATION_IN_PROGRESS':
         if latch.get('plan_id'):
@@ -451,10 +525,105 @@ def migrate_under_latch(latch):
     return finalize_done(latch['job_id'])
 
 
-def run_new(candidate, source_commit, expected_sha, health_timeout=None):
+def repin_preplan(job_id, candidate, source_commit, expected_sha, legacy_manifest_sha):
+    """Replace only a failed, provably pristine pre-plan candidate under the latch."""
     require(os.geteuid() == 0, 'root required')
-    require(not os.path.lexists(release.STAGING_LATCH) and
+    require(re.fullmatch(r'[0-9a-f]{32}', job_id or '') is not None and
+            isinstance(source_commit, str) and HEX40.fullmatch(source_commit) and
+            isinstance(expected_sha, str) and HEX64.fullmatch(expected_sha) and
+            isinstance(legacy_manifest_sha, str) and HEX64.fullmatch(legacy_manifest_sha),
+            'invalid pre-plan repin identity')
+    require(os.path.lexists(release.STAGING_LATCH) and
             not os.path.lexists(release.STAGING_REQUIRED),
+            'repin requires an unfinished migration latch without an active reader')
+    # This command never stops units: a running writer or deploy is a hard error.
+    for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+        verify_stopped(unit)
+    with ExitStack() as stack:
+        flock_file(stack, LOCK)
+        for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+            verify_stopped(unit)
+        latch = load_latch()
+        require(latch['job_id'] == job_id and latch['state'] == 'MIGRATION_IN_PROGRESS' and
+                not latch.get('plan_id'),
+                'repin requires the same unfinished pre-plan migration job')
+        require(canonical_paths() == {key: latch[key] for key in ('source', 'target', 'cold')},
+                'repin storage paths differ from durable latch')
+        storage_locks(stack, latch)
+        prepared = read_prepared()
+        require(all(prepared.get(key) == latch[key] for key in
+                    ('source', 'target', 'cold', 'service_was_active',
+                     'timer_was_active', 'timer_was_enabled')),
+                'prepared reader fence differs from original migration intent')
+        require(GUARD_INSTALL.is_file() and DROPIN.is_file() and
+                (APP / 'start.sh').is_file(),
+                'persistent startup/deployment guards are missing')
+        manifest = Path(latch['cold']) / 'manifest.json'
+        require(stable_manifest_sha(manifest) == legacy_manifest_sha,
+                'legacy cold manifest SHA differs from stopped bytes')
+
+        intent = read_repin_intent()
+        old_identity = repin_identity(latch) if intent is None else intent['old']
+        new_identity = dict(old_identity, source_commit=source_commit,
+                            candidate_sha256=expected_sha)
+        if intent is not None:
+            require(intent['job_id'] == job_id and intent['old'] == old_identity and
+                    intent['new'].get('source_commit') == source_commit and
+                    intent['new'].get('candidate_sha256') == expected_sha and
+                    intent['legacy_manifest_sha256'] == legacy_manifest_sha,
+                    'a different durable repin intent is pending')
+            new_identity = intent['new']
+        require(repin_identity(latch) in (old_identity, new_identity),
+                'latch is neither the old nor the pending new candidate')
+        require((prepared.get('source_commit'), prepared.get('candidate_sha256')) in
+                ((old_identity['source_commit'], old_identity['candidate_sha256']),
+                 (new_identity['source_commit'], new_identity['candidate_sha256'])),
+                'prepared fence is neither the old nor the pending new candidate')
+        pinned = pinned_candidate(Path(candidate), source_commit, expected_sha)
+        require(intent is None or str(pinned) == new_identity['candidate'],
+                'repin retry candidate path differs from durable intent')
+        new_identity['candidate'] = str(pinned)
+        probe = dict(latch, source_commit=source_commit, candidate_sha256=expected_sha,
+                     candidate=str(pinned), legacy_manifest_sha256=legacy_manifest_sha)
+        result = cli_result(probe, 'inspect', '--verify-pristine')
+        require(result.get('pristine') is True,
+                'new candidate did not prove the old job is pristine')
+        require(stable_manifest_sha(manifest) == legacy_manifest_sha,
+                'legacy cold manifest changed during pristine inspection')
+        for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+            verify_stopped(unit)
+
+        if intent is None:
+            intent = {'version': VERSION, 'state': 'REPIN_PREPLAN', 'job_id': job_id,
+                      'old': old_identity, 'new': new_identity,
+                      'legacy_manifest_sha256': legacy_manifest_sha}
+            atomic_json(REPIN_INTENT, intent)
+        revised_prepared = dict(prepared, source_commit=source_commit,
+                                candidate_sha256=expected_sha)
+        atomic_json(release.STAGING_PREPARED, revised_prepared)
+        revised_latch = dict(latch, source_commit=source_commit,
+                             candidate_sha256=expected_sha, candidate=str(pinned),
+                             legacy_manifest_sha256=legacy_manifest_sha)
+        write_latch(revised_latch)
+        require(repin_identity(load_latch()) == new_identity and
+                read_prepared() == revised_prepared,
+                'durable pre-plan repin did not converge')
+        remove_durable_file(REPIN_INTENT)
+        return {'version': VERSION, 'phase': 'repin-preplan', 'job_id': job_id,
+                'source_commit': source_commit, 'candidate_sha256': expected_sha,
+                'candidate': str(pinned), 'legacy_manifest_sha256': legacy_manifest_sha,
+                'pristine': True}
+
+
+def run_new(candidate, source_commit, expected_sha, health_timeout=None,
+            legacy_manifest_sha=None):
+    require(os.geteuid() == 0, 'root required')
+    require(legacy_manifest_sha is None or
+            isinstance(legacy_manifest_sha, str) and HEX64.fullmatch(legacy_manifest_sha),
+            'invalid explicit legacy manifest SHA')
+    require(not os.path.lexists(release.STAGING_LATCH) and
+            not os.path.lexists(release.STAGING_REQUIRED) and
+            not os.path.lexists(REPIN_INTENT),
             'migration already entered or reader already active; use resume')
     paths = canonical_paths()
     pinned = pinned_candidate(Path(candidate), source_commit, expected_sha)
@@ -492,6 +661,8 @@ def run_new(candidate, source_commit, expected_sha, health_timeout=None):
                          staging_health_timeout_sec=health_timeout,
                          source_config_args=config_args,
                          source_config_sha256=config_sha)
+            if legacy_manifest_sha is not None:
+                latch['legacy_manifest_sha256'] = legacy_manifest_sha
             write_latch(latch)
             entered = True
             systemctl('stop', SERVICE, timeout=650)
@@ -521,6 +692,8 @@ def resume(job_id):
             'invalid resume job ID')
     if not os.path.lexists(release.STAGING_LATCH):
         return finalize_done(job_id)
+    require(not os.path.lexists(REPIN_INTENT),
+            'durable repin is pending; retry repin-preplan with the same job/candidate/source/SHA')
     latch = load_latch()
     require(latch['job_id'] == job_id and
             release.root_sha(latch['candidate']) == latch['candidate_sha256'] and
@@ -555,16 +728,29 @@ def main():
     start.add_argument('--sha256', required=True)
     start.add_argument('--staging-health-timeout-sec',
                        help='bounded capable-reader health wait (600..86400 seconds; default 43200)')
+    start.add_argument('--legacy-manifest-sha256',
+                       help='exact stopped legacy cold manifest SHA; required when Chain is absent')
     again = modes.add_parser('resume')
     again.add_argument('--job-id', required=True)
+    repin = modes.add_parser('repin-preplan')
+    repin.add_argument('--job-id', required=True)
+    repin.add_argument('--candidate', type=Path, required=True)
+    repin.add_argument('--source', required=True)
+    repin.add_argument('--sha256', required=True)
+    repin.add_argument('--legacy-manifest-sha256', required=True)
     args = parser.parse_args()
-    require(args.mode in ('run', 'resume'), 'run or resume action required')
+    require(args.mode in ('run', 'resume', 'repin-preplan'),
+            'run, resume or repin-preplan action required')
     if args.mode == 'run':
         health_timeout = (release.staging_health_timeout(args.staging_health_timeout_sec)
                           if args.staging_health_timeout_sec is not None else None)
-        result = run_new(args.candidate, args.source, args.sha256, health_timeout)
-    else:
+        result = run_new(args.candidate, args.source, args.sha256, health_timeout,
+                         args.legacy_manifest_sha256)
+    elif args.mode == 'resume':
         result = resume(args.job_id)
+    else:
+        result = repin_preplan(args.job_id, args.candidate, args.source,
+                               args.sha256, args.legacy_manifest_sha256)
     print(json.dumps(result, sort_keys=True))
 
 
@@ -576,8 +762,12 @@ if __name__ == '__main__':
         if os.path.lexists(release.STAGING_LATCH):
             try:
                 latch = load_latch()
-                print('resume: /usr/bin/python3 ' + sys.argv[0] + ' resume --job-id ' +
-                      latch['job_id'], file=sys.stderr)
+                if os.path.lexists(REPIN_INTENT):
+                    print('durable repin is pending; retry repin-preplan with its exact arguments',
+                          file=sys.stderr)
+                else:
+                    print('resume: /usr/bin/python3 ' + sys.argv[0] + ' resume --job-id ' +
+                          latch['job_id'], file=sys.stderr)
             except Exception:
                 print('migration latch remains; inspect it before any restart',
                       file=sys.stderr)
