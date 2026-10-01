@@ -16,7 +16,7 @@ RUN_TESTS="${RUN_TESTS:-1}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 MAINNET_RELEASE_HELPER="/usr/local/libexec/gtron-mainnet-release.py"
 MAINNET_STAGING_GUARD="/usr/local/libexec/gtron-history-staging-guard.py"
-MAINNET_STAGING_REQUIRED="${MAINNET_STAGING_REQUIRED:-/data/gtron/main/HISTORY_STAGING_READER_REQUIRED.json}"
+MAINNET_STAGING_REQUIRED="$APP_ROOT/main/HISTORY_STAGING_READER_REQUIRED.json"
 release_health_arg=()
 
 log() {

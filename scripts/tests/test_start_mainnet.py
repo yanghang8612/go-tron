@@ -39,11 +39,11 @@ class StartMainnetTests(unittest.TestCase):
             fake('curl', 'exit 0')
             fake('make', 'echo "make $*" >> "$MOCK_CALLS"\nexit 7')
             env = os.environ.copy()
-            required = root / 'reader-required.json'
+            required = root / 'main' / 'HISTORY_STAGING_READER_REQUIRED.json'
             if staged:
+                required.parent.mkdir()
                 required.write_text('{}')
             env.update({'APP_ROOT': str(root), 'REPO_DIR': str(repo),
-                        'MAINNET_STAGING_REQUIRED': str(required),
                         'STATE_FILE': str(root / 'deployed.rev'),
                         'LOCK_FILE': str(root / 'start.lock'),
                         'LOG_FILE': str(root / 'start.log'),
