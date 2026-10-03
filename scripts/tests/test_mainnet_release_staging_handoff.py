@@ -276,6 +276,15 @@ class RootOwnershipHandoffTests(unittest.TestCase):
                         fcntl.flock(fd, fcntl.LOCK_EX)
                         held.append(fd)
                     for interrupt in (True, False):
+                        if not interrupt:
+                            # Preserve the exact locked inode while exercising the
+                            # production deployment account's shared 0644 layout.
+                            before = os.fstat(held[0])
+                            os.fchown(held[0], user.pw_uid, group.gr_gid)
+                            os.fchmod(held[0], 0o644)
+                            after = os.stat(str(start_lock), follow_symlinks=False)
+                            self.assertEqual((before.st_dev, before.st_ino),
+                                             (after.st_dev, after.st_ino))
                         child = os.fork()
                         if child == 0:
                             try:

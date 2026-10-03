@@ -27,6 +27,9 @@ type historyStagingApplySession struct {
 }
 
 func openHistoryStagingApply(ctx *cli.Context) (_ *historyStagingApplySession, err error) {
+	if _, err := historyStagingApplyWorkerCount(ctx); err != nil {
+		return nil, err
+	}
 	c, err := newHistoryStagingCLIContext(ctx)
 	if err != nil {
 		return nil, err
@@ -157,47 +160,113 @@ func historyStagingColdCoversWholeBucket(proof rawdb.HistoryStagingProof) bool {
 	return next == last+1
 }
 
-func (s *historyStagingApplySession) verifyCold(ctx context.Context, proof rawdb.HistoryStagingProof) error {
-	if len(proof.ColdSpans) == 0 {
-		return nil
+// completedPlanBucket reconciles immutable route, receipt and binding identities.
+// It deliberately defers expensive content authentication to verify-complete.
+func (s *historyStagingApplySession) completedPlanBucket(plan historyStagingPlanBucket, state rawdb.HistoryStagingBucketState, planID string) (bool, error) {
+	proof := plan.Proof
+	if !state.HasRoute || state.Route.Epoch != proof.Epoch {
+		return false, rawdb.ErrHistoryStagingConflict
 	}
-	return s.prover.VerifyBinding(ctx, rawdb.HistoryStagingColdBinding{
-		Bucket: proof.Bucket, Spans: proof.ColdSpans,
-	}, proof.Blocks)
+	completed := state.Route.Owner == rawdb.HistoryStagingOwnerCold ||
+		(state.Route.Owner == rawdb.HistoryStagingOwnerTarget && state.Route.SourceCleared)
+	if !completed {
+		return false, nil
+	}
+	if state.HasClaim {
+		return false, rawdb.ErrHistoryStagingIncomplete
+	}
+	if len(proof.ColdSpans) > 0 {
+		binding, present, err := s.manager.ReadColdBindingAt(proof.Epoch, proof.Bucket)
+		if err != nil || !present || binding.Epoch != proof.Epoch || binding.ManifestEpoch != s.manifest.Generation ||
+			binding.BindingEpoch != state.Route.ColdBindingEpoch || !reflect.DeepEqual(binding.Spans, proof.ColdSpans) {
+			return false, rawdb.ErrHistoryStagingConflict
+		}
+	}
+	if state.Route.Owner == rawdb.HistoryStagingOwnerCold {
+		if !historyStagingColdCoversWholeBucket(proof) || state.HasReceipt {
+			return false, rawdb.ErrHistoryStagingConflict
+		}
+		return true, nil
+	}
+	digest, err := rawdb.HistoryStagingProofDigest(proof)
+	if err != nil {
+		return false, err
+	}
+	receiptDigest, err := rawdb.HistoryStagingReceiptDigest(state.Receipt)
+	if err != nil {
+		return false, err
+	}
+	claimID, err := historyStagingClaimID(planID, proof.Bucket)
+	if err != nil {
+		return false, err
+	}
+	r := state.Receipt
+	if !state.HasReceipt || r.Epoch != proof.Epoch || r.Bucket != proof.Bucket || r.ClaimID != claimID ||
+		r.ProofDigest != digest || receiptDigest != state.Route.ReceiptDigest || r.DataDigest != plan.Physical.Digest ||
+		r.PayloadRows != plan.Physical.ChangeRows || r.PayloadBytes != plan.Physical.Bytes ||
+		r.TxRangeRows != plan.Physical.TxRangeRows || r.ChunkRows != plan.Physical.ChunkRows {
+		return false, rawdb.ErrHistoryStagingConflict
+	}
+	return true, nil
+}
+
+func (s *historyStagingApplySession) prepareApplyBucket(ctx context.Context, prover *statesnapshots.HistoryStagingColdProver, plan historyStagingPlanBucket, planID string) (func(context.Context) error, error) {
+	state, err := s.manager.InspectBucket(plan.Proof.Bucket)
+	if err != nil {
+		return nil, err
+	}
+	done, err := s.completedPlanBucket(plan, state, planID)
+	if err != nil {
+		return nil, err
+	}
+	if done || len(plan.Proof.ColdSpans) == 0 {
+		return func(c context.Context) error { return c.Err() }, nil
+	}
+	return prover.PrepareOfflineBinding(ctx, coldProofBinding(plan.Proof), plan.Proof.Blocks)
 }
 
 func (s *historyStagingApplySession) applyBucket(ctx context.Context, plan historyStagingPlanBucket, planID string) error {
+	check, err := s.prepareApplyBucket(ctx, s.prover, plan, planID)
+	if err != nil {
+		return err
+	}
+	return s.applyPreparedBucket(ctx, plan, planID, check)
+}
+
+func (s *historyStagingApplySession) applyPreparedBucket(ctx context.Context, plan historyStagingPlanBucket, planID string, check func(context.Context) error) error {
 	proof := plan.Proof
 	state, err := s.manager.InspectBucket(proof.Bucket)
 	if err != nil {
 		return err
 	}
-	if !state.HasRoute || state.Route.Epoch != proof.Epoch {
-		return errors.New("history staging bucket missing current source route")
+	done, err := s.completedPlanBucket(plan, state, planID)
+	if err != nil {
+		return err
 	}
-	if state.Route.Owner == rawdb.HistoryStagingOwnerCold {
-		if !historyStagingColdCoversWholeBucket(proof) || state.HasClaim {
-			return rawdb.ErrHistoryStagingConflict
-		}
-		return s.verifyCold(ctx, proof)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if state.Route.Owner == rawdb.HistoryStagingOwnerTarget && state.Route.SourceCleared {
-		if state.HasClaim || !state.HasReceipt {
-			return rawdb.ErrHistoryStagingIncomplete
+	if done {
+		if state.Route.Owner == rawdb.HistoryStagingOwnerCold {
+			first, last, _ := rawdb.StateHistoryChunkBucketBounds(proof.Bucket)
+			return s.manager.ClearCertifiedSourceRange(ctx, proof.Bucket, first, last, s.limits)
 		}
-		return s.verifyCold(ctx, proof)
+		return nil
 	}
 	if state.Route.Owner != rawdb.HistoryStagingOwnerSource && state.Route.Owner != rawdb.HistoryStagingOwnerTarget {
 		return rawdb.ErrHistoryStagingConflict
 	}
-	if err := s.verifyCold(ctx, proof); err != nil {
+	if check == nil {
+		return errors.New("history staging missing offline cold certificate")
+	}
+	if err := check(ctx); err != nil {
 		return err
 	}
 	if state.Route.Owner == rawdb.HistoryStagingOwnerSource && len(proof.ColdSpans) > 0 {
 		binding := rawdb.HistoryStagingColdBinding{Version: rawdb.HistoryStagingFormatVersion,
 			Bucket: proof.Bucket, Epoch: proof.Epoch, BindingEpoch: 1,
 			ManifestEpoch: s.manifest.Generation, Spans: proof.ColdSpans}
-		if err := s.manager.CertifyColdRange(ctx, binding, func() error { return s.verifyCold(ctx, proof) }); err != nil {
+		if err := s.manager.CertifyColdRange(ctx, binding, func() error { return check(ctx) }); err != nil {
 			return err
 		}
 	}
@@ -205,6 +274,7 @@ func (s *historyStagingApplySession) applyBucket(ctx context.Context, plan histo
 		first, last, _ := rawdb.StateHistoryChunkBucketBounds(proof.Bucket)
 		return s.manager.ClearCertifiedSourceRange(ctx, proof.Bucket, first, last, s.limits)
 	}
+
 	claimID, err := historyStagingClaimID(planID, proof.Bucket)
 	if err != nil {
 		return err
@@ -261,21 +331,31 @@ func runHistoryStagingApply(ctx *cli.Context, action string) error {
 		return err
 	}
 	progress.stage.Store("apply-buckets")
-	for {
-		row, more, err := s.reader.Next(s.cli.ctx)
-		if err != nil {
-			return err
-		}
-		if !more {
-			break
-		}
-		progress.bucket.Store(row.Proof.Bucket)
-		if err := s.applyBucket(s.cli.ctx, row, s.cli.event.PlanID); err != nil {
-			return fmt.Errorf("history staging bucket %d: %w", row.Proof.Bucket, err)
-		}
-		s.cli.event.Bucket = row.Proof.Bucket
-		progress.completed.Add(1)
+	workers, err := historyStagingApplyWorkerCount(ctx)
+	if err != nil {
+		return err
 	}
+	provers, closeWorkers, err := s.coldWorkers(workers)
+	if err != nil {
+		return err
+	}
+	defer closeWorkers()
+	err = pipelineHistoryStagingRows(s.cli.ctx, workers, s.reader.Next,
+		func(workCtx context.Context, id int, row historyStagingPlanBucket) (func(context.Context) error, error) {
+			return s.prepareApplyBucket(workCtx, provers[id], row, s.cli.event.PlanID)
+		}, func(row historyStagingPlanBucket, check func(context.Context) error) error {
+			progress.bucket.Store(row.Proof.Bucket)
+			if err := s.applyPreparedBucket(s.cli.ctx, row, s.cli.event.PlanID, check); err != nil {
+				return err
+			}
+			s.cli.event.Bucket = row.Proof.Bucket
+			progress.completed.Add(1)
+			return nil
+		})
+	if err != nil {
+		return err
+	}
+
 	if err := verifyHistoryStagingPlanInputs(ctx, s.cli, s.source, s.reader.header); err != nil {
 		return err
 	}
@@ -351,71 +431,67 @@ func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context, progre
 	if err := verifyHistoryStagingPlanInputs(ctx, s.cli, s.source, s.reader.header); err != nil {
 		return err
 	}
-	ancient, closeAncient, err := openSnapshotPruneAncientReader(ctx.String("datadir"))
+	count, err := historyStagingApplyWorkerCount(ctx)
 	if err != nil {
 		return err
 	}
-	defer closeAncient()
-	canonical := rawdb.NewChainDB(s.source, ancient)
-	hot, release, err := rawdb.AcquireStateHistoryReadView(s.source)
+	provers, closeProvers, err := s.coldWorkers(count)
 	if err != nil {
 		return err
 	}
-	defer release()
-	progress.stage.Store("verify-buckets")
-	for {
-		row, more, err := s.reader.Next(s.cli.ctx)
+	defer closeProvers()
+	type verifyWorker struct {
+		hot   rawdb.StateHistoryReadView
+		chain *rawdb.ChainDB
+		close func()
+	}
+	workers := make([]verifyWorker, 0, count)
+	defer func() {
+		for _, worker := range workers {
+			worker.close()
+		}
+	}()
+	for i := 0; i < count; i++ {
+		ancient, closeAncient, err := openSnapshotPruneAncientReader(ctx.String("datadir"))
 		if err != nil {
 			return err
 		}
-		if !more {
-			break
+		hot, release, err := rawdb.AcquireStateHistoryReadView(s.source)
+		if err != nil {
+			closeAncient()
+			return err
 		}
-		proof := row.Proof
-		progress.bucket.Store(proof.Bucket)
-		for _, block := range proof.Blocks {
-			hash, present, err := rawdb.ReadBlockHashByNumberStrict(canonical, block.Number)
-			if err != nil || !present || hash != block.Hash {
-				return fmt.Errorf("history staging canonical block %d changed", block.Number)
-			}
-			rangeRow, present, err := rawdb.ReadStateTxRange(hot, block.Number)
-			if err != nil || !present || rangeRow == nil || rangeRow.BlockHash != block.Hash ||
-				rangeRow.BeginTxNum != block.BeginTxNum || rangeRow.EndTxNum != block.EndTxNum {
-				return fmt.Errorf("history staging tx range %d changed", block.Number)
-			}
-		}
-		if err := s.verifyCold(s.cli.ctx, proof); err != nil {
-			return fmt.Errorf("history staging bucket %d cold: %w", proof.Bucket, err)
-		}
-		state, err := s.manager.InspectBucket(proof.Bucket)
-		if err != nil || !state.HasRoute || state.Route.Epoch != proof.Epoch || state.HasClaim {
-			return fmt.Errorf("history staging bucket %d route/claim incomplete", proof.Bucket)
-		}
-		if len(proof.ColdSpans) > 0 {
-			binding, present, err := s.manager.ReadColdBindingAt(proof.Epoch, proof.Bucket)
-			if err != nil || !present || binding.BindingEpoch != state.Route.ColdBindingEpoch ||
-				!reflect.DeepEqual(binding.Spans, proof.ColdSpans) {
-				return fmt.Errorf("history staging bucket %d cold binding incomplete", proof.Bucket)
-			}
-		}
-		switch state.Route.Owner {
-		case rawdb.HistoryStagingOwnerTarget:
-			if !state.Route.SourceCleared || !state.HasReceipt {
-				return fmt.Errorf("history staging bucket %d target receipt incomplete", proof.Bucket)
-			}
-			physical, err := s.manager.InspectTargetBucket(s.cli.ctx, proof, s.limits)
-			if err != nil || physical != row.Physical || state.Receipt.DataDigest != physical.Digest {
-				return fmt.Errorf("history staging bucket %d target physical inventory differs: %w", proof.Bucket, err)
-			}
-		case rawdb.HistoryStagingOwnerCold:
-			if !historyStagingColdCoversWholeBucket(proof) || state.HasReceipt {
-				return fmt.Errorf("history staging bucket %d cold route lacks full proof", proof.Bucket)
-			}
-		default:
-			return fmt.Errorf("history staging bucket %d remains source-owned", proof.Bucket)
-		}
-		progress.completed.Add(1)
+		workers = append(workers, verifyWorker{hot: hot, chain: rawdb.NewChainDB(s.source, ancient),
+			close: func() { _ = release(); closeAncient() }})
 	}
+	progress.stage.Store("verify-buckets")
+	err = pipelineHistoryStagingRows(s.cli.ctx, count, s.reader.Next,
+		func(workCtx context.Context, id int, row historyStagingPlanBucket) (func(context.Context) error, error) {
+			worker := workers[id]
+			check := func(c context.Context) error { return c.Err() }
+			if len(row.Proof.ColdSpans) > 0 {
+				var err error
+				check, err = provers[id].PrepareOfflineBinding(workCtx, coldProofBinding(row.Proof), row.Proof.Blocks)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err := s.verifyCompleteRow(workCtx, row, worker.chain, worker.hot); err != nil {
+				return nil, err
+			}
+			return check, nil
+		}, func(row historyStagingPlanBucket, check func(context.Context) error) error {
+			if err := check(s.cli.ctx); err != nil {
+				return err
+			}
+			progress.bucket.Store(row.Proof.Bucket)
+			progress.completed.Add(1)
+			return nil
+		})
+	if err != nil {
+		return err
+	}
+
 	if err := verifyHistoryStagingPlanInputs(ctx, s.cli, s.source, s.reader.header); err != nil {
 		return err
 	}
@@ -424,4 +500,61 @@ func (s *historyStagingApplySession) verifyCompleteRows(ctx *cli.Context, progre
 		s.reader.header.FullEligibleLastBucket,
 		s.reader.header.Head.HeadBlock/rawdb.StateHistoryChunkBucketBlocks)
 	return err
+}
+
+func (s *historyStagingApplySession) verifyCompleteRow(workCtx context.Context, row historyStagingPlanBucket,
+	canonical *rawdb.ChainDB, hot rawdb.StateHistoryReadView) error {
+	proof := row.Proof
+	if err := workCtx.Err(); err != nil {
+		return err
+	}
+	for _, block := range proof.Blocks {
+		if err := workCtx.Err(); err != nil {
+			return err
+		}
+		hash, present, err := rawdb.ReadBlockHashByNumberStrict(canonical, block.Number)
+		if err != nil || !present || hash != block.Hash {
+			return fmt.Errorf("history staging canonical block %d changed", block.Number)
+		}
+		rangeRow, present, err := rawdb.ReadStateTxRange(hot, block.Number)
+		if err != nil || !present || rangeRow == nil || rangeRow.BlockHash != block.Hash ||
+			rangeRow.BeginTxNum != block.BeginTxNum || rangeRow.EndTxNum != block.EndTxNum {
+			return fmt.Errorf("history staging tx range %d changed", block.Number)
+		}
+	}
+
+	state, err := s.manager.InspectBucket(proof.Bucket)
+	if err != nil || !state.HasRoute || state.Route.Epoch != proof.Epoch || state.HasClaim {
+		return fmt.Errorf("history staging bucket %d route/claim incomplete", proof.Bucket)
+	}
+	if len(proof.ColdSpans) > 0 {
+		binding, present, err := s.manager.ReadColdBindingAt(proof.Epoch, proof.Bucket)
+		if err != nil || !present || binding.BindingEpoch != state.Route.ColdBindingEpoch ||
+			!reflect.DeepEqual(binding.Spans, proof.ColdSpans) {
+			return fmt.Errorf("history staging bucket %d cold binding incomplete", proof.Bucket)
+		}
+	}
+	if done, err := s.completedPlanBucket(row, state, s.cli.event.PlanID); err != nil || !done {
+		if err != nil {
+			return err
+		}
+		return rawdb.ErrHistoryStagingIncomplete
+	}
+	switch state.Route.Owner {
+	case rawdb.HistoryStagingOwnerTarget:
+		if !state.Route.SourceCleared || !state.HasReceipt {
+			return fmt.Errorf("history staging bucket %d target receipt incomplete", proof.Bucket)
+		}
+		physical, err := s.manager.InspectTargetBucket(workCtx, proof, s.limits)
+		if err != nil || physical != row.Physical || state.Receipt.DataDigest != physical.Digest {
+			return fmt.Errorf("history staging bucket %d target physical inventory differs: %w", proof.Bucket, err)
+		}
+	case rawdb.HistoryStagingOwnerCold:
+		if !historyStagingColdCoversWholeBucket(proof) || state.HasReceipt {
+			return fmt.Errorf("history staging bucket %d cold route lacks full proof", proof.Bucket)
+		}
+	default:
+		return fmt.Errorf("history staging bucket %d remains source-owned", proof.Bucket)
+	}
+	return workCtx.Err()
 }

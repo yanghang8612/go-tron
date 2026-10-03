@@ -21,6 +21,8 @@ STATE_DIR = Path('/data/gtron/main')
 PREPARED = STATE_DIR / 'HISTORY_STAGING_PREPARED.json'
 LATCH = STATE_DIR / 'MIGRATION_IN_PROGRESS.json'
 REQUIRED = STATE_DIR / 'HISTORY_STAGING_READER_REQUIRED.json'
+REPIN_INTENT = STATE_DIR / 'HISTORY_STAGING_REPIN_INTENT.json'
+UPGRADE_BINDING = Path('/var/lib/gtron-history-staging/apply-upgrade.json')
 MAX_JSON = 16 << 10
 MAX_BINARY = 512 << 20
 SHA = re.compile(r'[0-9a-f]{64}\Z')
@@ -30,18 +32,18 @@ class StopIntent(Exception):
     """The timer should exit successfully without starting an inactive node."""
 
 
-def read_root_json(path):
+def read_root_json(path, limit=MAX_JSON):
     if not os.path.lexists(path):
         return None
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as stream:
         before = os.fstat(stream.fileno())
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or
-                before.st_mode & 0o022 or before.st_size > MAX_JSON):
+                before.st_mode & 0o022 or before.st_size > limit):
             raise ValueError('unsafe root-owned history-staging state: ' + str(path))
-        raw = stream.read(MAX_JSON + 1)
+        raw = stream.read(limit + 1)
         after = os.fstat(stream.fileno())
-    if (len(raw) != before.st_size or len(raw) > MAX_JSON or
+    if (len(raw) != before.st_size or len(raw) > limit or
             (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns) !=
             (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns)):
         raise ValueError('history-staging state changed during read: ' + str(path))
@@ -138,10 +140,31 @@ def check_identity(prepared, latch, required, digest, is_capable):
         raise ValueError('unmigrated mainnet may start only its pinned legacy binary')
 
 
+def require_no_repin():
+    if os.path.lexists(REPIN_INTENT):
+        raise ValueError('pending history-staging repin blocks startup and deployment')
+
+
+def check_upgrade_fence(latch, prepared):
+    if latch is None or 'upgrade_binding' not in latch:
+        return
+    if latch.get('upgrade_binding') != str(UPGRADE_BINDING):
+        raise ValueError('upgrade binding path differs from trusted journal')
+    journal = read_root_json(UPGRADE_BINDING, 65536)
+    if journal is None or journal.get('state') != 'DONE' or journal.get('new_prepared') != prepared:
+        raise ValueError('upgrade reader fences differ from completed journal')
+    expected = journal.get('new_latch', {})
+    for key, value in expected.items():
+        if key != 'state' and latch.get(key) != value:
+            raise ValueError('upgrade latch differs from completed executor binding')
+
+
 def check_service():
+    require_no_repin()
     prepared = read_root_json(PREPARED)
     latch = read_root_json(LATCH)
     required = read_root_json(REQUIRED)
+    check_upgrade_fence(latch, prepared)
     binary = service_binary()
     digest = binary_sha(binary)
     needs_capability = (latch is not None and latch.get('state') == 'VERIFIED_PENDING_ACTIVATION') or required is not None
@@ -152,6 +175,7 @@ def check_service():
 
 
 def check_deploy():
+    require_no_repin()
     prepared = read_root_json(PREPARED)
     latch = read_root_json(LATCH)
     required = read_root_json(REQUIRED)

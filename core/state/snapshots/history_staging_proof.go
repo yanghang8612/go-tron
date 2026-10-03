@@ -43,10 +43,11 @@ type HistoryStagingColdProver struct {
 // HistoryStagingProverStats counts real opens and full trio audits in this
 // worker. Counts describe work, not cache correctness or user-visible hits.
 type HistoryStagingProverStats struct {
-	HistoryOpens          uint64
-	IndexOpens            uint64
-	ReaderReuses          uint64
-	FullTrioAuthenticates uint64
+	HistoryOpens            uint64
+	IndexOpens              uint64
+	ReaderReuses            uint64
+	FullTrioAuthenticates   uint64
+	SemanticBindingVerifies uint64
 }
 
 // EnableReaderReuse opts into retaining at most one history/index pair across
@@ -790,30 +791,15 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 	}
 	history := contextReaderAt{ctx: ctx, r: open.history}
 	index := contextReaderAt{ctx: ctx, r: open.index}
-	// The context wrapper preserves cancellation but hides the concrete
-	// history reader's cached header and forward StateTxRange cursor. Keep one
-	// validated range cursor for this span instead of rediscovering the header
-	// and binary-searching the range table for every V5/V6 record.
-	var ranges *stateDomainChangeTxRangeCursor
-	if open.header.version == stateDomainChangeBinaryVersionV5 || open.header.version == stateDomainChangeBinaryVersionV6 {
-		ranges, err = newStateDomainChangeTxRangeCursor(history, open.historySize, ref, open.header)
-		if err != nil {
-			return nil, err
-		}
+	// Authenticate the whole bucket's contiguous fixed-width range table once.
+	// Reusing these exact rows for hydration avoids O(blocks*log(segment))
+	// point reads and still binds every zero-change block to its canonical hash.
+	certifiedRanges, err := historyStagingCertifiedRanges(ctx, history, open.historySize, ref, open.header, blocks)
+	if err != nil {
+		return nil, err
 	}
-	for _, block := range blocks {
-		cold, table, found, err := findStateDomainChangeBinaryTxRangeForBlock(history,
-			open.historySize, ref, open.header, block.Number)
-		want := rawdb.StateTxRange{BlockNum: block.Number, BlockHash: block.Hash,
-			BeginTxNum: block.BeginTxNum, EndTxNum: block.EndTxNum}
-		if err != nil {
-			return nil, err
-		}
-		if !table || !found || cold == nil || *cold != want ||
-			block.BeginTxNum < ref.FromTxNum || block.EndTxNum > ref.ToTxNum {
-			return nil, fmt.Errorf("snapshots: offline cold block range mismatch at block %d", block.Number)
-		}
-	}
+	rangeIndex := 0
+
 	var records [][32]byte
 	var previousTx, ordinal uint64
 	var havePrevious bool
@@ -845,12 +831,14 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 				if change == nil {
 					return nil, errors.New("snapshots: nil cold proof record")
 				}
-				if ranges != nil {
-					row, err := ranges.txRangeForTxNum(change.TxNum)
-					if err != nil {
-						return nil, err
+				if open.header.version == stateDomainChangeBinaryVersionV5 || open.header.version == stateDomainChangeBinaryVersionV6 {
+					for rangeIndex < len(certifiedRanges) && change.TxNum > certifiedRanges[rangeIndex].EndTxNum {
+						rangeIndex++
 					}
-					if err := hydrateStateDomainChangeBinaryRecordV5FromRange(row, recordIndex, change); err != nil {
+					if rangeIndex == len(certifiedRanges) || change.TxNum < certifiedRanges[rangeIndex].BeginTxNum {
+						return nil, errors.New("snapshots: cold record outside certified transaction ranges")
+					}
+					if err := hydrateStateDomainChangeBinaryRecordV5FromRange(&certifiedRanges[rangeIndex], recordIndex, change); err != nil {
 						return nil, err
 					}
 				}
@@ -1059,6 +1047,7 @@ func VerifyHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 // VerifyBinding keeps the complete per-span semantic check while allowing an
 // offline worker to reuse its authenticated reader between adjacent buckets.
 func (p *HistoryStagingColdProver) VerifyBinding(ctx context.Context, binding rawdb.HistoryStagingColdBinding, blocks []rawdb.HistoryStagingBlockProof) error {
+	p.stats.SemanticBindingVerifies++
 	if len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) || len(binding.Spans) == 0 ||
 		binding.Bucket != blocks[0].Number/rawdb.StateHistoryChunkBucketBlocks {
 		return errors.New("snapshots: invalid cold binding proof coverage")
@@ -1157,4 +1146,112 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 		result.Spans = append(result.Spans, current...)
 	}
 	return result, nil
+}
+
+// PrepareOfflineBinding authenticates semantics once and returns an immutable
+// file-identity check for ordered offline publication. The caller must hold the
+// exclusive cold-directory and store locks and keep this manifest fixed until
+// consumption. This is not authorization for an online publication or GC.
+// The returned check shares no mutable readers or prover state with a worker.
+func (p *HistoryStagingColdProver) PrepareOfflineBinding(ctx context.Context, binding rawdb.HistoryStagingColdBinding, blocks []rawdb.HistoryStagingBlockProof) (func(context.Context) error, error) {
+	if err := p.VerifyBinding(ctx, binding, blocks); err != nil {
+		return nil, err
+	}
+	type files struct {
+		refs   [3]SegmentRef
+		states [3]historyStagingFileState
+	}
+	captured := make([]files, 0, len(binding.Spans))
+	seen := make(map[[32]byte]bool)
+	for _, span := range binding.Spans {
+		if seen[span.ContentID] {
+			continue
+		}
+		seen[span.ContentID] = true
+		refIndex := sort.Search(len(p.refs), func(i int) bool { return p.refs[i].ToTxNum >= blocks[span.From-blocks[0].Number].BeginTxNum })
+		if refIndex == len(p.refs) {
+			return nil, errors.New("snapshots: offline certified trio missing")
+		}
+		refs, id, err := p.trio(p.refs[refIndex])
+		if err != nil || id != span.ContentID {
+			return nil, errors.New("snapshots: offline certified trio differs")
+		}
+		states, ok := p.verified[id]
+		if !ok {
+			return nil, errors.New("snapshots: offline certified trio unauthenticated")
+		}
+		if err := historyStagingCheckFileStates(p.dir, refs, states); err != nil {
+			return nil, err
+		}
+		captured = append(captured, files{refs, states})
+	}
+	dir := p.dir
+	return func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, item := range captured {
+			if err := historyStagingCheckFileStates(dir, item.refs, item.states); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
+	}, nil
+}
+
+// historyStagingCertifiedRanges reads at most one bucket (64 KiB) after a
+// logarithmic lower-bound lookup. Complete trio authentication has already
+// checked ordering; this pass additionally checks every expected block row.
+func historyStagingCertifiedRanges(ctx context.Context, reader io.ReaderAt, size uint64, ref SegmentRef,
+	header stateDomainChangeBinaryHeader, blocks []rawdb.HistoryStagingBlockProof) ([]rawdb.StateTxRange, error) {
+	if len(blocks) == 0 || len(blocks) > int(rawdb.StateHistoryChunkBucketBlocks) {
+		return nil, errors.New("snapshots: invalid certified range size")
+	}
+	count, payloadOffset, err := stateDomainChangeBinaryTxRangeTableBoundsAt(reader, size, ref, header)
+	if err != nil {
+		return nil, err
+	}
+	low, high := uint64(0), count
+	var scratch rawdb.StateTxRange
+	for low < high {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		mid := low + (high-low)/2
+		if err := readStateDomainChangeBinaryTxRangeAtInto(reader, ref, header.version, mid, &scratch); err != nil {
+			return nil, err
+		}
+		if scratch.BlockNum < blocks[0].Number {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	if uint64(len(blocks)) > count-low {
+		return nil, errors.New("snapshots: cold block range table incomplete")
+	}
+	offset := stateDomainChangeBinaryTxRangeTableStart(header.version) + 8 + low*stateDomainChangeBinaryTxRangeSize
+	length := uint64(len(blocks)) * stateDomainChangeBinaryTxRangeSize
+	if payloadOffset > uint64(1<<63-1) || offset > payloadOffset || length > payloadOffset-offset {
+		return nil, errors.New("snapshots: cold block range table overflow")
+	}
+	data := make([]byte, int(length))
+	if _, err := reader.ReadAt(data, int64(offset)); err != nil {
+		return nil, err
+	}
+	rows := make([]rawdb.StateTxRange, len(blocks))
+	for i, block := range blocks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		decodeStateDomainChangeBinaryTxRangeInto(&rows[i], data[i*stateDomainChangeBinaryTxRangeSize:(i+1)*stateDomainChangeBinaryTxRangeSize])
+		if err := validateStateDomainChangeBinaryTxRange(ref, &rows[i], low+uint64(i), nil); err != nil {
+			return nil, err
+		}
+		want := rawdb.StateTxRange{BlockNum: block.Number, BlockHash: block.Hash, BeginTxNum: block.BeginTxNum, EndTxNum: block.EndTxNum}
+		if rows[i] != want || block.BeginTxNum < ref.FromTxNum || block.EndTxNum > ref.ToTxNum {
+			return nil, fmt.Errorf("snapshots: offline cold block range mismatch at block %d", block.Number)
+		}
+	}
+	return rows, nil
 }

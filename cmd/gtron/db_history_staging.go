@@ -30,6 +30,8 @@ func dbHistoryStagingCommand() *cli.Command {
 		configFileFlag, pruneModeFlag, historyEnabledFlag,
 		&cli.StringFlag{Name: "staging-dir", Usage: "Separate history-staging Pebble directory"},
 		&cli.StringFlag{Name: "job-id", Usage: "Durable 32-hex offline migration job identity"},
+		&cli.UintFlag{Name: "apply-workers", Usage: "Parallel apply proof workers; 0 uses up to 8 available Go CPUs"},
+		&cli.StringFlag{Name: "upgrade-binding", Usage: "Fixed root-owned apply upgrade authorization journal"},
 		&cli.StringFlag{Name: "candidate-sha256", Usage: "Required SHA256 of this running gtron executable"},
 		&cli.StringFlag{Name: "legacy-manifest-sha256", Usage: "Exact SHA256 of an unbound local cold manifest for scoped history admission"},
 		&cli.Uint64Flag{Name: "max-row-mib", Value: 16, Usage: "Maximum physical row size in MiB"},
@@ -58,6 +60,8 @@ func dbHistoryStagingCommand() *cli.Command {
 				Flags: flags(&cli.Uint64Flag{Name: "max-buckets", Usage: "Maximum complete buckets; 0 means all"},
 					&cli.UintFlag{Name: "plan-workers", Usage: "Parallel proof workers; 0 uses up to 8 available Go CPUs"}),
 				Action: dbHistoryStagingMigrate},
+			{Name: "upgrade-check", Usage: "Read-only validate a root-authorized executor replacement against the original sealed plan",
+				Flags: flags(&cli.StringFlag{Name: "plan-id", Required: true}), Action: dbHistoryStagingUpgradeCheck},
 			{Name: "apply", Usage: "Apply a frozen plan using durable claim/copy/adopt/clear phases",
 				Flags: flags(&cli.StringFlag{Name: "plan-id", Required: true}), Action: dbHistoryStagingApply},
 			{Name: "resume", Usage: "Reconcile and finish a previously started frozen plan",
@@ -88,10 +92,11 @@ type historyStagingCLIEvent struct {
 }
 
 type historyStagingCLIContext struct {
-	ctx    context.Context
-	paths  historyStagingPaths
-	event  historyStagingCLIEvent
-	output io.Writer
+	ctx             context.Context
+	paths           historyStagingPaths
+	event           historyStagingCLIEvent
+	output          io.Writer
+	planProducerSHA string
 }
 
 type historyStagingPlanHeader struct {
@@ -244,10 +249,16 @@ func newHistoryStagingCLIContext(ctx *cli.Context) (*historyStagingCLIContext, e
 	if err != nil {
 		return nil, err
 	}
-	return &historyStagingCLIContext{ctx: contextOrBackground(ctx), paths: paths,
+	c := &historyStagingCLIContext{ctx: contextOrBackground(ctx), paths: paths,
 		output: ctx.App.Writer, event: historyStagingCLIEvent{
 			Version: 1, JobID: job, CandidateSHA256: actual,
-			Source: paths.Source, Target: paths.Target, Cold: paths.Cold}}, nil
+			Source: paths.Source, Target: paths.Target, Cold: paths.Cold}}
+	producer, err := historyStagingUpgradeAuthorization(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	c.planProducerSHA = producer
+	return c, nil
 }
 
 func (c *historyStagingCLIContext) emit(phase string) error {

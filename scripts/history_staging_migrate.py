@@ -48,6 +48,7 @@ HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 CLI_STDERR_LIMIT = 16 << 20
 CLI_RUN_TIMEOUT = 24 * 60 * 60
 REPIN_INTENT = MAIN / 'HISTORY_STAGING_REPIN_INTENT.json'
+UPGRADE_BINDING = Path('/var/lib/gtron-history-staging/apply-upgrade.json')
 PLAN_DIR = DATADIR / 'gtron' / 'history-staging-plans'
 
 
@@ -352,6 +353,10 @@ def cli_result(latch, action, *options):
                    '--datadir', str(DATADIR), '--staging-dir', latch['target'],
                    '--snapshot.dir', latch['cold'], '--job-id', latch['job_id'],
                    '--candidate-sha256', latch['candidate_sha256']]
+    if latch.get('upgrade_binding'):
+        commandline.extend(['--upgrade-binding', latch['upgrade_binding']])
+        if action == 'inspect' and '--plan-id' not in options:
+            commandline.extend(['--plan-id', latch['plan_id']])
     if latch.get('legacy_manifest_sha256'):
         commandline.extend(['--legacy-manifest-sha256', latch['legacy_manifest_sha256']])
     commandline.extend([*latch['source_config_args'], *options])
@@ -378,7 +383,7 @@ def cli_result(latch, action, *options):
 
 def stream_cli_stderr(commandline, output, latch, action):
     """Bound, persist and forward heartbeat stderr without changing JSONL stdout."""
-    require(action in ('inspect', 'migrate', 'apply', 'resume') and
+    require(action in ('inspect', 'migrate', 'apply', 'resume', 'upgrade-check') and
             re.fullmatch(r'[0-9a-f]{32}', latch['job_id']) is not None,
             'invalid migration log identity')
     CLI_LOG_DIR.mkdir(mode=0o700, exist_ok=True)
@@ -626,6 +631,150 @@ def repin_preplan(job_id, candidate, source_commit, expected_sha, legacy_manifes
                 'pristine': True}
 
 
+def read_apply_upgrade():
+    raw, _ = release.root_bytes(UPGRADE_BINDING, 65536)
+    value = json.loads(raw)
+    require(isinstance(value, dict) and value.get('version') == VERSION and
+            value.get('state') in ('PRECHECK', 'AUTHORIZED', 'DONE') and
+            all(isinstance(value.get(key), dict) for key in
+                ('old', 'new', 'old_latch', 'new_latch', 'old_prepared', 'new_prepared')),
+            'invalid apply upgrade journal')
+    return value
+
+
+def write_apply_upgrade(value):
+    directory = UPGRADE_BINDING.parent
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for parent in (directory, *directory.parents):
+        info = os.lstat(str(parent))
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and
+                not info.st_mode & 0o022 and
+                (parent != directory or stat.S_IMODE(info.st_mode) == 0o700),
+                'unsafe apply upgrade journal parent')
+    release.atomic_root(UPGRADE_BINDING, release.json_bytes(value), 0o600)
+
+
+def verify_apply_upgrade_guards():
+    for installed, source in ((GUARD_INSTALL, REPO / 'scripts' / 'history_staging_guard.py'),
+                              (RELEASE_INSTALL, REPO / 'scripts' / 'mainnet_release.py')):
+        raw, _ = release.root_bytes(installed, 1 << 20)
+        require(raw == source.read_bytes(), 'installed pending upgrade fence differs from reviewed helper')
+
+
+def apply_repin(job_id, candidate, source_commit, expected_sha, legacy_manifest_sha):
+    """Replace an interrupted executor while retaining its immutable sealed plan.
+
+    Every journal switch is retryable with precisely the same request. The
+    pending marker stays present until both reader fences match the DONE journal.
+    This operation does not resume DB writes; the separate resume action does.
+    """
+    require(os.geteuid() == 0, 'root required')
+    require(re.fullmatch(r'[0-9a-f]{32}', job_id or '') is not None and
+            HEX40.fullmatch(source_commit or '') and HEX64.fullmatch(expected_sha or '') and
+            HEX64.fullmatch(legacy_manifest_sha or ''), 'invalid apply upgrade identity')
+    require(os.path.lexists(release.STAGING_LATCH) and
+            not os.path.lexists(release.STAGING_REQUIRED),
+            'apply upgrade requires unfinished migration without an active reader')
+    for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+        verify_stopped(unit)
+    with ExitStack() as stack:
+        flock_file(stack, LOCK)
+        for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+            verify_stopped(unit)
+        latch = load_latch()
+        require(latch['job_id'] == job_id and latch['state'] == 'MIGRATION_IN_PROGRESS' and
+                HEX64.fullmatch(latch.get('plan_id', '')),
+                'apply upgrade requires the same published unfinished plan')
+        require(canonical_paths() == {key: latch[key] for key in ('source', 'target', 'cold')},
+                'apply upgrade storage paths differ')
+        storage_locks(stack, latch)
+        prepared = read_prepared()
+        verify_source_config(latch)
+        require(latch.get('legacy_manifest_sha256') == legacy_manifest_sha and
+                stable_manifest_sha(Path(latch['cold']) / 'manifest.json') == legacy_manifest_sha,
+                'apply upgrade frozen manifest differs')
+        require(GUARD_INSTALL.is_file() and DROPIN.is_file() and (APP / 'start.sh').is_file(),
+                'persistent startup/deployment guards are missing')
+        verify_apply_upgrade_guards()
+        pinned = pinned_candidate(Path(candidate), source_commit, expected_sha)
+        journal = read_apply_upgrade() if os.path.lexists(UPGRADE_BINDING) else None
+        if journal is None:
+            require(not latch.get('upgrade_binding') and
+                    all(prepared.get(key) == latch[key] for key in
+                        ('source', 'target', 'cold', 'service_was_active',
+                         'timer_was_active', 'timer_was_enabled', 'source_commit', 'candidate_sha256')),
+                    'apply upgrade original prepared/latch identity differs or another repin is pending')
+            require(latch['candidate_sha256'] != expected_sha,
+                    'apply upgrade requires a different executor')
+            require(release.root_sha(latch['candidate']) == latch['candidate_sha256'],
+                    'original executor SHA differs from durable latch')
+            old = repin_identity(latch)
+            new = dict(old, candidate=str(pinned), source_commit=source_commit,
+                       candidate_sha256=expected_sha)
+            revised_latch = dict(latch, source_commit=source_commit, candidate=str(pinned),
+                                 candidate_sha256=expected_sha,
+                                 plan_producer_sha256=latch['candidate_sha256'],
+                                 upgrade_binding=str(UPGRADE_BINDING))
+            revised_prepared = dict(prepared, source_commit=source_commit,
+                                    candidate_sha256=expected_sha)
+            journal = {'version': VERSION, 'state': 'PRECHECK', 'job_id': job_id,
+                       'plan_id': latch['plan_id'], 'plan_producer_sha256': latch['candidate_sha256'],
+                       'old': old, 'new': new, 'old_latch': latch, 'new_latch': revised_latch,
+                       'old_prepared': prepared, 'new_prepared': revised_prepared}
+            # A durable pending marker precedes every journal or identity switch.
+            marker = {'version': VERSION, 'state': 'REPIN_APPLY',
+                      'job_id': job_id, 'plan_id': latch['plan_id'],
+                      'new': new, 'binding': str(UPGRADE_BINDING)}
+            if os.path.lexists(REPIN_INTENT):
+                raw, _ = release.root_bytes(REPIN_INTENT, 16384)
+                require(json.loads(raw) == marker, 'different durable apply upgrade request is pending')
+            else:
+                atomic_json(REPIN_INTENT, marker)
+            write_apply_upgrade(journal)
+        else:
+            require(journal['job_id'] == job_id and journal['plan_id'] == latch['plan_id'] and
+                    journal['new']['source_commit'] == source_commit and
+                    journal['new']['candidate_sha256'] == expected_sha and
+                    journal['new']['candidate'] == str(pinned),
+                    'different durable apply upgrade request is pending')
+            require((latch == journal['old_latch'] and prepared == journal['old_prepared']) or
+                    (journal['state'] != 'PRECHECK' and latch == journal['old_latch'] and
+                     prepared == journal['new_prepared']) or
+                    (journal['state'] != 'PRECHECK' and latch == journal['new_latch'] and
+                     prepared == journal['new_prepared']),
+                    'apply upgrade prepared/latch switch is inconsistent')
+            if journal['state'] == 'DONE' and not os.path.lexists(REPIN_INTENT):
+                return dict(version=VERSION, phase='apply-repin', job_id=job_id,
+                            plan_id=journal['plan_id'], candidate_sha256=expected_sha,
+                            plan_producer_sha256=journal['plan_producer_sha256'])
+        raw, _ = release.root_bytes(REPIN_INTENT, 16384)
+        intent = json.loads(raw)
+        require(intent == {'version': VERSION, 'state': 'REPIN_APPLY', 'job_id': job_id,
+                           'plan_id': journal['plan_id'], 'new': journal['new'],
+                           'binding': str(UPGRADE_BINDING)}, 'pending apply upgrade marker differs')
+        probe = journal['new_latch']
+        result = cli_result(probe, 'upgrade-check', '--plan-id', journal['plan_id'])
+        require(result.get('phase') == 'upgrade-check', 'new executor did not validate sealed plan')
+        require(stable_manifest_sha(Path(latch['cold']) / 'manifest.json') == legacy_manifest_sha,
+                'frozen manifest changed during upgrade validation')
+        for unit in (SERVICE, TIMER, DEPLOY_SERVICE):
+            verify_stopped(unit)
+        require(load_latch() == latch and read_prepared() == prepared,
+                'reader fences changed during upgrade validation')
+        if journal['state'] == 'PRECHECK':
+            journal = dict(journal, state='AUTHORIZED')
+            write_apply_upgrade(journal)
+        atomic_json(release.STAGING_PREPARED, journal['new_prepared'])
+        write_latch(journal['new_latch'])
+        require(load_latch() == journal['new_latch'] and read_prepared() == journal['new_prepared'],
+                'apply upgrade durable fences did not converge')
+        write_apply_upgrade(dict(journal, state='DONE'))
+        remove_durable_file(REPIN_INTENT)
+        return dict(version=VERSION, phase='apply-repin', job_id=job_id,
+                    plan_id=journal['plan_id'], candidate_sha256=expected_sha,
+                    plan_producer_sha256=journal['plan_producer_sha256'])
+
+
 def checked_unpublished_job_temps(plan_dir, latch, manifest_sha, owner=0):
     """Identify only exact, unpublished temporary plans for this frozen job."""
     if not os.path.lexists(plan_dir):
@@ -869,6 +1018,12 @@ def main():
                        help='exact stopped legacy cold manifest SHA; required when Chain is absent')
     again = modes.add_parser('resume')
     again.add_argument('--job-id', required=True)
+    upgrade = modes.add_parser('apply-repin')
+    upgrade.add_argument('--job-id', required=True)
+    upgrade.add_argument('--candidate', type=Path, required=True)
+    upgrade.add_argument('--source', required=True)
+    upgrade.add_argument('--sha256', required=True)
+    upgrade.add_argument('--legacy-manifest-sha256', required=True)
     repin = modes.add_parser('repin-preplan')
     repin.add_argument('--job-id', required=True)
     repin.add_argument('--candidate', type=Path, required=True)
@@ -882,7 +1037,7 @@ def main():
     discard.add_argument('--sha256', required=True)
     discard.add_argument('--legacy-manifest-sha256', required=True)
     args = parser.parse_args()
-    require(args.mode in ('run', 'resume', 'repin-preplan', 'discard-preplan-tmp'),
+    require(args.mode in ('run', 'resume', 'repin-preplan', 'apply-repin', 'discard-preplan-tmp'),
             'run, resume, repin-preplan or discard-preplan-tmp action required')
     if args.mode == 'run':
         health_timeout = (release.staging_health_timeout(args.staging_health_timeout_sec)
@@ -891,6 +1046,9 @@ def main():
                          args.legacy_manifest_sha256)
     elif args.mode == 'resume':
         result = resume(args.job_id)
+    elif args.mode == 'apply-repin':
+        result = apply_repin(args.job_id, args.candidate, args.source,
+                             args.sha256, args.legacy_manifest_sha256)
     elif args.mode == 'repin-preplan':
         result = repin_preplan(args.job_id, args.candidate, args.source,
                                args.sha256, args.legacy_manifest_sha256)

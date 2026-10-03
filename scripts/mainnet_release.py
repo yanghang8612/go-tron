@@ -39,6 +39,8 @@ SHARED_GUARD = '/usr/local/libexec/gtron-history-shared-reader-guard.py'
 REFERENCE_GUARD = '/usr/local/libexec/gtron-history-reference-reader-guard.py'
 STAGING_GUARD = '/usr/local/libexec/gtron-history-staging-guard.py'
 STAGING_PREPARED = Path('/data/gtron/main/HISTORY_STAGING_PREPARED.json')
+STAGING_UPGRADE_BINDING = Path('/var/lib/gtron-history-staging/apply-upgrade.json')
+STAGING_REPIN_INTENT = Path('/data/gtron/main/HISTORY_STAGING_REPIN_INTENT.json')
 STAGING_LATCH = Path('/data/gtron/main/MIGRATION_IN_PROGRESS.json')
 STAGING_REQUIRED = Path('/data/gtron/main/HISTORY_STAGING_READER_REQUIRED.json')
 STAGING_ACTIVATION = Path('/data/gtron/main/HISTORY_STAGING_ACTIVATION_INTENT.json')
@@ -200,7 +202,22 @@ def _staging_parent_lock_matches(listing, pid, stats):
 
 def _staging_root_lock_owned(info):
     return (stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and
-            info.st_nlink == 1 and not info.st_mode & 0o077)
+            info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600)
+
+
+def _staging_shared_deployment_lock_owned(info):
+    if _staging_root_lock_owned(info):
+        return True
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+            stat.S_IMODE(info.st_mode) != 0o644):
+        return False
+    try:
+        user = pwd.getpwnam('java-tron')
+        group = grp.getgrnam('java-tron')
+    except KeyError:
+        return False
+    return (user.pw_uid > 0 and group.gr_gid > 0 and user.pw_gid == group.gr_gid and
+            info.st_uid == user.pw_uid and info.st_gid == group.gr_gid)
 
 
 def _staging_require_parent_locks(latch, pid, started):
@@ -214,7 +231,9 @@ def _staging_require_parent_locks(latch, pid, started):
         try:
             info = os.fstat(fd)
             named = os.stat(str(path), follow_symlinks=False)
-            require(_staging_root_lock_owned(info) and
+            allowed = (_staging_shared_deployment_lock_owned if path == STAGING_START_LOCK
+                       else _staging_root_lock_owned)
+            require(allowed(info) and
                     (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino),
                     'unsafe staging migration lock: ' + str(path))
             stats.append(info)
@@ -224,6 +243,19 @@ def _staging_require_parent_locks(latch, pid, started):
         listing = stream.read(16 << 20)
     require(_staging_parent_lock_matches(listing, pid, stats),
             'staging migration parent does not hold all four exact locks')
+    descriptors = []
+    for entry in os.listdir('/proc/%d/fd' % pid):
+        try:
+            descriptors.append(os.stat('/proc/%d/fd/%s' % (pid, entry)))
+        except OSError:
+            continue
+    for path, held in zip(paths, stats):
+        named = os.stat(str(path), follow_symlinks=False)
+        allowed = (_staging_shared_deployment_lock_owned if path == STAGING_START_LOCK
+                   else _staging_root_lock_owned)
+        require(allowed(named) and (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino) and
+                any((item.st_dev, item.st_ino) == (held.st_dev, held.st_ino)
+                    for item in descriptors), 'staging parent lock descriptor/path differs')
     require(_staging_parent_identity(pid) == started,
             'staging migration parent changed after lock proof')
 
@@ -614,6 +646,8 @@ def staging_marker(digest, source, stop_intent=False, prune_mode=None, history_w
 
 
 def require_ordinary_deploy_allowed():
+    require(not os.path.lexists(STAGING_REPIN_INTENT),
+            'pending history-staging repin blocks ordinary release and rollback')
     require(not os.path.lexists(STAGING_LATCH),
             'history-staging migration latch blocks ordinary release and rollback')
     require(not os.path.lexists(STAGING_PREPARED) or os.path.lexists(STAGING_REQUIRED),
@@ -954,6 +988,8 @@ def verify(source):
 
 
 def restore(old, health_timeout=None):
+    require(not os.path.lexists(STAGING_REPIN_INTENT),
+            'pending history-staging repin blocks ordinary release and rollback')
     require(not os.path.lexists(STAGING_LATCH),
             'migration latch forbids rollback to the old release')
     atomic_root(MEMORY, *old['memory'])
@@ -1045,8 +1081,18 @@ def activate_staging(source, candidate, digest, health_timeout=None):
     Failure intentionally leaves the migration latch and stopped service in
     place. The old reader must never be restored after source adoption.
     """
+    require(not os.path.lexists(STAGING_REPIN_INTENT),
+            'pending history-staging repin blocks activation')
     latch = json.loads(root_bytes(STAGING_LATCH, 16384)[0])
     prepared = json.loads(root_bytes(STAGING_PREPARED, 16384)[0])
+    if 'upgrade_binding' in latch:
+        require(latch['upgrade_binding'] == str(STAGING_UPGRADE_BINDING),
+                'pending activation upgrade binding path differs')
+        upgrade = json.loads(root_bytes(STAGING_UPGRADE_BINDING, 65536)[0])
+        require(upgrade.get('version') == 1 and upgrade.get('state') == 'DONE' and
+                upgrade.get('new_prepared') == prepared and
+                all(latch.get(key) == value for key, value in upgrade.get('new_latch', {}).items()
+                    if key != 'state'), 'pending activation upgrade binding differs')
     require(latch.get('version') == 1 and
             latch.get('state') == 'VERIFIED_PENDING_ACTIVATION' and
             latch.get('candidate_sha256') == digest and

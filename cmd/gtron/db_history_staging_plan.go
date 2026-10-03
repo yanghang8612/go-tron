@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/urfave/cli/v2"
@@ -78,7 +79,7 @@ func openHistoryStagingPlan(ctx *cli.Context, c *historyStagingCLIContext) (*his
 	}
 	header := reader.header
 	if header.Version != 1 || header.JobID != c.event.JobID ||
-		header.CandidateSHA256 != c.event.CandidateSHA256 ||
+		header.CandidateSHA256 != historyStagingPlanProducer(c) ||
 		header.Paths != c.paths || header.Head.HeadHash == ([32]byte{}) ||
 		header.GenesisHash == ([32]byte{}) ||
 		!historyStagingSHAPattern.MatchString(header.ManifestSHA256) ||
@@ -166,6 +167,25 @@ func verifyHistoryStagingPlanInputs(ctx *cli.Context, c *historyStagingCLIContex
 	if boundary != header.Head || eligible != header.EligibleThrough {
 		return errors.New("history staging canonical head, solid, Finish or index changed while planning")
 	}
+	forkHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return err
+	}
+	chain, err := snapshotExpectedChainIdentityFromContext(ctx, forkHash)
+	if err != nil {
+		return err
+	}
+	genesis, err := makeGenesis(ctx)
+	if err != nil {
+		return err
+	}
+	if err = applyHistoryConfig(ctx, genesis.Config); err != nil {
+		return err
+	}
+	if chain.NetworkID < 0 || uint64(chain.NetworkID) != header.NetworkID || common.HexToHash(chain.GenesisHash) != header.GenesisHash || string(genesis.Config.EffectiveHistoryMode()) != header.PruneMode || genesis.Config.EffectiveHistoryPruneWindow() != header.HistoryWindow {
+		return errors.New("history staging frozen chain or retention config differs")
+	}
+
 	index, present, err := rawdb.ReadStageProgressRow(source, rawdb.StageStateHistoryIndex)
 	if err != nil || !present || !index.HasBlockHash {
 		return errors.New("history staging index changed while planning")
