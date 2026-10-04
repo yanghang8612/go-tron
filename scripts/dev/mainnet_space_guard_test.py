@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -65,6 +66,69 @@ class MainnetGuardTest(unittest.TestCase):
     def test_wrong_device_rejected(self):
         with self.assertRaisesRegex(ValueError, "device mismatch"):
             self.inspect(device=8)
+
+    def migration_run(self, mode, contents):
+        # Exercise run -> inspect_space with real latch bytes and only the
+        # host ownership/filesystem accounting replaced by production fixtures.
+        with tempfile.TemporaryDirectory() as tmp:
+            migration = Path(tmp, "migration.json")
+            migration.write_bytes(contents)
+            with patch.object(guard, "MIGRATION", str(migration)), \
+                 patch.object(guard, "read_config", return_value=self.cfg), \
+                 patch.object(guard.os, "stat", return_value=types.SimpleNamespace(st_mode=0o40755, st_dev=7)), \
+                 patch.object(guard.os, "fstat", return_value=types.SimpleNamespace(st_mode=0o100600, st_uid=0, st_size=len(contents))), \
+                 patch.object(guard.os, "statvfs", side_effect=lambda p: self.root_vfs if p == "/" else self.vfs), \
+                 patch.object(guard.os.path, "lexists", side_effect=lambda p: p == str(migration)), \
+                 patch.object(guard.os, "geteuid", return_value=0), \
+                 patch.object(guard, "create_latch") as latch, \
+                 patch.object(guard.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)) as stop, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return guard.run(mode), latch, stop
+
+    def test_in_progress_migration_only_blocks_startup(self):
+        self.vfs.f_bavail = 600 * guard.GIB // 4096
+        contents = json.dumps({'version': 1, 'state': 'MIGRATION_IN_PROGRESS'}).encode()
+        for mode, expected in (("check", 1), ("guard", 0)):
+            code, latch, stop = self.migration_run(mode, contents)
+            self.assertEqual(code, expected)
+            latch.assert_not_called()
+            stop.assert_not_called()
+
+    def test_damaged_migration_blocks_startup_without_disk_hold(self):
+        self.vfs.f_bavail = 600 * guard.GIB // 4096
+        for mode, expected in (("check", 1), ("guard", 0)):
+            code, latch, stop = self.migration_run(mode, b'{broken')
+            self.assertEqual(code, expected)
+            latch.assert_not_called()
+            stop.assert_not_called()
+
+    def test_periodic_disk_fault_still_latches_and_stops_during_migration(self):
+        self.vfs.f_bavail = 100 * guard.GIB // 4096
+        contents = json.dumps({'version': 1, 'state': 'MIGRATION_IN_PROGRESS'}).encode()
+        code, latch, stop = self.migration_run("guard", contents)
+        self.assertEqual(code, 1)
+        latch.assert_called_once()
+        self.assertEqual(latch.call_args[0][0]['reasons'], ['free byte reserve reached'])
+        self.assertEqual(stop.call_args[0][0], ["/bin/systemctl", "stop", "gtron.service"])
+
+    def test_verified_pending_activation_can_start_with_sufficient_space(self):
+        self.vfs.f_bavail = 600 * guard.GIB // 4096
+        contents = json.dumps({'version': 1, 'state': 'VERIFIED_PENDING_ACTIVATION'}).encode()
+        code, latch, stop = self.migration_run("check", contents)
+        self.assertEqual(code, 0)
+        latch.assert_not_called()
+        stop.assert_not_called()
+
+    def test_unknown_or_missing_migration_state_version_blocks_startup(self):
+        self.vfs.f_bavail = 600 * guard.GIB // 4096
+        for props in ({'version': 2, 'state': 'VERIFIED_PENDING_ACTIVATION'},
+                      {'version': 1, 'state': 'unknown'}, {'version': 1},
+                      {'state': 'VERIFIED_PENDING_ACTIVATION'}):
+            with self.subTest(props=props):
+                code, latch, stop = self.migration_run("check", json.dumps(props).encode())
+                self.assertEqual(code, 1)
+                latch.assert_not_called()
+                stop.assert_not_called()
 
     def invoke(self, mode, result=None, failure=None, latch_error=None):
         with patch.object(guard.os, "geteuid", return_value=0), \

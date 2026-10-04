@@ -77,7 +77,9 @@ def inspect_space(starting):
     reasons = []
     if os.path.lexists(HOLD):
         reasons.append("mainnet stop latch exists")
-    if os.path.lexists(MIGRATION):
+    if starting and os.path.lexists(MIGRATION):
+        # Migration is a startup fence, not a disk fault. The periodic disk
+        # guard must not turn this temporary fence into a persistent stop hold.
         # During VERIFIED_PENDING_ACTIVATION the fixed candidate may start
         # under its separate SHA/capability guard. Unknown or damaged latch
         # contents must still prevent this guard from approving startup.
