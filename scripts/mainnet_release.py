@@ -90,7 +90,7 @@ def command(argv, timeout=60):
 
 def show(*names):
     lines = command(['/bin/systemctl', 'show', SERVICE, '--no-pager'] +
-                    ['--property=' + name for name in names], 30).splitlines()
+                    (['--property=' + name for name in names] if names else ['--all']), 30).splitlines()
     result = {}
     for line in lines:
         name, separator, value = line.partition('=')
@@ -272,12 +272,14 @@ def _staging_require_stopped(unit, timer=False):
 
 
 def _staging_service_owner(active=False):
-    props = show('ActiveState', 'MainPID', 'User', 'Group', 'DynamicUser')
+    # Older systemd rejects a filtered query naming the unsupported DynamicUser
+    # property. A successful full query still proves all required properties.
+    props = show()
     state_ok = (props.get('ActiveState') == 'active' and
                 props.get('MainPID', '0').isdigit() and int(props['MainPID']) > 0) if active else (
                     props.get('ActiveState') in ('inactive', 'failed') and props.get('MainPID') == '0')
     require(state_ok and props.get('User') == 'java-tron' and
-            props.get('Group') == 'java-tron' and props.get('DynamicUser', 'no') in ('no', ''),
+            props.get('Group') == 'java-tron' and props.get('DynamicUser', 'no') == 'no',
             'staging handoff requires pinned java-tron service User/Group and state')
     user = pwd.getpwnam('java-tron')
     group = grp.getgrnam('java-tron')

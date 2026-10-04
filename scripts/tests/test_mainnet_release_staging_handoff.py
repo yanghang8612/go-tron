@@ -20,6 +20,68 @@ release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
 
 
+class ServiceOwnerQueryTests(unittest.TestCase):
+    def query(self, props, active=False, returncode=0, uid=1001, gid=1002, user_gid=1002):
+        def run(argv, **kwargs):
+            # systemd 219 rejects unknown filtered properties, but its full
+            # query succeeds and omits properties it does not implement.
+            if '--property=DynamicUser' in argv:
+                return subprocess.CompletedProcess(argv, 1, b'', b'Unknown property DynamicUser')
+            self.assertEqual(argv, ['/bin/systemctl', 'show', release.SERVICE, '--no-pager', '--all'])
+            output = '\n'.join('%s=%s' % item for item in props.items()).encode()
+            return subprocess.CompletedProcess(argv, returncode, output, b'query failed')
+        with mock.patch.object(release.subprocess, 'run', side_effect=run), \
+                mock.patch.object(release.pwd, 'getpwnam', return_value=mock.Mock(pw_uid=uid, pw_gid=user_gid)), \
+                mock.patch.object(release.grp, 'getgrnam', return_value=mock.Mock(gr_gid=gid)):
+            return release._staging_service_owner(active=active)
+
+    def props(self):
+        return {'ActiveState': 'inactive', 'MainPID': '0', 'User': 'java-tron', 'Group': 'java-tron'}
+
+    def test_systemd_219_full_query_accepts_absent_optional_property(self):
+        self.assertEqual(self.query(self.props()), (1001, 1002))
+
+    def test_modern_static_owner_and_active_branch(self):
+        props = self.props()
+        props.update(DynamicUser='no', ActiveState='active', MainPID='99')
+        self.assertEqual(self.query(props, active=True), (1001, 1002))
+
+    def test_dynamic_user_must_be_explicitly_false_if_present(self):
+        for value in ('yes', '', 'unexpected'):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                props = self.props()
+                props['DynamicUser'] = value
+                self.query(props)
+
+    def test_each_required_property_missing_fails(self):
+        for name in self.props():
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                props = self.props()
+                del props[name]
+                self.query(props)
+
+    def test_wrong_owner_state_and_pid_fail(self):
+        for name, value in (('User', 'root'), ('Group', 'root'), ('ActiveState', 'active'), ('MainPID', '99')):
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                props = self.props()
+                props[name] = value
+                self.query(props)
+        for pid in ('0', '', 'invalid'):
+            with self.subTest(pid=pid), self.assertRaises(RuntimeError):
+                props = self.props()
+                props.update(ActiveState='active', MainPID=pid)
+                self.query(props, active=True)
+
+    def test_real_query_failure_does_not_accept_stdout(self):
+        with self.assertRaisesRegex(RuntimeError, 'failed \\(1\\)'):
+            self.query(self.props(), returncode=1)
+
+    def test_numeric_owner_validation_is_preserved(self):
+        for ids in ({'uid': 0}, {'gid': 0}, {'user_gid': 9999}):
+            with self.subTest(ids=ids), self.assertRaises(RuntimeError):
+                self.query(self.props(), **ids)
+
+
 class StorageHandoffTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
