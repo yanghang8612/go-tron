@@ -1829,11 +1829,9 @@ func gtron(ctx *cli.Context) error {
 // preserves and verifies that prefix; later index passes advance it. Require
 // a present, canonical hash-bound row no higher than head before construction
 // so a missing or corrupt row cannot be silently initialized at genesis.
-func verifyHistoryStagingConstructorIndex(hot ethdb.KeyValueReader, canonical ethdb.KeyValueReader, boundary offlineChainBoundary) error {
+func verifyHistoryStagingConstructorIndex(hot ethdb.KeyValueReader, canonical *rawdb.ChainDB, boundary offlineChainBoundary) error {
 	index, present, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(hot,
-		rawdb.StageStateHistoryIndex, func(number uint64) (common.Hash, bool, error) {
-			return rawdb.ReadBlockHashByNumberStrict(canonical, number)
-		})
+		rawdb.StageStateHistoryIndex, canonical.BlockHashByNumberStrict)
 	if err != nil {
 		return fmt.Errorf("history staging requires canonical hash-bound StateHistoryIndex at or below head before constructor: %w", err)
 	}

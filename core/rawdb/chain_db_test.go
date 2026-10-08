@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,6 +66,88 @@ func TestChainDBNilAncient(t *testing.T) {
 	}
 	if _, err := cdb.Ancient("headers", 0); !errors.Is(err, ErrNotInAncient) {
 		t.Fatalf("Ancient on nil-AncientReader path: want ErrNotInAncient, got %v", err)
+	}
+}
+
+func TestChainDBBlockHashByNumberStrict(t *testing.T) {
+	t.Parallel()
+	block := coretypes.NewBlockFromPB(newBlockProto(13, 1313))
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cold := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cold=%v", cold), func(t *testing.T) {
+			hot := NewMemoryDatabase()
+			anc := newFakeAncient()
+			if cold {
+				anc.put(ancientBlocks, 13, data)
+			} else if err := WriteBlock(hot, block); err != nil {
+				t.Fatal(err)
+			}
+			if cold && ReadBlockKV(hot, 13) != nil {
+				t.Fatal("cold-only fixture unexpectedly has a hot body")
+			}
+			cdb := NewChainDB(hot, anc)
+			hash, present, err := cdb.BlockHashByNumberStrict(13)
+			if err != nil || !present || hash != block.Hash() {
+				t.Fatalf("canonical hash = %x/%v/%v, want %x/true/nil", hash, present, err, block.Hash())
+			}
+			hash, present, err = cdb.BlockHashByNumberStrict(14)
+			if err != nil || present || hash != (common.Hash{}) {
+				t.Fatalf("missing hash = %x/%v/%v", hash, present, err)
+			}
+		})
+	}
+}
+
+func TestChainDBBlockHashByNumberStrictErrors(t *testing.T) {
+	t.Parallel()
+	readErr := errors.New("canonical body I/O failed")
+	wrong, err := coretypes.NewBlockFromPB(newBlockProto(14, 1414)).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		data        []byte
+		err         error
+		wantPresent bool
+		wantMessage string
+	}{
+		{name: "decode", data: []byte("not-a-valid-proto"), wantPresent: true, wantMessage: "block 13 decode"},
+		{name: "wrong number", data: wrong, wantPresent: true, wantMessage: "row 13 contains block number 14"},
+		{name: "I/O", err: readErr, wantMessage: readErr.Error()},
+	} {
+		for _, cold := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cold=%v", tc.name, cold), func(t *testing.T) {
+				hot := NewMemoryDatabase()
+				anc := newFakeAncient()
+				cdb := NewChainDB(hot, anc)
+				if cold {
+					if tc.err != nil {
+						anc.setErr(ancientBlocks, 13, tc.err)
+					} else {
+						anc.put(ancientBlocks, 13, tc.data)
+					}
+				} else if tc.err != nil {
+					cdb.KeyValueStore = failingGetStore{KeyValueStore: hot, key: blockKey(13), err: tc.err}
+				} else if err := hot.Put(blockKey(13), tc.data); err != nil {
+					t.Fatal(err)
+				}
+				hash, present, err := cdb.BlockHashByNumberStrict(13)
+				if err == nil || present != tc.wantPresent || hash != (common.Hash{}) || !strings.Contains(err.Error(), tc.wantMessage) {
+					t.Fatalf("hash = %x/%v/%v, want zero/%v/%s", hash, present, err, tc.wantPresent, tc.wantMessage)
+				}
+				if tc.err != nil && !errors.Is(err, tc.err) {
+					t.Fatalf("I/O error identity lost: %v", err)
+				}
+			})
+		}
+	}
+	var missing *ChainDB
+	if _, present, err := missing.BlockHashByNumberStrict(13); err == nil || present {
+		t.Fatalf("nil ChainDB = present %v, err %v", present, err)
 	}
 }
 

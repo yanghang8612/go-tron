@@ -228,6 +228,15 @@ func (db *ChainDB) SetChainIndexReader(reader ChainIndexReader) {
 	db.chainIndex = reader
 }
 
+// BlockHashByNumberStrict returns the hash of the canonical body at number through
+// the composed hot/freezer view. Missing bodies return present=false; storage,
+// decoding, and block-number errors are preserved for strict stage verifiers.
+func (db *ChainDB) BlockHashByNumberStrict(number uint64) (common.Hash, bool, error) {
+	return ReadBlockHashByNumberStrict(db, number)
+}
+
+var _ BlockHashReaderStrict = (*ChainDB)(nil)
+
 // BlockNumberByHash implements ChainIndexReader over the composed ChainDB view:
 // hot rows are preferred and the attached cold sidecar is consulted only on a
 // miss.
