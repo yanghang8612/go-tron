@@ -247,6 +247,8 @@ func (m *Manager) VerifyHistoryStagingPinnedBinding(ctx context.Context, binding
 // the persisted semantic receipt was already proven during offline adoption
 // or rebind. RPC reads can still perform the full per-range semantic proof on
 // their first cache miss using VerifyHistoryStagingPinnedBinding.
+// The caller must load the binding through a validated durable route; this
+// method cannot certify newly supplied semantic commitments for publication.
 func (m *Manager) VerifyHistoryStagingPinnedBindingReceipt(ctx context.Context, binding rawdb.HistoryStagingColdBinding) error {
 	if m == nil || !m.pinned || ctx == nil || binding.Version != rawdb.HistoryStagingFormatVersion ||
 		binding.Epoch == 0 || binding.BindingEpoch == 0 || len(binding.Spans) == 0 {
@@ -272,11 +274,18 @@ func (m *Manager) VerifyHistoryStagingPinnedBindingReceipt(ctx context.Context, 
 	if err != nil || manifest == nil || binding.ManifestEpoch == 0 || manifest.Generation < binding.ManifestEpoch {
 		return errors.New("snapshots: pinned cold manifest differs from receipt")
 	}
-	prover := &HistoryStagingColdProver{dir: m.dir, manifest: manifest, verified: make(map[[32]byte][3]historyStagingFileState)}
-	if _, err := prover.bindingFileStates(binding); err != nil {
+	prover := &HistoryStagingColdProver{dir: m.dir, manifest: manifest}
+	authenticator := &historyStagingReceiptAuthenticator{dir: m.dir, manifest: manifest}
+	return prover.verifyBindingReceiptFiles(ctx, binding, authenticator)
+}
+
+// The caller has validated the durable binding's metadata and manifest epoch.
+func (prover *HistoryStagingColdProver) verifyBindingReceiptFiles(ctx context.Context, binding rawdb.HistoryStagingColdBinding, authenticator *historyStagingReceiptAuthenticator) error {
+	before, err := prover.bindingFileStates(binding)
+	if err != nil {
 		return err
 	}
-	index, err := historyStagingManifestTrioIndex(m.dir, manifest)
+	index, err := historyStagingManifestTrioIndex(prover.dir, prover.manifest)
 	if err != nil {
 		return err
 	}
@@ -288,11 +297,17 @@ func (m *Manager) VerifyHistoryStagingPinnedBindingReceipt(ctx context.Context, 
 		}
 		seen[id] = struct{}{}
 		trio := index[id]
-		if err := prover.authenticate(ctx, trio, id); err != nil {
+		if err := authenticator.authenticate(ctx, trio, id); err != nil {
 			return err
 		}
 	}
-	return nil
+	// A binding can depend on several trios. Recheck the entire set so a file
+	// verified early cannot change while a later trio is being authenticated.
+	after, err := prover.bindingFileStates(binding)
+	if err != nil || !historyStagingSamePinnedFiles(before, after) {
+		return errors.New("snapshots: cold trio changed during pinned binding receipt proof")
+	}
+	return ctx.Err()
 }
 
 func historyStagingSamePinnedFiles(before, after map[[32]byte][3]historyStagingFileState) bool {
