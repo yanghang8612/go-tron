@@ -165,6 +165,17 @@ type HistoryStagingLimits struct {
 	MaxDecodedBytes uint64
 	MinFreeBytes    uint64
 	FreeBytes       func() (uint64, error)
+	// Checkpoint optionally yields runtime maintenance between bounded rows,
+	// decoded blocks and batches. It runs outside route/canonical writer locks.
+	// Nil preserves the offline protocol. A failure never authorizes adoption.
+	Checkpoint func(workBytes uint64) error
+}
+
+func (l HistoryStagingLimits) checkpoint(workBytes uint64) error {
+	if l.Checkpoint != nil {
+		return l.Checkpoint(workBytes)
+	}
+	return nil
 }
 
 // Manager is the shared storage protocol used by the node and offline CLI.

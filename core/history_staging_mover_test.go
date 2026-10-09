@@ -100,7 +100,7 @@ func TestHistoryStagingMoverResumesClaimAfterStageAdvance(t *testing.T) {
 	indexed, _, _ := rawdb.ReadStageProgressRow(hot, rawdb.StageStateHistoryIndex)
 	pressure := func() maintenance.StoragePressure {
 		now := time.Now()
-		return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now}
+		return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now, DeviceQueueMilli: 4_000, DeviceAwait: time.Millisecond}
 	}
 	mover, err := NewHistoryStagingMover(bc, HistoryStagingMoverConfig{HistoryWindow: 1, Cadence: time.Second, HeavyWorkGate: maintenance.NewHeavyWorkGate(), HotPressure: pressure, StagePressure: pressure, Limits: rawdb.HistoryStagingLimits{MaxRowBytes: 1 << 20, MaxBatchBytes: 4 << 20, MaxBucketBytes: 64 << 20, MaxWorkBytes: 128 << 20, MaxDecodedBytes: 32 << 20, MinFreeBytes: 1, FreeBytes: func() (uint64, error) { return 1 << 40, nil }}})
 	if err != nil {
@@ -119,6 +119,74 @@ func TestHistoryStagingMoverResumesClaimAfterStageAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("reservation hint survives an unrelated empty page", func(t *testing.T) {
+		bc.chainmu.Lock()
+		ready, err := mover.candidateHint(context.Background())
+		bc.chainmu.Unlock()
+		if err != nil || !ready {
+			t.Fatalf("route-only hint under writer lock: ready=%t err=%v", ready, err)
+		}
+		other, ok := mover.cfg.HeavyWorkGate.TryAcquire()
+		if !ok {
+			t.Fatal("could not occupy maintenance gate")
+		}
+		if _, ok := mover.acquireHeavy(true); ok || mover.reservation == nil {
+			t.Fatal("candidate failed to reserve a turn")
+		}
+		var after [8]byte
+		binary.BigEndian.PutUint64(after[:], 1000)
+		mover.hintCursor = after[:]
+		ready, err = mover.candidateHint(context.Background())
+		if err != nil || !ready || mover.reservation == nil {
+			t.Fatalf("empty page revoked eligible candidate: ready=%t err=%v", ready, err)
+		}
+		other()
+		mover.cancelReservation()
+		mover.hintCursor = nil
+	})
+	t.Run("canceled claim releases publication before checkpoint", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := snapshots.NewManifestForChain(0, 0, nil, snapshots.ChainIdentity{ChainID: 1, NetworkID: 1, GenesisHash: fmt.Sprintf("0x%x", genesisHash[:])})
+		if err := snapshots.PublishManifest(dir, manifest); err != nil {
+			t.Fatal(err)
+		}
+		cold, err := snapshots.OpenManager(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := snapshots.BindHistoryStagingColdRetention(dir, manager); err != nil {
+			t.Fatal(err)
+		}
+		bc.SetStateCodeColdHistory(cold)
+		limits := mover.cfg.Limits
+		limits.Checkpoint = func(uint64) error { return context.Canceled }
+		if err := manager.AbortClaim(context.Background(), claim, limits); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel claim: %v", err)
+		}
+		calls := 0
+		mover.cfg.Limits.Checkpoint = func(uint64) error {
+			calls++
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// This takes publication Write admission. It must succeed while the
+			// aborted payload copy yields instead of waiting behind its Read.
+			return snapshots.ReconcileHistoryStagingColdDependencies(ctx, dir)
+		}
+		if err := mover.runAdmitted(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		mover.cfg.Limits.Checkpoint = nil
+		if calls == 0 {
+			t.Fatal("abort never reached a checkpoint")
+		}
+		if _, present, err := manager.ReadClaim(1); err != nil || present {
+			t.Fatalf("abort left claim: present=%t err=%v", present, err)
+		}
+		claim, err = manager.BeginClaim(context.Background(), proof, [32]byte{9})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 	// Simulate foreground import and index progress after the durable claim.
 	newHead := testRestartBlock(2049)
 	bc.currentBlock.Store(newHead)

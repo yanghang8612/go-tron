@@ -1377,7 +1377,7 @@ func gtron(ctx *cli.Context) error {
 		stagingResources = newRuntimeHistoryResources(stageDB, stagingRequest.Paths.Target)
 		stack.RegisterLifecycle(stagingResources)
 		limits := rawdb.HistoryStagingLimits{
-			MaxRowBytes: 16 << 20, MaxBatchBytes: 32 << 20,
+			MaxRowBytes: 16 << 20, MaxBatchBytes: 16 << 20,
 			MaxBucketBytes: 2 << 30, MaxWorkBytes: 4 << 30,
 			MaxDecodedBytes: 64 << 20, MinFreeBytes: 16 << 30,
 			FreeBytes: func() (uint64, error) {
@@ -1388,6 +1388,7 @@ func gtron(ctx *cli.Context) error {
 			HistoryWindow: chainConfig.EffectiveHistoryPruneWindow(), Cadence: 5 * time.Second,
 			Limits: limits, HeavyWorkGate: heavyWorkGate,
 			HotPressure: historyResources.sampleLoad, StagePressure: stagingResources.sampleLoad,
+			MemoryProbe: historyResources.stagingMemoryHeadroom,
 		})
 		if err != nil {
 			closeStores()

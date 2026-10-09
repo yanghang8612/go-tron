@@ -12,10 +12,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -108,7 +110,9 @@ type historyStagingTrio struct {
 }
 
 type historyStagingFileState struct {
-	info os.FileInfo
+	info          os.FileInfo
+	changeTime    [2]int64
+	hasChangeTime bool
 }
 
 const historyStagingPinnedProofCacheEntries = 4096
@@ -186,7 +190,7 @@ func (m *Manager) VerifyHistoryStagingPinnedBinding(ctx context.Context, binding
 	if m == nil || !m.pinned || ctx == nil || loadBlocks == nil || len(binding.Spans) == 0 {
 		return errors.New("snapshots: pinned cold binding proof requires a pinned manager and block loader")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 		return err
 	}
 	manifest, err := m.currentManifest()
@@ -205,7 +209,7 @@ func (m *Manager) VerifyHistoryStagingPinnedBinding(ctx context.Context, binding
 	key := sha256.Sum256(append(append([]byte("gtron-history-staging-pinned-binding-v1\x00"), m.dir...), encoded...))
 	historyStagingPinnedProofCache.Lock()
 	entry, hit := historyStagingPinnedProofCache.entries[key]
-	if hit && historyStagingSamePinnedFiles(entry.files, files) {
+	if hit && historyStagingReusablePinnedFiles(entry.files) && historyStagingSamePinnedFiles(entry.files, files) {
 		historyStagingPinnedProofCache.clock++
 		entry.used = historyStagingPinnedProofCache.clock
 		historyStagingPinnedProofCache.entries[key] = entry
@@ -254,7 +258,7 @@ func (m *Manager) VerifyHistoryStagingPinnedBindingReceipt(ctx context.Context, 
 		binding.Epoch == 0 || binding.BindingEpoch == 0 || len(binding.Spans) == 0 {
 		return errors.New("snapshots: invalid pinned cold binding receipt")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 		return err
 	}
 	first, last, err := rawdb.StateHistoryChunkBucketBounds(binding.Bucket)
@@ -320,7 +324,7 @@ func historyStagingSamePinnedFiles(before, after map[[32]byte][3]historyStagingF
 			return false
 		}
 		for i := range first {
-			if !first[i].same(second[i]) {
+			if !first[i].unchanged(second[i]) {
 				return false
 			}
 		}
@@ -361,11 +365,50 @@ func (p *HistoryStagingColdProver) bindingFileStates(binding rawdb.HistoryStagin
 	return files, nil
 }
 
+// Cache reuse requires an OS change timestamp: size and a restored mtime alone
+// cannot detect in-place corruption. Linux Ctim and Darwin/BSD Ctimespec carry
+// this information. Other platforms still verify, but do not reuse auth caches.
+func historyStagingChangeTime(info os.FileInfo) ([2]int64, bool) {
+	value := reflect.ValueOf(info.Sys())
+	if value.Kind() == reflect.Pointer && !value.IsNil() {
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return [2]int64{}, false
+	}
+	for _, name := range []string{"Ctim", "Ctimespec"} {
+		stamp := value.FieldByName(name)
+		if !stamp.IsValid() || stamp.Kind() != reflect.Struct {
+			continue
+		}
+		sec, nsec := stamp.FieldByName("Sec"), stamp.FieldByName("Nsec")
+		if sec.IsValid() && nsec.IsValid() && sec.CanInt() && nsec.CanInt() {
+			return [2]int64{sec.Int(), nsec.Int()}, true
+		}
+	}
+	return [2]int64{}, false
+}
+
+func historyStagingReusablePinnedFiles(files map[[32]byte][3]historyStagingFileState) bool {
+	for _, trio := range files {
+		for _, file := range trio {
+			if !file.hasChangeTime {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (s historyStagingFileState) same(other historyStagingFileState) bool {
+	return s.hasChangeTime && other.hasChangeTime && s.unchanged(other)
+}
+
+func (s historyStagingFileState) unchanged(other historyStagingFileState) bool {
 	return s.info != nil && other.info != nil && os.SameFile(s.info, other.info) &&
-		s.info.Size() == other.info.Size() &&
-		s.info.ModTime() == other.info.ModTime() &&
-		s.info.Mode() == other.info.Mode()
+		s.info.Size() == other.info.Size() && s.info.ModTime() == other.info.ModTime() &&
+		s.info.Mode() == other.info.Mode() && s.hasChangeTime == other.hasChangeTime &&
+		s.changeTime == other.changeTime
 }
 
 const historyStagingProofMaxRecords = 4_000_000
@@ -484,13 +527,14 @@ func historyStagingFileFingerprint(dir string, ref SegmentRef) (historyStagingFi
 	if !info.Mode().IsRegular() || info.Size() < 0 || uint64(info.Size()) != ref.Size {
 		return historyStagingFileState{}, fmt.Errorf("snapshots: cold trio file identity changed: %s", path)
 	}
-	return historyStagingFileState{info: info}, nil
+	changeTime, known := historyStagingChangeTime(info)
+	return historyStagingFileState{info: info, changeTime: changeTime, hasChangeTime: known}, nil
 }
 
 func historyStagingCheckFileStates(dir string, refs [3]SegmentRef, states [3]historyStagingFileState) error {
 	for i, ref := range refs {
 		after, err := historyStagingFileFingerprint(dir, ref)
-		if err != nil || !after.same(states[i]) {
+		if err != nil || !after.unchanged(states[i]) {
 			return fmt.Errorf("snapshots: cold trio changed during proof: %s", ref.Path)
 		}
 	}
@@ -516,8 +560,48 @@ func (p *HistoryStagingColdProver) authenticate(ctx context.Context, refs [3]Seg
 		}
 	}
 	globalKey := sha256.Sum256(append(append([]byte("gtron-history-staging-trio-auth-v1\x00"), p.dir...), id[:]...))
+	// A cooperative owner may release the shared maintenance token. Never
+	// own or wait on a global flight here: a flight waiter may hold that token
+	// while the owner tries to reacquire it. Cache hits remain safe; misses run
+	// the identical full proof independently, publishing only authenticated bytes.
+	if maintenance.HasWorkCheckpoint(ctx) {
+		historyStagingPinnedProofCache.Lock()
+		cached, hit := historyStagingPinnedProofCache.trios[globalKey]
+		historyStagingPinnedProofCache.Unlock()
+		if hit && cached[0].same(states[0]) && cached[1].same(states[1]) && cached[2].same(states[2]) {
+			p.verified[id] = states
+			return nil
+		}
+		p.stats.FullTrioAuthenticates++
+		var err error
+		if p.testAuth != nil {
+			err = p.testAuth(ctx, refs)
+		} else {
+			err = VerifyHistorySegmentWithCompanionsContext(ctx, p.dir, p.manifest, refs[0])
+		}
+		if err == nil {
+			err = historyStagingCheckFileStates(p.dir, refs, states)
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			return err
+		}
+		historyStagingPinnedProofCache.Lock()
+		if len(historyStagingPinnedProofCache.trios) >= historyStagingPinnedProofCacheEntries {
+			for old := range historyStagingPinnedProofCache.trios {
+				delete(historyStagingPinnedProofCache.trios, old)
+				break
+			}
+		}
+		historyStagingPinnedProofCache.trios[globalKey] = states
+		historyStagingPinnedProofCache.Unlock()
+		p.verified[id] = states
+		return nil
+	}
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 			return err
 		}
 		historyStagingPinnedProofCache.Lock()
@@ -581,7 +665,7 @@ func (p *HistoryStagingColdProver) authenticate(ctx context.Context, refs [3]Seg
 		if err == nil {
 			for i, ref := range refs {
 				after, fingerprintErr := historyStagingFileFingerprint(p.dir, ref)
-				if fingerprintErr != nil || !after.same(states[i]) {
+				if fingerprintErr != nil || !after.unchanged(states[i]) {
 					err = fmt.Errorf("snapshots: cold trio changed during authentication: %s", ref.Path)
 					break
 				}
@@ -664,7 +748,7 @@ func (p *HistoryStagingColdProver) Build(ctx context.Context, blocks []rawdb.His
 	if p == nil || ctx == nil || len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) || len(needed) != len(blocks) {
 		return nil, errors.New("snapshots: staging proof needs one full bucket and matching cold mask")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 		return nil, err
 	}
 	first, last, err := rawdb.StateHistoryChunkBucketBounds(blocks[0].Number / rawdb.StateHistoryChunkBucketBlocks)
@@ -733,7 +817,7 @@ func (p *HistoryStagingColdProver) Build(ctx context.Context, blocks []rawdb.His
 }
 
 func (p *HistoryStagingColdProver) openSpanTrio(ctx context.Context, ref SegmentRef, id [32]byte) (*historyStagingOpenTrio, error) {
-	if err := ctx.Err(); err != nil {
+	if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 		return nil, err
 	}
 	refs, actualID, err := p.trio(ref)
@@ -765,16 +849,16 @@ func (p *HistoryStagingColdProver) openSpanTrio(ctx context.Context, ref Segment
 		return nil, errors.New("snapshots: cold proof trio was not authenticated")
 	}
 	for i := range states {
-		if !states[i].same(verified[i]) {
+		if !states[i].unchanged(verified[i]) {
 			return nil, errors.New("snapshots: cold proof trio changed after authentication")
 		}
 	}
-	history, size, header, err := openHistorySegmentForReadWithCacheLimit(p.dir, ref, 4)
+	history, size, header, err := openHistorySegmentForReadWithCacheLimitContext(ctx, p.dir, ref, 4)
 	if err != nil {
 		return nil, err
 	}
 	p.stats.HistoryOpens++
-	index, indexHeader, err := openStateDomainChangeBinaryIndexReader(p.dir, refs[1])
+	index, indexHeader, err := openStateDomainChangeBinaryIndexReaderContext(ctx, p.dir, refs[1])
 	if err != nil {
 		_ = history.Close()
 		return nil, err
@@ -825,7 +909,7 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 	}
 	if found {
 		for i := start; i < open.indexHeader.count; i++ {
-			if err := ctx.Err(); err != nil {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 				return nil, err
 			}
 			entry, err := readStateDomainChangeBinaryIndexEntryAt(index, i)
@@ -861,7 +945,7 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 					return nil, errors.New("snapshots: cold proof index/record tx mismatch")
 				}
 				if change.TxNum >= first.BeginTxNum {
-					if err := ctx.Err(); err != nil {
+					if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 						return nil, err
 					}
 					if change == nil || change.BlockNum < first.Number || change.BlockNum > last.Number {
@@ -883,7 +967,14 @@ func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref S
 						ordinal++
 					}
 					previousTx, havePrevious = change.TxNum, true
-					records = append(records, historyStagingRecordDigest(change, ordinal))
+					digest, err := historyStagingRecordDigestStream(change, ordinal, uint64(len(change.Prev)), func(dst io.Writer) error {
+						_, err := (contextWriter{ctx: ctx, w: dst}).Write(change.Prev)
+						return err
+					})
+					if err != nil {
+						return nil, err
+					}
+					records = append(records, digest)
 				}
 				offset = next
 			}
@@ -913,12 +1004,96 @@ func historyStagingSemanticDigest(blocks []rawdb.HistoryStagingBlockProof, recor
 	return rangeDigest, semantic
 }
 
+// sortHistoryStagingRecordsContext uses in-place heap sorting for cooperative
+// proofs, avoiding a second allocation of up to 128 MiB at the row cap. It has
+// the same bytewise order as the ordinary digest, with cancellation outside
+// comparisons and no comparator-contract changes on errors.
+func sortHistoryStagingRecordsContext(ctx context.Context, records [][32]byte) error {
+	if !maintenance.HasWorkCheckpoint(ctx) {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		sort.Slice(records, func(i, j int) bool { return bytes.Compare(records[i][:], records[j][:]) < 0 })
+		return contextError(ctx)
+	}
+	steps := uint64(0)
+	down := func(root, end int) error {
+		for root < end/2 {
+			child := 2*root + 1
+			if child+1 < end && bytes.Compare(records[child][:], records[child+1][:]) < 0 {
+				child++
+			}
+			if bytes.Compare(records[root][:], records[child][:]) >= 0 {
+				break
+			}
+			records[root], records[child] = records[child], records[root]
+			root = child
+			steps++
+			if steps%1024 == 0 {
+				if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for i := len(records) / 2; i > 0; i-- {
+		if i%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				return err
+			}
+		}
+		if err := down(i-1, len(records)); err != nil {
+			return err
+		}
+	}
+	for end := len(records) - 1; end > 0; end-- {
+		records[0], records[end] = records[end], records[0]
+		if err := down(0, end); err != nil {
+			return err
+		}
+		if end%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				return err
+			}
+		}
+	}
+	return maintenance.WorkCheckpoint(ctx, 0)
+}
+
+func historyStagingSemanticDigestContext(ctx context.Context, blocks []rawdb.HistoryStagingBlockProof, records [][32]byte) ([32]byte, [32]byte, error) {
+	if err := sortHistoryStagingRecordsContext(ctx, records); err != nil {
+		return [32]byte{}, [32]byte{}, err
+	}
+	h := sha256.New()
+	h.Write([]byte("gtron-history-staging-semantic-v1\x00"))
+	rangeDigest := historyStagingRangeDigest(blocks)
+	h.Write(rangeDigest[:])
+	var count [8]byte
+	binary.BigEndian.PutUint64(count[:], uint64(len(records)))
+	h.Write(count[:])
+	for i, record := range records {
+		if i%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				return [32]byte{}, [32]byte{}, err
+			}
+		}
+		h.Write(record[:])
+	}
+	var semantic [32]byte
+	copy(semantic[:], h.Sum(nil))
+	return rangeDigest, semantic, contextError(ctx)
+}
+
 func (p *HistoryStagingColdProver) buildSpan(ctx context.Context, ref SegmentRef, id [32]byte, blocks []rawdb.HistoryStagingBlockProof) (rawdb.HistoryStagingColdSpan, error) {
 	records, err := p.collectSpanRecords(ctx, ref, id, blocks)
 	if err != nil {
 		return rawdb.HistoryStagingColdSpan{}, err
 	}
-	rangeDigest, semantic := historyStagingSemanticDigest(blocks, records)
+	rangeDigest, semantic, err := historyStagingSemanticDigestContext(ctx, blocks, records)
+	if err != nil {
+		return rawdb.HistoryStagingColdSpan{}, err
+	}
 	first, last := blocks[0], blocks[len(blocks)-1]
 	span := rawdb.HistoryStagingColdSpan{From: first.Number, To: last.Number,
 		ContentID: id, TxRangeDigest: rangeDigest, RowCount: uint64(len(records))}
@@ -1005,6 +1180,9 @@ func verifyHistoryStagingSourceColdMask(ctx context.Context, source rawdb.StateH
 				return true, nil // Already certified by an old cold binding.
 			}
 			_, err := block.IterateRows(func(row *rawdb.StateHistorySpanRow) (bool, error) {
+				if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+					return false, err
+				}
 				if row == nil || row.Change.BlockNum != info.BlockNum || row.Change.BlockHash != info.BlockHash ||
 					row.Change.TxNum < info.BeginTxNum || row.Change.TxNum > info.EndTxNum {
 					return false, fmt.Errorf("%w at block %d row", ErrHistoryStagingColdSemanticMismatch, info.BlockNum)
@@ -1024,7 +1202,7 @@ func verifyHistoryStagingSourceColdMask(ctx context.Context, source rawdb.StateH
 				}
 				previousTx[spanIndex], havePrevious[spanIndex] = row.Change.TxNum, true
 				digest, err := historyStagingRecordDigestStream(&row.Change, ordinals[spanIndex], row.PrevLength, func(dst io.Writer) error {
-					return block.WritePrevTo(row, dst)
+					return block.WritePrevTo(row, contextWriter{ctx: ctx, w: dst})
 				})
 				if err != nil {
 					return false, err
@@ -1040,7 +1218,10 @@ func verifyHistoryStagingSourceColdMask(ctx context.Context, source rawdb.StateH
 	}
 	for i, span := range spans {
 		start, end := int(span.From-blocks[0].Number), int(span.To-blocks[0].Number)+1
-		rangeDigest, semantic := historyStagingSemanticDigest(blocks[start:end], records[i])
+		rangeDigest, semantic, err := historyStagingSemanticDigestContext(ctx, blocks[start:end], records[i])
+		if err != nil {
+			return nil, err
+		}
 		if rangeDigest != span.TxRangeDigest || semantic != span.SemanticHash || uint64(len(records[i])) != span.RowCount {
 			return nil, fmt.Errorf("%w in bucket span [%d,%d]", ErrHistoryStagingColdSemanticMismatch, span.From, span.To)
 		}
@@ -1153,7 +1334,10 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 			}
 			records = append(records, part...)
 		}
-		txDigest, semantic := historyStagingSemanticDigest(blocks[start:end], records)
+		txDigest, semantic, err := historyStagingSemanticDigestContext(ctx, blocks[start:end], records)
+		if err != nil {
+			return zero, err
+		}
 		if txDigest != old.TxRangeDigest || semantic != old.SemanticHash ||
 			uint64(len(records)) != old.RowCount {
 			return zero, fmt.Errorf("%w in [%d,%d]", ErrHistoryStagingColdSemanticMismatch, old.From, old.To)
@@ -1229,7 +1413,7 @@ func historyStagingCertifiedRanges(ctx context.Context, reader io.ReaderAt, size
 	low, high := uint64(0), count
 	var scratch rawdb.StateTxRange
 	for low < high {
-		if err := ctx.Err(); err != nil {
+		if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 			return nil, err
 		}
 		mid := low + (high-low)/2
@@ -1256,7 +1440,7 @@ func historyStagingCertifiedRanges(ctx context.Context, reader io.ReaderAt, size
 	}
 	rows := make([]rawdb.StateTxRange, len(blocks))
 	for i, block := range blocks {
-		if err := ctx.Err(); err != nil {
+		if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
 			return nil, err
 		}
 		decodeStateDomainChangeBinaryTxRangeInto(&rows[i], data[i*stateDomainChangeBinaryTxRangeSize:(i+1)*stateDomainChangeBinaryTxRangeSize])

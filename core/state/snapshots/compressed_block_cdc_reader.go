@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/internal/historychunk"
 )
 
@@ -55,6 +57,10 @@ func boundedCDCDecoder() (*zstd.Decoder, error) {
 }
 
 func openCDCReader(src io.ReaderAt, size uint64, header []byte) (*cdcReader, error) {
+	return openCDCReaderContext(nil, src, size, header)
+}
+
+func openCDCReaderContext(ctx context.Context, src io.ReaderAt, size uint64, header []byte) (*cdcReader, error) {
 	if len(header) != compressedBlockHeaderSize || size < compressedBlockHeaderSize+cdcFooterSize+4 || size > math.MaxInt64 {
 		return nil, errors.New("snapshots: invalid CDC file size")
 	}
@@ -91,11 +97,20 @@ func openCDCReader(src io.ReaderAt, size uint64, header []byte) (*cdcReader, err
 	if _, err := src.ReadAt(data, int64(r.tableOff+r.tableLen)); err != nil {
 		return nil, err
 	}
-	if binary.BigEndian.Uint32(data[len(data)-4:]) != crc32.ChecksumIEEE(data[:len(data)-4]) {
+	crc := crc32.NewIEEE()
+	if _, err := (contextWriter{ctx: ctx, w: crc}).Write(data[:len(data)-4]); err != nil {
+		return nil, err
+	}
+	if binary.BigEndian.Uint32(data[len(data)-4:]) != crc.Sum32() {
 		return nil, errors.New("snapshots: CDC sparse directory checksum mismatch")
 	}
 	r.sparse = make([]uint64, pages)
 	for i := range r.sparse {
+		if i%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				return nil, err
+			}
+		}
 		x := binary.BigEndian.Uint64(data[i*8:])
 		if x >= r.logical || i == 0 && x != 0 || i > 0 && x <= r.sparse[i-1] {
 			return nil, errors.New("snapshots: invalid CDC sparse logical offsets")

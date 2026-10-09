@@ -49,6 +49,10 @@ type HistoryStagingMoverConfig struct {
 	HeavyWorkGate *maintenance.HeavyWorkGate
 	HotPressure   func() maintenance.StoragePressure
 	StagePressure func() maintenance.StoragePressure
+	// MemoryProbe observes the existing runtime sampler independently of CPU
+	// parallel-read readiness. Production wires it explicitly; nil preserves
+	// package-level and offline callers without a runtime sampler.
+	MemoryProbe func() HistoryStagingMemory
 }
 
 type HistoryStagingMover struct {
@@ -61,6 +65,8 @@ type HistoryStagingMover struct {
 	nextBucket           uint64
 	auditCursor          []byte
 	retireCursor         []byte
+	hintCursor           []byte
+	hintBucket           uint64
 	quarantineEpoch      uint64
 	quarantineResetEpoch uint64
 	quarantineRefsDone   bool
@@ -68,6 +74,9 @@ type HistoryStagingMover struct {
 	auditSource          uint64
 	auditUncleared       uint64
 	lastLog              time.Time
+	reservation          *maintenance.HeavyWorkReservation
+	lastReservation      time.Time
+	quantum              *historyStagingQuantum
 }
 
 func NewHistoryStagingMover(bc *BlockChain, cfg HistoryStagingMoverConfig) (*HistoryStagingMover, error) {
@@ -94,12 +103,17 @@ func (m *HistoryStagingMover) Start() error {
 	m.cancel, m.done = cancel, make(chan struct{})
 	go func() {
 		defer close(m.done)
+		defer func() {
+			m.passMu.Lock()
+			m.cancelReservation()
+			m.passMu.Unlock()
+		}()
 		ticker := time.NewTicker(m.cfg.Cadence)
 		defer ticker.Stop()
 		for {
 			// A failed optional pass is retried after the cadence; it never
 			// blocks canonical import or turns an unknown pressure into idle.
-			if err := m.RunOnce(ctx); err != nil && ctx.Err() == nil {
+			if err := m.RunOnce(ctx); err != nil && ctx.Err() == nil && !errors.Is(err, ErrHistoryStagingResourceDeferred) {
 				m.mu.Lock()
 				if time.Since(m.lastLog) >= time.Minute {
 					log.Warn("History staging mover pass failed", "err", err)
@@ -144,16 +158,6 @@ func (m *HistoryStagingMover) hasStarted() bool {
 	return m.done != nil
 }
 
-func historyStagingPressureReady(p maintenance.StoragePressure, now time.Time) bool {
-	if !p.Available || p.SampledAt.IsZero() || now.Sub(p.SampledAt) < -time.Second || now.Sub(p.SampledAt) > 15*time.Second || p.HardLimitReached(now) {
-		return false
-	}
-	if !p.DeviceAvailable || p.DeviceSampledAt.IsZero() || now.Sub(p.DeviceSampledAt) < -time.Second || now.Sub(p.DeviceSampledAt) > 15*time.Second {
-		return false
-	}
-	return p.DeviceBusyPPM < 900_000 && p.DeviceQueueMilli < 1_000 && p.DeviceAwait < 20*time.Millisecond
-}
-
 // RunOnce migrates at most one full bucket, with the configured copy limits.
 // It is callable by tests and deliberately does not own the cold Runner lock.
 func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
@@ -164,7 +168,10 @@ func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
 	defer m.passMu.Unlock()
 	historyStagingMoverAttempts.Inc(1)
 	defer func() {
-		if err != nil && ctx.Err() == nil {
+		if err != nil {
+			m.cancelReservation()
+		}
+		if err != nil && ctx.Err() == nil && !errors.Is(err, ErrHistoryStagingResourceDeferred) {
 			historyStagingMoverErrors.Inc(1)
 			historyStagingMoverLastError.Update(time.Now().Unix())
 		}
@@ -177,24 +184,53 @@ func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
 			return err
 		}
 	}
-	now := time.Now()
-	if !historyStagingPressureReady(m.cfg.HotPressure(), now) {
-		historyStagingMoverSkippedHot.Inc(1)
+	if m.admission(time.Now()) > historyStagingBusy {
+		m.cancelReservation()
 		return nil
 	}
-	if !historyStagingPressureReady(m.cfg.StagePressure(), now) {
-		historyStagingMoverSkippedStage.Inc(1)
-		return nil
+	candidate, err := m.candidateHint(ctx)
+	if err != nil {
+		m.cancelReservation()
+		return err
 	}
-	releaseHeavy, ok := m.cfg.HeavyWorkGate.TryAcquire()
+	if !candidate {
+		m.cancelReservation()
+	}
+	releaseHeavy, ok := m.acquireHeavy(candidate)
 	if !ok {
 		historyStagingMoverSkippedGate.Inc(1)
 		return nil
 	}
-	defer releaseHeavy()
+	q := &historyStagingQuantum{m: m, ctx: ctx, release: releaseHeavy, started: time.Now(), now: time.Now, wait: historyStagingWait}
+	m.quantum = q
+	defer func() { q.close(); m.quantum = nil; m.cancelReservation() }()
+	ctx = maintenance.WithWorkCheckpoint(ctx, q.checkpoint)
+	if err := q.recheck(); err != nil {
+		return err
+	}
 	moveErr := m.runAdmitted(ctx)
+	if q.terminal != nil {
+		return errors.Join(moveErr, q.terminal)
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(moveErr, err)
+	}
+	if err := q.recheck(); err != nil {
+		return errors.Join(moveErr, err)
+	}
 	retireErr := m.runRetirement(ctx)
-	quarantineErr := m.runQuarantine(ctx)
+	if q.terminal != nil {
+		return errors.Join(moveErr, retireErr, q.terminal)
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(moveErr, retireErr, err)
+	}
+	if err := q.recheck(); err != nil {
+		return errors.Join(moveErr, retireErr, err)
+	}
+	// Quarantine pins publication admission across its bounded cleanup page.
+	// It must not release the shared lease from inside that lock scope.
+	quarantineErr := m.runQuarantine(maintenance.WithWorkCheckpoint(ctx, nil))
 	return errors.Join(moveErr, retireErr, quarantineErr)
 }
 
@@ -295,7 +331,7 @@ func (m *HistoryStagingMover) runRetirement(ctx context.Context) error {
 			action = func() error {
 				historyStagingMoverResumedClears.Inc(1)
 				started := time.Now()
-				err := manager.ClearSource(ctx, claim, m.cfg.Limits)
+				err := manager.ClearSource(ctx, claim, m.workLimits())
 				historyStagingMoverClearNanos.Inc(time.Since(started).Nanoseconds())
 				if err != nil {
 					return err
@@ -581,7 +617,11 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	if resumeAbort {
 		bc.chainmu.Unlock()
 		bc.stateHistoryIndexMu.Unlock()
-		if err := manager.AbortClaim(ctx, existingClaim, m.cfg.Limits); err != nil {
+		if releasePublication != nil {
+			releasePublication()
+			releasePublication = nil
+		}
+		if err := manager.AbortClaim(ctx, existingClaim, m.workLimits()); err != nil {
 			return err
 		}
 		m.nextBucket = bucket // new proof and claim in a later bounded pass
@@ -653,9 +693,8 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		return err
 	}
 	historyStagingMoverProofNanos.Inc(time.Since(proofStarted).Nanoseconds())
-	if !historyStagingPressureReady(m.cfg.HotPressure(), time.Now()) || !historyStagingPressureReady(m.cfg.StagePressure(), time.Now()) {
-		m.nextBucket = bucket
-		return nil
+	if err := m.recheckWork(ctx); err != nil {
+		return err
 	}
 	// Qualification and adoption both recheck under index→chain. The expensive
 	// checksum and bounded copy never hold either writer lock.
@@ -685,8 +724,11 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	if hasClaim {
 		historyStagingMoverResumedClaims.Inc(1)
 	}
+	if err := m.recheckWork(ctx); err != nil {
+		return err
+	}
 	copyStarted := time.Now()
-	receipt, err := manager.CopyClaim(ctx, claim, m.cfg.Limits)
+	receipt, err := manager.CopyClaim(ctx, claim, m.workLimits())
 	historyStagingMoverCopyNanos.Inc(time.Since(copyStarted).Nanoseconds())
 	if err != nil {
 		return err
@@ -729,6 +771,9 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		}
 		binding = &candidate
 	}
+	if err := m.recheckWork(ctx); err != nil {
+		return err
+	}
 	adoptStarted := time.Now()
 	// A binding's manifest identity is checked and its durable references are
 	// published under one short serving admission. The expensive verification
@@ -764,8 +809,11 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		return adoptErr
 	}
 	historyStagingMoverAdoptNanos.Inc(time.Since(adoptStarted).Nanoseconds())
+	if err := m.recheckWork(ctx); err != nil {
+		return err
+	}
 	clearStarted := time.Now()
-	if err := manager.ClearSource(ctx, claim, m.cfg.Limits); err != nil {
+	if err := manager.ClearSource(ctx, claim, m.workLimits()); err != nil {
 		return err
 	}
 	historyStagingMoverClearNanos.Inc(time.Since(clearStarted).Nanoseconds())
@@ -864,7 +912,7 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 		releasePublication()
 		releasePublication = nil
 	}
-	if err := manager.ClearColdTarget(ctx, bucket, m.cfg.Limits); err != nil {
+	if err := manager.ClearColdTarget(ctx, bucket, m.workLimits()); err != nil {
 		return err
 	}
 	return nil
@@ -982,4 +1030,11 @@ func (m *HistoryStagingMover) withValidatedProof(ctx context.Context, proof rawd
 	}
 	_ = needed
 	return action()
+}
+
+func (m *HistoryStagingMover) recheckWork(ctx context.Context) error {
+	if m.quantum != nil {
+		return m.quantum.recheck()
+	}
+	return ctx.Err()
 }

@@ -53,6 +53,10 @@ type Options struct {
 	TempDir     string
 	BufferLimit int
 	BatchSize   int
+	// Checkpoint runs only on the collector owner goroutine, outside locks and
+	// parallel radix workers. Charges estimate logical work, not device bytes.
+	// Sorting one BufferLimit-sized run remains an indivisible CPU operation.
+	Checkpoint func(uint64) error
 }
 
 // Stats describes the work performed by a collector load.
@@ -336,11 +340,17 @@ func (c *Collector) spillBufferInterruptible(interrupted func() bool) error {
 	if len(c.rows) == 0 {
 		return nil
 	}
+	if err := c.checkpoint(uint64(c.bufferBytes)); err != nil {
+		return err
+	}
 	order, err := sortedEntryOrderInterruptible(c.rows, interrupted)
 	if err != nil {
 		return err
 	}
 	defer releaseEntryOrder(&order)
+	if err := c.checkpoint(0); err != nil {
+		return err
+	}
 	final := filepath.Join(c.dir, fmt.Sprintf("run-%06d.dat", len(c.runFiles)))
 	tmp, err := os.CreateTemp(c.dir, ".run-*.tmp")
 	if err != nil {
@@ -356,7 +366,11 @@ func (c *Collector) spillBufferInterruptible(interrupted func() bool) error {
 	}()
 
 	w := collectorRunWriterPool.Get().(*bufio.Writer)
-	w.Reset(tmp)
+	if c.opts.Checkpoint == nil {
+		w.Reset(tmp)
+	} else {
+		w.Reset(checkpointWriter{w: tmp, checkpoint: c.opts.Checkpoint})
+	}
 	defer func() {
 		w.Reset(io.Discard)
 		collectorRunWriterPool.Put(w)
@@ -366,6 +380,11 @@ func (c *Collector) spillBufferInterruptible(interrupted func() bool) error {
 		return err
 	}
 	for i, row := range *order {
+		if i&1023 == 0 {
+			if err := c.checkpoint(0); err != nil {
+				return err
+			}
+		}
 		if i&4095 == 0 && interrupted != nil && interrupted() {
 			_ = tmp.Close()
 			return ErrLoadInterrupted
@@ -468,7 +487,7 @@ func (c *Collector) releaseArena() {
 func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 	readers := make([]*runReader, 0, len(c.runFiles))
 	for i, path := range c.runFiles {
-		rr, err := openRunReader(path, i)
+		rr, err := openRunReaderCheckpoint(path, i, c.opts.Checkpoint)
 		if err != nil {
 			closeRunReaders(readers)
 			return err
@@ -478,13 +497,19 @@ func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 	defer closeRunReaders(readers)
 
 	for _, rr := range readers {
+		if err := c.checkpoint(0); err != nil {
+			return err
+		}
 		if err := rr.next(); err != nil {
 			return err
 		}
 	}
 	// Advancing one run changes one tournament leaf and costs one comparison
 	// per level. The former heap pop plus push traversed the same levels twice.
-	tournament := newRunTournament(readers)
+	tournament, err := newRunTournamentCheckpoint(readers, c.opts.Checkpoint)
+	if err != nil {
+		return err
+	}
 
 	var (
 		haveGroup   bool
@@ -527,6 +552,11 @@ func (c *Collector) mergeRuns(applier *applier, interrupted func() bool) error {
 
 	var merged uint64
 	for tournament.winner() != nil {
+		if merged&1023 == 0 {
+			if err := c.checkpoint(0); err != nil {
+				return err
+			}
+		}
 		if merged&1023 == 0 && interrupted != nil && interrupted() {
 			return ErrLoadInterrupted
 		}
@@ -563,18 +593,34 @@ func (c *Collector) loadRows(applier *applier, interrupted func() bool) error {
 	if len(c.rows) == 0 {
 		return nil
 	}
+	if err := c.checkpoint(uint64(c.bufferBytes)); err != nil {
+		return err
+	}
 	order, err := sortedEntryOrderInterruptible(c.rows, interrupted)
 	if err != nil {
 		return err
 	}
 	defer releaseEntryOrder(&order)
+	if err := c.checkpoint(0); err != nil {
+		return err
+	}
 	var groups uint64
 	for start := 0; start < len(*order); {
+		if groups&1023 == 0 {
+			if err := c.checkpoint(0); err != nil {
+				return err
+			}
+		}
 		if groups&1023 == 0 && interrupted != nil && interrupted() {
 			return ErrLoadInterrupted
 		}
 		end := start + 1
 		for end < len(*order) && bytes.Equal(c.rows[(*order)[start]].key, c.rows[(*order)[end]].key) {
+			if end&1023 == 0 {
+				if err := c.checkpoint(0); err != nil {
+					return err
+				}
+			}
 			end++
 		}
 		winner := c.rows[(*order)[end-1]]
@@ -952,6 +998,15 @@ type runReader struct {
 }
 
 func openRunReader(path string, index int) (*runReader, error) {
+	return openRunReaderCheckpoint(path, index, nil)
+}
+
+func openRunReaderCheckpoint(path string, index int, checkpoint func(uint64) error) (*runReader, error) {
+	if checkpoint != nil {
+		if err := checkpoint(0); err != nil {
+			return nil, err
+		}
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -961,7 +1016,11 @@ func openRunReader(path string, index int) (*runReader, error) {
 		file:  file,
 	}
 	rr.reader = collectorRunReaderPool.Get().(*bufio.Reader)
-	rr.reader.Reset(file)
+	if checkpoint == nil {
+		rr.reader.Reset(file)
+	} else {
+		rr.reader.Reset(checkpointReader{r: file, checkpoint: checkpoint})
+	}
 	magic := make([]byte, len(runFileMagic))
 	if _, err := io.ReadFull(rr.reader, magic); err != nil {
 		releaseRunReader(rr.reader)
@@ -1022,6 +1081,11 @@ type runTournament struct {
 }
 
 func newRunTournament(readers []*runReader) *runTournament {
+	t, _ := newRunTournamentCheckpoint(readers, nil)
+	return t
+}
+
+func newRunTournamentCheckpoint(readers []*runReader, checkpoint func(uint64) error) (*runTournament, error) {
 	leafBase := 1
 	for leafBase < len(readers) {
 		leafBase <<= 1
@@ -1032,17 +1096,32 @@ func newRunTournament(readers []*runReader) *runTournament {
 		tree:     make([]int, leafBase*2),
 	}
 	for i := range t.tree {
+		if i&1023 == 0 && checkpoint != nil {
+			if err := checkpoint(0); err != nil {
+				return nil, err
+			}
+		}
 		t.tree[i] = -1
 	}
 	for i, rr := range readers {
+		if i&1023 == 0 && checkpoint != nil {
+			if err := checkpoint(0); err != nil {
+				return nil, err
+			}
+		}
 		if rr.has {
 			t.tree[leafBase+i] = i
 		}
 	}
 	for node := leafBase - 1; node > 0; node-- {
+		if node&1023 == 0 && checkpoint != nil {
+			if err := checkpoint(0); err != nil {
+				return nil, err
+			}
+		}
 		t.tree[node] = t.pick(t.tree[node*2], t.tree[node*2+1])
 	}
-	return t
+	return t, nil
 }
 
 func (t *runTournament) winner() *runReader {

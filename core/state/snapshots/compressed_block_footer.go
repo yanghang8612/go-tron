@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 )
 
 // V2 writes the body once. The retained first logical chunk is physically last,
@@ -227,6 +228,10 @@ func readCompressedBlockFooterInfo(src io.ReaderAt, size uint64, header []byte) 
 }
 
 func readCompressedBlockFooterLayout(src io.ReaderAt, size uint64, header []byte) (compressedBlockFooterLayout, error) {
+	return readCompressedBlockFooterLayoutContext(nil, src, size, header)
+}
+
+func readCompressedBlockFooterLayoutContext(ctx context.Context, src io.ReaderAt, size uint64, header []byte) (compressedBlockFooterLayout, error) {
 	var layout compressedBlockFooterLayout
 	info, err := readCompressedBlockFooterInfo(src, size, header)
 	if err != nil {
@@ -239,6 +244,11 @@ func readCompressedBlockFooterLayout(src io.ReaderAt, size uint64, header []byte
 	reader := bufio.NewReaderSize(io.NewSectionReader(src, int64(info.tableOff), int64(info.tableLen)), 32<<10)
 	var entry [compressedBlockTableEntry]byte
 	for i := range layout.table {
+		if i%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				return layout, err
+			}
+		}
 		if _, err := io.ReadFull(reader, entry[:]); err != nil {
 			return layout, err
 		}
@@ -249,7 +259,7 @@ func readCompressedBlockFooterLayout(src io.ReaderAt, size uint64, header []byte
 			records:           binary.BigEndian.Uint32(entry[24:28]),
 		}
 	}
-	if err := validateCompressedBlockPhysicalTable(layout.table, info.recCount, info.uncSize, compressedBlockHeaderSize, info.tableOff, true); err != nil {
+	if err := validateCompressedBlockPhysicalTableContext(ctx, layout.table, info.recCount, info.uncSize, compressedBlockHeaderSize, info.tableOff, true); err != nil {
 		return layout, err
 	}
 	return layout, nil

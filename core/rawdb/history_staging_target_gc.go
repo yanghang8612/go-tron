@@ -119,6 +119,9 @@ func (m *HistoryStagingManager) ClearColdTarget(ctx context.Context, bucket uint
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := limits.checkpoint(0); err != nil {
+			return err
+		}
 		if current, present, err := m.ReadRoute(bucket); err != nil || !present || current != route {
 			return ErrHistoryStagingConflict
 		}
@@ -148,6 +151,9 @@ func (m *HistoryStagingManager) ClearColdTarget(ctx context.Context, bucket uint
 			if err := flush(); err != nil {
 				return err
 			}
+		}
+		if err := limits.checkpoint(cost); err != nil {
+			return err
 		}
 		if err := batch.Delete(key); err != nil {
 			return err

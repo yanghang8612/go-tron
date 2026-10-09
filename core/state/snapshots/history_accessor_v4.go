@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
@@ -471,6 +472,10 @@ func newStateDomainChangeAccessorV5VerificationCollectors(snapshotDir string) (*
 }
 
 func newStateDomainChangeAccessorVerificationCollectorsVersion(snapshotDir string, version uint32) (*stateDomainChangeBinaryAccessorV4Collectors, string, error) {
+	return newStateDomainChangeAccessorVerificationCollectorsVersionContext(nil, snapshotDir, version)
+}
+
+func newStateDomainChangeAccessorVerificationCollectorsVersionContext(ctx context.Context, snapshotDir string, version uint32) (*stateDomainChangeBinaryAccessorV4Collectors, string, error) {
 	parent := ""
 	if snapshotDir != "" {
 		parent = filepath.Join(snapshotDir, "etl")
@@ -482,7 +487,12 @@ func newStateDomainChangeAccessorVerificationCollectorsVersion(snapshotDir strin
 	if err != nil {
 		return nil, "", err
 	}
-	collectors, err := newStateDomainChangeBinaryAccessorCollectors(etl.Options{TempDir: scratch}, version)
+	opts := etl.Options{TempDir: scratch}
+	if maintenance.HasWorkCheckpoint(ctx) {
+		opts.BufferLimit = stateDomainChangeV7VerificationBufferLimit
+		opts.Checkpoint = func(n uint64) error { return maintenance.WorkCheckpoint(ctx, n) }
+	}
+	collectors, err := newStateDomainChangeBinaryAccessorCollectors(opts, version)
 	if err != nil {
 		_ = os.RemoveAll(scratch)
 		return nil, "", err

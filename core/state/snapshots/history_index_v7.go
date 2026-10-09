@@ -186,11 +186,15 @@ type stateDomainChangeBinaryIndexV7Reader struct {
 }
 
 func openStateDomainChangeBinaryIndexV7Reader(file *os.File, size uint64, header stateDomainChangeBinaryHeader) (*stateDomainChangeBinaryIndexV7Reader, error) {
+	return openStateDomainChangeBinaryIndexV7ReaderContext(nil, file, size, header)
+}
+
+func openStateDomainChangeBinaryIndexV7ReaderContext(ctx context.Context, file *os.File, size uint64, header stateDomainChangeBinaryHeader) (*stateDomainChangeBinaryIndexV7Reader, error) {
 	if size < stateDomainChangeBinaryIndexV7HeaderSize {
 		return nil, io.ErrUnexpectedEOF
 	}
 	var rawHeader [stateDomainChangeBinaryIndexV7HeaderSize]byte
-	if _, err := file.ReadAt(rawHeader[:], 0); err != nil {
+	if _, err := (contextReaderAt{ctx: ctx, r: file}).ReadAt(rawHeader[:], 0); err != nil {
 		return nil, err
 	}
 	if binary.BigEndian.Uint32(rawHeader[36:40]) != uint32(stateDomainChangeBinaryIndexV7FrameEntries) || binary.BigEndian.Uint32(rawHeader[64:68]) != crc32.ChecksumIEEE(rawHeader[:64]) {
@@ -212,7 +216,7 @@ func openStateDomainChangeBinaryIndexV7Reader(file *os.File, size uint64, header
 	var dataEnd = stateDomainChangeBinaryIndexV7HeaderSize + dirLen
 	var rawFrame [stateDomainChangeBinaryIndexV7FrameSize]byte
 	for i := uint64(0); i < frameCount; i++ {
-		if _, err := file.ReadAt(rawFrame[:], int64(stateDomainChangeBinaryIndexV7HeaderSize+i*stateDomainChangeBinaryIndexV7FrameSize)); err != nil {
+		if _, err := (contextReaderAt{ctx: ctx, r: file}).ReadAt(rawFrame[:], int64(stateDomainChangeBinaryIndexV7HeaderSize+i*stateDomainChangeBinaryIndexV7FrameSize)); err != nil {
 			return nil, err
 		}
 		for _, b := range rawFrame[28:] {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+
+	"github.com/tronprotocol/go-tron/core/maintenance"
 )
 
 // contextReaderAt makes immutable-segment decoders cancellable without
@@ -14,20 +16,41 @@ type contextReaderAt struct {
 	r   io.ReaderAt
 }
 
+// Limit cooperative reads outside decoder/cache locks. A codec's one block
+// decode and the underlying syscall remain indivisible; this is not an I/O
+// deadline or a hard wall-clock bound.
+const workCheckpointIOChunk = 1 << 20
+
 func (r contextReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	if r.ctx != nil {
-		if err := r.ctx.Err(); err != nil {
+	if !maintenance.HasWorkCheckpoint(r.ctx) {
+		if err := contextError(r.ctx); err != nil {
 			return 0, err
 		}
+		return r.r.ReadAt(p, off)
 	}
-	return r.r.ReadAt(p, off)
+	total := 0
+	for len(p) > 0 {
+		chunk := p[:min(len(p), workCheckpointIOChunk)]
+		if err := maintenance.WorkCheckpoint(r.ctx, uint64(len(chunk))); err != nil {
+			return total, err
+		}
+		n, err := r.r.ReadAt(chunk, off)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n != len(chunk) {
+			return total, io.ErrUnexpectedEOF
+		}
+		off += int64(n)
+		p = p[n:]
+	}
+	return total, contextError(r.ctx)
 }
 
 func (r contextReaderAt) v6Key(keyID uint32) ([]byte, error) {
-	if r.ctx != nil {
-		if err := r.ctx.Err(); err != nil {
-			return nil, err
-		}
+	if err := maintenance.WorkCheckpoint(r.ctx, 0); err != nil {
+		return nil, err
 	}
 	resolver, ok := r.r.(stateDomainChangeBinaryV6KeyResolver)
 	if !ok {
@@ -47,17 +70,39 @@ type contextWriter struct {
 }
 
 func (w contextWriter) Write(p []byte) (int, error) {
-	if err := contextError(w.ctx); err != nil {
-		return 0, err
+	if !maintenance.HasWorkCheckpoint(w.ctx) {
+		if err := contextError(w.ctx); err != nil {
+			return 0, err
+		}
+		return w.w.Write(p)
 	}
-	return w.w.Write(p)
+	total := 0
+	for len(p) > 0 {
+		chunk := p[:min(len(p), workCheckpointIOChunk)]
+		if err := maintenance.WorkCheckpoint(w.ctx, uint64(len(chunk))); err != nil {
+			return total, err
+		}
+		n, err := w.w.Write(chunk)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n != len(chunk) {
+			return total, io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return total, contextError(w.ctx)
 }
 
 func (r contextReader) Read(p []byte) (int, error) {
-	if r.ctx != nil {
-		if err := r.ctx.Err(); err != nil {
+	if maintenance.HasWorkCheckpoint(r.ctx) {
+		p = p[:min(len(p), workCheckpointIOChunk)]
+		if err := maintenance.WorkCheckpoint(r.ctx, uint64(len(p))); err != nil {
 			return 0, err
 		}
+	} else if err := contextError(r.ctx); err != nil {
+		return 0, err
 	}
 	return r.r.Read(p)
 }

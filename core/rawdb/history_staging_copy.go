@@ -195,6 +195,9 @@ func visitHistoryStagingBucket(ctx context.Context, db StateHistoryReadView, pro
 		if rowBytes > limits.MaxRowBytes || stats.Bytes > limits.MaxBucketBytes || rowBytes > limits.MaxBucketBytes-stats.Bytes || stats.Rows == ^uint64(0) {
 			return errors.New("rawdb: staging bucket exceeds row or byte limit")
 		}
+		if err := limits.checkpoint(rowBytes); err != nil {
+			return err
+		}
 		if visit != nil {
 			if err := visit(key, value); err != nil {
 				return err
@@ -327,6 +330,9 @@ func visitHistoryStagingBucket(ctx context.Context, db StateHistoryReadView, pro
 	// retaining a []*StateDomainChange or expanding all Prev values at once.
 	if err := IterateStateHistorySpanBlocks(ctx, db, first, last, proof.Blocks[0].BeginTxNum, proof.Blocks[len(proof.Blocks)-1].EndTxNum, func(block *StateHistorySpanBlock) (bool, error) {
 		info := block.Info()
+		if err := limits.checkpoint(info.DecodedBytes); err != nil {
+			return false, err
+		}
 		want := proof.Blocks[info.BlockNum-first]
 		if info.BlockHash != want.Hash || info.BeginTxNum != want.BeginTxNum || info.EndTxNum != want.EndTxNum || info.DecodedBytes > limits.MaxDecodedBytes {
 			return false, ErrHistoryStagingConflict
@@ -458,6 +464,9 @@ func (m *HistoryStagingManager) CopyClaim(ctx context.Context, claim HistoryStag
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := limits.checkpoint(0); err != nil {
+			return err
+		}
 		free, err := limits.FreeBytes()
 		if err != nil || free < limits.MinFreeBytes {
 			return errors.New("rawdb: staging copy crossed free-space floor")
@@ -495,6 +504,9 @@ func (m *HistoryStagingManager) CopyClaim(ctx context.Context, claim HistoryStag
 	if err := flush(); err != nil {
 		return zero, err
 	}
+	if err := limits.checkpoint(0); err != nil {
+		return zero, err
+	}
 	if err := m.syncStage(); err != nil {
 		return zero, err
 	}
@@ -518,6 +530,9 @@ func (m *HistoryStagingManager) CopyClaim(ctx context.Context, claim HistoryStag
 		return zero, ErrHistoryStagingConflict
 	}
 	if err := writeHistoryStagingValue(m.stage, historyStagingReceiptKey(claim.Epoch, claim.Bucket), receipt); err != nil {
+		return zero, err
+	}
+	if err := limits.checkpoint(0); err != nil {
 		return zero, err
 	}
 	if err := m.syncStage(); err != nil {

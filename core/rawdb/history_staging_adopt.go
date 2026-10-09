@@ -148,6 +148,9 @@ func (m *HistoryStagingManager) ClearSource(ctx context.Context, claim HistorySt
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := limits.checkpoint(0); err != nil {
+			return err
+		}
 		if epoch, err := m.CurrentEpoch(); err != nil || epoch != claim.Epoch {
 			return ErrHistoryStagingConflict
 		}
@@ -193,6 +196,9 @@ func (m *HistoryStagingManager) ClearSource(ctx context.Context, claim HistorySt
 				if err := flush(); err != nil {
 					return err
 				}
+			}
+			if err := limits.checkpoint(cost); err != nil {
+				return err
 			}
 			if err := batch.Delete(key); err != nil {
 				return err

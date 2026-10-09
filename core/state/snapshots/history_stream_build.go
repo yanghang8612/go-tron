@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
@@ -1712,17 +1713,23 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) build(ctx context.Context,
 		groupRecords       *uint64
 		groupPayloadOffset *uint64
 	)
+	var groupPayloadWriter io.Writer = groupPayloadTmp
+	var groupOffsetsWriter io.Writer = groupOffsetsTmp
+	if maintenance.HasWorkCheckpoint(ctx) {
+		groupPayloadWriter = contextWriter{ctx: ctx, w: groupPayloadTmp}
+		groupOffsetsWriter = contextWriter{ctx: ctx, w: groupOffsetsTmp}
+	}
 	if c.version == stateDomainChangeBinaryVersionV5 {
 		writer := &stateDomainChangeBinaryAccessorV5GroupETLWriter{
-			payload:      acquireStateDomainChangeHistoryWriter(groupPayloadTmp),
-			offsetWriter: acquireStateDomainChangeHistoryWriter(groupOffsetsTmp),
+			payload:      acquireStateDomainChangeHistoryWriter(groupPayloadWriter),
+			offsetWriter: acquireStateDomainChangeHistoryWriter(groupOffsetsWriter),
 		}
 		groupSink, finishGroup, releaseGroup = writer, writer.Finish, writer.Release
 		groupCount, groupRecords, groupPayloadOffset = &writer.groups, &writer.records, &writer.payloadOffset
 	} else {
 		writer := &stateDomainChangeBinaryAccessorV4GroupETLWriter{
-			payload:      acquireStateDomainChangeHistoryWriter(groupPayloadTmp),
-			offsetWriter: acquireStateDomainChangeHistoryWriter(groupOffsetsTmp),
+			payload:      acquireStateDomainChangeHistoryWriter(groupPayloadWriter),
+			offsetWriter: acquireStateDomainChangeHistoryWriter(groupOffsetsWriter),
 		}
 		groupSink, finishGroup, releaseGroup = writer, writer.Finish, writer.Release
 		groupCount, groupRecords, groupPayloadOffset = &writer.groups, &writer.records, &writer.payloadOffset
@@ -1763,10 +1770,14 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) build(ctx context.Context,
 		destination = accessorTmp
 	}
 	metadataWriter := newSnapshotMetadataWriter(destination)
-	if err := writeStateDomainChangeBinaryHeaderToVersion(metadataWriter, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, recordCount, c.version); err != nil {
+	var metadataSink io.Writer = metadataWriter
+	if maintenance.HasWorkCheckpoint(ctx) {
+		metadataSink = contextWriter{ctx: ctx, w: metadataWriter}
+	}
+	if err := writeStateDomainChangeBinaryHeaderToVersion(metadataSink, stateDomainChangeBinaryAccessorMagic, accessorRef.FromTxNum, accessorRef.ToTxNum, recordCount, c.version); err != nil {
 		return SegmentRef{}, snapshotFileMetadata{}, etl.Stats{}, err
 	}
-	if err := writeStateDomainChangeBinaryTxRangeCount(metadataWriter, *groupCount); err != nil {
+	if err := writeStateDomainChangeBinaryTxRangeCount(metadataSink, *groupCount); err != nil {
 		return SegmentRef{}, snapshotFileMetadata{}, etl.Stats{}, err
 	}
 	var (
@@ -1776,10 +1787,10 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) build(ctx context.Context,
 		exactCount   *uint64
 	)
 	if c.version == stateDomainChangeBinaryVersionV5 {
-		writer := &stateDomainChangeBinaryAccessorV5ExactETLWriter{file: acquireStateDomainChangeHistoryWriter(metadataWriter), expected: recordCount}
+		writer := &stateDomainChangeBinaryAccessorV5ExactETLWriter{file: acquireStateDomainChangeHistoryWriter(metadataSink), expected: recordCount}
 		exactSink, finishExact, releaseExact, exactCount = writer, writer.Finish, writer.Release, &writer.count
 	} else {
-		writer := &stateDomainChangeBinaryAccessorV3ExactETLWriter{file: acquireStateDomainChangeHistoryWriter(metadataWriter), expected: recordCount}
+		writer := &stateDomainChangeBinaryAccessorV3ExactETLWriter{file: acquireStateDomainChangeHistoryWriter(metadataSink), expected: recordCount}
 		exactSink, finishExact, releaseExact, exactCount = writer, writer.Finish, writer.Release, &writer.count
 	}
 	defer releaseExact()
@@ -1796,7 +1807,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) build(ctx context.Context,
 	if err := finishExact(); err != nil {
 		return SegmentRef{}, snapshotFileMetadata{}, etl.Stats{}, err
 	}
-	tailWriter := acquireStateDomainChangeHistoryWriter(metadataWriter)
+	tailWriter := acquireStateDomainChangeHistoryWriter(metadataSink)
 	defer releaseStateDomainChangeHistoryWriter(&tailWriter)
 	exactEntrySize := uint64(stateDomainChangeBinaryAccessorV3ExactEntrySize)
 	if c.version == stateDomainChangeBinaryVersionV5 {
@@ -1806,7 +1817,7 @@ func (c *stateDomainChangeBinaryAccessorV4Collectors) build(ctx context.Context,
 	if _, err := groupOffsetsTmp.Seek(0, io.SeekStart); err != nil {
 		return SegmentRef{}, snapshotFileMetadata{}, etl.Stats{}, err
 	}
-	if err := writeStateDomainChangeBinaryAccessorV4GroupDirectory(ctx, tailWriter, groupOffsetsTmp, *groupCount, payloadStart, *groupPayloadOffset); err != nil {
+	if err := writeStateDomainChangeBinaryAccessorV4GroupDirectory(ctx, tailWriter, contextReader{ctx: ctx, r: groupOffsetsTmp}, *groupCount, payloadStart, *groupPayloadOffset); err != nil {
 		return SegmentRef{}, snapshotFileMetadata{}, etl.Stats{}, err
 	}
 	if _, err := groupPayloadTmp.Seek(0, io.SeekStart); err != nil {

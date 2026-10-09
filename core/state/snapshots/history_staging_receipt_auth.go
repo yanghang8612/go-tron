@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"sync"
+
+	"github.com/tronprotocol/go-tron/core/maintenance"
 )
 
 // Receipt authentication only establishes that immutable bytes still match
@@ -47,6 +49,45 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		}
 	}
 	key := sha256.Sum256(append(append([]byte("gtron-history-staging-receipt-checksum-v1\x00"), p.dir...), id[:]...))
+	// A cooperative owner may release the shared maintenance token. Never
+	// own or wait on a global flight here: a flight waiter may hold that token
+	// while the owner tries to reacquire it. Cache hits remain safe; misses run
+	// the identical full proof independently, publishing only authenticated bytes.
+	if maintenance.HasWorkCheckpoint(ctx) {
+		historyStagingReceiptChecksumCache.Lock()
+		cached, hit := historyStagingReceiptChecksumCache.trios[key]
+		historyStagingReceiptChecksumCache.Unlock()
+		if hit && cached[0].same(states[0]) && cached[1].same(states[1]) && cached[2].same(states[2]) {
+
+			return nil
+		}
+
+		if p.testAuth != nil {
+			err = p.testAuth(ctx, refs)
+		} else {
+			err = VerifyHistorySegmentCompanionChecksumsContext(ctx, p.dir, p.manifest, refs[0])
+		}
+		if err == nil {
+			err = historyStagingCheckFileStates(p.dir, refs, states)
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			return err
+		}
+		historyStagingReceiptChecksumCache.Lock()
+		if len(historyStagingReceiptChecksumCache.trios) >= historyStagingPinnedProofCacheEntries {
+			for old := range historyStagingReceiptChecksumCache.trios {
+				delete(historyStagingReceiptChecksumCache.trios, old)
+				break
+			}
+		}
+		historyStagingReceiptChecksumCache.trios[key] = states
+		historyStagingReceiptChecksumCache.Unlock()
+
+		return nil
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

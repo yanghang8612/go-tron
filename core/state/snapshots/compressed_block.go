@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 )
 
 // Compressed block segment format ("gtcblk01"). A record stream is grouped into
@@ -515,6 +516,13 @@ func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 }
 
 func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*compressedBlockReader, error) {
+	return openCompressedBlockReaderWithCacheLimitContext(nil, path, cacheLimit)
+}
+
+// Initialization owns no codec locks, so metadata reads and table validation
+// may cooperatively yield. The stored reader remains unwrapped: runtime codec
+// reads hold its private mutex and must only checkpoint at the outer reader.
+func openCompressedBlockReaderWithCacheLimitContext(ctx context.Context, path string, cacheLimit int) (*compressedBlockReader, error) {
 	if cacheLimit < 1 || cacheLimit > cbCacheBlocks {
 		return nil, fmt.Errorf("snapshots: compressed-block cache limit %d outside [1,%d]", cacheLimit, cbCacheBlocks)
 	}
@@ -538,7 +546,7 @@ func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*comp
 		return nil, fmt.Errorf("snapshots: compressed-block file %q size %d below header size %d", path, fileSize, compressedBlockHeaderSize)
 	}
 	hdr := make([]byte, compressedBlockHeaderSize)
-	if _, err := io.ReadFull(f, hdr); err != nil {
+	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, hdr); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -547,15 +555,16 @@ func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*comp
 		return nil, errors.New("snapshots: bad compressed-block magic")
 	}
 	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockCDCVersion {
-		cdc, err := openCDCReader(f, fileSize, hdr)
+		cdc, err := openCDCReaderContext(ctx, contextReaderAt{ctx: ctx, r: f}, fileSize, hdr)
 		if err != nil {
 			_ = f.Close()
 			return nil, err
 		}
+		cdc.src = f
 		return &compressedBlockReader{f: f, dec: dec, uncSize: cdc.logical, fileSize: fileSize, cdc: cdc}, nil
 	}
 	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockFooterVersion {
-		layout, err := readCompressedBlockFooterLayout(f, fileSize, hdr)
+		layout, err := readCompressedBlockFooterLayoutContext(ctx, contextReaderAt{ctx: ctx, r: f}, fileSize, hdr)
 		if err != nil {
 			_ = f.Close()
 			return nil, err
@@ -598,12 +607,18 @@ func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*comp
 		return nil, fmt.Errorf("snapshots: compressed-block data offset %d, want table end %d", r.dataOff, tableEnd)
 	}
 	tableBytes := make([]byte, int(tableLen))
-	if _, err := io.ReadFull(f, tableBytes); err != nil {
+	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, tableBytes); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
 	r.table = make([]cbBlock, blockCount)
 	for i := uint64(0); i < blockCount; i++ {
+		if i%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				_ = f.Close()
+				return nil, err
+			}
+		}
 		o := i * compressedBlockTableEntry
 		r.table[i] = cbBlock{
 			uncompressedStart: binary.BigEndian.Uint64(tableBytes[o : o+8]),
@@ -612,7 +627,7 @@ func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*comp
 			records:           binary.BigEndian.Uint32(tableBytes[o+24 : o+28]),
 		}
 	}
-	if err := validateCompressedBlockTable(r.table, r.recCount, r.uncSize, r.dataOff, fileSize); err != nil {
+	if err := validateCompressedBlockPhysicalTableContext(ctx, r.table, r.recCount, r.uncSize, r.dataOff, fileSize, false); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -641,6 +656,10 @@ func validateCompressedBlockTable(table []cbBlock, recCount, uncSize, dataOff, f
 }
 
 func validateCompressedBlockPhysicalTable(table []cbBlock, recCount, uncSize, dataOff, fileSize uint64, prefixAtEnd bool) error {
+	return validateCompressedBlockPhysicalTableContext(nil, table, recCount, uncSize, dataOff, fileSize, prefixAtEnd)
+}
+
+func validateCompressedBlockPhysicalTableContext(ctx context.Context, table []cbBlock, recCount, uncSize, dataOff, fileSize uint64, prefixAtEnd bool) error {
 	if len(table) == 0 {
 		if recCount != 0 || uncSize != 0 {
 			return fmt.Errorf("snapshots: empty compressed-block table with records=%d uncompressed=%d", recCount, uncSize)
@@ -657,6 +676,11 @@ func validateCompressedBlockPhysicalTable(table []cbBlock, recCount, uncSize, da
 	var prevUncStart uint64
 	var records uint64
 	for i, block := range table {
+		if i%1024 == 0 {
+			if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
+				return err
+			}
+		}
 		if block.records == 0 {
 			return fmt.Errorf("snapshots: compressed-block table entry %d has zero records", i)
 		}

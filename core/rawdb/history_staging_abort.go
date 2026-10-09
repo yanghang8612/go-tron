@@ -66,6 +66,9 @@ func (m *HistoryStagingManager) purgeCancelledClaim(ctx context.Context, claim H
 		if cost > limits.MaxRowBytes || cost > limits.MaxWorkBytes-work {
 			return errors.New("rawdb: cancelled claim target exceeds purge budget")
 		}
+		if err := limits.checkpoint(cost); err != nil {
+			return err
+		}
 		work += cost
 		return nil
 	}
@@ -114,6 +117,9 @@ func (m *HistoryStagingManager) purgeCancelledClaim(ctx context.Context, claim H
 		if err := count(metaKey, value); err != nil {
 			return err
 		}
+	}
+	if err := limits.checkpoint(0); err != nil {
+		return err
 	}
 	if free, err := limits.FreeBytes(); err != nil || free < limits.MinFreeBytes {
 		return errors.New("rawdb: cancelled claim purge space floor")
