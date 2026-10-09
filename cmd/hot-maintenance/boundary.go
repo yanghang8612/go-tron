@@ -15,7 +15,8 @@ import (
 // strictBoundary cross-checks the recent hot head with dynamic properties,
 // canonical hashes, and durable stage pointers before offline compaction. If
 // a canonical anchor is ancient-only, it fails closed; archive reads require
-// a separate ancient-aware ChainDB path. An absent row never verifies.
+// a separate ancient-aware ChainDB path. An absent canonical anchor never
+// verifies; the optional stored solid hash may be absent.
 func strictBoundary(db ethdb.KeyValueReader) (chainBoundary, error) {
 	var out chainBoundary
 	head, ok, err := rawdb.ReadHeadBlockHashStrict(db)
@@ -103,7 +104,7 @@ func strictBoundary(db ethdb.KeyValueReader) (chainBoundary, error) {
 	if err != nil {
 		return out, err
 	}
-	if !present || storedSolid != solidHash {
+	if present && storedSolid != solidHash {
 		return out, errors.New("stored solid hash disagrees with canonical solid hash")
 	}
 	return chainBoundary{number, head.Hex(), solid, solidHash.Hex()}, nil

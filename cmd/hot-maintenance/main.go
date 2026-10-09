@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,15 +41,48 @@ type guard struct {
 }
 
 type routeCensus struct {
-	Source        uint64 `json:"source"`
-	Target        uint64 `json:"target"`
-	Cold          uint64 `json:"cold"`
-	SourceCleared uint64 `json:"source_cleared"`
-	TargetCleared uint64 `json:"target_cleared"`
-	Claim         uint64 `json:"claim"`
-	Receipt       uint64 `json:"receipt"`
-	Buckets       uint64 `json:"buckets"`
-	Warning       string `json:"warning"`
+	Epoch                     uint64               `json:"epoch"`
+	HeadBucket                uint64               `json:"head_bucket"`
+	Source                    uint64               `json:"source"`
+	Target                    uint64               `json:"target"`
+	Cold                      uint64               `json:"cold"`
+	SourceCleared             uint64               `json:"source_cleared"`
+	TargetCleared             uint64               `json:"target_cleared"`
+	Claim                     uint64               `json:"claim"`
+	Receipt                   uint64               `json:"receipt"`
+	Buckets                   uint64               `json:"buckets"`
+	StaleEpochRoutes          uint64               `json:"stale_epoch_routes"`
+	ColdIntervals             []coldBucketInterval `json:"cold_intervals"`
+	FirstNonColdFromBucketOne *uint64              `json:"first_non_cold_from_bucket_one"`
+	ResetIntent               routeResetSummary    `json:"reset_intent"`
+	Barrier                   routeBarrierSummary  `json:"barrier"`
+	Warning                   string               `json:"warning"`
+	nextNonColdCandidate      uint64
+}
+
+type coldBucketInterval struct {
+	StartBucket uint64 `json:"start_bucket"`
+	EndBucket   uint64 `json:"end_bucket"`
+	StartBlock  uint64 `json:"start_block"`
+	EndBlock    uint64 `json:"end_block"`
+}
+
+type routeResetSummary struct {
+	Present      bool   `json:"present"`
+	Complete     bool   `json:"complete,omitempty"`
+	OldEpoch     uint64 `json:"old_epoch,omitempty"`
+	NewEpoch     uint64 `json:"new_epoch,omitempty"`
+	ReadyThrough uint64 `json:"ready_through,omitempty"`
+	TargetHeight uint64 `json:"target_height,omitempty"`
+}
+
+type routeBarrierSummary struct {
+	Present         bool   `json:"present"`
+	Epoch           uint64 `json:"epoch,omitempty"`
+	ThroughBucket   uint64 `json:"through_bucket,omitempty"`
+	EligibleThrough uint64 `json:"eligible_through_bucket,omitempty"`
+	PlanDigest      string `json:"plan_digest,omitempty"`
+	RouteDigest     string `json:"route_digest,omitempty"`
 }
 
 type statusReport struct {
@@ -257,7 +291,11 @@ func readStatus(hotInput, stageInput string, routes, full bool) (statusReport, e
 		if err != nil {
 			return out, err
 		}
-		census, err := scanRoutes(context.Background(), manager)
+		head, present, err := rawdb.ReadHeadBlockHashStrict(hotDB)
+		if err != nil || !present || head == ([32]byte{}) || !out.Guard.Finish.Present || !out.Guard.Finish.Value.HasBlockHash || out.Guard.Finish.Value.BlockHash != head || out.Guard.Finish.Value.BlockNum != binary.BigEndian.Uint64(head[:8]) {
+			return out, errors.Join(err, errors.New("route census requires coherent head and Finish pointer"))
+		}
+		census, err := scanRoutes(context.Background(), manager, out.Guard.Finish.Value.BlockNum/rawdb.StateHistoryChunkBucketBlocks)
 		if err != nil {
 			return out, err
 		}
@@ -285,9 +323,33 @@ func readStatus(hotInput, stageInput string, routes, full bool) (statusReport, e
 	return out, nil
 }
 
-func scanRoutes(ctx context.Context, manager *rawdb.HistoryStagingManager) (routeCensus, error) {
-	var out routeCensus
+func scanRoutes(ctx context.Context, manager *rawdb.HistoryStagingManager, headBucket uint64) (routeCensus, error) {
+	out := routeCensus{HeadBucket: headBucket}
+	var err error
+	out.Epoch, err = manager.CurrentEpoch()
+	if err != nil {
+		return routeCensus{}, err
+	}
+	reset, present, err := manager.ReadResetIntent()
+	if err != nil {
+		return routeCensus{}, err
+	}
+	out.ResetIntent = routeResetSummary{Present: present}
+	if present {
+		out.ResetIntent.Complete, out.ResetIntent.OldEpoch, out.ResetIntent.NewEpoch = reset.Complete, reset.OldEpoch, reset.NewEpoch
+		out.ResetIntent.ReadyThrough, out.ResetIntent.TargetHeight = reset.ReadyThrough, reset.TargetHeight
+	}
+	barrier, present, err := manager.ReadHistoryStagingRouteBarrier()
+	if err != nil {
+		return routeCensus{}, err
+	}
+	out.Barrier = routeBarrierSummary{Present: present}
+	if present {
+		out.Barrier.Epoch, out.Barrier.ThroughBucket, out.Barrier.EligibleThrough = barrier.Epoch, barrier.ThroughBucket, barrier.EligibleThrough
+		out.Barrier.PlanDigest, out.Barrier.RouteDigest = hex.EncodeToString(barrier.PlanDigest[:]), hex.EncodeToString(barrier.RouteDigest[:])
+	}
 	var after []byte
+	out.nextNonColdCandidate = 1
 	for {
 		states, next, complete, err := manager.ScanBuckets(ctx, after, 128)
 		if err != nil {
@@ -301,7 +363,13 @@ func scanRoutes(ctx context.Context, manager *rawdb.HistoryStagingManager) (rout
 			if state.HasReceipt {
 				out.Receipt++
 			}
-			if state.HasRoute {
+			currentRoute := state.HasRoute && state.Route.Epoch == out.Epoch
+			if state.HasRoute && !currentRoute {
+				out.StaleEpochRoutes++
+			}
+			isCold := currentRoute && state.Route.Owner == rawdb.HistoryStagingOwnerCold
+			out.observeColdRoute(state.Bucket, isCold)
+			if currentRoute {
 				if state.Route.SourceCleared {
 					out.SourceCleared++
 				}
@@ -325,6 +393,35 @@ func scanRoutes(ctx context.Context, manager *rawdb.HistoryStagingManager) (rout
 		}
 		after = next
 	}
-	out.Warning = "Metadata census only; does not authenticate canonical history, receipts or cold files"
+	if out.FirstNonColdFromBucketOne == nil && out.nextNonColdCandidate <= headBucket {
+		v := out.nextNonColdCandidate
+		out.FirstNonColdFromBucketOne = &v
+	}
+	out.Warning = "Metadata census only; bucket 0 is excluded from intervals; missing routes count as non-COLD; intervals do not authenticate canonical history, receipts or cold files"
 	return out, nil
+}
+
+func (out *routeCensus) observeColdRoute(bucket uint64, isCold bool) {
+	if bucket >= 1 && bucket <= out.HeadBucket && out.FirstNonColdFromBucketOne == nil {
+		if bucket > out.nextNonColdCandidate || (bucket == out.nextNonColdCandidate && !isCold) {
+			v := out.nextNonColdCandidate
+			out.FirstNonColdFromBucketOne = &v
+		} else if bucket == out.nextNonColdCandidate {
+			out.nextNonColdCandidate++
+		}
+	}
+	if isCold && bucket >= 1 && bucket <= out.HeadBucket {
+		out.addColdBucket(bucket)
+	}
+}
+
+func (out *routeCensus) addColdBucket(bucket uint64) {
+	const span = rawdb.StateHistoryChunkBucketBlocks
+	n := len(out.ColdIntervals)
+	if n > 0 && out.ColdIntervals[n-1].EndBucket+1 == bucket {
+		out.ColdIntervals[n-1].EndBucket = bucket
+		out.ColdIntervals[n-1].EndBlock = (bucket+1)*span - 1
+		return
+	}
+	out.ColdIntervals = append(out.ColdIntervals, coldBucketInterval{StartBucket: bucket, EndBucket: bucket, StartBlock: bucket * span, EndBlock: (bucket+1)*span - 1})
 }

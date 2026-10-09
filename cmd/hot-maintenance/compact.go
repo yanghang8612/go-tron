@@ -57,8 +57,8 @@ func captureProtected(m *pebbledb.MaintenanceDB) (protectedState, error) {
 	if err != nil {
 		return out, err
 	}
-	if !out.Guard.LatestCommitmentRoot.Present || !out.Guard.EngineStateSHA256.Present {
-		return out, errors.New("compact requires commitment root and engine state")
+	if !out.Guard.LatestCommitmentRoot.Present {
+		return out, errors.New("compact requires latest commitment root")
 	}
 	out.Canaries = make(map[string][]pebbledb.MaintenanceSample)
 	for _, r := range rawdb.HotMaintenanceCanaryRanges() {
@@ -176,9 +176,16 @@ func runCompact(args []string) (retErr error) {
 	if captureErr != nil {
 		return errors.Join(compactErr, fmt.Errorf("reopen verification: %w", captureErr))
 	}
-	if !reflect.DeepEqual(report.Before, after) {
-		return errors.Join(compactErr, errors.New("protected metadata or current-state samples changed after compaction"))
+	if err := verifyProtectedUnchanged(report.Before, after); err != nil {
+		return errors.Join(compactErr, err)
 	}
 	report.ProtectedStateVerified = true
 	return compactErr
+}
+
+func verifyProtectedUnchanged(before, after protectedState) error {
+	if !reflect.DeepEqual(before, after) {
+		return errors.New("protected metadata or current-state samples changed after compaction")
+	}
+	return nil
 }

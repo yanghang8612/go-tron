@@ -75,7 +75,7 @@ func TestStatusReadOnlyAndMissingStore(t *testing.T) {
 	}
 }
 
-func seedCompactStore(t *testing.T, path string) {
+func seedCompactStore(t *testing.T, path string, optionalFields bool) {
 	t.Helper()
 	db, err := rawdb.NewPebbleDB(path, 16, 32)
 	if err != nil {
@@ -88,7 +88,9 @@ func seedCompactStore(t *testing.T, path string) {
 	}
 	h := block.Hash()
 	rawdb.WriteHeadBlockHash(db, h)
-	rawdb.WriteHeadSolidBlockHash(db, h)
+	if optionalFields {
+		rawdb.WriteHeadSolidBlockHash(db, h)
+	}
 	rawdb.WriteDynamicProperty(db, "latest_block_header_hash", h.Bytes())
 	var n [8]byte
 	binary.BigEndian.PutUint64(n[:], 1)
@@ -102,8 +104,10 @@ func seedCompactStore(t *testing.T, path string) {
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, h); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteCommitmentEngineState(db, []byte("fixture engine")); err != nil {
-		t.Fatal(err)
+	if optionalFields {
+		if err := rawdb.WriteCommitmentEngineState(db, []byte("fixture engine")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := rawdb.WriteStateAccountLatest(db, common.Address{}, []byte("fixture account")); err != nil {
 		t.Fatal(err)
@@ -112,7 +116,7 @@ func seedCompactStore(t *testing.T, path string) {
 
 func TestCompactDryRunAndPreservingAll(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chaindata")
-	seedCompactStore(t, path)
+	seedCompactStore(t, path, true)
 	args := []string{"--hot-dir", path, "--range", "all", "--min-free-gib", "1", "--max-sst-write-gib", "1"}
 	before := databaseFileHashes(t, path)
 	if err := runCompact(args); err != nil {
@@ -135,7 +139,7 @@ func TestCompactDryRunAndPreservingAll(t *testing.T) {
 
 func TestCompactRejectsChangedBoundaryBeforeWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chaindata")
-	seedCompactStore(t, path)
+	seedCompactStore(t, path, true)
 	db, err := rawdb.NewPebbleDB(path, 16, 32)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +161,7 @@ func TestCompactRejectsChangedBoundaryBeforeWrite(t *testing.T) {
 
 func TestCompactRejectsAncientOnlyHotAnchorBeforeWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chaindata")
-	seedCompactStore(t, path)
+	seedCompactStore(t, path, true)
 	db, err := rawdb.NewPebbleDB(path, 16, 32)
 	if err != nil {
 		t.Fatal(err)
@@ -174,5 +178,100 @@ func TestCompactRejectsAncientOnlyHotAnchorBeforeWrite(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, databaseFileHashes(t, path)) {
 		t.Fatal("failed hot anchor preflight modified files")
+	}
+}
+
+func TestCompactAcceptsAbsentOptionalMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chaindata")
+	seedCompactStore(t, path, false)
+	args := []string{"--hot-dir", path, "--range", "all", "--min-free-gib", "1", "--max-sst-write-gib", "1"}
+	if err := runCompact(args); err != nil {
+		t.Fatalf("dry-run with absent optional fields: %v", err)
+	}
+	if err := runCompact(append(append([]string{}, args...), "--yes", "--allow-wal-replay")); err != nil {
+		t.Fatalf("compact with absent optional fields: %v", err)
+	}
+	report, err := readStatus(path, "", false, false)
+	if err != nil || report.Guard.SolidHash.Present || report.Guard.EngineStateSHA256.Present || !report.Guard.LatestCommitmentRoot.Present {
+		t.Fatalf("optional presence after reopen: %+v %v", report.Guard, err)
+	}
+}
+
+func TestCompactRejectsIncorrectStoredSolidHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chaindata")
+	seedCompactStore(t, path, true)
+	db, err := rawdb.NewPebbleDB(path, 16, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawdb.WriteHeadSolidBlockHash(db, common.HexToHash("0x9876"))
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := databaseFileHashes(t, path)
+	if err := runCompact([]string{"--hot-dir", path, "--range", "all", "--yes", "--allow-wal-replay", "--min-free-gib", "1", "--max-sst-write-gib", "1"}); err == nil {
+		t.Fatal("incorrect stored solid hash accepted")
+	}
+	if !reflect.DeepEqual(before, databaseFileHashes(t, path)) {
+		t.Fatal("failed solid mismatch preflight modified files")
+	}
+}
+
+func TestProtectedOptionalPresenceCannotChange(t *testing.T) {
+	before := protectedState{Guard: guard{
+		SolidHash:         field[string]{Present: false},
+		EngineStateSHA256: field[string]{Present: false},
+	}}
+	if err := verifyProtectedUnchanged(before, before); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*protectedState)
+	}{
+		{"solid appeared", func(s *protectedState) { s.Guard.SolidHash = field[string]{Present: true, Value: "0x1234"} }},
+		{"engine appeared", func(s *protectedState) { s.Guard.EngineStateSHA256 = field[string]{Present: true, Value: "abcd"} }},
+		{"solid disappeared", func(s *protectedState) { s.Guard.SolidHash = field[string]{} }},
+		{"engine disappeared", func(s *protectedState) { s.Guard.EngineStateSHA256 = field[string]{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := before
+			if tc.name == "solid disappeared" {
+				start.Guard.SolidHash = field[string]{Present: true, Value: "0x1234"}
+			}
+			if tc.name == "engine disappeared" {
+				start.Guard.EngineStateSHA256 = field[string]{Present: true, Value: "abcd"}
+			}
+			end := start
+			tc.mutate(&end)
+			if err := verifyProtectedUnchanged(start, end); err == nil {
+				t.Fatal("optional field presence change was accepted")
+			}
+		})
+	}
+}
+
+func TestRouteCensusColdIntervalsAndMissingRoute(t *testing.T) {
+	c := routeCensus{HeadBucket: 6, nextNonColdCandidate: 1}
+	for _, row := range []struct {
+		bucket uint64
+		cold   bool
+	}{{0, true}, {1, true}, {2, true}, {4, true}, {5, false}} {
+		c.observeColdRoute(row.bucket, row.cold)
+	}
+	if c.FirstNonColdFromBucketOne == nil || *c.FirstNonColdFromBucketOne != 3 {
+		t.Fatalf("missing route bucket 3 must be first non-COLD: %+v", c)
+	}
+	want := []coldBucketInterval{
+		{StartBucket: 1, EndBucket: 2, StartBlock: rawdb.StateHistoryChunkBucketBlocks, EndBlock: 3*rawdb.StateHistoryChunkBucketBlocks - 1},
+		{StartBucket: 4, EndBucket: 4, StartBlock: 4 * rawdb.StateHistoryChunkBucketBlocks, EndBlock: 5*rawdb.StateHistoryChunkBucketBlocks - 1},
+	}
+	if !reflect.DeepEqual(c.ColdIntervals, want) {
+		t.Fatalf("intervals %+v, want %+v", c.ColdIntervals, want)
+	}
+	stale := routeCensus{HeadBucket: 2, nextNonColdCandidate: 1}
+	stale.observeColdRoute(1, false) // An old-epoch COLD route is not current COLD.
+	if stale.FirstNonColdFromBucketOne == nil || *stale.FirstNonColdFromBucketOne != 1 {
+		t.Fatalf("old-epoch route misread as COLD: %+v", stale)
 	}
 }
