@@ -167,6 +167,10 @@ func referenceMergeSourceReader(ctx context.Context, dir string, source stateDom
 // at most two records for the existing complete order comparison. Codec buffers,
 // ETL, bounded dictionary cache and container tables are additional, not RSS.
 func scanReferenceMergeSource(ctx context.Context, dir string, source stateDomainChangeBinaryCompactionSource, dst *historyReferenceWriter, emit func(*rawdb.StateDomainChange, uint64, []historyReferenceValueSpan) error) (err error) {
+	return scanReferenceMergeSourceProjection(ctx, dir, source, dst, nil, emit)
+}
+
+func scanReferenceMergeSourceProjection(ctx context.Context, dir string, source stateDomainChangeBinaryCompactionSource, dst *historyReferenceWriter, projection *OfflineHistoryRepairSlice, emit func(*rawdb.StateDomainChange, uint64, []historyReferenceValueSpan) error) (err error) {
 	reader, header, size, err := openStateDomainChangeBinarySegmentSequentialReader(dir, source.history)
 	if err != nil {
 		return err
@@ -240,9 +244,11 @@ func scanReferenceMergeSource(ctx context.Context, dir string, source stateDomai
 			if err = hydrateStateDomainChangeBinaryRecordV5FromRange(txRange, i, row); err != nil {
 				return err
 			}
-			spans, err = r.copyValueSpans(ctx, dst, mapping, offset+21, prev)
-			if err != nil {
-				return err
+			if projection == nil || (row.TxNum >= projection.FromTxNum && row.TxNum <= projection.ToTxNum) {
+				spans, err = r.copyValueSpans(ctx, dst, mapping, offset+21, prev)
+				if err != nil {
+					return err
+				}
 			}
 			next = offset + 4 + payload
 		} else {
@@ -265,7 +271,7 @@ func scanReferenceMergeSource(ctx context.Context, dir string, source stateDomai
 			}
 			previousLegacy = row
 			prev = uint64(len(row.Prev))
-			for off := 0; off < len(row.Prev); {
+			for off := 0; off < len(row.Prev) && (projection == nil || (row.TxNum >= projection.FromTxNum && row.TxNum <= projection.ToTxNum)); {
 				end := min(len(row.Prev), off+historyReferenceMaxChunk)
 				id, err := dst.StoreChunk(row.Prev[off:end])
 				if err != nil {
@@ -279,8 +285,10 @@ func scanReferenceMergeSource(ctx context.Context, dir string, source stateDomai
 			return errStateDomainChangeHistoryRecordsNotOrdered
 		}
 		previousTx = row.TxNum
-		if err = emit(row, prev, spans); err != nil {
-			return err
+		if projection == nil || (row.TxNum >= projection.FromTxNum && row.TxNum <= projection.ToTxNum) {
+			if err = emit(row, prev, spans); err != nil {
+				return err
+			}
 		}
 		offset = next
 	}
@@ -314,6 +322,12 @@ func scanReferenceMergeSource(ctx context.Context, dir string, source stateDomai
 // At most 128 source descriptors, one <=1MiB chunk-ID map, 256MiB on-disk metadata
 // spool, existing ETL thresholds and R1 directory limits are permitted.
 func compactStateDomainChangeReferenceHistoryRunContext(ctx context.Context, dir string, cfg DomainCfg, selection historyCompactionSelection, sources []stateDomainChangeBinaryCompactionSource, progress *historyCompactionProgress) (refs []SegmentRef, err error) {
+	return compactStateDomainChangeReferenceHistoryProjectionContext(ctx, dir, cfg, selection, sources, progress, nil, etl.Options{})
+}
+
+// A projection is used only by the explicit offline range-copy entry point.
+// Ordinary compaction keeps its complete source coverage and row-count checks.
+func compactStateDomainChangeReferenceHistoryProjectionContext(ctx context.Context, dir string, cfg DomainCfg, selection historyCompactionSelection, sources []stateDomainChangeBinaryCompactionSource, progress *historyCompactionProgress, projection *OfflineHistoryRepairSlice, opts etl.Options) (refs []SegmentRef, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -339,14 +353,22 @@ func compactStateDomainChangeReferenceHistoryRunContext(ctx context.Context, dir
 		return nil, errors.New("snapshots: reference merge range differs")
 	}
 	ref := SegmentRef{Dataset: cfg.Dataset, Kind: SegmentHistory, FromTxNum: selection.fromTxNum, ToTxNum: selection.toTxNum, AggregationSteps: selection.aggregationSteps, Path: cfg.HistoryPath(selection.fromTxNum, selection.toTxNum)}
+	if projection != nil {
+		ref.FromTxNum, ref.ToTxNum = projection.FromTxNum, projection.ToTxNum
+		ref.Path, ref.AggregationSteps = projection.path, 1
+	}
 	if err = validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
 		return nil, err
 	}
-	temp := filepath.Join(dir, "etl")
+	temp := opts.TempDir
+	if temp == "" {
+		temp = filepath.Join(dir, "etl")
+	}
+	opts.TempDir = temp
 	if err = os.MkdirAll(temp, 0700); err != nil {
 		return nil, err
 	}
-	v6, err := newStateDomainChangeV6Build(etl.Options{TempDir: temp}, dir, ref.Path)
+	v6, err := newStateDomainChangeV6Build(opts, dir, ref.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -380,16 +402,16 @@ func compactStateDomainChangeReferenceHistoryRunContext(ctx context.Context, dir
 	for i, source := range sources {
 		// Match the old merger's complete V6 dictionary, including legal keys
 		// with no postings. This reads metadata only, never Prev payloads.
-		if source.segmentHeader.version == stateDomainChangeBinaryVersionV6 {
+		if projection == nil && source.segmentHeader.version == stateDomainChangeBinaryVersionV6 {
 			if err = collectStateDomainChangeBinarySegmentV6Keys(ctx, dir, v6, source); err != nil {
 				return nil, err
 			}
 		}
-		err = scanReferenceMergeSource(ctx, dir, source, container, func(row *rawdb.StateDomainChange, prev uint64, spans []historyReferenceValueSpan) error {
+		err = scanReferenceMergeSourceProjection(ctx, dir, source, container, projection, func(row *rawdb.StateDomainChange, prev uint64, spans []historyReferenceValueSpan) error {
 			if rows >= total {
 				return errors.New("snapshots: reference merge excess rows")
 			}
-			if source.segmentHeader.version != stateDomainChangeBinaryVersionV6 {
+			if projection != nil || source.segmentHeader.version != stateDomainChangeBinaryVersionV6 {
 				if err := v6.CollectKey(row); err != nil {
 					return err
 				}
@@ -410,9 +432,10 @@ func compactStateDomainChangeReferenceHistoryRunContext(ctx context.Context, dir
 		progress.setSourcesProcessed(uint64(i + 1))
 		progress.setRecordsProcessed(rows)
 	}
-	if rows != total {
+	if projection == nil && rows != total {
 		return nil, errors.New("snapshots: reference merge missing rows")
 	}
+	total = rows
 	if err = out.Flush(); err != nil {
 		return nil, err
 	}
@@ -427,7 +450,12 @@ func compactStateDomainChangeReferenceHistoryRunContext(ctx context.Context, dir
 		return nil, err
 	}
 	progress.setPhase(historyCompactionPhaseWriteTxRanges)
-	txCount, err := writeStateDomainChangeBinaryCompactionTxRanges(ctx, dir, container, sources)
+	var txCount uint64
+	if projection == nil {
+		txCount, err = writeStateDomainChangeBinaryCompactionTxRanges(ctx, dir, container, sources)
+	} else {
+		txCount, err = writeOfflineHistoryRepairTxRanges(ctx, dir, container, sources, ref.FromTxNum, ref.ToTxNum)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -435,8 +463,10 @@ func compactStateDomainChangeReferenceHistoryRunContext(ctx context.Context, dir
 	// tx-range tables to the originally admitted physical identities before
 	// any final artifact is installed.
 	for _, source := range sources {
-		if err = checkStateDomainChangeBinarySegmentChecksumContext(ctx, dir, source.history); err != nil {
-			return nil, err
+		if projection == nil {
+			if err = checkStateDomainChangeBinarySegmentChecksumContext(ctx, dir, source.history); err != nil {
+				return nil, err
+			}
 		}
 	}
 	index, indexName, err := createStateDomainChangeBinaryTempFile(dir, stateDomainChangeBinaryIndexPath(ref.Path))
