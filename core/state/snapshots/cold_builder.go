@@ -1378,6 +1378,10 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		}
 		historyDB = view
 		defer func() { err = errors.Join(err, release()) }()
+	} else if _, staged, identityErr := rawdb.ReadHistoryStagingIdentity(db); identityErr != nil {
+		return result, fmt.Errorf("snapshots: inspect history-source identity: %w", identityErr)
+	} else if staged {
+		return result, errors.New("snapshots: staged history source lacks a routed view")
 	}
 	cutoffRange, ok, err := historyCfg.HotHistoryTxRangeForBlock(historyDB, cutoffBlock)
 	if err != nil {

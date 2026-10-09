@@ -138,6 +138,11 @@ func dbOfflineHistoryCmd(ctx *cli.Context) (retErr error) {
 			retErr = errors.Join(retErr, db.Close())
 		}
 	}()
+	if _, staged, err := rawdb.ReadHistoryStagingIdentity(db); err != nil {
+		return fmt.Errorf("offline history: inspect staging identity: %w", err)
+	} else if staged {
+		return errors.New("offline history: staged history requires routed source; this legacy hot-only command is unavailable")
+	}
 	boundary, err := readOfflineChainBoundary(db)
 	if err != nil {
 		return err

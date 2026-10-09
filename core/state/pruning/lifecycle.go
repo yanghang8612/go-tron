@@ -683,6 +683,11 @@ func (s snapshotChainSource) AcquireStateHistorySourceView(ctx context.Context) 
 	}); ok {
 		return source.AcquireStateHistorySourceView(ctx)
 	}
+	if _, staged, err := rawdb.ReadHistoryStagingIdentity(s.chain.DB()); err != nil {
+		return nil, nil, err
+	} else if staged {
+		return nil, nil, errors.New("pruning: staged history source lacks a routed view")
+	}
 	return rawdb.AcquireStateHistoryReadView(s.chain.DB())
 }
 

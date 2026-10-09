@@ -146,6 +146,45 @@ func TestOfflineHistoryErrorsAlwaysProduceJSON(t *testing.T) {
 	}
 }
 
+func TestOfflineHistoryRejectsStagedHotOnlySourceBeforePlanning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(stateSnapshotsDir(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hot, err := rawdb.NewPebbleDB(chainDataDir(dir), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := rawdb.NewHistoryStagingPebbleDB(defaultHistoryStagingDir(dir), 16, 16, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := rawdb.HistoryStagingIdentity{Version: rawdb.HistoryStagingFormatVersion, GenesisHash: common.Hash{1}, NetworkID: 1, SourceID: [32]byte{2}, TargetID: [32]byte{3}}
+	manager, err := rawdb.NewHistoryStagingManager(hot, stage, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := hot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := &cli.App{Writer: &stdout, ErrWriter: &stderr, Commands: []*cli.Command{dbOfflineHistoryCommand()}}
+	err = app.Run([]string{"gtron", "offline-history", "--datadir", dir, "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "legacy hot-only command is unavailable") {
+		t.Fatalf("staged offline history plan was accepted: %v", err)
+	}
+	var report offlineHistoryReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || report.Result != nil || report.Plan.Blocks != 0 {
+		t.Fatalf("staged failure report: %+v decode=%v", report, err)
+	}
+}
+
 func TestOfflineHistoryAdmissionFailureReportsPlanAndPreservesFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := chainDataDir(dir)

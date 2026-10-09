@@ -47,6 +47,17 @@ func (a *prunerChainSource) DB() ethdb.KeyValueStore {
 	return a.chain.DB()
 }
 
+// The cold builder must read the same pinned SOURCE/TARGET/COLD route as the
+// canonical reader. Without this forwarding method SnapshotLifecycle falls
+// back to a hot-only snapshot and can publish an empty history segment for a
+// bucket whose changesets have already moved to staging.
+func (a *prunerChainSource) AcquireStateHistorySourceView(ctx context.Context) (statesnapshots.AggregatorDB, func() error, error) {
+	if a == nil || a.chain == nil || ctx == nil {
+		return nil, nil, errors.New("history snapshots: unavailable routed chain source")
+	}
+	return a.chain.AcquireStateHistorySourceView(ctx)
+}
+
 func (a *prunerChainSource) EventLogDB() *rawdb.ChainDB {
 	if a == nil || a.chain == nil {
 		return nil
@@ -80,6 +91,13 @@ func (a *prunerChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Ha
 
 func (a *stateSnapshotChainSource) DB() statesnapshots.AggregatorDB {
 	return a.chain.DB()
+}
+
+func (a *stateSnapshotChainSource) AcquireStateHistorySourceView(ctx context.Context) (statesnapshots.AggregatorDB, func() error, error) {
+	if a == nil || a.chain == nil || ctx == nil {
+		return nil, nil, errors.New("history snapshots: unavailable routed chain source")
+	}
+	return a.chain.AcquireStateHistorySourceView(ctx)
 }
 
 func (a *stateSnapshotChainSource) LatestSolidifiedBlockNum() int64 {
