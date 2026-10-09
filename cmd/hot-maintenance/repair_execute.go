@@ -68,6 +68,10 @@ func repairBuildReplacements(ctx context.Context, e repairExecution, slices []re
 		}
 		refs = append(refs, left...)
 	}
+	type targetBuildTask struct {
+		bucket, fromTx, toTx, fromBlock, toBlock uint64
+	}
+	var tasks []targetBuildTask
 	for _, item := range slices {
 		if err := e.fence(ctx); err != nil {
 			return nil, err
@@ -86,23 +90,50 @@ func repairBuildReplacements(ctx context.Context, e repairExecution, slices []re
 		// that fails closed without truncating a canonical block.
 		for start := first; start <= last; {
 			end := min(start+127, last)
-			fromTx, toTx := blocks[start].BeginTxNum, blocks[end].EndTxNum
-			view, err := e.manager.AcquireTargetBucketView(e.routes.Epoch, item.Bucket)
-			if err != nil {
-				return nil, err
-			}
-			path, err := repairNewHistoryPath("target", fromTx, toTx)
-			if err != nil {
-				_ = view.Close()
-				return nil, err
-			}
-			part, _, buildErr := snapshots.BuildStateHistoryReferenceTrioReadContext(ctx, view, e.coldPath, fromTx, toTx, blocks[start].Number, blocks[end].Number, path, opts, 0)
-			if err := errors.Join(buildErr, view.Close()); err != nil {
-				return nil, fmt.Errorf("repair: build TARGET bucket %d blocks [%d,%d]: %w", item.Bucket, blocks[start].Number, blocks[end].Number, err)
-			}
-			refs = append(refs, part...)
+			tasks = append(tasks, targetBuildTask{item.Bucket, blocks[start].BeginTxNum, blocks[end].EndTxNum, blocks[start].Number, blocks[end].Number})
 			start = end + 1
 		}
+	}
+	if err := e.fence(ctx); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(opts.TempDir, 0700); err != nil {
+		return nil, err
+	}
+	parts, err := repairParallelOrdered(ctx, e.workers, len(tasks), func(workCtx context.Context, index int) (part []snapshots.SegmentRef, retErr error) {
+		task := tasks[index]
+		if err := e.fence(workCtx); err != nil {
+			return nil, err
+		}
+		tempDir, err := os.MkdirTemp(opts.TempDir, "repair-target-*")
+		if err != nil {
+			return nil, err
+		}
+		defer func() { retErr = errors.Join(retErr, os.RemoveAll(tempDir)) }()
+		taskOpts := opts
+		taskOpts.TempDir = tempDir
+		view, err := e.manager.AcquireTargetBucketView(e.routes.Epoch, task.bucket)
+		if err != nil {
+			return nil, err
+		}
+		path, err := repairNewHistoryPath("target", task.fromTx, task.toTx)
+		if err != nil {
+			return nil, errors.Join(err, view.Close())
+		}
+		part, _, buildErr := snapshots.BuildStateHistoryReferenceTrioReadContext(workCtx, view, e.coldPath, task.fromTx, task.toTx, task.fromBlock, task.toBlock, path, taskOpts, 0)
+		if err := errors.Join(buildErr, view.Close()); err != nil {
+			return nil, fmt.Errorf("repair: build TARGET bucket %d blocks [%d,%d]: %w", task.bucket, task.fromBlock, task.toBlock, err)
+		}
+		return part, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := e.fence(ctx); err != nil {
+		return nil, err
+	}
+	for _, part := range parts {
+		refs = append(refs, part...)
 	}
 	if e.plan.Right != nil {
 		right, err := repairCopyBoundary(ctx, e, e.plan.Right, "right", opts)
@@ -160,16 +191,33 @@ func repairCandidateBindings(ctx context.Context, e repairExecution, chain *rawd
 	if expected != nil && audit == nil {
 		return nil, errors.New("repair: resumed durable binding needs a pinned receipt audit")
 	}
-	bindings := make([]rawdb.HistoryStagingColdBinding, 0, len(e.routes.Buckets))
+	// Canonical reads are planned serially. The fresh proof workers consume
+	// independent target snapshots and provers; a resumed durable receipt audit
+	// is explicitly single-goroutine and always stays on the serial path.
+	blocksByBucket := make([][]rawdb.HistoryStagingBlockProof, len(e.routes.Buckets))
 	for i, row := range e.routes.Buckets {
 		blocks, err := retireCanonicalBlocks(ctx, e.manager, chain, row.Bucket)
 		if err != nil {
 			return nil, err
 		}
-		item := slices[i]
-		if item.Bucket != row.Bucket {
-			return nil, fmt.Errorf("repair: TARGET slice bucket %d differs from route %d", item.Bucket, row.Bucket)
+		if slices[i].Bucket != row.Bucket {
+			return nil, fmt.Errorf("repair: TARGET slice bucket %d differs from route %d", slices[i].Bucket, row.Bucket)
 		}
+		blocksByBucket[i] = blocks
+	}
+	workers := e.workers
+	if expected != nil {
+		workers = 1
+	}
+	if err := e.fence(ctx); err != nil {
+		return nil, err
+	}
+	proved, err := repairParallelOrdered(ctx, workers, len(e.routes.Buckets), func(workCtx context.Context, i int) ([]rawdb.HistoryStagingColdBinding, error) {
+		ctx := workCtx
+		if err := e.fence(ctx); err != nil {
+			return nil, err
+		}
+		row, item, blocks := e.routes.Buckets[i], slices[i], blocksByBucket[i]
 		var prior *rawdb.HistoryStagingColdBinding
 		if expected != nil {
 			prior = &expected.Bindings[i]
@@ -183,8 +231,7 @@ func repairCandidateBindings(ctx context.Context, e repairExecution, chain *rawd
 				if err := audit.VerifyBinding(ctx, *row.OldBinding); err != nil {
 					return nil, err
 				}
-				bindings = append(bindings, *row.OldBinding)
-				continue
+				return []rawdb.HistoryStagingColdBinding{*row.OldBinding}, nil
 			}
 		}
 		mask := make([]bool, len(blocks))
@@ -252,7 +299,17 @@ func repairCandidateBindings(ctx context.Context, e repairExecution, chain *rawd
 				return nil, fmt.Errorf("repair: resumed semantic proof differs for bucket %d", binding.Bucket)
 			}
 		}
-		bindings = append(bindings, binding)
+		return []rawdb.HistoryStagingColdBinding{binding}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := e.fence(ctx); err != nil {
+		return nil, err
+	}
+	bindings := make([]rawdb.HistoryStagingColdBinding, 0, len(proved))
+	for _, one := range proved {
+		bindings = append(bindings, one...)
 	}
 	return bindings, nil
 }

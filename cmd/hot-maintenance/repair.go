@@ -36,6 +36,8 @@ type repairReport struct {
 	FromBucket             uint64                              `json:"from_bucket"`
 	ThroughBucket          uint64                              `json:"through_bucket"`
 	HistoryWindow          uint64                              `json:"history_window"`
+	Workers                int                                 `json:"workers"` // configured outer cap; actual tasks may be fewer
+	ResumeProofSerial      bool                                `json:"resume_proof_serial,omitempty"`
 	Plan                   *snapshots.OfflineHistoryRepairPlan `json:"plan,omitempty"`
 	TargetSlices           []repairTargetSlice                 `json:"target_slices,omitempty"`
 	ProtectedStateVerified bool                                `json:"protected_state_verified"`
@@ -61,6 +63,7 @@ func runRepairTargetColdInternal(args []string, phaseHook func(string) error) (r
 	fromTx := fs.Uint64("from-tx", 0, "first TARGET tx number at a complete block boundary")
 	toTx := fs.Uint64("to-tx", 0, "last TARGET tx number at a complete block boundary")
 	maxSourceTrios := fs.Uint64("max-source-trios", 1, "maximum old cold trios replaced in one durable publication (1..16)")
+	workers := fs.Int("workers", 1, "bounded independent TARGET builders and fresh bucket proofs (1, 2, or 4)")
 	window := fs.Uint64("history-window", 0, "configured retained block window")
 	yes := fs.Bool("yes", false, "authenticate, build exact replacement, and publish; default reads metadata only")
 	resume := fs.Bool("resume", false, "resume only this exact durable repair journal after an interrupted --yes")
@@ -70,7 +73,7 @@ func runRepairTargetColdInternal(args []string, phaseHook func(string) error) (r
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	report := repairReport{Version: 1, ObservedUTC: time.Now().UTC().Format(time.RFC3339), DryRun: !*yes, Phase: "preflight", FromBucket: *fromBucket, ThroughBucket: *throughBucket, HistoryWindow: *window,
+	report := repairReport{Version: 1, ObservedUTC: time.Now().UTC().Format(time.RFC3339), DryRun: !*yes, Phase: "preflight", FromBucket: *fromBucket, ThroughBucket: *throughBucket, HistoryWindow: *window, Workers: *workers,
 		Note: "Metadata-only by default. --yes proves the current TARGET interval against a new immutable cold trio, publishes a complete replacement manifest, and durably rebinds/certifies. It does not release or delete TARGET, hot, or old cold files."}
 	defer func() {
 		if retErr != nil {
@@ -81,7 +84,7 @@ func runRepairTargetColdInternal(args []string, phaseHook func(string) error) (r
 		retErr = errors.Join(retErr, enc.Encode(report))
 	}()
 	if fs.NArg() != 0 || len(*manifestText) != 64 || *fromBucket == 0 || *throughBucket < *fromBucket || *throughBucket-*fromBucket >= 16 ||
-		*fromTx == 0 || *toTx < *fromTx || *window == 0 || *maxSourceTrios == 0 || *maxSourceTrios > 16 || *minGiB == 0 || *minGiB > 4096 {
+		*fromTx == 0 || *toTx < *fromTx || *window == 0 || *maxSourceTrios == 0 || *maxSourceTrios > 16 || (*workers != 1 && *workers != 2 && *workers != 4) || *minGiB == 0 || *minGiB > 4096 {
 		return errors.New("repair: exact manifest SHA, explicit contiguous buckets/TARGET tx interval, history window, and bounded budgets are required")
 	}
 	decoded, err := hex.DecodeString(*manifestText)
@@ -237,18 +240,20 @@ func runRepairTargetColdInternal(args []string, phaseHook func(string) error) (r
 		return fmt.Errorf("repair: %d old trios exceed --max-source-trios=%d", len(plan.SourceRefs)/3, *maxSourceTrios)
 	}
 	report.Plan = plan
+	report.ResumeProofSerial = journalPresent
 	if !*yes {
 		report.Phase = "metadata_only"
 		return nil
 	}
 	// The remaining write path is entered only after metadata and route checks.
-	return executeRepairTargetCold(ctx, &report, repairExecution{hotPath: hot, stagePath: stage, coldPath: cold, ancientPath: *ancientInput, currentSHA: expected, fromTx: *fromTx, toTx: *toTx, fromBucket: *fromBucket, throughBucket: *throughBucket, window: *window, minFree: *minGiB << 30, lockPath: *lockPath, lock: lock, hold: hold, manifest: manifest, plan: plan, routes: p, manager: manager, hotDB: &hotDB, stageDB: &stageDB, journal: journal, journalPresent: journalPresent, phaseHook: phaseHook})
+	return executeRepairTargetCold(ctx, &report, repairExecution{hotPath: hot, stagePath: stage, coldPath: cold, ancientPath: *ancientInput, currentSHA: expected, fromTx: *fromTx, toTx: *toTx, fromBucket: *fromBucket, throughBucket: *throughBucket, window: *window, minFree: *minGiB << 30, workers: *workers, lockPath: *lockPath, lock: lock, hold: hold, manifest: manifest, plan: plan, routes: p, manager: manager, hotDB: &hotDB, stageDB: &stageDB, journal: journal, journalPresent: journalPresent, phaseHook: phaseHook})
 }
 
 type repairExecution struct {
 	hotPath, stagePath, coldPath, ancientPath                string
 	currentSHA                                               [32]byte
 	fromTx, toTx, fromBucket, throughBucket, window, minFree uint64
+	workers                                                  int
 	lockPath                                                 string
 	lock                                                     *os.File
 	hold                                                     cleanupHoldState

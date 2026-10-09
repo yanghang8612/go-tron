@@ -78,6 +78,22 @@ func TestRepairTargetColdFullCLIWithInheritedLock(t *testing.T) {
 	testRepairTargetColdCLI(t, false, "")
 }
 
+func TestRepairTargetColdParallelBuildersAndFreshProof(t *testing.T) {
+	for _, workers := range []int{2, 4} {
+		t.Run(strconv.Itoa(workers), func(t *testing.T) {
+			testRepairTargetColdCLIAtWithWorkers(t, false, "", 1024, workers)
+		})
+	}
+}
+
+func TestRepairTargetColdParallelResumeKeepsReceiptAuditSerial(t *testing.T) {
+	testRepairTargetColdCLIAtWithWorkers(t, true, journalPublished, 1024, 4)
+}
+
+func TestRepairTargetColdParallelPartialThenMixedBinding(t *testing.T) {
+	testRepairTargetColdCLIAtWithWorkers(t, true, "", 1024, 2)
+}
+
 func TestRepairTargetColdPartialBatchLeavesBadTailUncertified(t *testing.T) {
 	testRepairTargetColdCLI(t, true, "")
 }
@@ -101,6 +117,10 @@ func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
 }
 
 func testRepairTargetColdCLIAt(t *testing.T, partial bool, failPhase string, fromTx uint64) {
+	testRepairTargetColdCLIAtWithWorkers(t, partial, failPhase, fromTx, 1)
+}
+
+func testRepairTargetColdCLIAtWithWorkers(t *testing.T, partial bool, failPhase string, fromTx uint64, workers int) {
 	t.Helper()
 	const childEnv = "GTRON_REPAIR_CLI_TEST_CHILD"
 	if os.Getenv(childEnv) == "1" {
@@ -207,7 +227,7 @@ func testRepairTargetColdCLIAt(t *testing.T, partial bool, failPhase string, fro
 	if partial {
 		toTx = "1034"
 	}
-	args := []string{"--hot-dir", f.hotPath, "--stage-dir", f.stagePath, "--cold-dir", f.cold, "--ancient-dir", ancientPath, "--manifest-sha256", fmtHash(oldSHA), "--from-bucket", "1", "--through-bucket", "1", "--from-tx", strconv.FormatUint(fromTx, 10), "--to-tx", toTx, "--history-window", "64", "--min-free-gib", "1", "--start-lock", lockPath, "--hold-file", holdPath, "--yes"}
+	args := []string{"--hot-dir", f.hotPath, "--stage-dir", f.stagePath, "--cold-dir", f.cold, "--ancient-dir", ancientPath, "--manifest-sha256", fmtHash(oldSHA), "--from-bucket", "1", "--through-bucket", "1", "--from-tx", strconv.FormatUint(fromTx, 10), "--to-tx", toTx, "--history-window", "64", "--min-free-gib", "1", "--workers", strconv.Itoa(workers), "--start-lock", lockPath, "--hold-file", holdPath, "--yes"}
 	var extras []*os.File
 	for i := 3; i < 9; i++ {
 		null, err := os.Open(os.DevNull)
@@ -230,6 +250,15 @@ func testRepairTargetColdCLIAt(t *testing.T, partial bool, failPhase string, fro
 		var report repairReport
 		if err := json.NewDecoder(&out).Decode(&report); err != nil {
 			t.Fatalf("repair report missing: %v\nstdout: %s\nstderr: %s", err, out.String(), stderr.String())
+		}
+		entries, err := os.ReadDir(filepath.Join(f.cold, "etl"))
+		if err != nil {
+			t.Fatalf("repair ETL directory: %v", err)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "repair-target-") {
+				t.Fatalf("repair left TARGET task workspace %q after child exit", entry.Name())
+			}
 		}
 		if cmdErr != nil && phase == "" {
 			t.Fatalf("repair CLI failed: %v\nstdout: %s\nstderr: %s", cmdErr, out.String(), stderr.String())
@@ -289,6 +318,12 @@ func testRepairTargetColdCLIAt(t *testing.T, partial bool, failPhase string, fro
 	}
 	if report.Phase != "complete" || !report.ProtectedStateVerified || report.Error != "" || report.CandidateSHA256 == "" {
 		t.Fatalf("repair did not complete: %+v", report)
+	}
+	if report.Workers != workers {
+		t.Fatalf("reported workers %d, want %d", report.Workers, workers)
+	}
+	if report.ResumeProofSerial != (failPhase != "") {
+		t.Fatalf("resume proof mode %t differs from resumed=%t", report.ResumeProofSerial, failPhase != "")
 	}
 	probe, err := os.OpenFile(lockPath, os.O_RDWR, 0)
 	if err != nil {
