@@ -8,11 +8,12 @@ import (
 )
 
 func TestRepairParallelOrderedPreservesTaskOrder(t *testing.T) {
-	for _, workers := range []int{1, 2, 4} {
+	for _, workers := range []int{1, 2, 4, 8} {
 		t.Run(string(rune('0'+workers)), func(t *testing.T) {
 			gate := make(chan struct{})
 			var laterTaskCompleted atomic.Bool
-			results, err := repairParallelOrdered(context.Background(), workers, 8, func(_ context.Context, index int) (int, error) {
+			count := max(8, workers+1)
+			results, err := repairParallelOrdered(context.Background(), workers, count, func(_ context.Context, index int) (int, error) {
 				if workers > 1 {
 					if index == 0 {
 						<-gate
@@ -25,7 +26,7 @@ func TestRepairParallelOrderedPreservesTaskOrder(t *testing.T) {
 				}
 				return index * 13, nil
 			})
-			if err != nil || len(results) != 8 {
+			if err != nil || len(results) != count {
 				t.Fatalf("ordered work: %v, %v", results, err)
 			}
 			for i, value := range results {
@@ -60,7 +61,7 @@ func TestRepairParallelOrderedCancelsAndJoinsBeforeReturning(t *testing.T) {
 }
 
 func TestRepairParallelOrderedBoundsActiveWorkers(t *testing.T) {
-	for _, workers := range []int{2, 4} {
+	for _, workers := range []int{2, 4, 8} {
 		started := make(chan struct{}, workers)
 		release := make(chan struct{})
 		finished := make(chan error, 1)
@@ -94,24 +95,29 @@ func TestRepairParallelOrderedBoundsActiveWorkers(t *testing.T) {
 }
 
 func TestRepairParallelOrderedExternalCancellationJoins(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	started := make(chan struct{}, 2)
-	finished := make(chan error, 1)
-	var joined atomic.Int32
-	go func() {
-		_, err := repairParallelOrdered(ctx, 2, 8, func(ctx context.Context, _ int) (int, error) {
-			started <- struct{}{}
-			<-ctx.Done()
-			joined.Add(1)
-			return 0, ctx.Err()
+	for _, workers := range []int{2, 8} {
+		t.Run(string(rune('0'+workers)), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			started := make(chan struct{}, workers)
+			finished := make(chan error, 1)
+			var joined atomic.Int32
+			go func() {
+				_, err := repairParallelOrdered(ctx, workers, workers*2, func(ctx context.Context, _ int) (int, error) {
+					started <- struct{}{}
+					<-ctx.Done()
+					joined.Add(1)
+					return 0, ctx.Err()
+				})
+				finished <- err
+			}()
+			for range workers {
+				<-started
+			}
+			cancel()
+			if err := <-finished; !errors.Is(err, context.Canceled) || joined.Load() != int32(workers) {
+				t.Fatalf("workers=%d: cancel returned %v before %d workers joined", workers, err, joined.Load())
+			}
 		})
-		finished <- err
-	}()
-	<-started
-	<-started
-	cancel()
-	if err := <-finished; !errors.Is(err, context.Canceled) || joined.Load() != 2 {
-		t.Fatalf("cancel returned %v before %d workers joined", err, joined.Load())
 	}
 }

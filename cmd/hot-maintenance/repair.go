@@ -63,7 +63,7 @@ func runRepairTargetColdInternal(args []string, phaseHook func(string) error) (r
 	fromTx := fs.Uint64("from-tx", 0, "first TARGET tx number at a complete block boundary")
 	toTx := fs.Uint64("to-tx", 0, "last TARGET tx number at a complete block boundary")
 	maxSourceTrios := fs.Uint64("max-source-trios", 1, "maximum old cold trios replaced in one durable publication (1..16)")
-	workers := fs.Int("workers", 1, "bounded independent TARGET builders and fresh bucket proofs (1, 2, or 4)")
+	workers := fs.Int("workers", 1, "bounded independent TARGET builders and fresh bucket proofs (1, 2, 4, or 8)")
 	window := fs.Uint64("history-window", 0, "configured retained block window")
 	yes := fs.Bool("yes", false, "authenticate, build exact replacement, and publish; default reads metadata only")
 	resume := fs.Bool("resume", false, "resume only this exact durable repair journal after an interrupted --yes")
@@ -84,7 +84,7 @@ func runRepairTargetColdInternal(args []string, phaseHook func(string) error) (r
 		retErr = errors.Join(retErr, enc.Encode(report))
 	}()
 	if fs.NArg() != 0 || len(*manifestText) != 64 || *fromBucket == 0 || *throughBucket < *fromBucket || *throughBucket-*fromBucket >= 16 ||
-		*fromTx == 0 || *toTx < *fromTx || *window == 0 || *maxSourceTrios == 0 || *maxSourceTrios > 16 || (*workers != 1 && *workers != 2 && *workers != 4) || *minGiB == 0 || *minGiB > 4096 {
+		*fromTx == 0 || *toTx < *fromTx || *window == 0 || *maxSourceTrios == 0 || *maxSourceTrios > 16 || (*workers != 1 && *workers != 2 && *workers != 4 && *workers != 8) || *minGiB == 0 || *minGiB > 4096 {
 		return errors.New("repair: exact manifest SHA, explicit contiguous buckets/TARGET tx interval, history window, and bounded budgets are required")
 	}
 	decoded, err := hex.DecodeString(*manifestText)

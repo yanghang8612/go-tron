@@ -79,7 +79,7 @@ func TestRepairTargetColdFullCLIWithInheritedLock(t *testing.T) {
 }
 
 func TestRepairTargetColdParallelBuildersAndFreshProof(t *testing.T) {
-	for _, workers := range []int{2, 4} {
+	for _, workers := range []int{2, 4, 8} {
 		t.Run(strconv.Itoa(workers), func(t *testing.T) {
 			testRepairTargetColdCLIAtWithWorkers(t, false, "", 1024, workers)
 		})
@@ -87,7 +87,7 @@ func TestRepairTargetColdParallelBuildersAndFreshProof(t *testing.T) {
 }
 
 func TestRepairTargetColdParallelResumeKeepsReceiptAuditSerial(t *testing.T) {
-	testRepairTargetColdCLIAtWithWorkers(t, true, journalPublished, 1024, 4)
+	testRepairTargetColdCLIAtWithWorkers(t, true, journalPublished, 1024, 8)
 }
 
 func TestRepairTargetColdParallelPartialThenMixedBinding(t *testing.T) {

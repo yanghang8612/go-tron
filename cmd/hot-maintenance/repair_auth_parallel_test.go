@@ -12,7 +12,7 @@ import (
 )
 
 func TestRepairVerifyNewRefsAuthenticatesCompleteTriosInParallel(t *testing.T) {
-	for _, workers := range []int{1, 2, 4} {
+	for _, workers := range []int{1, 2, 4, 8} {
 		t.Run(strconv.Itoa(workers), func(t *testing.T) {
 			// A fresh directory and second trio keep each configuration on its
 			// first physical authentication, not a prior worker's cache hit.
