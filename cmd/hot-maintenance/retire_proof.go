@@ -132,7 +132,7 @@ func inspectRetirePlan(ctx context.Context, hot, stage ethdb.KeyValueStore, from
 
 // ReadBucketBlockProofs reads retained tx ranges, not canonical bodies. The
 // caller must compose hot with the explicitly opened read-only ancient store.
-func retireCanonicalBlocks(ctx context.Context, m *rawdb.HistoryStagingManager, chain ethdb.KeyValueReader, bucket uint64) ([]rawdb.HistoryStagingBlockProof, error) {
+func retireCanonicalBlocks(ctx context.Context, m *rawdb.HistoryStagingManager, chain *rawdb.ChainDB, bucket uint64) ([]rawdb.HistoryStagingBlockProof, error) {
 	blocks, err := m.ReadBucketBlockProofs(ctx, bucket)
 	if err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func retireCanonicalBlocks(ctx context.Context, m *rawdb.HistoryStagingManager, 
 	return blocks, nil
 }
 
-func authenticateRetirePlan(ctx context.Context, p *retirePlan, m *rawdb.HistoryStagingManager, chain ethdb.KeyValueReader, cold string, manifest *snapshots.Manifest, audit cleanupBindingAuditor, certify bool, progress func(uint64)) error {
+func authenticateRetirePlan(ctx context.Context, p *retirePlan, m *rawdb.HistoryStagingManager, chain *rawdb.ChainDB, cold string, manifest *snapshots.Manifest, audit cleanupBindingAuditor, certify bool, progress func(uint64)) error {
 	for i := range p.Buckets {
 		row := &p.Buckets[i]
 		if err := ctx.Err(); err != nil {
@@ -222,7 +222,7 @@ func retireBlocksDigest(bucket uint64, blocks []rawdb.HistoryStagingBlockProof) 
 	return out, nil
 }
 
-func recheckRetireCanonical(ctx context.Context, p retirePlan, m *rawdb.HistoryStagingManager, chain ethdb.KeyValueReader) error {
+func recheckRetireCanonical(ctx context.Context, p retirePlan, m *rawdb.HistoryStagingManager, chain *rawdb.ChainDB) error {
 	for _, row := range p.Buckets {
 		if !row.NeedsCertification {
 			continue

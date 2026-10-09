@@ -17,6 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -155,10 +156,10 @@ func TestRetireMissingBindingRequiresExplicitSemanticProofAndPreservesProtectedS
 	if len(p.Buckets) != 1 || !p.Buckets[0].NeedsCertification || p.Buckets[0].OldBinding != nil {
 		t.Fatalf("wrong metadata %+v", p)
 	}
-	if err := authenticateRetirePlan(ctx, &p, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), false, nil); err == nil {
+	if err := authenticateRetirePlan(ctx, &p, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), false, nil); err == nil {
 		t.Fatal("missing binding accepted without explicit certification")
 	}
-	if err := authenticateRetirePlan(ctx, &p, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
+	if err := authenticateRetirePlan(ctx, &p, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !cleanupBindingCovers(1, *p.Buckets[0].Prepared) {
@@ -168,7 +169,7 @@ func TestRetireMissingBindingRequiresExplicitSemanticProofAndPreservesProtectedS
 	if err != nil || !retireMetadataEqual(p, current) {
 		t.Fatal("read-only authentication changed metadata", err)
 	}
-	if err := recheckRetireCanonical(ctx, p, m, f.hot); err != nil {
+	if err := recheckRetireCanonical(ctx, p, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{})); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.CertifyColdRange(ctx, *p.Buckets[0].Prepared, func() error { return nil }); err != nil {
@@ -210,7 +211,7 @@ func TestRetireMissingBindingRequiresExplicitSemanticProofAndPreservesProtectedS
 	if err := m.ClearColdTarget(ctx, 1, f.limits); err != nil {
 		t.Fatal("completed retry failed", err)
 	}
-	if err := authenticateRetirePlan(ctx, &after, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), false, nil); err != nil {
+	if err := authenticateRetirePlan(ctx, &after, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), false, nil); err != nil {
 		t.Fatal("COLD retry unnecessarily required target payload", err)
 	}
 }
@@ -222,7 +223,7 @@ func TestRetireSemanticMismatchNeverPublishesBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authenticateRetirePlan(ctx, &p, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); !errors.Is(err, snapshots.ErrHistoryStagingColdSemanticMismatch) {
+	if err := authenticateRetirePlan(ctx, &p, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); !errors.Is(err, snapshots.ErrHistoryStagingColdSemanticMismatch) {
 		t.Fatalf("wrong Prev accepted: %v", err)
 	}
 	route, _, _ := m.ReadRoute(1)
@@ -247,7 +248,7 @@ func TestRetireBoundsAndTransitionsFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authenticateRetirePlan(context.Background(), &before, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
+	if err := authenticateRetirePlan(context.Background(), &before, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
 		t.Fatal(err)
 	}
 	after := before
@@ -312,7 +313,7 @@ func TestRetireResumesReceiptGoneBeforeTargetClearedFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authenticateRetirePlan(ctx, &before, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
+	if err := authenticateRetirePlan(ctx, &before, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.CertifyColdRange(ctx, *before.Buckets[0].Prepared, func() error { return nil }); err != nil {
@@ -382,7 +383,7 @@ func TestRetirePartialBindingExtendsWithMixedProof(t *testing.T) {
 	if p.Buckets[0].OldBinding == nil || !p.Buckets[0].NeedsCertification {
 		t.Fatal("partial binding misclassified")
 	}
-	if err := authenticateRetirePlan(ctx, &p, m, f.hot, f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
+	if err := authenticateRetirePlan(ctx, &p, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if p.Buckets[0].Prepared.BindingEpoch != 2 || !cleanupBindingCovers(1, *p.Buckets[0].Prepared) {
@@ -467,4 +468,58 @@ func fmtHash(hash [32]byte) string {
 		b[2*i], b[2*i+1] = digits[x>>4], digits[x&15]
 	}
 	return string(b)
+}
+
+func TestRetireCanonicalProofWithAncientOnlyBodies(t *testing.T) {
+	f := newRetireFixture(t, false)
+	ctx := context.Background()
+	path := t.TempDir()
+	tables := map[string]rawfreezer.TableConfig{rawdb.AncientBlocksTable: {NoSnappy: true}}
+	writer, err := rawfreezer.NewFreezer(path, "", false, 1<<20, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = writer.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n <= 2047; n++ {
+			// Prefix placeholders are never read by this bucket proof.
+			body := []byte{0}
+			if n >= 1024 {
+				body = rawdb.ReadBlockRaw(f.hot, n)
+			}
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, n, body); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err := errors.Join(err, writer.Sync(), writer.Close()); err != nil {
+		t.Fatal(err)
+	}
+	ancient, err := rawfreezer.NewFreezer(path, "", true, 1<<20, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ancient.Close()
+	if err := rawdb.DeleteFrozenBlockRange(f.hot, 1024, 2047); err != nil {
+		t.Fatal(err)
+	}
+	for _, block := range f.blocks {
+		if found, _, err := rawdb.HasHotFrozenBlockRows(f.hot, block.Number); err != nil || found {
+			t.Fatal("canonical body still hot", block.Number, err)
+		}
+	}
+	p, m, err := inspectRetirePlan(ctx, f.hot, f.stage, 1, 1, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retireCanonicalBlocks(ctx, m, rawdb.NewChainDB(f.hot, rawdb.NoopAncient{}), 1); err == nil {
+		t.Fatal("missing ancient bodies accepted")
+	}
+	chain := rawdb.NewChainDB(f.hot, rawdb.NewFreezerReader(ancient))
+	if err := authenticateRetirePlan(ctx, &p, m, chain, f.cold, f.manifest, fixtureRetireAudit(t, f), true, nil); err != nil {
+		t.Fatal("ancient-only canonical authentication", err)
+	}
+	if err := recheckRetireCanonical(ctx, p, m, chain); err != nil {
+		t.Fatal("ancient-only canonical handoff recheck", err)
+	}
 }
