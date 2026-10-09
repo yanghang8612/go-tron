@@ -54,6 +54,10 @@ var ErrNotFound = errors.New("blockbuffer: not found")
 // the moving Buffer read surface.
 var ErrReadSnapshotUnsupported = errors.New("blockbuffer: durable read snapshot unsupported")
 
+// ErrReadSnapshotBusy lets optional maintenance defer without waiting for a
+// potentially long overlay merge or disk flush while holding a chain guard.
+var ErrReadSnapshotBusy = errors.New("blockbuffer: read snapshot flush boundary busy")
+
 var (
 	flushInputOpsCounter                         = metrics.NewRegisteredCounter("blockbuffer/flush/input/ops", nil)
 	flushOutputOpsCounter                        = metrics.NewRegisteredCounter("blockbuffer/flush/output/ops", nil)
@@ -761,6 +765,14 @@ func (b *Buffer) NewReadSnapshot() (*ReadSnapshot, error) {
 	return b.newReadSnapshot(nil)
 }
 
+// TryNewReadSnapshot captures the same complete base/committed/inflight view
+// as NewReadSnapshot, but never queues on flushMu behind FlushUpTo. Acquiring
+// b.mu and the base snapshot can still wait. The caller retains the same
+// external single-writer capture requirement as NewReadSnapshot.
+func (b *Buffer) TryNewReadSnapshot() (*ReadSnapshot, error) {
+	return b.captureReadSnapshot(nil, true)
+}
+
 // NewReadSnapshotThrough captures the durable base plus committed buffer
 // layers through maxBlock. In-flight layers and committed layers above the
 // boundary are deliberately excluded, so an archive reader can use the last
@@ -775,6 +787,10 @@ func (b *Buffer) NewReadSnapshotThrough(maxBlock uint64) (*ReadSnapshot, error) 
 }
 
 func (b *Buffer) newReadSnapshot(maxBlock *uint64) (*ReadSnapshot, error) {
+	return b.captureReadSnapshot(maxBlock, false)
+}
+
+func (b *Buffer) captureReadSnapshot(maxBlock *uint64, try bool) (*ReadSnapshot, error) {
 	if b == nil || b.base == nil {
 		return nil, ErrReadSnapshotUnsupported
 	}
@@ -783,7 +799,13 @@ func (b *Buffer) newReadSnapshot(maxBlock *uint64) (*ReadSnapshot, error) {
 		return nil, ErrReadSnapshotUnsupported
 	}
 
-	b.flushMu.Lock()
+	if try {
+		if !b.flushMu.TryLock() {
+			return nil, ErrReadSnapshotBusy
+		}
+	} else {
+		b.flushMu.Lock()
+	}
 	b.mu.RLock()
 	base, err := factory.NewKeyValueSnapshot()
 	if err != nil {

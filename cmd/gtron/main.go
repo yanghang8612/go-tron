@@ -1395,6 +1395,16 @@ func gtron(ctx *cli.Context) error {
 			return fmt.Errorf("configure history staging mover: %w", err)
 		}
 		stack.RegisterLifecycle(mover)
+		indexGC, err := core.NewHistoryStagingIndexGC(bc, core.HistoryStagingIndexGCConfig{
+			HeavyWorkGate: heavyWorkGate, Pressure: historyResources.postingPressure,
+		})
+		if err != nil {
+			closeStores()
+			return fmt.Errorf("configure staging history-index GC: %w", err)
+		}
+		stack.RegisterLifecycle(indexGC)
+		log.Info("Staging history-index GC enabled", "interval", 100*time.Millisecond, "scanRows", 4096,
+			"scanBytes", 1<<20, "deleteLogicalBytes", 256<<10, "cooperativeDuration", 10*time.Millisecond)
 	}
 	historyLoadProbe := historyResources.sampleLoad
 	historyParallelReady := historyResources.parallelReady
@@ -1482,7 +1492,7 @@ func gtron(ctx *cli.Context) error {
 			HeavyWorkGate: heavyWorkGate,
 		}
 		var fullIndexPrune statepruning.StateChangeIndexPruneFunc = stateChangeIndexPruner.OnePass
-		if postingPrune {
+		if postingPrune || stagingManager != nil {
 			fullIndexPrune = nil
 		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
@@ -1577,7 +1587,7 @@ func gtron(ctx *cli.Context) error {
 		if historyBacklog.enabled {
 			log.Info("Cold history backlog import admission enabled", "highBlocks", historyBacklog.high, "lowBlocks", historyBacklog.low, "historyWindow", prunePolicy.HistoryWindow)
 		}
-		if postingPrune {
+		if postingPrune && stagingManager == nil {
 			stack.RegisterLifecycle(statepruning.NewPostingPruneWorker(statepruning.PostingPruneWorkerConfig{
 				Boundary:      domainLifecycle.PostingPruneBoundary,
 				Chunk:         runtimePostingPruneChunk(bc, heavyWorkGate, historyResources.postingPressure),
@@ -1599,7 +1609,7 @@ func gtron(ctx *cli.Context) error {
 			"sectionBloomPrune", sectionBloomPrune != nil,
 			"balanceTracePrune", balanceTracePrune != nil,
 			"stateChangeIndexPrune", fullIndexPrune != nil,
-			"postingChunkPrune", postingPrune,
+			"postingChunkPrune", postingPrune && stagingManager == nil,
 			"historyRangePrune", historyRangePrune,
 			"historyRangeQueue", historyRangeQueue,
 			"retiredPrune", true,
