@@ -18,7 +18,13 @@ import (
 // pinned manifest. The frozen offline CandidateSHA is not compared with a
 // later, legitimately advancing canonical database.
 func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (result error) {
-	if bc == nil || ctx == nil {
+	if bc == nil {
+		return errors.New("history staging startup: missing blockchain or context")
+	}
+	// A repeated verification must never preserve an earlier ready bit when
+	// any subsequent identity, file, or cancellation check fails.
+	bc.historyStagingReady.Store(false)
+	if ctx == nil {
 		return errors.New("history staging startup: missing blockchain or context")
 	}
 	manager := bc.HistoryStagingManager()
@@ -55,6 +61,7 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 	if release != nil {
 		defer release()
 	}
+	var receiptAudit *snapshots.HistoryStagingReceiptAudit
 	if pinned != nil {
 		manifest := pinned.Manifest()
 		if manifest == nil {
@@ -71,6 +78,13 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 				common.HexToHash(manifest.Chain.GenesisHash) != bc.genesisBlock.Hash() {
 				return errors.New("history staging startup: cold manifest primary chain identity mismatch")
 			}
+		}
+		// Keep strong fingerprints for every authenticated trio for this one
+		// startup. The process-wide receipt cache is bounded and may evict an
+		// earlier trio before a later bucket references it again.
+		receiptAudit, err = snapshots.NewHistoryStagingReceiptAudit(pinned)
+		if err != nil {
+			return fmt.Errorf("history staging startup: create receipt audit: %w", err)
 		}
 	}
 	// A single large trio can take much longer than a bucket to authenticate.
@@ -101,8 +115,12 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 	defer func() {
 		close(stop)
 		<-stopped
+		var authenticatedTrios int
+		if receiptAudit != nil {
+			authenticatedTrios = receiptAudit.AuthenticatedTrios()
+		}
 		log.Info("History staging startup audit finished", "verifiedBuckets", verifiedBuckets.Load(),
-			"headBucket", headBucket, "coldBindings", coldBindings.Load(),
+			"headBucket", headBucket, "coldBindings", coldBindings.Load(), "authenticatedTrios", authenticatedTrios,
 			"elapsed", time.Since(started), "err", result)
 	}()
 	if err := manager.VerifyHistoryStagingStartup(ctx, current.Number(), func(bucket uint64, route rawdb.HistoryStagingRoute) error {
@@ -118,19 +136,26 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 		if err != nil || !present || binding.BindingEpoch != route.ColdBindingEpoch {
 			return fmt.Errorf("history staging startup: cold binding bucket %d is missing: %w", bucket, err)
 		}
-		verifier, ok := any(pinned).(interface {
-			VerifyHistoryStagingPinnedBindingReceipt(context.Context, rawdb.HistoryStagingColdBinding) error
-		})
-		if !ok {
+		if receiptAudit == nil {
 			return errors.New("history staging startup: cold verifier is unavailable")
 		}
-		if err := verifier.VerifyHistoryStagingPinnedBindingReceipt(ctx, binding); err != nil {
+		if err := receiptAudit.VerifyBinding(ctx, binding); err != nil {
 			return err
 		}
 		coldBindings.Add(1)
 		verifiedBuckets.Add(1)
 		return nil
 	}); err != nil {
+		return err
+	}
+	// The pinned lease prevents normal retirement, but fail closed if any file
+	// authenticated early in this long audit changed before API/P2P is opened.
+	if receiptAudit != nil {
+		if err := receiptAudit.RecheckAll(ctx); err != nil {
+			return fmt.Errorf("history staging startup: recheck authenticated trios: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	bc.historyStagingReady.Store(true)

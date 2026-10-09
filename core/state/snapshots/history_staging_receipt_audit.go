@@ -9,9 +9,9 @@ import (
 )
 
 // HistoryStagingReceiptAudit is a task-local, pinned-manifest authentication
-// session for offline cleanup. It reuses the startup receipt verifier while
-// retaining every authenticated trio's strong file fingerprint, independent
-// of the bounded process-wide cache. It is single-goroutine only.
+// session for startup or offline cleanup. It reuses the durable receipt
+// verifier while retaining every authenticated trio's strong file fingerprint,
+// independent of the bounded process-wide cache. It is single-goroutine only.
 type HistoryStagingReceiptAudit struct {
 	manager *Manager
 	auth    *historyStagingReceiptAuthenticator
@@ -20,11 +20,11 @@ type HistoryStagingReceiptAudit struct {
 
 func NewHistoryStagingReceiptAudit(manager *Manager) (*HistoryStagingReceiptAudit, error) {
 	if manager == nil || !manager.pinned {
-		return nil, errors.New("snapshots: offline receipt audit requires pinned manager")
+		return nil, errors.New("snapshots: receipt audit requires pinned manager")
 	}
 	manifest, err := manager.currentManifest()
 	if err != nil || manifest == nil {
-		return nil, errors.New("snapshots: offline receipt audit has no pinned manifest")
+		return nil, errors.New("snapshots: receipt audit has no pinned manifest")
 	}
 	refs, err := historyStagingManifestTrioIndex(manager.dir, manifest)
 	if err != nil {
@@ -37,11 +37,12 @@ func NewHistoryStagingReceiptAudit(manager *Manager) (*HistoryStagingReceiptAudi
 
 // VerifyBinding checks an existing durable semantic receipt and its physical
 // trio. The caller must load the binding through a validated current-epoch
-// COLD route; this method cannot certify newly supplied semantic commitments
-// for publication. A separate TARGET migration receipt is not required.
+// route/binding; SOURCE or TARGET routes may also carry a certified cold span.
+// This method cannot certify newly supplied semantic commitments for
+// publication. A separate TARGET migration receipt is not required.
 func (a *HistoryStagingReceiptAudit) VerifyBinding(ctx context.Context, binding rawdb.HistoryStagingColdBinding) error {
 	if a == nil || a.manager == nil || ctx == nil {
-		return errors.New("snapshots: missing offline receipt audit")
+		return errors.New("snapshots: missing receipt audit")
 	}
 	return a.manager.verifyHistoryStagingPinnedBindingReceipt(ctx, binding, a.auth)
 }
@@ -51,7 +52,10 @@ func (a *HistoryStagingReceiptAudit) VerifyBinding(ctx context.Context, binding 
 // checksum work is not repeated before the writer transition or after close.
 func (a *HistoryStagingReceiptAudit) RecheckAll(ctx context.Context) error {
 	if a == nil || a.auth == nil || ctx == nil {
-		return errors.New("snapshots: missing offline receipt audit")
+		return errors.New("snapshots: missing receipt audit")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	for id, states := range a.auth.taskVerified {
 		if err := ctx.Err(); err != nil {
@@ -62,7 +66,7 @@ func (a *HistoryStagingReceiptAudit) RecheckAll(ctx context.Context) error {
 			return errors.New("snapshots: authenticated trio disappeared from pinned manifest")
 		}
 		if err := historyStagingCheckFileStates(a.auth.dir, refs, states); err != nil {
-			return fmt.Errorf("snapshots: offline receipt trio changed: %w", err)
+			return fmt.Errorf("snapshots: receipt audit trio changed: %w", err)
 		}
 	}
 	return nil
