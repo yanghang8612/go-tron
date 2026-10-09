@@ -143,6 +143,25 @@ func HotMaintenanceRanges() []PhysicalSpaceRange {
 	return ranges
 }
 
+// HotMaintenanceDiagnosticRanges grants read-only bounded inventory over the
+// large history payload families and metadata. These names never grant a
+// logical delete or compaction permission.
+func HotMaintenanceDiagnosticRanges() []PhysicalSpaceRange {
+	groups := [...]struct {
+		name   string
+		prefix []byte
+	}{
+		{"state_history_chunk", stateHistorySharedChunkPrefix},
+		{"state_history_chunk_bucket", stateHistorySharedBucketPrefix},
+		{"history_staging_metadata", historyStagingMetadataPrefix},
+	}
+	ranges := make([]PhysicalSpaceRange, len(groups))
+	for i, group := range groups {
+		ranges[i] = PhysicalSpaceRange{Name: group.name, Start: append([]byte(nil), group.prefix...), End: prefixUpperBound(group.prefix)}
+	}
+	return ranges
+}
+
 // HotMaintenanceCanaryRanges selects current-state prefixes for bounded
 // read-only value sampling before and after a physical maintenance rewrite.
 func HotMaintenanceCanaryRanges() []PhysicalSpaceRange {

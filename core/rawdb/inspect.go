@@ -39,6 +39,10 @@ type InspectProgress struct {
 }
 
 type InspectOptions struct {
+	// Start and End bound a half-open read-only scan. An empty pair scans all
+	// keys; callers must obtain selected bounds from schema-owned ranges.
+	Start            []byte
+	End              []byte
 	ProgressInterval time.Duration
 	Progress         func(InspectProgress)
 }
@@ -154,15 +158,21 @@ func InspectDatabase(db ethdb.Iteratee, opts InspectOptions) (DatabaseInspection
 	if db == nil {
 		return DatabaseInspection{}, fmt.Errorf("inspect database: nil database")
 	}
+	if (len(opts.Start) == 0) != (len(opts.End) == 0) || (len(opts.Start) > 0 && bytes.Compare(opts.Start, opts.End) >= 0) {
+		return DatabaseInspection{}, fmt.Errorf("inspect database: invalid half-open range")
+	}
 	stats := make(map[string]*KeyspaceStat, len(inspectSingletons)+len(inspectPrefixes)+2)
 	started := time.Now()
 	nextProgress := started.Add(opts.ProgressInterval)
-	it := db.NewIterator(nil, nil)
+	it := db.NewIterator(nil, opts.Start)
 	defer it.Release()
 
 	var report DatabaseInspection
 	for it.Next() {
 		key, value := it.Key(), it.Value()
+		if len(opts.End) > 0 && bytes.Compare(key, opts.End) >= 0 {
+			break
+		}
 		space := inspectKeyspaceFor(key)
 		stat := stats[space.name]
 		if stat == nil {

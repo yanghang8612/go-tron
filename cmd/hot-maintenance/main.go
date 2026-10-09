@@ -95,6 +95,7 @@ type statusReport struct {
 	StagePebble     *pebbledb.MaintenanceSpaceStats `json:"stage_pebble,omitempty"`
 	Routes          *routeCensus                    `json:"routes,omitempty"`
 	HotInspection   *rawdb.DatabaseInspection       `json:"hot_inspection,omitempty"`
+	HotInspectRange string                          `json:"hot_inspect_range,omitempty"`
 	StageInspection *rawdb.DatabaseInspection       `json:"stage_inspection,omitempty"`
 	Note            string                          `json:"note"`
 }
@@ -117,6 +118,7 @@ func run(args []string) error {
 		stage := fs.String("stage-dir", "", "existing separate history-staging Pebble directory")
 		routes := fs.Bool("routes", false, "scan and count routed buckets; not a completeness proof")
 		full := fs.Bool("full", false, "scan every live KV in hot and target stores")
+		inspectRange := fs.String("inspect-range", "", "schema-owned hot read-only history range")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -126,7 +128,10 @@ func run(args []string) error {
 		if args[0] == "inspect" {
 			*full = true
 		}
-		report, err := readStatus(*hot, *stage, *routes, *full)
+		if *inspectRange != "" && !*full {
+			return errors.New("--inspect-range requires a live-key inspection")
+		}
+		report, err := readStatusRange(*hot, *stage, *routes, *full, *inspectRange)
 		if err != nil {
 			return err
 		}
@@ -135,6 +140,8 @@ func run(args []string) error {
 		return enc.Encode(report)
 	case "compact":
 		return runCompact(args[1:])
+	case "cleanup-index":
+		return runCleanupIndex(args[1:])
 	default:
 		return fmt.Errorf("unknown operation %q", args[0])
 	}
@@ -229,7 +236,26 @@ func spaceStats(path string) (pebbledb.MaintenanceSpaceStats, error) {
 }
 
 func readStatus(hotInput, stageInput string, routes, full bool) (statusReport, error) {
+	return readStatusRange(hotInput, stageInput, routes, full, "")
+}
+
+func readStatusRange(hotInput, stageInput string, routes, full bool, inspectRange string) (statusReport, error) {
 	var out statusReport
+	var selected *rawdb.PhysicalSpaceRange
+	if inspectRange != "" {
+		if !full {
+			return out, errors.New("selected inspect range requires live-key inspection")
+		}
+		for _, r := range rawdb.HotMaintenanceDiagnosticRanges() {
+			if r.Name == inspectRange {
+				selected = &r
+				break
+			}
+		}
+		if selected == nil {
+			return out, fmt.Errorf("unknown read-only diagnostic range %q", inspectRange)
+		}
+	}
 	hot, err := checkedDir(hotInput)
 	if err != nil {
 		return out, err
@@ -302,14 +328,19 @@ func readStatus(hotInput, stageInput string, routes, full bool) (statusReport, e
 		out.Routes = &census
 	}
 	if full {
-		inspection, err := rawdb.InspectDatabase(hotDB, rawdb.InspectOptions{ProgressInterval: 30 * time.Second, Progress: func(p rawdb.InspectProgress) {
+		opts := rawdb.InspectOptions{ProgressInterval: 30 * time.Second, Progress: func(p rawdb.InspectProgress) {
 			fmt.Fprintf(os.Stderr, "hot rows=%d logical_bytes=%d elapsed=%s\n", p.Rows, p.LogicalBytes, p.Elapsed.Round(time.Second))
-		}})
+		}}
+		if selected != nil {
+			opts.Start, opts.End = selected.Start, selected.End
+			out.HotInspectRange = selected.Name
+		}
+		inspection, err := rawdb.InspectDatabase(hotDB, opts)
 		if err != nil {
 			return out, err
 		}
 		out.HotInspection = &inspection
-		if stageDB != nil {
+		if stageDB != nil && selected == nil {
 			inspection, err = rawdb.InspectDatabase(stageDB, rawdb.InspectOptions{ProgressInterval: 30 * time.Second, Progress: func(p rawdb.InspectProgress) {
 				fmt.Fprintf(os.Stderr, "stage rows=%d logical_bytes=%d elapsed=%s\n", p.Rows, p.LogicalBytes, p.Elapsed.Round(time.Second))
 			}})

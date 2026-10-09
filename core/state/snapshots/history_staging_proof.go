@@ -254,6 +254,10 @@ func (m *Manager) VerifyHistoryStagingPinnedBinding(ctx context.Context, binding
 // The caller must load the binding through a validated durable route; this
 // method cannot certify newly supplied semantic commitments for publication.
 func (m *Manager) VerifyHistoryStagingPinnedBindingReceipt(ctx context.Context, binding rawdb.HistoryStagingColdBinding) error {
+	return m.verifyHistoryStagingPinnedBindingReceipt(ctx, binding, nil)
+}
+
+func (m *Manager) verifyHistoryStagingPinnedBindingReceipt(ctx context.Context, binding rawdb.HistoryStagingColdBinding, authenticator *historyStagingReceiptAuthenticator) error {
 	if m == nil || !m.pinned || ctx == nil || binding.Version != rawdb.HistoryStagingFormatVersion ||
 		binding.Epoch == 0 || binding.BindingEpoch == 0 || len(binding.Spans) == 0 {
 		return errors.New("snapshots: invalid pinned cold binding receipt")
@@ -279,7 +283,11 @@ func (m *Manager) VerifyHistoryStagingPinnedBindingReceipt(ctx context.Context, 
 		return errors.New("snapshots: pinned cold manifest differs from receipt")
 	}
 	prover := &HistoryStagingColdProver{dir: m.dir, manifest: manifest}
-	authenticator := &historyStagingReceiptAuthenticator{dir: m.dir, manifest: manifest}
+	if authenticator == nil {
+		authenticator = &historyStagingReceiptAuthenticator{dir: m.dir, manifest: manifest}
+	} else if authenticator.dir != m.dir || authenticator.manifest != manifest {
+		return errors.New("snapshots: receipt audit manifest differs from pinned view")
+	}
 	return prover.verifyBindingReceiptFiles(ctx, binding, authenticator)
 }
 

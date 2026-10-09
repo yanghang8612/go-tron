@@ -95,6 +95,33 @@ func TestInspectDatabaseRejectsNil(t *testing.T) {
 	}
 }
 
+func TestInspectDatabaseSchemaBoundedHistoryRange(t *testing.T) {
+	db := NewMemoryDatabase()
+	defer db.Close()
+	for _, row := range []struct{ key, value []byte }{
+		{stateHistoryChunkBucketPrefix(3), []byte("chunk")},
+		{stateHistoryChunkBucketKey(3), []byte("bucket")},
+		{historyStagingIdentityKey, []byte("identity")},
+		{stateChangePostingKey([32]byte{1}, 3), []byte("outside")},
+	} {
+		if err := db.Put(row.key, row.value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, selected := range HotMaintenanceDiagnosticRanges() {
+		got, err := InspectDatabase(db, InspectOptions{Start: selected.Start, End: selected.End})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Rows != 1 || len(got.Keyspaces) != 1 {
+			t.Fatalf("range %s crossed schema boundary: %+v", selected.Name, got)
+		}
+	}
+	if _, err := InspectDatabase(db, InspectOptions{Start: []byte("z")}); err == nil {
+		t.Fatal("unbounded selected range accepted")
+	}
+}
+
 func findInspectionKeyspace(t *testing.T, report DatabaseInspection, name string) KeyspaceStat {
 	t.Helper()
 	for _, stat := range report.Keyspaces {

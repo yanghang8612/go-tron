@@ -37,6 +37,7 @@ type compactReport struct {
 	AllowWALReplay         bool                           `json:"allow_wal_replay"`
 	MinFreeBytes           uint64                         `json:"min_free_bytes"`
 	MaxSSTWriteBytes       uint64                         `json:"max_sst_write_bytes"`
+	TargetSSTBytes         uint64                         `json:"target_sst_bytes"`
 	Before                 protectedState                 `json:"before"`
 	After                  *protectedState                `json:"after,omitempty"`
 	Inspection             pebbledb.MaintenanceInspection `json:"inspection"`
@@ -79,11 +80,12 @@ func runCompact(args []string) (retErr error) {
 	yes := fs.Bool("yes", false, "perform physical-only compaction; default is read-only dry-run")
 	minFreeGiB := fs.Uint64("min-free-gib", 64, "minimum free space to retain")
 	maxWriteGiB := fs.Uint64("max-sst-write-gib", 8, "hard cap on this handle's SST allocation attempts")
+	targetSSTMiB := fs.Uint64("target-sst-mib", 32, "target SST file size, 1..128 MiB")
 	wal := fs.Bool("allow-wal-replay", false, "explicitly permit bounded Pebble WAL replay on write-open")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || *rangeName == "" || *minFreeGiB == 0 || *maxWriteGiB == 0 || *minFreeGiB > math.MaxUint64>>30 || *maxWriteGiB > math.MaxUint64>>30 {
+	if fs.NArg() != 0 || *rangeName == "" || *minFreeGiB == 0 || *maxWriteGiB == 0 || *targetSSTMiB < 1 || *targetSSTMiB > 128 || *minFreeGiB > math.MaxUint64>>30 || *maxWriteGiB > math.MaxUint64>>30 {
 		return errors.New("compact requires --range, positive bounded GiB budgets, and no positional arguments")
 	}
 	hot, err := checkedDir(*hotInput)
@@ -113,7 +115,7 @@ func runCompact(args []string) (retErr error) {
 		}
 	}
 	report := compactReport{Version: 1, ObservedUTC: time.Now().UTC().Format(time.RFC3339), HotPath: hot, StagePath: stage, Range: *rangeName,
-		DryRun: !*yes, AllowWALReplay: *wal, MinFreeBytes: *minFreeGiB << 30, MaxSSTWriteBytes: *maxWriteGiB << 30,
+		DryRun: !*yes, AllowWALReplay: *wal, MinFreeBytes: *minFreeGiB << 30, MaxSSTWriteBytes: *maxWriteGiB << 30, TargetSSTBytes: *targetSSTMiB << 20,
 		Note: "Physical compaction preserves all live KV; overlapping SST estimates are not a reclaim or peak-space guarantee. A failed compaction may have completed earlier SST rewrites."}
 	defer func() {
 		if retErr != nil {
@@ -123,7 +125,7 @@ func runCompact(args []string) (retErr error) {
 		enc.SetIndent("", "  ")
 		retErr = errors.Join(retErr, enc.Encode(report))
 	}()
-	m, err := pebbledb.OpenMaintenance(hot, pebbledb.MaintenanceOptions{MinFreeBytes: report.MinFreeBytes, MaxSSTWriteBytes: report.MaxSSTWriteBytes, AllowWALReplay: *wal})
+	m, err := pebbledb.OpenMaintenance(hot, pebbledb.MaintenanceOptions{MinFreeBytes: report.MinFreeBytes, MaxSSTWriteBytes: report.MaxSSTWriteBytes, TargetFileSizeBytes: int64(report.TargetSSTBytes), AllowWALReplay: *wal})
 	if err != nil {
 		return err
 	}

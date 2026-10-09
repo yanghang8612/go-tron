@@ -23,6 +23,10 @@ var historyStagingReceiptChecksumCache = struct {
 type historyStagingReceiptAuthenticator struct {
 	dir      string
 	manifest *Manifest
+	// taskVerified is owned by one offline audit. Unlike the process-wide
+	// bounded cache, it cannot evict an already authenticated trio midway
+	// through a large route census. A changed fingerprint is an error.
+	taskVerified map[[32]byte][3]historyStagingFileState
 	// Test hooks wrap only physical authentication and singleflight waiting.
 	// Production always uses the strong companion checksum verifier.
 	testAuth func(context.Context, [3]SegmentRef) error
@@ -47,6 +51,19 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		if err != nil {
 			return err
 		}
+		if p.taskVerified != nil && !states[i].hasChangeTime {
+			return errors.New("snapshots: offline receipt audit requires strong file change timestamps")
+		}
+	}
+	if p.taskVerified != nil {
+		if previous, ok := p.taskVerified[id]; ok {
+			for i := range previous {
+				if !previous[i].unchanged(states[i]) {
+					return errors.New("snapshots: authenticated cold trio changed during offline audit")
+				}
+			}
+			return nil
+		}
 	}
 	key := sha256.Sum256(append(append([]byte("gtron-history-staging-receipt-checksum-v1\x00"), p.dir...), id[:]...))
 	// A cooperative owner may release the shared maintenance token. Never
@@ -58,7 +75,9 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		cached, hit := historyStagingReceiptChecksumCache.trios[key]
 		historyStagingReceiptChecksumCache.Unlock()
 		if hit && cached[0].same(states[0]) && cached[1].same(states[1]) && cached[2].same(states[2]) {
-
+			if p.taskVerified != nil {
+				p.taskVerified[id] = states
+			}
 			return nil
 		}
 
@@ -75,6 +94,9 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		}
 		if err != nil {
 			return err
+		}
+		if p.taskVerified != nil {
+			p.taskVerified[id] = states
 		}
 		historyStagingReceiptChecksumCache.Lock()
 		if len(historyStagingReceiptChecksumCache.trios) >= historyStagingPinnedProofCacheEntries {
@@ -96,6 +118,9 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		cached, hit := historyStagingReceiptChecksumCache.trios[key]
 		if hit && cached[0].same(states[0]) && cached[1].same(states[1]) && cached[2].same(states[2]) {
 			historyStagingReceiptChecksumCache.Unlock()
+			if p.taskVerified != nil {
+				p.taskVerified[id] = states
+			}
 			return nil
 		}
 		flight := historyStagingReceiptChecksumCache.flights[key]
@@ -150,6 +175,9 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		delete(historyStagingReceiptChecksumCache.flights, key)
 		close(flight)
 		historyStagingReceiptChecksumCache.Unlock()
+		if err == nil && p.taskVerified != nil {
+			p.taskVerified[id] = states
+		}
 		return err
 	}
 }
