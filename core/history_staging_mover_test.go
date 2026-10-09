@@ -21,6 +21,173 @@ type historyStagingRunnerChain struct {
 	solidified int64
 }
 
+func TestHistoryStagingLastCompleteBucket(t *testing.T) {
+	for _, tc := range []struct {
+		eligible, want uint64
+	}{
+		{0, 0}, {1022, 0}, {1023, 0}, {1024, 0},
+		{2046, 0}, {2047, 1}, {2048, 1}, {3070, 1}, {3071, 2},
+		{^uint64(0) - 1, ^uint64(0)/1024 - 1},
+		{^uint64(0), ^uint64(0) / 1024},
+	} {
+		if got := historyStagingLastCompleteBucket(tc.eligible); got != tc.want {
+			t.Errorf("eligible=%d: last complete bucket=%d want=%d", tc.eligible, got, tc.want)
+		}
+	}
+}
+
+func TestHistoryStagingMoverRevisitsMaturingBucketWithoutRestart(t *testing.T) {
+	ctx := context.Background()
+	hot, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hot.Close()
+	stage, err := rawdb.NewHistoryStagingPebbleDB(t.TempDir(), 16, 16, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stage.Close()
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	genesis := &params.Genesis{Config: cfg, DynamicProperties: map[string]int64{"next_maintenance_time": 1<<62 - 1}}
+	_, genesisHash, err := SetupGenesisBlock(hot, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(hot, state.NewDatabase(rawdb.WrapKeyValueStore(hot)), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	manager, err := rawdb.NewHistoryStagingManager(hot, stage, rawdb.HistoryStagingIdentity{
+		Version: rawdb.HistoryStagingFormatVersion, GenesisHash: genesisHash, NetworkID: 1,
+		SourceID: [32]byte{1}, TargetID: [32]byte{2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := bc.SetHistoryStagingManager(manager); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.EnsureCanonicalSourceRoute(ctx, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	for height := uint64(1); height <= 2063; height++ {
+		block := testRestartBlock(height)
+		if err := rawdb.WriteBlock(hot, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateTxRange(hot, height, block.Hash(), height, height); err != nil {
+			t.Fatal(err)
+		}
+		if height >= 1024 && height <= 2047 {
+			receipt, err := rawdb.NewHistoryStagingBlockHasher(height).Finish(block.Hash(), 1, height, height)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := rawdb.WriteHistoryStagingBlockComplete(hot, receipt); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	setProgress := func(head, solid, finish, indexed uint64) {
+		t.Helper()
+		bc.currentBlock.Store(testRestartBlock(head))
+		props := bc.DynProps().Copy()
+		props.SetLatestSolidifiedBlockNum(int64(solid))
+		bc.storeDynPropsCache(props)
+		for stageID, height := range map[rawdb.StageID]uint64{rawdb.StageFinish: finish, rawdb.StageStateHistoryIndex: indexed} {
+			if err := rawdb.WriteStageProgressWithHash(hot, stageID, height, testRestartBlock(height).Hash()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	pressure := func() maintenance.StoragePressure {
+		now := time.Now()
+		return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now}
+	}
+	mover, err := NewHistoryStagingMover(bc, HistoryStagingMoverConfig{
+		HistoryWindow: 16, Cadence: time.Second, HeavyWorkGate: maintenance.NewHeavyWorkGate(),
+		HotPressure: pressure, StagePressure: pressure,
+		Limits: rawdb.HistoryStagingLimits{MaxRowBytes: 1 << 20, MaxBatchBytes: 4 << 20,
+			MaxBucketBytes: 64 << 20, MaxWorkBytes: 128 << 20, MaxDecodedBytes: 32 << 20,
+			MinFreeBytes: 1, FreeBytes: func() (uint64, error) { return 1 << 40, nil }}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                         string
+		head, solid, finish, indexed uint64
+	}{
+		{"retention tail", 2050, 2050, 2050, 2050},
+		{"Finish lag", 2063, 2063, 2046, 2063},
+		{"Index lag", 2063, 2063, 2063, 2046},
+		{"solid lag", 2063, 2050, 2063, 2063},
+		{"head lag", 2046, 2063, 2063, 2063},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setProgress(tc.head, tc.solid, tc.finish, tc.indexed)
+			if ready, err := mover.candidateHint(ctx); err != nil || ready {
+				t.Fatalf("immature bucket hint: ready=%t err=%v", ready, err)
+			}
+			if err := mover.RunOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if mover.nextBucket != 1 {
+				t.Fatalf("immature bucket skipped: next=%d want=1", mover.nextBucket)
+			}
+		})
+	}
+	setProgress(2063, 2063, 2063, 2063) // retention cutoff reaches bucket one's last block.
+	if ready, err := mover.candidateHint(ctx); err != nil || !ready {
+		t.Fatalf("mature bucket hint: ready=%t err=%v", ready, err)
+	}
+	// A failed copy must retain its durable claim and retry the same bucket.
+	mover.cfg.Limits.MaxRowBytes = 1
+	if err := mover.RunOnce(ctx); err == nil {
+		t.Fatal("undersized row budget accepted copy")
+	}
+	if mover.nextBucket != 1 {
+		t.Fatalf("failed copy skipped bucket: next=%d", mover.nextBucket)
+	}
+	if _, present, err := manager.ReadClaim(1); err != nil || !present {
+		t.Fatalf("failed copy lost claim: present=%t err=%v", present, err)
+	}
+	mover.cfg.Limits.MaxRowBytes = 1 << 20
+	if err := mover.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	route, present, err := manager.ReadRoute(1)
+	if err != nil || !present || route.Owner != rawdb.HistoryStagingOwnerTarget || !route.SourceCleared {
+		t.Fatalf("mature bucket not handed off: route=%+v present=%t err=%v", route, present, err)
+	}
+	target, err := manager.AcquireTargetBucketView(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if row, present, err := rawdb.ReadStateTxRange(target, 2047); err != nil || !present || row.BlockHash != testRestartBlock(2047).Hash() {
+		t.Fatalf("target missing copied range: row=%+v present=%t err=%v", row, present, err)
+	}
+	if route, present, err := manager.ReadRoute(0); err != nil || !present || route.Owner != rawdb.HistoryStagingOwnerSource {
+		t.Fatalf("genesis route changed: route=%+v present=%t err=%v", route, present, err)
+	}
+	// Missing route metadata at the next eligible bucket must fail closed on
+	// every attempt, rather than silently advancing beyond the unread bucket.
+	setProgress(3087, 3087, 3087, 3087)
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := mover.runAdmitted(ctx); !errors.Is(err, rawdb.ErrHistoryStagingIncomplete) {
+			t.Fatalf("missing next route attempt %d: err=%v", attempt, err)
+		}
+		if mover.nextBucket != 2 {
+			t.Fatalf("missing route skipped bucket: next=%d want=2", mover.nextBucket)
+		}
+	}
+}
+
 func (c historyStagingRunnerChain) DB() snapshots.AggregatorDB      { return c.bc.DB() }
 func (c historyStagingRunnerChain) LatestSolidifiedBlockNum() int64 { return c.solidified }
 func (c historyStagingRunnerChain) AcquireStateHistorySourceView(ctx context.Context) (snapshots.AggregatorDB, func() error, error) {

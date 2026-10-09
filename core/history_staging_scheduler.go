@@ -352,6 +352,7 @@ func (m *HistoryStagingMover) candidateHint(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	eligible := min(head.Number(), uint64(solid)-m.cfg.HistoryWindow, finish.BlockNum, indexed.BlockNum)
+	lastCompleteBucket := historyStagingLastCompleteBucket(eligible)
 	var coldThrough uint64
 	if cold, ok := bc.stateCodeColdHistory.(*snapshots.Manager); ok && cold != nil {
 		if manifest := cold.Manifest(); manifest != nil {
@@ -368,7 +369,7 @@ func (m *HistoryStagingMover) candidateHint(ctx context.Context) (bool, error) {
 		}
 		switch route.Owner {
 		case rawdb.HistoryStagingOwnerSource:
-			return route.Bucket >= m.nextBucket && last <= eligible, nil
+			return route.Bucket >= m.nextBucket && route.Bucket <= lastCompleteBucket, nil
 		case rawdb.HistoryStagingOwnerTarget:
 			if !route.SourceCleared {
 				return true, nil

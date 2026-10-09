@@ -553,7 +553,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		return nil
 	}
 	eligible := min(head.Number(), uint64(solid)-m.cfg.HistoryWindow, finish.BlockNum, indexed.BlockNum)
-	lastBucket := eligible / rawdb.StateHistoryChunkBucketBlocks
+	lastBucket := historyStagingLastCompleteBucket(eligible)
 	historyStagingMoverEligibleBucket.Update(int64(lastBucket))
 	if lastBucket == 0 {
 		bc.chainmu.Unlock()
@@ -571,11 +571,9 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	var hasClaim, resumeAbort bool
 	for examined := uint64(0); examined < 256 && m.nextBucket <= lastBucket; examined++ {
 		candidate := m.nextBucket
-		m.nextBucket++
-		historyStagingMoverNextBucket.Update(int64(m.nextBucket))
 		_, last, _ := rawdb.StateHistoryChunkBucketBounds(candidate)
 		if last > eligible {
-			continue
+			break
 		}
 		route, present, err := manager.ReadRoute(candidate)
 		if err != nil {
@@ -594,6 +592,10 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 			bc.stateHistoryIndexMu.Unlock()
 			return err
 		}
+		// Only advance past metadata we successfully inspected. A transient
+		// route/claim read failure must not make this bucket unreachable.
+		m.nextBucket++
+		historyStagingMoverNextBucket.Update(int64(m.nextBucket))
 		if route.Owner == rawdb.HistoryStagingOwnerSource {
 			bucket = candidate
 			if claimPresent {
@@ -821,6 +823,16 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	historyStagingMoverCopiedBytes.Inc(int64(receipt.PayloadBytes))
 	historyStagingMoverLastSuccess.Update(time.Now().Unix())
 	return m.finalizeColdBucket(ctx, bucket)
+}
+
+// historyStagingLastCompleteBucket excludes the bucket containing an
+// immature eligible tail. Subtract before dividing to avoid overflowing at
+// MaxUint64; bucket zero remains intentionally ineligible for handoff.
+func historyStagingLastCompleteBucket(eligible uint64) uint64 {
+	if eligible < rawdb.StateHistoryChunkBucketBlocks-1 {
+		return 0
+	}
+	return (eligible - (rawdb.StateHistoryChunkBucketBlocks - 1)) / rawdb.StateHistoryChunkBucketBlocks
 }
 
 func historyStagingBindingFull(binding rawdb.HistoryStagingColdBinding, first, last uint64) bool {
