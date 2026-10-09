@@ -171,14 +171,18 @@ func repairCopyBoundary(ctx context.Context, e repairExecution, boundary *snapsh
 	return refs, nil
 }
 
-func repairVerifyNewRefs(ctx context.Context, dir string, manifest *snapshots.Manifest, refs []snapshots.SegmentRef) error {
-	if len(refs)%3 != 0 {
+func repairVerifyNewRefs(ctx context.Context, dir string, manifest *snapshots.Manifest, refs []snapshots.SegmentRef, workers int) error {
+	if len(refs) == 0 || len(refs)%3 != 0 {
 		return errors.New("repair: incomplete replacement trios")
 	}
 	if manifest == nil {
 		return errors.New("repair: replacement manifest missing")
 	}
-	if err := snapshots.AuthenticateOfflineHistoryRepairTrios(ctx, dir, refs); err != nil {
+	_, err := repairParallelOrdered(ctx, workers, len(refs)/3, func(workCtx context.Context, index int) (struct{}, error) {
+		trio := refs[index*3 : (index+1)*3]
+		return struct{}{}, snapshots.AuthenticateOfflineHistoryRepairTrios(workCtx, dir, trio)
+	})
+	if err != nil {
 		return fmt.Errorf("repair: replacement trio authentication: %w", err)
 	}
 	return nil
@@ -389,7 +393,7 @@ func executeRepairTargetCold(ctx context.Context, report *repairReport, e repair
 		if err != nil || sha256.Sum256(serialized) != j.CandidateSHA {
 			return errors.Join(errors.New("repair: resumed candidate manifest differs from journal"), err)
 		}
-		if err := repairVerifyNewRefs(proofCtx, e.coldPath, candidate, j.NewRefs); err != nil {
+		if err := repairVerifyNewRefs(proofCtx, e.coldPath, candidate, j.NewRefs, 1); err != nil {
 			return err
 		}
 		// The private journal says which boundary outputs were copied; it is
@@ -418,7 +422,7 @@ func executeRepairTargetCold(ctx context.Context, report *repairReport, e repair
 		if err != nil {
 			return err
 		}
-		if err := repairVerifyNewRefs(proofCtx, e.coldPath, candidate, refs); err != nil {
+		if err := repairVerifyNewRefs(proofCtx, e.coldPath, candidate, refs, e.workers); err != nil {
 			return err
 		}
 		bindings, err := repairCandidateBindings(proofCtx, e, chain, candidate, slices, nil, nil)

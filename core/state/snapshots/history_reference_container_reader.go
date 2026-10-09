@@ -38,6 +38,11 @@ type historyReferenceReader struct {
 	cacheOrder             []uint32
 	cacheBytes, cacheLimit int
 	zstd                   *zstd.Decoder
+	// ReadAt is serialized by mu. The last authenticated logical span is a
+	// one-entry cursor for the two small reads made by each record frame.
+	hintIndex uint64
+	hintSpan  historyReferenceSpan
+	hintValid bool
 }
 
 func openHistoryReferenceReader(ctx context.Context, path string, cacheBytes int) (*historyReferenceReader, error) {
@@ -327,25 +332,12 @@ func (r *historyReferenceReader) ReadAt(p []byte, off int64) (int, error) {
 	if uint64(off) >= r.header.logical {
 		return 0, io.EOF
 	}
-	lo, hi := uint64(0), r.header.spans
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		span, err := r.span(r.ctx, mid)
-		if err != nil {
-			return 0, err
-		}
-		if span.logical+uint64(span.length) <= uint64(off) {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
+	lo, span, err := r.spanForOffset(uint64(off))
+	if err != nil {
+		return 0, err
 	}
 	n := 0
 	for n < len(p) && uint64(off) < r.header.logical {
-		span, err := r.span(r.ctx, lo)
-		if err != nil {
-			return n, err
-		}
 		raw, err := r.loadChunk(r.ctx, span.chunk)
 		if err != nil {
 			return n, err
@@ -356,7 +348,14 @@ func (r *historyReferenceReader) ReadAt(p []byte, off int64) (int, error) {
 		copy(p[n:n+count], raw[start:start+uint32(count)])
 		off += int64(count)
 		n += count
+		r.hintIndex, r.hintSpan, r.hintValid = lo, span, true
 		lo++
+		if n < len(p) && uint64(off) < r.header.logical {
+			span, err = r.span(r.ctx, lo)
+			if err != nil {
+				return n, err
+			}
+		}
 	}
 	if err := r.check(r.ctx); err != nil {
 		return n, err
@@ -365,6 +364,44 @@ func (r *historyReferenceReader) ReadAt(p []byte, off int64) (int, error) {
 		return n, io.EOF
 	}
 	return n, nil
+}
+
+// spanForOffset uses a single authenticated descriptor for nearby logical
+// reads. A random or reverse seek still performs the original binary search.
+// validateLayout must have succeeded before this method is called.
+func (r *historyReferenceReader) spanForOffset(offset uint64) (uint64, historyReferenceSpan, error) {
+	contains := func(span historyReferenceSpan) bool {
+		return offset >= span.logical && offset-span.logical < uint64(span.length)
+	}
+	if r.hintValid {
+		if contains(r.hintSpan) {
+			return r.hintIndex, r.hintSpan, nil
+		}
+		if r.hintIndex+1 < r.header.spans && offset >= r.hintSpan.logical+uint64(r.hintSpan.length) {
+			next, err := r.span(r.ctx, r.hintIndex+1)
+			if err != nil {
+				return 0, historyReferenceSpan{}, err
+			}
+			if contains(next) {
+				return r.hintIndex + 1, next, nil
+			}
+		}
+	}
+	lo, hi := uint64(0), r.header.spans
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		span, err := r.span(r.ctx, mid)
+		if err != nil {
+			return 0, historyReferenceSpan{}, err
+		}
+		if span.logical+uint64(span.length) <= offset {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	span, err := r.span(r.ctx, lo)
+	return lo, span, err
 }
 
 func (r *historyReferenceReader) Close() error {
@@ -377,6 +414,9 @@ func (r *historyReferenceReader) Close() error {
 	r.cache, r.cacheOrder = nil, nil
 	r.cacheBytes = 0
 	r.pages = [historyReferenceMetadataPages]historyReferencePage{}
+	r.hintValid = false
+	r.hintIndex = 0
+	r.hintSpan = historyReferenceSpan{}
 	if r.zstd != nil {
 		r.zstd.Close()
 		r.zstd = nil
