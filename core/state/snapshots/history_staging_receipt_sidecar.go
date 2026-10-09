@@ -18,7 +18,7 @@ import (
 // route, semantic receipt, or permission to prune hot history. A missing or
 // invalid certificate always falls back to the real checksum verifier.
 const historyStagingReceiptSidecar = ".history-staging-receipt-checksums-v1.json"
-const historyStagingReceiptSidecarMaxBytes = 32 << 20
+const historyStagingReceiptSidecarMaxBytes = 128 << 20
 const historyStagingReceiptSidecarMaxEntries = 100000
 
 var historyStagingReceiptSidecarMu sync.Mutex
