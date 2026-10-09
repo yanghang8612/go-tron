@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -275,6 +276,61 @@ func TestOfflineHistoryRepairNarrowRebindSkipsOtherRetiredDependencies(t *testin
 	}
 	if _, bound := historyStagingRetentionFor(dir); bound {
 		t.Fatal("offline repair registered global retention")
+	}
+	// A subsequent batch can copy an already active trio byte-for-byte to a
+	// different path. The same ContentID is still active, so its old durable
+	// binding must stay valid without a RebindCold attempt to remove that ID.
+	activePlan, err := PlanOfflineHistoryRepair(candidate, 1024, 2047)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := append([]SegmentRef(nil), activePlan.SourceRefs...)
+	for i := range alias {
+		oldPath := filepath.Join(dir, alias[i].Path)
+		alias[i].Path = strings.Replace(alias[i].Path, "state-domain-change-", "state-domain-change-repair-alias-", 1)
+		data, err := os.ReadFile(oldPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, alias[i].Path), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aliasManifest, err := PrepareOfflineHistoryRepairManifest(candidate, activePlan, alias, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasCtx, aliasFacts, err := WithHistoryStagingPhysicalFacts(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := OfflineRebindHistoryStagingRepair(aliasCtx, dir, manager, aliasManifest, activePlan.SourceRefs, func() error { return nil }); err != nil {
+		t.Fatal("byte-identical active ContentID was rejected", err)
+	}
+	if unchanged, _, err := manager.ReadColdBindingAt(1, 1); err != nil || !reflect.DeepEqual(unchanged, actual) {
+		t.Fatal("active ContentID alias rewrote its durable binding", err)
+	}
+	if err := aliasFacts.RecheckAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	aliasHistory := referenceBuildHistoryRef(t, alias)
+	aliasPath := filepath.Join(dir, aliasHistory.Path)
+	file, err := os.OpenFile(aliasPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0xff}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	badCtx, _, err := WithHistoryStagingPhysicalFacts(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := OfflineRebindHistoryStagingRepair(badCtx, dir, manager, aliasManifest, activePlan.SourceRefs, func() error { return nil }); err == nil {
+		t.Fatal("changed active ContentID alias escaped physical authentication")
 	}
 }
 

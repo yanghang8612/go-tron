@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -90,7 +92,15 @@ func TestRepairTargetColdFinalFileMutationCannotArchive(t *testing.T) {
 	testRepairTargetColdCLI(t, true, "mutate-after-rebound")
 }
 
+func TestRepairTargetColdSplitLeftBoundaryResume(t *testing.T) {
+	testRepairTargetColdCLIAt(t, false, journalPublished, 1500)
+}
+
 func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
+	testRepairTargetColdCLIAt(t, partial, failPhase, 1024)
+}
+
+func testRepairTargetColdCLIAt(t *testing.T, partial bool, failPhase string, fromTx uint64) {
 	t.Helper()
 	const childEnv = "GTRON_REPAIR_CLI_TEST_CHILD"
 	if os.Getenv(childEnv) == "1" {
@@ -127,6 +137,7 @@ func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
 			return nil
 		}
 		if err := runRepairTargetColdInternal(args, hook); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			t.Fatal(err)
 		}
 		return
@@ -196,7 +207,7 @@ func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
 	if partial {
 		toTx = "1034"
 	}
-	args := []string{"--hot-dir", f.hotPath, "--stage-dir", f.stagePath, "--cold-dir", f.cold, "--ancient-dir", ancientPath, "--manifest-sha256", fmtHash(oldSHA), "--from-bucket", "1", "--through-bucket", "1", "--from-tx", "1024", "--to-tx", toTx, "--history-window", "64", "--min-free-gib", "1", "--start-lock", lockPath, "--hold-file", holdPath, "--yes"}
+	args := []string{"--hot-dir", f.hotPath, "--stage-dir", f.stagePath, "--cold-dir", f.cold, "--ancient-dir", ancientPath, "--manifest-sha256", fmtHash(oldSHA), "--from-bucket", "1", "--through-bucket", "1", "--from-tx", strconv.FormatUint(fromTx, 10), "--to-tx", toTx, "--history-window", "64", "--min-free-gib", "1", "--start-lock", lockPath, "--hold-file", holdPath, "--yes"}
 	var extras []*os.File
 	for i := 3; i < 9; i++ {
 		null, err := os.Open(os.DevNull)
@@ -233,6 +244,9 @@ func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
 		journal, present, err := readRepairJournal(f.cold)
 		if err != nil || !present {
 			t.Fatal("durable journal missing after interruption", err)
+		}
+		if fromTx > 1024 && failPhase == journalPublished && len(journal.NewRefs) < 6*3 {
+			t.Fatalf("split left boundary was not durably published: %d refs", len(journal.NewRefs))
 		}
 		wantPhase := failPhase
 		if failPhase == "certified-bucket-1" {
@@ -306,6 +320,15 @@ func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
 		if len(binding.Spans) != 1 || binding.Spans[0].From != 1024 || binding.Spans[0].To != 1034 {
 			t.Fatalf("repair certified unrepaired TARGET tail: %+v", binding.Spans)
 		}
+	} else if fromTx > 1024 {
+		if len(binding.Spans) == 0 || binding.Spans[0].From != fromTx || binding.Spans[len(binding.Spans)-1].To != 2047 {
+			t.Fatalf("repair certified outside selected TARGET suffix: %+v", binding.Spans)
+		}
+		for i := 1; i < len(binding.Spans); i++ {
+			if binding.Spans[i].From != binding.Spans[i-1].To+1 {
+				t.Fatalf("repair binding has a gap: %+v", binding.Spans)
+			}
+		}
 	} else if !cleanupBindingCovers(1, binding) {
 		t.Fatal("full repair did not cover the whole bucket")
 	}
@@ -347,6 +370,9 @@ func testRepairTargetColdCLI(t *testing.T, partial bool, failPhase string) {
 					args[i+1] = "2047"
 				}
 			}
+			// The first publication leaves several 128-block replacement trios.
+			// The next batch intentionally replaces their complete overlap.
+			args = append(args, "--max-source-trios=16")
 			second, err := run(args, "")
 			if err != nil || second.Phase != "complete" || !second.ProtectedStateVerified {
 				t.Fatalf("next batch after done journal failed: %+v: %v", second, err)

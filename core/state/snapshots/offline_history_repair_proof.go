@@ -183,6 +183,7 @@ func OfflineRebindHistoryStagingRepair(ctx context.Context, dir string, manager 
 	}
 	var ids [][32]byte
 	seen := make(map[[32]byte]bool)
+	oldRanges := make(map[[2]uint64]bool, len(oldRefs)/3)
 	for i := 0; i < len(oldRefs); i += 3 {
 		h, idx, acc, _, err := historyReferenceTranscodeIdentity(oldRefs[i : i+3])
 		if err != nil {
@@ -202,6 +203,35 @@ func OfflineRebindHistoryStagingRepair(ctx context.Context, dir string, manager 
 		}
 		seen[id] = true
 		ids = append(ids, id)
+		oldRanges[[2]uint64{h.FromTxNum, h.ToTxNum}] = true
+	}
+	// A byte-identical boundary copy can have a different active path but the
+	// same ContentID: that ID includes the exact range and three checksums, not
+	// filenames. It remains a valid current dependency, so demanding that
+	// RebindCold remove it would reject a legitimate multi-batch repair.
+	activeSameID := make(map[[32]byte][3]SegmentRef)
+	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	for _, h := range candidate.Segments {
+		if h.NormalizedDataset() != SegmentDatasetStateDomainChange || h.Kind != SegmentHistory || !oldRanges[[2]uint64{h.FromTxNum, h.ToTxNum}] {
+			continue
+		}
+		idx, foundIndex := cfg.HistoryIndexRef(candidate, h)
+		acc, foundAccessor := cfg.HistoryAccessorRef(candidate, h)
+		if !foundIndex || !foundAccessor {
+			return errors.New("snapshots: offline repair active trio incomplete")
+		}
+		trio := [3]SegmentRef{h, idx, acc}
+		id, err := historyStagingTrioID(trio)
+		if err != nil {
+			return err
+		}
+		if !seen[id] {
+			continue
+		}
+		if _, exists := activeSameID[id]; exists {
+			return errors.New("snapshots: duplicate active offline repair ContentID")
+		}
+		activeSameID[id] = trio
 	}
 	proofCtx := ctx
 	facts, shared := ctx.Value(historyStagingPhysicalFactKey{}).(*HistoryStagingPhysicalFactCollector)
@@ -226,6 +256,19 @@ func OfflineRebindHistoryStagingRepair(ctx context.Context, dir string, manager 
 	for _, id := range ids {
 		if err := check(); err != nil {
 			return err
+		}
+		if trio, retained := activeSameID[id]; retained {
+			// Exact active files still need complete physical authentication;
+			// the old durable semantic binding continues to authorize only its
+			// original coverage. The shared collector protects these facts
+			// through the final manifest/route handoff.
+			if err := AuthenticateOfflineHistoryRepairTrios(proofCtx, dir, trio[:]); err != nil {
+				return fmt.Errorf("snapshots: retained offline repair ContentID %x: %w", id, err)
+			}
+			if err := check(); err != nil {
+				return err
+			}
+			continue
 		}
 		err := manager.RebindCold(proofCtx, id, candidate.Generation, func(old rawdb.HistoryStagingColdBinding) (rawdb.HistoryStagingColdBinding, error) {
 			if err := check(); err != nil {

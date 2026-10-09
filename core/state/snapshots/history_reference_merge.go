@@ -192,19 +192,32 @@ func scanReferenceMergeSourceProjection(ctx context.Context, dir string, source 
 	}
 	var r *historyReferenceReader
 	var mapping []uint32
+	var directV6Projection bool
+	var directScratch []byte
 	if header.version == stateDomainChangeBinaryVersionV6 {
-		var release func() error
-		r, release, err = referenceMergeSourceReader(ctx, dir, source, contextual)
-		if err != nil {
-			return err
-		}
-		defer func() { err = errors.Join(err, release()) }()
-		if err = r.ValidateLayout(ctx); err != nil {
-			return err
-		}
-		mapping = make([]uint32, int(r.header.chunks))
-		for i := range mapping {
-			mapping[i] = math.MaxUint32
+		// An explicit offline projection has already authenticated the complete
+		// immutable source trio. Converting a non-R1 source in its entirety here
+		// would charge unselected CDC records against the destination R1 budget.
+		// Read the same contextual logical V6 frames directly and import only
+		// selected Prev chunks. Ordinary compaction and R1 span-copy are unchanged.
+		_, alreadyReference := contextual.historySegmentReader.(*historyReferenceReader)
+		directV6Projection = projection != nil && !alreadyReference
+		if directV6Projection {
+			directScratch = make([]byte, historyReferenceMaxChunk)
+		} else {
+			var release func() error
+			r, release, err = referenceMergeSourceReader(ctx, dir, source, contextual)
+			if err != nil {
+				return err
+			}
+			defer func() { err = errors.Join(err, release()) }()
+			if err = r.ValidateLayout(ctx); err != nil {
+				return err
+			}
+			mapping = make([]uint32, int(r.header.chunks))
+			for i := range mapping {
+				mapping[i] = math.MaxUint32
+			}
 		}
 	}
 	var previousTx uint64
@@ -248,6 +261,52 @@ func scanReferenceMergeSourceProjection(ctx context.Context, dir string, source 
 				spans, err = r.copyValueSpans(ctx, dst, mapping, offset+21, prev)
 				if err != nil {
 					return err
+				}
+			}
+			next = offset + 4 + payload
+		} else if directV6Projection {
+			if offset > size || size-offset < 21 {
+				return io.ErrUnexpectedEOF
+			}
+			var frame [21]byte
+			if err = historyReferenceReadAt(ctx, contextual, frame[:], offset); err != nil {
+				return err
+			}
+			payload := uint64(binary.BigEndian.Uint32(frame[:4]))
+			prev = uint64(binary.BigEndian.Uint32(frame[17:]))
+			if payload != 17+prev || payload > size-offset-4 || frame[16] > 1 {
+				return errors.New("snapshots: malformed projected V6 record")
+			}
+			row = &rawdb.StateDomainChange{TxNum: binary.BigEndian.Uint64(frame[8:16]), PrevExists: frame[16] == 1}
+			key, e := contextual.v6Key(binary.BigEndian.Uint32(frame[4:8]))
+			if e != nil {
+				return e
+			}
+			if err = decodeStateDomainChangeBinaryAccessorKey(key, row); err != nil {
+				return err
+			}
+			txRange, e := contextual.txRangeForTxNum(row.TxNum)
+			if e != nil {
+				return e
+			}
+			if err = hydrateStateDomainChangeBinaryRecordV5FromRange(txRange, i, row); err != nil {
+				return err
+			}
+			if row.TxNum >= projection.FromTxNum && row.TxNum <= projection.ToTxNum {
+				for copied := uint64(0); copied < prev; {
+					if len(spans) >= historyReferenceMaxSpans {
+						return errHistoryReferenceBudget
+					}
+					n := min(uint64(len(directScratch)), prev-copied)
+					if err = historyReferenceReadAt(ctx, contextual, directScratch[:int(n)], offset+21+copied); err != nil {
+						return err
+					}
+					id, storeErr := dst.StoreChunk(directScratch[:int(n)])
+					if storeErr != nil {
+						return storeErr
+					}
+					spans = append(spans, historyReferenceValueSpan{id, 0, uint32(n)})
+					copied += n
 				}
 			}
 			next = offset + 4 + payload

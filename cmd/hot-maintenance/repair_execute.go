@@ -61,19 +61,12 @@ func repairNewHistoryPath(tag string, from, to uint64) (string, error) {
 func repairBuildReplacements(ctx context.Context, e repairExecution, slices []repairTargetSlice) ([]snapshots.SegmentRef, error) {
 	opts := etl.Options{TempDir: filepath.Join(e.coldPath, "etl"), BufferLimit: 32 << 20, BatchSize: 4 << 20}
 	var refs []snapshots.SegmentRef
-	for _, boundary := range []*snapshots.OfflineHistoryRepairSlice{e.plan.Left} {
-		if boundary == nil {
-			continue
-		}
-		path, err := repairNewHistoryPath("left", boundary.FromTxNum, boundary.ToTxNum)
+	if e.plan.Left != nil {
+		left, err := repairCopyBoundary(ctx, e, e.plan.Left, "left", opts)
 		if err != nil {
 			return nil, err
 		}
-		part, err := snapshots.CopyStateHistoryReferenceTrioRangeContext(ctx, e.coldPath, boundary.SourceRefs, boundary.FromTxNum, boundary.ToTxNum, path, opts)
-		if err != nil {
-			return nil, fmt.Errorf("repair: copy left immutable range: %w", err)
-		}
-		refs = append(refs, part...)
+		refs = append(refs, left...)
 	}
 	for _, item := range slices {
 		if err := e.fence(ctx); err != nil {
@@ -112,19 +105,37 @@ func repairBuildReplacements(ctx context.Context, e repairExecution, slices []re
 		}
 	}
 	if e.plan.Right != nil {
-		boundary := e.plan.Right
-		path, err := repairNewHistoryPath("right", boundary.FromTxNum, boundary.ToTxNum)
+		right, err := repairCopyBoundary(ctx, e, e.plan.Right, "right", opts)
 		if err != nil {
 			return nil, err
 		}
-		part, err := snapshots.CopyStateHistoryReferenceTrioRangeContext(ctx, e.coldPath, boundary.SourceRefs, boundary.FromTxNum, boundary.ToTxNum, path, opts)
-		if err != nil {
-			return nil, fmt.Errorf("repair: copy right immutable range: %w", err)
-		}
-		refs = append(refs, part...)
+		refs = append(refs, right...)
 	}
 	if err := snapshots.SyncHistorySegmentDirectories(e.coldPath, refs); err != nil {
 		return nil, err
+	}
+	return refs, nil
+}
+
+func repairCopyBoundary(ctx context.Context, e repairExecution, boundary *snapshots.OfflineHistoryRepairSlice, tag string, opts etl.Options) ([]snapshots.SegmentRef, error) {
+	parts, err := snapshots.PlanOfflineHistoryRepairBoundaryBlockSlices(ctx, e.coldPath, boundary.SourceRefs, boundary.FromTxNum, boundary.ToTxNum, 128)
+	if err != nil {
+		return nil, fmt.Errorf("repair: plan %s immutable boundary: %w", tag, err)
+	}
+	var refs []snapshots.SegmentRef
+	for _, part := range parts {
+		if err := e.fence(ctx); err != nil {
+			return nil, err
+		}
+		path, err := repairNewHistoryPath(tag, part.FromTxNum, part.ToTxNum)
+		if err != nil {
+			return nil, err
+		}
+		copied, err := snapshots.CopyStateHistoryReferenceTrioRangeContext(ctx, e.coldPath, boundary.SourceRefs, part.FromTxNum, part.ToTxNum, path, opts)
+		if err != nil {
+			return nil, fmt.Errorf("repair: copy %s immutable blocks [%d,%d]: %w", tag, part.FromBlock, part.ToBlock, err)
+		}
+		refs = append(refs, copied...)
 	}
 	return refs, nil
 }

@@ -113,6 +113,61 @@ func TestOfflineHistoryRepairCopyPreservesColdRange(t *testing.T) {
 	}
 }
 
+func TestOfflineHistoryRepairBoundaryPartitionAndResumedDigest(t *testing.T) {
+	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "3")
+	dir := t.TempDir()
+	changes := v6StreamChanges(1, 300, 1, 50)
+	for _, change := range changes {
+		change.BlockHash[1] = 1 // The shared fixture's one-byte hash wraps at block 256.
+	}
+	refs := writeV6StateDomainHistorySegmentForTest(t, dir, 1, 300, changes)
+	compressV6StreamFixture(t, dir, refs, 4096)
+	ctx := context.Background()
+	parts, err := PlanOfflineHistoryRepairBoundaryBlockSlices(ctx, dir, refs, 1, 300, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []OfflineHistoryRepairBlockSlice{
+		{FromTxNum: 1, ToTxNum: 128, FromBlock: 1, ToBlock: 128},
+		{FromTxNum: 129, ToTxNum: 256, FromBlock: 129, ToBlock: 256},
+		{FromTxNum: 257, ToTxNum: 300, FromBlock: 257, ToBlock: 300},
+	}
+	if !reflect.DeepEqual(parts, want) {
+		t.Fatalf("boundary slices=%+v, want %+v", parts, want)
+	}
+	var replacements []SegmentRef
+	for i, part := range parts {
+		copied, err := CopyStateHistoryReferenceTrioRangeContext(ctx, dir, refs, part.FromTxNum, part.ToTxNum, fmtRepairTestPath(i), etl.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replacements = append(replacements, copied...)
+	}
+	plan := &OfflineHistoryRepairPlan{Left: &OfflineHistoryRepairSlice{SourceRefs: refs, FromTxNum: 1, ToTxNum: 300}}
+	if err := VerifyOfflineHistoryRepairBoundaryCopies(ctx, dir, plan, replacements); err != nil {
+		t.Fatal("multi-trio resume digest rejected exact copy", err)
+	}
+	canceled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := PlanOfflineHistoryRepairBoundaryBlockSlices(canceled, dir, refs, 1, 300, 128); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled partition returned %v", err)
+	}
+	path := filepath.Join(dir, replacements[0].Path)
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0xff}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyOfflineHistoryRepairBoundaryCopies(ctx, dir, plan, replacements); err == nil {
+		t.Fatal("tampered boundary candidate passed resumed digest")
+	}
+}
+
 func TestOfflineHistoryRepairCopyRejectsUnsafeInput(t *testing.T) {
 	dir := t.TempDir()
 	refs := writeV6StateDomainHistorySegmentForTest(t, dir, 1, 9, v6StreamChanges(1, 9, 3, 100))

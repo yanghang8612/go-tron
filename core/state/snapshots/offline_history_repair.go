@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
@@ -23,6 +24,78 @@ type OfflineHistoryRepairSlice struct {
 	FromTxNum  uint64       `json:"from_tx_num"`
 	ToTxNum    uint64       `json:"to_tx_num"`
 	path       string
+}
+
+type OfflineHistoryRepairBlockSlice struct {
+	FromTxNum uint64 `json:"from_tx_num"`
+	ToTxNum   uint64 `json:"to_tx_num"`
+	FromBlock uint64 `json:"from_block"`
+	ToBlock   uint64 `json:"to_block"`
+}
+
+// PlanOfflineHistoryRepairBoundaryBlockSlices reads only the old trio's
+// canonical TxRange table after its complete physical authentication. It
+// partitions an exact selected boundary into full, consecutive blocks; the
+// subsequent CopyStateHistoryReferenceTrioRangeContext still performs its own
+// full source authentication and ordered row/Prev comparison for each part.
+// This is metadata planning, never publication or deletion authority.
+func PlanOfflineHistoryRepairBoundaryBlockSlices(ctx context.Context, dir string, sourceRefs []SegmentRef, fromTx, toTx, maxBlocks uint64) ([]OfflineHistoryRepairBlockSlice, error) {
+	if ctx == nil || maxBlocks == 0 || maxBlocks > 128 || toTx < fromTx {
+		return nil, errors.New("snapshots: invalid offline repair boundary partition")
+	}
+	h, idx, acc, _, err := historyReferenceTranscodeIdentity(sourceRefs)
+	if err != nil {
+		return nil, err
+	}
+	if fromTx < h.FromTxNum || toTx > h.ToTxNum {
+		return nil, errors.New("snapshots: boundary partition outside old trio")
+	}
+	trio := [3]SegmentRef{h, idx, acc}
+	var states [3]historyStagingFileState
+	for i, ref := range trio {
+		states[i], err = historyStagingFileFingerprint(dir, ref)
+		if err != nil {
+			return nil, err
+		}
+	}
+	source, err := offlineHistoryRepairAuthenticatedSource(ctx, dir, trio)
+	if err != nil {
+		return nil, err
+	}
+	var parts []OfflineHistoryRepairBlockSlice
+	var previousBlock, previousEnd uint64
+	err = iterateMergedStateDomainChangeBinaryCompactionTxRanges(ctx, dir, []stateDomainChangeBinaryCompactionSource{source}, func(row *rawdb.StateTxRange) error {
+		if row.EndTxNum < fromTx || row.BeginTxNum > toTx {
+			return nil
+		}
+		if row.BlockHash == (common.Hash{}) || row.EndTxNum < row.BeginTxNum || row.BeginTxNum < fromTx || row.EndTxNum > toTx {
+			return errors.New("snapshots: boundary partition cuts a canonical block or has zero block hash")
+		}
+		if len(parts) == 0 {
+			if row.BeginTxNum != fromTx {
+				return errors.New("snapshots: boundary partition misses first canonical block")
+			}
+		} else if previousEnd == math.MaxUint64 || row.BeginTxNum != previousEnd+1 || previousBlock == math.MaxUint64 || row.BlockNum != previousBlock+1 {
+			return errors.New("snapshots: boundary partition has a block or tx gap")
+		}
+		if len(parts) == 0 || parts[len(parts)-1].ToBlock-parts[len(parts)-1].FromBlock+1 == maxBlocks {
+			parts = append(parts, OfflineHistoryRepairBlockSlice{FromTxNum: row.BeginTxNum, FromBlock: row.BlockNum})
+		}
+		last := &parts[len(parts)-1]
+		last.ToTxNum, last.ToBlock = row.EndTxNum, row.BlockNum
+		previousBlock, previousEnd = row.BlockNum, row.EndTxNum
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 || parts[len(parts)-1].ToTxNum != toTx {
+		return nil, errors.New("snapshots: boundary partition misses final canonical block")
+	}
+	if err := historyStagingCheckFileStates(dir, trio, states); err != nil {
+		return nil, err
+	}
+	return parts, ctx.Err()
 }
 
 type OfflineHistoryRepairPlan struct {
