@@ -33,6 +33,10 @@ type retireFixture struct {
 }
 
 func newRetireFixture(t *testing.T, wrongPrev bool) *retireFixture {
+	return newRetireFixtureWithTail(t, wrongPrev, false)
+}
+
+func newRetireFixtureWithTail(t *testing.T, wrongPrev, tailRow bool) *retireFixture {
 	t.Helper()
 	root := t.TempDir()
 	f := &retireFixture{hotPath: filepath.Join(root, "hot"), stagePath: filepath.Join(root, "stage"), cold: filepath.Join(root, "cold")}
@@ -96,6 +100,12 @@ func newRetireFixture(t *testing.T, wrongPrev bool) *retireFixture {
 	change := &rawdb.StateDomainChange{BlockNum: 1029, BlockHash: f.blocks[5].Hash, TxNum: 1029, Seq: 1, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: common.Address{0x41, 9}, PrevExists: true, Prev: []byte("authentic-prev"), NextExists: true, Next: []byte("next")}
 	if err := rawdb.WriteStateDomainChangeBlockRows(f.hot, []*rawdb.StateDomainChange{change}); err != nil {
 		t.Fatal(err)
+	}
+	if tailRow {
+		tail := &rawdb.StateDomainChange{BlockNum: 1500, BlockHash: f.blocks[1500-1024].Hash, TxNum: 1500, Seq: 1, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: common.Address{0x41, 10}, PrevExists: true, Prev: []byte("target-tail-prev"), NextExists: true, Next: []byte("tail-next")}
+		if err := rawdb.WriteStateDomainChangeBlockRows(f.hot, []*rawdb.StateDomainChange{tail}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDBByBlockRange(f.hot, f.cold, 1024, 2047, 1024, 2047, "history/state-domain-change-1024-2047.seg")
 	if err != nil {
