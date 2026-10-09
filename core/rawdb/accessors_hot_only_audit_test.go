@@ -408,6 +408,12 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		"cmd/gtron/db_offline_preflight.go": {
 			"ReadBlockHashByNumberStrict": {},
 		},
+		// The offline physical-only maintenance preflight checks recent hot
+		// canonical anchors before opening Pebble for compaction. If an anchor
+		// is ancient-only it fails closed; this is not an archive reader.
+		"cmd/hot-maintenance/boundary.go": {
+			"ReadBlockHashByNumberStrict": {},
+		},
 		"core/balance_trace_backfill.go": {
 			"ReadAccountTrace":            {},
 			"ReadAccountTraceStrict":      {},

@@ -216,6 +216,128 @@ func TestMaintenanceBudgetFailurePreservesAllLiveKeys(t *testing.T) {
 	}
 }
 
+func TestMaintenancePreservingRangeKeepsLiveAndOutsideKeys(t *testing.T) {
+	path := maintenanceFixture(t)
+	db := maintenanceTestPebble(t, path, false)
+	if err := db.Set([]byte("m-live"), []byte("current"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("m-live"), []byte("new-current"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := maintenanceSnapshot(t, path)
+	opts := maintenanceTestOptions()
+	opts.AllowWALReplay = true
+	m, err := openMaintenance(path, opts, &maintenanceTestFS{vfs.Default, 1 << 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.CompactPreservingRange([]byte("m"), []byte("n"))
+	if err != nil || result.Before.Empty || result.After.Empty || result.SSTBytesAdmitted == 0 {
+		t.Fatalf("preserving compact: %+v %v", result, err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, maintenanceSnapshot(t, path)) {
+		t.Fatal("physical compaction changed live or outside key")
+	}
+}
+
+func TestMaintenancePreservingBudgetErrorReopensWithoutDataLoss(t *testing.T) {
+	path := maintenanceFixture(t)
+	before := maintenanceSnapshot(t, path)
+	opts := maintenanceTestOptions()
+	opts.MaxSSTWriteBytes = 4096
+	m, err := openMaintenance(path, opts, &maintenanceTestFS{vfs.Default, 1 << 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.CompactPreservingRange([]byte("a"), []byte("z"))
+	if !errors.Is(err, ErrMaintenanceWriteBudget) || result.SSTBytesAdmitted > opts.MaxSSTWriteBytes {
+		t.Fatalf("expected bounded failure: %+v %v", result, err)
+	}
+	if err := m.ReopenReadOnly(); err != nil {
+		t.Fatalf("same-lock reopen after budget failure: %v", err)
+	}
+	if has, err := m.Has([]byte("a-live")); err != nil || !has {
+		t.Fatalf("reopened live key: has=%v error=%v", has, err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, maintenanceSnapshot(t, path)) {
+		t.Fatal("budget failure changed live KV")
+	}
+}
+
+func TestMaintenancePreservingAllIncludesEmptyAndFFKeys(t *testing.T) {
+	path := t.TempDir()
+	db := maintenanceTestPebble(t, path, false)
+	for _, key := range [][]byte{{}, {0}, {0xff, 0xff}} {
+		if err := db.Set(key, []byte("value"), pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := maintenanceSnapshot(t, path)
+	opts := maintenanceTestOptions()
+	opts.AllowWALReplay = true
+	m, err := openMaintenance(path, opts, &maintenanceTestFS{vfs.Default, 1 << 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, end, err := m.allBounds()
+	if err != nil || len(start) != 0 || bytes.Compare(end, []byte{0xff, 0xff}) <= 0 {
+		t.Fatalf("all bounds missed empty or ff key: %x..%x %v", start, end, err)
+	}
+	result, err := m.CompactPreservingAll()
+	if err != nil || result.Before.Empty || result.After.Empty {
+		t.Fatalf("all compact: %+v %v", result, err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, maintenanceSnapshot(t, path)) {
+		t.Fatal("full compaction missed or changed boundary key")
+	}
+}
+
+func TestMaintenancePreservingAllOnlyEmptyKey(t *testing.T) {
+	path := t.TempDir()
+	db := maintenanceTestPebble(t, path, false)
+	if err := db.Set([]byte{}, []byte("empty key"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts := maintenanceTestOptions()
+	opts.AllowWALReplay = true
+	m, err := openMaintenance(path, opts, &maintenanceTestFS{vfs.Default, 1 << 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, end, err := m.allBounds()
+	if err != nil || !bytes.Equal(end, []byte{0}) {
+		t.Fatalf("single empty key bounds %x: %v", end, err)
+	}
+	if _, err := m.CompactPreservingAll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := maintenanceSnapshot(t, path)[""]; got != "empty key" {
+		t.Fatalf("empty key changed: %q", got)
+	}
+}
+
 func TestMaintenanceWALRecoveryAndCompactionPreserveAllLiveKeys(t *testing.T) {
 	path := maintenanceFixture(t)
 	db := maintenanceTestPebble(t, path, false)

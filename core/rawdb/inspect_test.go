@@ -25,6 +25,15 @@ func TestInspectDatabaseGroupsCurrentAndLegacyRows(t *testing.T) {
 		{incrMerkleLastTreeKey, []byte("tree")},
 		{bytes.Repeat([]byte{0x22}, 32), []byte("legacy-trie")},
 		{[]byte("mystery-key"), []byte("unknown")},
+		{stateHistoryChunkBucketPrefix(3), []byte("chunk")},
+		{stateHistoryChunkBucketKey(3), []byte("bucket")},
+		{historyStagingIdentityKey, []byte("identity")},
+		{historyStagingBucketKey(historyStagingRoutePrefix, 3), []byte("route")},
+		{historyStagingReceiptKey(1, 3), []byte("receipt")},
+		{historyStagingPayloadKey(1, []byte("state-changeset-v2-example")), []byte("payload")},
+		{stateCommitmentBranchBaseKey, []byte("base")},
+		{stateCommitmentBranchRotationKey, []byte("rotation")},
+		{append(append([]byte{}, stateCommitmentBranchDeltaPrefix...), 1), []byte("delta")},
 	}
 	var wantKeyBytes, wantValueBytes uint64
 	for _, row := range rows {
@@ -57,6 +66,15 @@ func TestInspectDatabaseGroupsCurrentAndLegacyRows(t *testing.T) {
 		"incremental-merkle-last-tree",
 		"legacy-trie-node",
 		"unclassified",
+		"state-history-shared-chunk",
+		"state-history-shared-bucket",
+		"history-staging-identity",
+		"history-staging-route",
+		"history-staging-receipt",
+		"history-staging-payload",
+		"state-commitment-branch-base",
+		"state-commitment-branch-rotation",
+		"state-commitment-branch-delta",
 	} {
 		if stat := findInspectionKeyspace(t, report, name); stat.Rows != 1 {
 			t.Errorf("%s rows = %d, want 1", name, stat.Rows)

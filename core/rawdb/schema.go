@@ -112,6 +112,46 @@ func DiskSpaceObservationRanges() []PhysicalSpaceRange {
 	return ranges
 }
 
+// HotMaintenanceRanges is the schema-owned allowlist for offline physical-only
+// compaction. A range name never grants permission to delete logical keys.
+// Callers must keep unknown/unclassified keys and staging metadata intact.
+func HotMaintenanceRanges() []PhysicalSpaceRange {
+	groups := [...]struct {
+		name   string
+		prefix []byte
+	}{
+		{"state_changeset", stateChangeSetPrefix},
+		{"state_history_chunk", stateHistorySharedChunkPrefix},
+		{"state_history_chunk_bucket", stateHistorySharedBucketPrefix},
+		{"state_change_posting", stateChangePostingPrefix},
+		{"state_change_directory", stateChangeKeyDirectoryPrefix},
+		{"state_kv_latest", stateKVLatestPrefix},
+		{"state_kv_generation", stateKVGenerationPrefix},
+		{"state_account_latest", stateAccountLatestPrefix},
+		{"commitment_branch", stateCommitmentBranchPrefix},
+		{"commitment_branch_delta", stateCommitmentBranchDeltaPrefix},
+		{"commitment_domain", stateCommitmentDomainPrefix},
+		{"transaction_info", txInfoPrefix},
+		{"transaction_info_block", txInfoBlockPrefix},
+		{"transaction_index", txPrefix},
+		{"block_body", blockPrefix},
+	}
+	ranges := make([]PhysicalSpaceRange, len(groups))
+	for i, group := range groups {
+		ranges[i] = PhysicalSpaceRange{Name: group.name, Start: append([]byte(nil), group.prefix...), End: prefixUpperBound(group.prefix)}
+	}
+	return ranges
+}
+
+// HotMaintenanceCanaryRanges selects current-state prefixes for bounded
+// read-only value sampling before and after a physical maintenance rewrite.
+func HotMaintenanceCanaryRanges() []PhysicalSpaceRange {
+	return []PhysicalSpaceRange{
+		{Name: "state_account_latest", Start: append([]byte(nil), stateAccountLatestPrefix...), End: prefixUpperBound(stateAccountLatestPrefix)},
+		{Name: "state_kv_latest", Start: append([]byte(nil), stateKVLatestPrefix...), End: prefixUpperBound(stateKVLatestPrefix)},
+	}
+}
+
 // ClassifyPhysicalKeyString assigns a rawdb key to one stable storage family.
 // String input lets blockbuffer classify its already-owned immutable map keys
 // without allocating []byte wrappers on the flush path.
