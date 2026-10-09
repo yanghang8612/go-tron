@@ -382,7 +382,8 @@ func (m *HistoryStagingMover) candidateHint(ctx context.Context) (bool, error) {
 				return present && row.EndTxNum <= coldThrough, nil
 			}
 		case rawdb.HistoryStagingOwnerCold:
-			return !route.TargetCleared, nil
+			// A direct SOURCE→COLD handoff has no target payload to retire.
+			return route.SourceCleared && !route.TargetCleared, nil
 		}
 		return false, nil
 	}

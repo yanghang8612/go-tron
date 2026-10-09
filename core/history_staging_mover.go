@@ -338,7 +338,7 @@ func (m *HistoryStagingMover) runRetirement(ctx context.Context) error {
 				}
 				return m.finalizeColdBucket(ctx, state.Bucket)
 			}
-		case route.Owner == rawdb.HistoryStagingOwnerCold && !route.TargetCleared:
+		case route.Owner == rawdb.HistoryStagingOwnerCold && route.SourceCleared && !route.TargetCleared:
 			action = func() error { return m.finalizeColdBucket(ctx, state.Bucket) }
 		case route.Owner == rawdb.HistoryStagingOwnerTarget && route.SourceCleared && route.ColdBindingEpoch != 0:
 			binding, present, err := manager.ReadColdBindingAt(route.Epoch, state.Bucket)
