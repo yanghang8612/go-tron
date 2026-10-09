@@ -195,6 +195,10 @@ func (r *historyReferenceReader) validateLayout(ctx context.Context) error {
 		return fmt.Errorf("%w: metadata digest", errHistoryReferenceCorrupt)
 	}
 	physical := uint64(historyReferenceHeaderSize)
+	// The chunk directory was authenticated above. Retain only its validated
+	// raw lengths for the span pass, rather than rereading a chunk entry for
+	// every span. The header bounds this temporary table to 1 MiB.
+	rawLengths := make([]uint32, int(h.chunks))
 	for id := uint32(0); uint64(id) < h.chunks; id++ {
 		chunk, err := r.chunk(ctx, id)
 		if err != nil {
@@ -207,6 +211,7 @@ func (r *historyReferenceReader) validateLayout(ctx context.Context) error {
 			uint64(chunk.stored) > h.chunkDir-physical {
 			return fmt.Errorf("%w: chunk layout", errHistoryReferenceCorrupt)
 		}
+		rawLengths[id] = chunk.raw
 		physical += uint64(chunk.stored)
 	}
 	if physical != h.chunkDir {
@@ -218,11 +223,11 @@ func (r *historyReferenceReader) validateLayout(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		chunk, err := r.chunk(ctx, span.chunk)
-		if err != nil {
-			return err
+		if uint64(span.chunk) >= h.chunks {
+			return fmt.Errorf("%w: chunk ID", errHistoryReferenceCorrupt)
 		}
-		if span.logical != logical || span.length == 0 || span.offset > chunk.raw || span.length > chunk.raw-span.offset ||
+		rawLength := rawLengths[span.chunk]
+		if span.logical != logical || span.length == 0 || span.offset > rawLength || span.length > rawLength-span.offset ||
 			uint64(span.length) > h.logical-logical {
 			return fmt.Errorf("%w: span layout", errHistoryReferenceCorrupt)
 		}
