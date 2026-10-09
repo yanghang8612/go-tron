@@ -144,6 +144,8 @@ func run(args []string) error {
 		return runCleanupIndex(args[1:])
 	case "retire-target":
 		return runRetireTarget(args[1:])
+	case "compact-stage":
+		return runCompactStage(args[1:])
 	default:
 		return fmt.Errorf("unknown operation %q", args[0])
 	}
