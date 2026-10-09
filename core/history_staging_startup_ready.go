@@ -116,11 +116,14 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 		close(stop)
 		<-stopped
 		var authenticatedTrios int
+		var receiptStats snapshots.HistoryStagingReceiptAuditStats
 		if receiptAudit != nil {
 			authenticatedTrios = receiptAudit.AuthenticatedTrios()
+			receiptStats = receiptAudit.Stats()
 		}
 		log.Info("History staging startup audit finished", "verifiedBuckets", verifiedBuckets.Load(),
 			"headBucket", headBucket, "coldBindings", coldBindings.Load(), "authenticatedTrios", authenticatedTrios,
+			"persistentCertificateHits", receiptStats.PersistentHits, "physicalSHATrios", receiptStats.PhysicalSHATrios,
 			"elapsed", time.Since(started), "err", result)
 	}()
 	if err := manager.VerifyHistoryStagingStartup(ctx, current.Number(), func(bucket uint64, route rawdb.HistoryStagingRoute) error {
@@ -153,6 +156,14 @@ func (bc *BlockChain) VerifyHistoryStagingRuntimeReady(ctx context.Context) (res
 	if receiptAudit != nil {
 		if err := receiptAudit.RecheckAll(ctx); err != nil {
 			return fmt.Errorf("history staging startup: recheck authenticated trios: %w", err)
+		}
+		if err := receiptAudit.CommitPhysicalCertificates(ctx); err != nil {
+			if !errors.Is(err, snapshots.ErrHistoryStagingReceiptSidecarWrite) {
+				return fmt.Errorf("history staging startup: final receipt certificate recheck: %w", err)
+			}
+			// The sidecar is advisory. Only a pure persistence failure may be
+			// ignored after physical authentication passed.
+			log.Warn("History staging receipt sidecar was not saved", "err", err)
 		}
 	}
 	if err := ctx.Err(); err != nil {

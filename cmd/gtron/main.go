@@ -1395,16 +1395,10 @@ func gtron(ctx *cli.Context) error {
 			return fmt.Errorf("configure history staging mover: %w", err)
 		}
 		stack.RegisterLifecycle(mover)
-		indexGC, err := core.NewHistoryStagingIndexGC(bc, core.HistoryStagingIndexGCConfig{
-			HeavyWorkGate: heavyWorkGate, Pressure: historyResources.postingPressure,
-		})
-		if err != nil {
-			closeStores()
-			return fmt.Errorf("configure staging history-index GC: %w", err)
-		}
-		stack.RegisterLifecycle(indexGC)
-		log.Info("Staging history-index GC enabled", "interval", 100*time.Millisecond, "scanRows", 4096,
-			"scanBytes", 1<<20, "deleteLogicalBytes", 256<<10, "cooperativeDuration", 10*time.Millisecond)
+		// Staging's derived posting/directory cleanup is performed during
+		// fenced offline maintenance. Keep the bounded worker implementation
+		// available, but do not delete index rows while mainnet is syncing.
+		log.Info("Staging history-index GC is offline-only")
 	}
 	historyLoadProbe := historyResources.sampleLoad
 	historyParallelReady := historyResources.parallelReady

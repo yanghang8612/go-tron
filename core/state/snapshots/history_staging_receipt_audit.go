@@ -18,7 +18,33 @@ type HistoryStagingReceiptAudit struct {
 	refs    map[[32]byte][3]SegmentRef
 }
 
+// HistoryStagingReceiptAuditStats counts distinct trios handled by this one
+// audit. Task-local duplicate references do not increment either counter.
+// Process-memory checksum hits count in neither field.
+type HistoryStagingReceiptAuditStats struct {
+	PersistentHits   uint64
+	PhysicalSHATrios uint64
+}
+
+func (a *HistoryStagingReceiptAudit) Stats() HistoryStagingReceiptAuditStats {
+	if a == nil || a.auth == nil {
+		return HistoryStagingReceiptAuditStats{}
+	}
+	return HistoryStagingReceiptAuditStats{PersistentHits: a.auth.persistentHits,
+		PhysicalSHATrios: a.auth.physicalSHATrios}
+}
+
 func NewHistoryStagingReceiptAudit(manager *Manager) (*HistoryStagingReceiptAudit, error) {
+	return newHistoryStagingReceiptAudit(manager, false)
+}
+
+// NewHistoryStagingReceiptAuditForceFull ignores persistent and process
+// checksum caches and SHA-verifies each unique trio once in this audit.
+func NewHistoryStagingReceiptAuditForceFull(manager *Manager) (*HistoryStagingReceiptAudit, error) {
+	return newHistoryStagingReceiptAudit(manager, true)
+}
+
+func newHistoryStagingReceiptAudit(manager *Manager, forceFull bool) (*HistoryStagingReceiptAudit, error) {
 	if manager == nil || !manager.pinned {
 		return nil, errors.New("snapshots: receipt audit requires pinned manager")
 	}
@@ -32,7 +58,8 @@ func NewHistoryStagingReceiptAudit(manager *Manager) (*HistoryStagingReceiptAudi
 	}
 	return &HistoryStagingReceiptAudit{manager: manager,
 		auth: &historyStagingReceiptAuthenticator{dir: manager.dir, manifest: manifest,
-			taskVerified: make(map[[32]byte][3]historyStagingFileState)}, refs: refs}, nil
+			taskVerified: make(map[[32]byte][3]historyStagingFileState),
+			persistent:   historyStagingReadCertificates(manager.dir), forceFull: forceFull}, refs: refs}, nil
 }
 
 // VerifyBinding checks an existing durable semantic receipt and its physical
@@ -77,4 +104,30 @@ func (a *HistoryStagingReceiptAudit) AuthenticatedTrios() int {
 		return 0
 	}
 	return len(a.auth.taskVerified)
+}
+
+// CommitPhysicalCertificates records the physical checksum facts from a
+// completed pinned audit. It deliberately does not persist semantic or RPC
+// proof caches. Callers treat write failure as advisory after strong auth.
+func (a *HistoryStagingReceiptAudit) CommitPhysicalCertificates(ctx context.Context) error {
+	if err := a.RecheckAll(ctx); err != nil {
+		return err
+	}
+	additions := make(map[[32]byte]historyStagingReceiptCertificate, len(a.auth.taskVerified))
+	for id, states := range a.auth.taskVerified {
+		refs, ok := a.refs[id]
+		if !ok {
+			return errors.New("snapshots: certificate trio absent from pinned manifest")
+		}
+		cert, ok := historyStagingMakeCertificate(id, refs, states)
+		if !ok {
+			return errors.New("snapshots: certificate lacks strong file identity")
+		}
+		additions[id] = cert
+	}
+	writeErr := historyStagingWriteCertificates(ctx, a.auth.dir, additions, a.auth.persistent, a.refs)
+	if err := a.RecheckAll(ctx); err != nil {
+		return err
+	}
+	return historyStagingAdvisoryWriteError(ctx, writeErr)
 }

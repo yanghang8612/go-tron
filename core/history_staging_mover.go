@@ -432,6 +432,12 @@ func (m *HistoryStagingMover) certifyNewColdTarget(ctx context.Context, bucket u
 		releaseCold()
 		return false, nil // the next cold publication may cover this bucket
 	}
+	proofCtx, physicalFacts, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, pinned.HistoryStagingDir())
+	if err != nil {
+		releasePublication()
+		releaseCold()
+		return false, err
+	}
 	target, err := manager.AcquireTargetBucketView(route.Epoch, bucket)
 	releasePublication()
 	if err != nil {
@@ -441,9 +447,9 @@ func (m *HistoryStagingMover) certifyNewColdTarget(ctx context.Context, bucket u
 	var spans []rawdb.HistoryStagingColdSpan
 	var proofErr error
 	if route.ColdBindingEpoch == 0 {
-		spans, proofErr = snapshots.VerifyHistoryStagingTargetColdEquivalence(ctx, target, pinned.HistoryStagingDir(), manifest, blocks)
+		spans, proofErr = snapshots.VerifyHistoryStagingTargetColdEquivalence(proofCtx, target, pinned.HistoryStagingDir(), manifest, blocks)
 	} else {
-		spans, proofErr = snapshots.VerifyHistoryStagingMixedTargetColdEquivalence(ctx, target, pinned.HistoryStagingDir(), manifest, blocks, oldBinding)
+		spans, proofErr = snapshots.VerifyHistoryStagingMixedTargetColdEquivalence(proofCtx, target, pinned.HistoryStagingDir(), manifest, blocks, oldBinding)
 	}
 	closeErr := target.Close()
 	if proofErr != nil || closeErr != nil {
@@ -465,6 +471,12 @@ func (m *HistoryStagingMover) certifyNewColdTarget(ctx context.Context, bucket u
 	}
 	if err := manager.CertifyColdRange(ctx, binding, func() error { return nil }); err != nil {
 		return false, err
+	}
+	if err := physicalFacts.CommitPhysicalCertificates(ctx); err != nil {
+		if !errors.Is(err, snapshots.ErrHistoryStagingReceiptSidecarWrite) {
+			return false, err
+		}
+		log.Warn("History staging target cold certificate was not saved", "bucket", bucket, "err", err)
 	}
 	return true, nil
 }
@@ -658,6 +670,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	for _, neededBlock := range needed {
 		needCold = needCold || neededBlock
 	}
+	var physicalProver *snapshots.HistoryStagingColdProver
 	if needCold && !hasClaim {
 		if coldManager == nil {
 			bc.chainmu.Unlock()
@@ -686,6 +699,8 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		if err != nil {
 			return err
 		}
+		defer prover.Close()
+		physicalProver = prover
 		proof.ColdSpans, err = prover.Build(ctx, proof.Blocks, needed)
 		if err != nil {
 			return err
@@ -736,6 +751,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		return err
 	}
 	var binding *rawdb.HistoryStagingColdBinding
+	var rebindingFacts *snapshots.HistoryStagingPhysicalFactCollector
 	if len(proof.ColdSpans) > 0 {
 		if coldManager == nil {
 			return errors.New("history staging mover: cold manager unavailable at adoption")
@@ -762,10 +778,15 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		if !hasOld {
 			old = rawdb.HistoryStagingColdBinding{Version: rawdb.HistoryStagingFormatVersion, Bucket: proof.Bucket, Epoch: proof.Epoch, BindingEpoch: 1, ManifestEpoch: currentPinned.Manifest().Generation, Spans: proof.ColdSpans}
 		}
-		candidate, err := snapshots.RebindHistoryStagingColdBinding(ctx, currentPinned.HistoryStagingDir(), currentPinned.Manifest(), old, proof.Blocks)
+		proofCtx, facts, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, currentPinned.HistoryStagingDir())
 		if err != nil {
 			return err
 		}
+		candidate, err := snapshots.RebindHistoryStagingColdBinding(proofCtx, currentPinned.HistoryStagingDir(), currentPinned.Manifest(), old, proof.Blocks)
+		if err != nil {
+			return err
+		}
+		rebindingFacts = facts
 		if hasOld {
 			candidate.BindingEpoch = old.BindingEpoch + 1
 		} else {
@@ -809,6 +830,22 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	}
 	if adoptErr != nil {
 		return adoptErr
+	}
+	if physicalProver != nil && binding != nil {
+		if err := physicalProver.CommitPhysicalCertificates(ctx); err != nil {
+			if !errors.Is(err, snapshots.ErrHistoryStagingReceiptSidecarWrite) {
+				return fmt.Errorf("history staging mover: cold certificate recheck: %w", err)
+			}
+			log.Warn("History staging cold physical certificate was not saved", "bucket", bucket, "err", err)
+		}
+	}
+	if rebindingFacts != nil && binding != nil {
+		if err := rebindingFacts.CommitPhysicalCertificates(ctx); err != nil {
+			if !errors.Is(err, snapshots.ErrHistoryStagingReceiptSidecarWrite) {
+				return fmt.Errorf("history staging mover: rebound certificate recheck: %w", err)
+			}
+			log.Warn("History staging rebound cold certificate was not saved", "bucket", bucket, "err", err)
+		}
 	}
 	historyStagingMoverAdoptNanos.Inc(time.Since(adoptStarted).Nanoseconds())
 	if err := m.recheckWork(ctx); err != nil {
@@ -871,6 +908,7 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 	if !present || !historyStagingBindingFull(binding, first, last) {
 		return nil
 	} // mixed hot/cold bucket stays TARGET
+	var physicalFacts *snapshots.HistoryStagingPhysicalFactCollector
 	if route.Owner == rawdb.HistoryStagingOwnerTarget {
 		coldManager, ok := m.bc.stateCodeColdHistory.(*snapshots.Manager)
 		if !ok || coldManager == nil {
@@ -886,11 +924,16 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 		if pinned == nil || pinned.Manifest() == nil {
 			return rawdb.ErrHistoryStagingIncomplete
 		}
+		proofCtx, collector, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, pinned.HistoryStagingDir())
+		if err != nil {
+			return err
+		}
+		physicalFacts = collector
 		blocks, err := m.canonicalBucketBlocks(ctx, bucket)
 		if err != nil {
 			return err
 		}
-		current, err := snapshots.RebindHistoryStagingColdBinding(ctx, pinned.HistoryStagingDir(), pinned.Manifest(), binding, blocks)
+		current, err := snapshots.RebindHistoryStagingColdBinding(proofCtx, pinned.HistoryStagingDir(), pinned.Manifest(), binding, blocks)
 		if err != nil {
 			return err
 		}
@@ -926,6 +969,14 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 	}
 	if err := manager.ClearColdTarget(ctx, bucket, m.workLimits()); err != nil {
 		return err
+	}
+	if physicalFacts != nil {
+		if err := physicalFacts.CommitPhysicalCertificates(ctx); err != nil {
+			if !errors.Is(err, snapshots.ErrHistoryStagingReceiptSidecarWrite) {
+				return err
+			}
+			log.Warn("History staging retired cold certificate was not saved", "bucket", bucket, "err", err)
+		}
 	}
 	return nil
 }

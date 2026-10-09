@@ -23,6 +23,12 @@ var historyStagingReceiptChecksumCache = struct {
 type historyStagingReceiptAuthenticator struct {
 	dir      string
 	manifest *Manifest
+	// persistent is advisory physical-checksum evidence only. Durable route and
+	// semantic-receipt checks happen independently before authenticate is called.
+	persistent       map[[32]byte]historyStagingReceiptCertificate
+	forceFull        bool
+	persistentHits   uint64
+	physicalSHATrios uint64
 	// taskVerified is owned by one offline audit. Unlike the process-wide
 	// bounded cache, it cannot evict an already authenticated trio midway
 	// through a large route census. A changed fingerprint is an error.
@@ -65,6 +71,34 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 			return nil
 		}
 	}
+	if p.forceFull {
+		if p.testAuth != nil {
+			err = p.testAuth(ctx, refs)
+		} else {
+			err = VerifyHistorySegmentCompanionChecksumsContext(ctx, p.dir, p.manifest, refs[0])
+		}
+		if err != nil {
+			return err
+		}
+		if err := historyStagingCheckFileStates(p.dir, refs, states); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if p.taskVerified != nil {
+			p.taskVerified[id] = states
+		}
+		p.physicalSHATrios++
+		return nil
+	}
+	if cert, ok := p.persistent[id]; ok && historyStagingCertificateMatches(cert, id, refs, states) {
+		if p.taskVerified != nil {
+			p.taskVerified[id] = states
+		}
+		p.persistentHits++
+		return nil
+	}
 	key := sha256.Sum256(append(append([]byte("gtron-history-staging-receipt-checksum-v1\x00"), p.dir...), id[:]...))
 	// A cooperative owner may release the shared maintenance token. Never
 	// own or wait on a global flight here: a flight waiter may hold that token
@@ -98,6 +132,7 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		if p.taskVerified != nil {
 			p.taskVerified[id] = states
 		}
+		p.physicalSHATrios++
 		historyStagingReceiptChecksumCache.Lock()
 		if len(historyStagingReceiptChecksumCache.trios) >= historyStagingPinnedProofCacheEntries {
 			for old := range historyStagingReceiptChecksumCache.trios {
@@ -177,6 +212,9 @@ func (p *historyStagingReceiptAuthenticator) authenticate(ctx context.Context, r
 		historyStagingReceiptChecksumCache.Unlock()
 		if err == nil && p.taskVerified != nil {
 			p.taskVerified[id] = states
+		}
+		if err == nil {
+			p.physicalSHATrios++
 		}
 		return err
 	}

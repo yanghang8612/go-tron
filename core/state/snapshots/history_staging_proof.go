@@ -67,6 +67,40 @@ func (p *HistoryStagingColdProver) Stats() HistoryStagingProverStats {
 	return p.stats
 }
 
+// CommitPhysicalCertificates remembers trios that this prover already fully
+// authenticated while constructing canonical cold spans. Call it after the
+// corresponding durable route/binding publication; a certificate on its own
+// never authorizes adoption, retirement, or an RPC semantic cache hit.
+func (p *HistoryStagingColdProver) CommitPhysicalCertificates(ctx context.Context) error {
+	if p == nil || ctx == nil {
+		return errors.New("snapshots: missing cold prover certificate context")
+	}
+	additions := make(map[[32]byte]historyStagingReceiptCertificate, len(p.verified))
+	for _, trio := range p.trios {
+		states, ok := p.verified[trio.id]
+		if !ok {
+			continue
+		}
+		if err := historyStagingCheckFileStates(p.dir, trio.refs, states); err != nil {
+			return err
+		}
+		cert, ok := historyStagingMakeCertificate(trio.id, trio.refs, states)
+		if !ok {
+			return errors.New("snapshots: cold prover certificate lacks strong file identity")
+		}
+		additions[trio.id] = cert
+	}
+	writeErr := historyStagingWriteCertificates(ctx, p.dir, additions, nil, nil)
+	for _, trio := range p.trios {
+		if states, ok := p.verified[trio.id]; ok {
+			if err := historyStagingCheckFileStates(p.dir, trio.refs, states); err != nil {
+				return err
+			}
+		}
+	}
+	return historyStagingAdvisoryWriteError(ctx, writeErr)
+}
+
 // A prover is worker-local. Keep only one history/index pair open so adjacent
 // buckets share reference metadata and decoded chunks without multiplying the
 // cache by the number of cold trios in a large manifest.
@@ -549,7 +583,18 @@ func historyStagingCheckFileStates(dir string, refs [3]SegmentRef, states [3]his
 	return nil
 }
 
-func (p *HistoryStagingColdProver) authenticate(ctx context.Context, refs [3]SegmentRef, id [32]byte) error {
+func (p *HistoryStagingColdProver) authenticate(ctx context.Context, refs [3]SegmentRef, id [32]byte) (retErr error) {
+	if ctx != nil {
+		if collector, ok := ctx.Value(historyStagingPhysicalFactKey{}).(*HistoryStagingPhysicalFactCollector); ok {
+			defer func() {
+				if retErr == nil {
+					if states, present := p.verified[id]; present {
+						collector.record(p.dir, id, refs, states)
+					}
+				}
+			}()
+		}
+	}
 	var states [3]historyStagingFileState
 	for i, ref := range refs {
 		state, err := historyStagingFileFingerprint(p.dir, ref)

@@ -22,28 +22,30 @@ import (
 )
 
 type cleanupReport struct {
-	Version                int                 `json:"version"`
-	ObservedUTC            string              `json:"observed_utc"`
-	HotPath                string              `json:"hot_path"`
-	StagePath              string              `json:"stage_path"`
-	ColdPath               string              `json:"cold_path"`
-	DryRun                 bool                `json:"dry_run"`
-	FromBlock              uint64              `json:"from_block"`
-	ThroughBlock           uint64              `json:"through_block"`
-	ManifestSHA256         string              `json:"manifest_sha256"`
-	HoldFile               string              `json:"hold_file,omitempty"`
-	HoldSHA256             string              `json:"hold_sha256,omitempty"`
-	Epoch                  uint64              `json:"epoch,omitempty"`
-	RouteBindingSHA256     string              `json:"route_binding_sha256,omitempty"`
-	ColdBindings           uint64              `json:"cold_bindings"`
-	AuthenticatedTrios     int                 `json:"authenticated_trios"`
-	Before                 *cleanupProtected   `json:"before,omitempty"`
-	After                  *cleanupProtected   `json:"after,omitempty"`
-	Stats                  *cleanupDeleteStats `json:"delete_stats,omitempty"`
-	SSTOverlapEstimates    map[string]uint64   `json:"sst_overlap_estimates,omitempty"`
-	ProtectedStateVerified bool                `json:"protected_state_verified"`
-	Error                  string              `json:"error,omitempty"`
-	Note                   string              `json:"note"`
+	Version                   int                 `json:"version"`
+	ObservedUTC               string              `json:"observed_utc"`
+	HotPath                   string              `json:"hot_path"`
+	StagePath                 string              `json:"stage_path"`
+	ColdPath                  string              `json:"cold_path"`
+	DryRun                    bool                `json:"dry_run"`
+	FromBlock                 uint64              `json:"from_block"`
+	ThroughBlock              uint64              `json:"through_block"`
+	ManifestSHA256            string              `json:"manifest_sha256"`
+	HoldFile                  string              `json:"hold_file,omitempty"`
+	HoldSHA256                string              `json:"hold_sha256,omitempty"`
+	Epoch                     uint64              `json:"epoch,omitempty"`
+	RouteBindingSHA256        string              `json:"route_binding_sha256,omitempty"`
+	ColdBindings              uint64              `json:"cold_bindings"`
+	AuthenticatedTrios        int                 `json:"authenticated_trios"`
+	PersistentCertificateHits uint64              `json:"persistent_certificate_hits"`
+	PhysicalSHATrios          uint64              `json:"physical_sha_trios"`
+	Before                    *cleanupProtected   `json:"before,omitempty"`
+	After                     *cleanupProtected   `json:"after,omitempty"`
+	Stats                     *cleanupDeleteStats `json:"delete_stats,omitempty"`
+	SSTOverlapEstimates       map[string]uint64   `json:"sst_overlap_estimates,omitempty"`
+	ProtectedStateVerified    bool                `json:"protected_state_verified"`
+	Error                     string              `json:"error,omitempty"`
+	Note                      string              `json:"note"`
 }
 
 // acquireCleanupOperationLock duplicates inherited fd 9, checks that it is
@@ -151,6 +153,7 @@ func runCleanupIndex(args []string) (retErr error) {
 	from := fs.Uint64("from-block", 0, "must equal complete bucket one start, 1024")
 	through := fs.Uint64("through-block", 0, "inclusive end of an explicitly authenticated COLD bucket prefix")
 	yes := fs.Bool("yes", false, "perform bounded logical deletion; default authenticates only")
+	forceColdSHA := fs.Bool("force-cold-sha", false, "ignore advisory receipt cache and SHA-verify every unique cold trio")
 	lockPath := fs.String("start-lock", "", "production start.lock matching inherited fd 9; required with --yes")
 	holdPath := fs.String("hold-file", "", "existing maintenance hold that fences automatic node startup; required with --yes")
 	if err := fs.Parse(args); err != nil {
@@ -250,7 +253,12 @@ func runCleanupIndex(args []string) (retErr error) {
 	if err != nil {
 		return err
 	}
-	audit, err := snapshots.NewHistoryStagingReceiptAudit(pinned)
+	var audit *snapshots.HistoryStagingReceiptAudit
+	if *forceColdSHA {
+		audit, err = snapshots.NewHistoryStagingReceiptAuditForceFull(pinned)
+	} else {
+		audit, err = snapshots.NewHistoryStagingReceiptAudit(pinned)
+	}
 	if err != nil {
 		return err
 	}
@@ -259,6 +267,7 @@ func runCleanupIndex(args []string) (retErr error) {
 		return err
 	}
 	report.Epoch, report.ColdBindings, report.AuthenticatedTrios = before.Epoch, before.ColdBindings, before.AuthenticatedTrio
+	report.PersistentCertificateHits, report.PhysicalSHATrios = audit.Stats().PersistentHits, audit.Stats().PhysicalSHATrios
 	report.RouteBindingSHA256 = hex.EncodeToString(before.RouteBindingHash[:])
 	report.Before = &before.Protected
 	fmt.Fprintf(os.Stderr, "history_cleanup event=auth_complete epoch=%d from=%d through=%d bindings=%d trios=%d manifest_sha256=%x route_binding_sha256=%x\n",
@@ -296,6 +305,14 @@ func runCleanupIndex(args []string) (retErr error) {
 			return errors.New("cleanup pinned manifest changed during dry-run estimate")
 		}
 		return nil
+	}
+	if err := audit.CommitPhysicalCertificates(ctx); err != nil {
+		if !errors.Is(err, snapshots.ErrHistoryStagingReceiptSidecarWrite) {
+			return fmt.Errorf("cleanup final receipt certificate recheck: %w", err)
+		}
+		// A missing advisory certificate only costs another checksum pass on
+		// restart. It never weakens the authenticated cleanup boundary.
+		fmt.Fprintf(os.Stderr, "history_cleanup event=receipt_sidecar_warning err=%v\n", err)
 	}
 	if err := hold.Recheck(); err != nil {
 		return err

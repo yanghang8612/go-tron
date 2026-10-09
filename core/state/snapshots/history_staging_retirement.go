@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
@@ -187,6 +188,10 @@ func reconcileHistoryStagingColdDependencies(ctx context.Context, dir string, ma
 	if ctx == nil || manifest == nil || manager == nil {
 		return errors.New("snapshots: missing cold rebind input")
 	}
+	proofCtx, physicalFacts, err := WithHistoryStagingPhysicalFacts(ctx, dir)
+	if err != nil {
+		return err
+	}
 	_, ids, err := retiredHistoryStagingTrios(manifest)
 	if err != nil {
 		return err
@@ -212,26 +217,35 @@ func reconcileHistoryStagingColdDependencies(ctx context.Context, dir string, ma
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := manager.RebindCold(ctx, id, manifest.Generation,
+		err := manager.RebindCold(proofCtx, id, manifest.Generation,
 			func(old rawdb.HistoryStagingColdBinding) (rawdb.HistoryStagingColdBinding, error) {
 				proof, err := blocks(old.Bucket)
 				if err != nil {
 					return rawdb.HistoryStagingColdBinding{}, err
 				}
-				return RebindHistoryStagingColdBinding(ctx, dir, manifest, old, proof)
+				return RebindHistoryStagingColdBinding(proofCtx, dir, manifest, old, proof)
 			},
 			func(old, new rawdb.HistoryStagingColdBinding) error {
 				proof, err := blocks(old.Bucket)
 				if err != nil {
 					return err
 				}
-				return VerifyHistoryStagingColdBinding(ctx, dir, manifest, new, proof)
+				return VerifyHistoryStagingColdBinding(proofCtx, dir, manifest, new, proof)
 			})
 		if err != nil {
 			return fmt.Errorf("snapshots: rebind retired cold ContentID %x: %w", id, err)
 		}
 	}
-	return manager.SyncColdDependencyPublications()
+	if err := manager.SyncColdDependencyPublications(); err != nil {
+		return err
+	}
+	if err := physicalFacts.CommitPhysicalCertificates(ctx); err != nil {
+		if !errors.Is(err, ErrHistoryStagingReceiptSidecarWrite) {
+			return err
+		}
+		slog.Warn("history staging rebind physical certificate was not saved", "err", err)
+	}
+	return nil
 }
 
 // ReconcileHistoryStagingColdDependencies may be used by startup repair and
