@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -469,26 +470,41 @@ func (s CommitmentBranchKeyspace) DeleteAll(db commitmentBranchStore) error {
 // namespace except keepGeneration. It is idempotent crash-window cleanup after
 // a new immutable base marker has made older generations unreachable.
 func DeleteCommitmentBranchDeltaGenerationsExcept(db commitmentBranchStore, keepGeneration uint64) error {
-	it := db.NewIterator(stateCommitmentBranchDeltaPrefix, nil)
 	var generations []uint64
-	var last uint64
-	for it.Next() {
-		key := it.Key()
+	var start []byte
+	for {
+		// Seek once per generation rather than walking every row in the kept
+		// (potentially very large) mutable namespace under the chain barrier.
+		it := db.NewIterator(stateCommitmentBranchDeltaPrefix, start)
+		found := it.Next()
+		var key []byte
+		if found {
+			key = append([]byte(nil), it.Key()...)
+		}
+		err := it.Error()
+		it.Release()
+		if err != nil {
+			return err
+		}
+		if !found {
+			break
+		}
 		if len(key) < len(stateCommitmentBranchDeltaPrefix)+8 {
-			it.Release()
 			return fmt.Errorf("rawdb: short commitment branch delta key length %d", len(key))
 		}
 		generation := binary.BigEndian.Uint64(key[len(stateCommitmentBranchDeltaPrefix) : len(stateCommitmentBranchDeltaPrefix)+8])
-		if generation == keepGeneration || (len(generations) > 0 && generation == last) {
-			continue
+		space, err := NewCommitmentBranchDeltaKeyspace(generation)
+		if err != nil {
+			return err
 		}
-		generations = append(generations, generation)
-		last = generation
-	}
-	err := it.Error()
-	it.Release()
-	if err != nil {
-		return err
+		if generation != keepGeneration {
+			generations = append(generations, generation)
+		}
+		upper := prefixUpperBound(space.prefix())
+		if !bytes.HasPrefix(upper, stateCommitmentBranchDeltaPrefix) {
+			break // Includes the maximum uint64 generation, without overflow.
+		}
+		start = upper[len(stateCommitmentBranchDeltaPrefix):]
 	}
 	for _, generation := range generations {
 		keyspace, err := NewCommitmentBranchDeltaKeyspace(generation)

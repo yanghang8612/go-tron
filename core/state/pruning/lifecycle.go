@@ -761,3 +761,31 @@ func (s snapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.H
 }
 
 var _ snapshots.ChainSource = snapshotChainSource{}
+
+func (s snapshotChainSource) BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	source, ok := s.chain.(interface {
+		BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error)
+	})
+	if !ok {
+		return rawdb.CommitmentBranchRotation{}, false, errors.New("initial commitment base: unavailable chain rotation")
+	}
+	return source.BeginInitialCommitmentBranchRotation()
+}
+func (s snapshotChainSource) CompleteInitialCommitmentBranchRotation(ctx context.Context, rotation rawdb.CommitmentBranchRotation, proof *snapshots.VerifiedCommitmentBranchBase) error {
+	source, ok := s.chain.(interface {
+		CompleteInitialCommitmentBranchRotation(context.Context, rawdb.CommitmentBranchRotation, *snapshots.VerifiedCommitmentBranchBase) error
+	})
+	if !ok {
+		return errors.New("initial commitment base: unavailable chain rotation")
+	}
+	return source.CompleteInitialCommitmentBranchRotation(ctx, rotation, proof)
+}
+func (s snapshotChainSource) CleanupAcceptedInitialCommitmentBranchBase(ctx context.Context, proof *snapshots.VerifiedCommitmentBranchBase) (bool, error) {
+	source, ok := s.chain.(interface {
+		CleanupAcceptedInitialCommitmentBranchBase(context.Context, *snapshots.VerifiedCommitmentBranchBase) (bool, error)
+	})
+	if !ok {
+		return false, errors.New("initial commitment base: unavailable chain rotation")
+	}
+	return source.CleanupAcceptedInitialCommitmentBranchBase(ctx, proof)
+}

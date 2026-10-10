@@ -13,3 +13,8 @@ var historyCatchupModeFlag = &cli.StringFlag{
 func runtimeHistoryCatchupMode(ctx *cli.Context) (snapshots.HistoryCatchupMode, error) {
 	return snapshots.ParseHistoryCatchupMode(ctx.String(historyCatchupModeFlag.Name))
 }
+
+var historyCommitmentBaseModeFlag = &cli.StringFlag{
+	Name: "history.commitment-base-mode", Value: string(snapshots.CommitmentBaseOff),
+	Usage: "Commitment branch migration: off or initial-only (one legacy base; postpones all general latest builds)",
+}

@@ -65,16 +65,17 @@ type CommitmentBranchPointView struct {
 	segmentHeader latestBinaryHeader
 	btreeHeader   latestBinaryBTreeHeader
 
-	// The sparse B-tree has one entry per 128 segment rows. Keeping those
+	// New branch B-trees have one entry per 32 segment rows; older files may
+	// have 128. Keeping those
 	// entries resident turns every hot lookup from O(log N) tiny ReadAt calls
-	// plus up to 128 per-row reads into one in-memory floor search and one
+	// plus one block of per-row reads into one in-memory floor search and one
 	// contiguous segment ReadAt. Keys share keyArena, so the steady resident
 	// footprint is one entry descriptor plus the sparse key bytes per block.
 	index    []latestBinaryBTreeEntry
 	keyArena []byte
 
 	// scratchPool is deliberately bounded by both concurrency and total retained
-	// bytes. The commitment fold normally has 16 lanes; ordinary ~70 KiB blocks
+	// bytes. The commitment fold normally has 16 lanes; ordinary branch blocks
 	// retain all 32 slots, while an unusually large valid block lowers the slot
 	// count instead of pinning hundreds of MiB after a transient burst.
 	maxBlockBytes int
@@ -84,14 +85,14 @@ type CommitmentBranchPointView struct {
 
 const (
 	commitmentBranchPointScratchPoolSize = 32
-	// BranchData rows are normally below 1 KiB, so a 128-row block is around
-	// 64-128 KiB. Rejecting an implausibly large block prevents a malformed or
-	// incompatible snapshot from turning one lookup into an unbounded allocation.
+	// BranchData rows are normally below 1 KiB, so a branch block is around
+	// 16-32 KiB with a 32-row stride. Rejecting an implausibly large block prevents
+	// a malformed snapshot from turning one lookup into an unbounded allocation.
 	commitmentBranchPointMaxBlockBytes           = 8 << 20
 	commitmentBranchPointMaxRetainedScratchBytes = 32 << 20
-	// The sparse B-tree is roughly one 45-byte record per 128 branch rows.
-	// 256 MiB therefore covers branch baselines far beyond the current chain
-	// while bounding the one sequential temporary allocation during open.
+	// The sparse B-tree is roughly one 45-byte record per 32 branch rows.
+	// Cap the index file and its sequential temporary allocation during open;
+	// activation must also account for resident descriptors and key bytes.
 	commitmentBranchPointMaxIndexFileBytes = 256 << 20
 )
 

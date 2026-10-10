@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -24,6 +25,16 @@ var (
 // generation-specific delta. The short chain barrier drains both asynchronous
 // workers and makes the marker durable before import resumes.
 func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	return bc.beginCommitmentBranchRotation(false)
+}
+
+// BeginInitialCommitmentBranchRotation only creates or resumes generation one
+// before any immutable base has been accepted. It never starts a successor.
+func (bc *BlockChain) BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	return bc.beginCommitmentBranchRotation(true)
+}
+
+func (bc *BlockChain) beginCommitmentBranchRotation(initialOnly bool) (rawdb.CommitmentBranchRotation, bool, error) {
 	if bc == nil || bc.db == nil {
 		return rawdb.CommitmentBranchRotation{}, false, errors.New("core: nil blockchain or database")
 	}
@@ -54,6 +65,14 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(bc.db)
 	if err != nil {
 		return rawdb.CommitmentBranchRotation{}, false, err
+	}
+	if initialOnly {
+		if based && rotating || rotating && rotation.Generation != 1 {
+			return rawdb.CommitmentBranchRotation{}, false, errors.New("core: initial commitment base cannot resume a successor rotation")
+		}
+		if based {
+			return rawdb.CommitmentBranchRotation{}, false, nil
+		}
 	}
 	if rotating {
 		if based && (rotation.Generation != base.Generation+1 || rotation.Generation == 0) {
@@ -162,12 +181,111 @@ func (bc *BlockChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRot
 	return rotation, true, nil
 }
 
+// CleanupAcceptedInitialCommitmentBranchBase closes the post-accept crash
+// window without rotating again. The exact accepted snapshot must be supplied;
+// neither a visible but unsynced marker nor a missing base authorizes deletion.
+// This entry point is deliberately restricted to the first-generation layout.
+func (bc *BlockChain) CleanupAcceptedInitialCommitmentBranchBase(ctx context.Context, proof *snapshots.VerifiedCommitmentBranchBase) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := proof.Recheck(proof.Rotation()); err != nil {
+		return false, err
+	}
+	if err := verifyCommitmentBranchRotationSnapshot(proof.Manager(), proof.Rotation()); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if bc == nil || bc.db == nil {
+		return false, errors.New("core: nil blockchain or database")
+	}
+	bc.insertSessionGate.Lock()
+	defer bc.insertSessionGate.Unlock()
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	bc.WaitForCommitSettled()
+	bc.WaitForFlushSettled()
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		return false, fmt.Errorf("cleanup initial commitment base: async commit failed: %w", *errPtr)
+	}
+	if errPtr := bc.flushErr.Load(); errPtr != nil {
+		return false, fmt.Errorf("cleanup initial commitment base: async flush failed: %w", *errPtr)
+	}
+	if err := bc.buffer.Flush(bc.db); err != nil {
+		return false, fmt.Errorf("cleanup initial commitment base: flush buffer: %w", err)
+	}
+	base, based, err := rawdb.ReadCommitmentBranchBase(bc.db)
+	if err != nil {
+		return false, err
+	}
+	_, rotating, err := rawdb.ReadCommitmentBranchRotation(bc.db)
+	if err != nil {
+		return false, err
+	}
+	if !based || base.Generation != 1 || rotating {
+		return false, errors.New("core: initial commitment base cleanup requires an accepted generation-one base")
+	}
+	legacyRows, err := rawdb.LegacyCommitmentBranchKeyspace().HasRows(bc.db)
+	if err != nil || !legacyRows {
+		return false, err
+	}
+	rotation := rawdb.CommitmentBranchRotation{
+		Generation: base.Generation, SnapshotTxNum: base.SnapshotTxNum, Root: base.Root,
+		BlockNum: base.BlockNum, BlockHash: base.BlockHash,
+	}
+	if err := proof.Recheck(rotation); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return false, fmt.Errorf("cleanup initial commitment base: sync accepted marker: %w", err)
+	}
+	if err := rawdb.DeleteCommitmentBranches(bc.db); err != nil {
+		return false, fmt.Errorf("cleanup initial commitment base: remove legacy branches: %w", err)
+	}
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return false, fmt.Errorf("cleanup initial commitment base: sync legacy cleanup: %w", err)
+	}
+	log.Info("Accepted initial commitment branch base cleanup completed", "block", base.BlockNum, "tx", base.SnapshotTxNum)
+	return true, nil
+}
+
 // CompleteCommitmentBranchRotation atomically promotes a verified immutable
 // snapshot, then removes the now-covered legacy table or prior delta. A crash
 // before the marker swap resumes current delta -> frozen delta/legacy -> base;
 // a crash after it resumes current delta -> snapshot, whether or not cleanup
 // had finished.
 func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *snapshots.Manager) error {
+	return bc.completeCommitmentBranchRotation(context.Background(), rotation, mgr, nil)
+}
+
+func (bc *BlockChain) CompleteInitialCommitmentBranchRotation(ctx context.Context, rotation rawdb.CommitmentBranchRotation, proof *snapshots.VerifiedCommitmentBranchBase) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if rotation.Generation != 1 {
+		return errors.New("core: initial commitment base requires generation one")
+	}
+	if err := proof.Recheck(rotation); err != nil {
+		return err
+	}
+	if err := verifyCommitmentBranchRotationSnapshot(proof.Manager(), rotation); err != nil {
+		return err
+	}
+	return bc.completeCommitmentBranchRotation(ctx, rotation, proof.Manager(), proof)
+}
+
+func (bc *BlockChain) completeCommitmentBranchRotation(ctx context.Context, rotation rawdb.CommitmentBranchRotation, mgr *snapshots.Manager, proof *snapshots.VerifiedCommitmentBranchBase) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if bc == nil || bc.db == nil {
 		return errors.New("core: nil blockchain or database")
 	}
@@ -175,6 +293,9 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 	defer bc.insertSessionGate.Unlock()
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	bc.WaitForCommitSettled()
 	bc.WaitForFlushSettled()
@@ -198,6 +319,14 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 	if err != nil {
 		return err
 	}
+	if proof != nil {
+		if hadBase {
+			return errors.New("core: initial commitment base cannot replace an accepted base")
+		}
+		if err := proof.Recheck(rotation); err != nil {
+			return err
+		}
+	}
 	if hadBase && (rotation.Generation != priorBase.Generation+1 || rotation.Generation == 0) {
 		return fmt.Errorf("core: rotation generation %d does not follow base %d", rotation.Generation, priorBase.Generation)
 	}
@@ -210,13 +339,23 @@ func (bc *BlockChain) CompleteCommitmentBranchRotation(rotation rawdb.Commitment
 		return fmt.Errorf("complete commitment branch rotation: canonical boundary: %w", err)
 	}
 	if !canonicalOK || canonical != rotation.BlockHash {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		commitmentBranchRotationRejectCounter.Inc(1)
 		if rebuildErr := bc.rebuildCommitmentBranchesAfterRejectedRotation(); rebuildErr != nil {
 			return fmt.Errorf("core: rotation boundary is no longer canonical; rebuild failed: %w", rebuildErr)
 		}
 		return errors.New("core: commitment branch rotation boundary is no longer canonical; rebuilt hot branches")
 	}
-	if err := verifyCommitmentBranchRotationSnapshot(mgr, rotation); err != nil {
+	if proof == nil {
+		if err := verifyCommitmentBranchRotationSnapshot(mgr, rotation); err != nil {
+			return err
+		}
+	} else if err := proof.Recheck(rotation); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 

@@ -505,7 +505,7 @@ func verifyManifestLatestBinarySidecarSet(ctx context.Context, dir string, manif
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := CheckLatestSegment(dir, ref); err != nil {
+	if err := checkLatestBinarySegmentContext(ctx, dir, ref); err != nil {
 		return err
 	}
 	path := filepath.Join(dir, ref.Path)
@@ -518,7 +518,7 @@ func verifyManifestLatestBinarySidecarSet(ctx context.Context, dir string, manif
 	if cfg.HasLatestAccessor {
 		accessorRef, ok := latestBinaryAccessorRef(manifest, ref)
 		if ok {
-			if err := CheckLatestAccessorSegment(dir, accessorRef); err != nil {
+			if err := checkLatestBinaryAccessorContext(ctx, dir, accessorRef); err != nil {
 				return err
 			}
 			accessorFile, accessorHeader, err := openLatestBinaryAccessorReader(dir, accessorRef)
@@ -539,7 +539,7 @@ func verifyManifestLatestBinarySidecarSet(ctx context.Context, dir string, manif
 		if !ok {
 			return fmt.Errorf("snapshots: binary latest %q missing required btree %q", ref.Path, latestBinaryBTreePath(ref.Path))
 		}
-		if err := CheckLatestBTreeSegment(dir, btreeRef); err != nil {
+		if err := checkLatestBTreeSegmentContext(ctx, dir, btreeRef); err != nil {
 			return err
 		}
 		btreeFile, btreeHeader, err := openLatestBinaryBTreeReader(dir, btreeRef)

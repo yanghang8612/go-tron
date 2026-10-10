@@ -46,8 +46,9 @@ type EventLogBuildOptions struct {
 }
 
 type AggregatorBuildResult struct {
-	Manifest *Manifest
-	Segments []SegmentRef
+	commitmentBaseProof *VerifiedCommitmentBranchBase
+	Manifest            *Manifest
+	Segments            []SegmentRef
 }
 
 func NewAggregator(dir string) *Aggregator {
@@ -228,6 +229,18 @@ func (a *Aggregator) BuildCommitmentBranchBaseContext(ctx context.Context, db Ag
 	}
 	if opts.ToTxNum < opts.FromTxNum {
 		return nil, fmt.Errorf("snapshots: aggregate range [%d,%d] is inverted", opts.FromTxNum, opts.ToTxNum)
+	}
+	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(db)
+	if err != nil {
+		return nil, err
+	}
+	if rotating {
+		if opts.ToTxNum != rotation.SnapshotTxNum {
+			return nil, errors.New("snapshots: commitment base build range differs from rotation")
+		}
+		if result, published, err := loadPublishedCommitmentBranchBase(ctx, a.dir, rotation); err != nil || published {
+			return result, err
+		}
 	}
 
 	registry := DefaultDomainRegistry()

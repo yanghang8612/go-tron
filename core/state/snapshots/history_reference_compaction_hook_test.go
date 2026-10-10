@@ -156,11 +156,11 @@ func TestHistoryReferenceCompactionHookBusyBoundaries(t *testing.T) {
 }
 
 func TestHistoryReferenceStreamingFallbackRetriesBoundaryCandidate(t *testing.T) {
-	giB := uint64(1 << 30)
+	limit := busyHistoryCompactionLogicalBytes
 	costs := []historyCompactionInputCost{
-		{bytes: 1, logicalBytes: 1700 << 20, records: 1},
-		{bytes: 1, logicalBytes: giB, records: 1},
-		{bytes: 1, logicalBytes: giB, records: 1},
+		{bytes: 1, logicalBytes: 3 * limit / 4, records: 1},
+		{bytes: 1, logicalBytes: limit / 2, records: 1},
+		{bytes: 1, logicalBytes: limit / 2, records: 1},
 	}
 	candidates, read := budgetTestLeaves(costs...)
 	large := historyReferenceCompactionInputBudget{HasReference: true, Records: 1, LogicalBytes: 1, ChunksUpper: historyReferenceMaxChunks}
@@ -171,12 +171,12 @@ func TestHistoryReferenceStreamingFallbackRetriesBoundaryCandidate(t *testing.T)
 }
 
 func TestHistoryReferenceStreamingFallbackStopsBeforeFixedLimit(t *testing.T) {
-	giB := uint64(1 << 30)
-	costs := []historyCompactionInputCost{{bytes: 1, logicalBytes: giB, records: 1}, {bytes: 1, logicalBytes: giB, records: 1}, {bytes: 1, logicalBytes: giB, records: 1}}
+	limit := busyHistoryCompactionLogicalBytes
+	costs := []historyCompactionInputCost{{bytes: 1, logicalBytes: limit / 2, records: 1}, {bytes: 1, logicalBytes: limit / 2, records: 1}, {bytes: 1, logicalBytes: limit / 2, records: 1}}
 	candidates, read := budgetTestLeaves(costs...)
 	large := historyReferenceCompactionInputBudget{HasReference: true, Records: 1, LogicalBytes: 1, ChunksUpper: historyReferenceMaxChunks}
 	selection, ok, err := selectBudgetedHistoryCompactionLeaves(context.Background(), candidates, CompactionConfig{}, read, func(historyCompactionCandidate) (historyReferenceCompactionInputBudget, error) { return large, nil })
-	if err != nil || !ok || selection.fromTxNum != 1 || selection.toTxNum != 2 || selection.inputLogicalBytes != 2*giB {
+	if err != nil || !ok || selection.fromTxNum != 1 || selection.toTxNum != 2 || selection.inputLogicalBytes != limit {
 		t.Fatal("streaming group crossed fixed logical limit", selection, ok, err)
 	}
 }

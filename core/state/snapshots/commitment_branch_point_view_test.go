@@ -76,7 +76,10 @@ func TestCommitmentBranchPointViewResidentIndexMultiBlock(t *testing.T) {
 	view, want := openCommitmentPointTestView(t, rows)
 	defer view.Close()
 	resident := view.(*CommitmentBranchPointView)
-	wantIndex := (rows + int(latestBinaryBTreeBlockSize) - 1) / int(latestBinaryBTreeBlockSize)
+	wantIndex := (rows + int(commitmentBranchBTreeBlockSize) - 1) / int(commitmentBranchBTreeBlockSize)
+	if resident.btreeHeader.blockSize != commitmentBranchBTreeBlockSize {
+		t.Fatalf("branch block size = %d, want %d", resident.btreeHeader.blockSize, commitmentBranchBTreeBlockSize)
+	}
 	if len(resident.index) != wantIndex {
 		t.Fatalf("resident entries = %d, want %d", len(resident.index), wantIndex)
 	}

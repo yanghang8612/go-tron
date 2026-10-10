@@ -84,12 +84,16 @@ type commitmentBranchRotator interface {
 
 // Config controls the cold history snapshot builder lifecycle.
 type Config struct {
-	Dir            string
-	Enabled        bool
-	HistoryDataset SegmentDataset
-	Interval       time.Duration
-	HistoryWindow  uint64
-	BatchBlocks    uint64
+	// Initial-only externalizes the legacy branch table once and suppresses
+	// all general latest builds until the policy is explicitly changed.
+	CommitmentBaseMode                CommitmentBaseMode
+	InitialCommitmentBaseReserveBytes uint64
+	Dir                               string
+	Enabled                           bool
+	HistoryDataset                    SegmentDataset
+	Interval                          time.Duration
+	HistoryWindow                     uint64
+	BatchBlocks                       uint64
 	// BatchTxNums bounds one base history step by transaction-number span.
 	// The selected range always includes a complete final block, so a single
 	// dense block may exceed the target. BatchBlocks independently caps sparse
@@ -679,9 +683,11 @@ func coldSnapshotUintGauge(value uint64) int64 {
 
 // Runner builds registered history snapshot segments in the background.
 type Runner struct {
-	chain   ChainSource
-	cfg     Config
-	metrics coldRunnerMetrics
+	initialCommitmentNotBefore time.Time // passMu
+	initialCommitmentDone      bool      // passMu
+	chain                      ChainSource
+	cfg                        Config
+	metrics                    coldRunnerMetrics
 
 	quit   chan struct{}
 	done   chan struct{}
@@ -797,6 +803,9 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 }
 
 func (c Config) applyDefaults() Config {
+	if mode, err := ParseCommitmentBaseMode(string(c.CommitmentBaseMode)); err == nil {
+		c.CommitmentBaseMode = mode
+	}
 	if c.HistoryCatchupMode == "" {
 		c.HistoryCatchupMode = HistoryCatchupBalanced
 	}
@@ -829,6 +838,13 @@ func (c Config) applyDefaults() Config {
 }
 
 func (c Config) validate() error {
+	mode, err := ParseCommitmentBaseMode(string(c.CommitmentBaseMode))
+	if err != nil {
+		return err
+	}
+	if mode == CommitmentBaseInitialOnly && (!c.Enabled || c.HeavyWorkGate == nil || c.HistoryLoadProbe == nil || c.HistoryReadResourceProbe == nil || c.HistoryPressureProbe == nil || c.MinHistoryBuildFreeBytes == 0) {
+		return errors.New("snapshots: initial commitment base requires enabled cold lifecycle, shared gate and resource/space probes")
+	}
 	if err := (HistoryReadOptions{Workers: c.HistorySharedReadWorkers, ChunkCache: c.HistorySharedChunkCache, ReferenceContainer: c.HistoryReferenceContainer}).Validate(); err != nil {
 		return err
 	}
@@ -1109,6 +1125,21 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		return result, err
 	}
 	spaceDeferred := r.historySpaceDeferred(pressure)
+	if r.initialCommitmentMode() {
+		phaseStart := time.Now()
+		attempted, built, initialErr := r.initialCommitmentPass(ctx)
+		if attempted || initialErr != nil {
+			result.LatestBuilt, result.LatestCommitmentBaseBuilt = built, built
+			result.LatestDeferred = true
+			result.LatestDuration = coldSnapshotPhaseDuration(phaseStart)
+			result.HistoryPressure, result.HistorySpaceDeferred = pressure, spaceDeferred
+			if initialErr == nil && beforeMerge != nil {
+				initialErr = beforeMerge(ctx, result)
+			}
+			r.recordPass(result, start, initialErr)
+			return result, initialErr
+		}
+	}
 	prioritizeMerge := !spaceDeferred && r.shouldPrioritizePendingCompaction(time.Now())
 	// Direct V2 receipt publication is hard-bound to event-log coverage. Give
 	// an existing event-log gap first admission to the shared heavy-work gate;
@@ -3270,6 +3301,9 @@ func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
 }
 
 func (r *Runner) latestPassWithStatusContext(ctx context.Context) (built bool, deferred bool, err error) {
+	if r.initialCommitmentMode() {
+		return false, true, contextError(ctx)
+	}
 	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
 		return false, false, nil
 	}

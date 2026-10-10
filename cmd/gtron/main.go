@@ -460,6 +460,7 @@ var app = &cli.App{
 		historyCrossBlockDedupFlag,
 		historyCompressionFormatFlag,
 		historyCatchupModeFlag,
+		historyCommitmentBaseModeFlag,
 		historyReferenceContainerFlag,
 		historySharedReadWorkersFlag,
 		historySharedChunkCacheFlag,
@@ -656,6 +657,11 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	commitmentBaseMode, err := statesnapshots.ParseCommitmentBaseMode(ctx.String(historyCommitmentBaseModeFlag.Name))
+	if err != nil {
+		return err
+	}
+	log.Info("Commitment branch base policy configured", "mode", commitmentBaseMode)
 	historyReads, err := runtimeHistorySharedReadOptions(ctx)
 	if err != nil {
 		return err
@@ -1418,6 +1424,10 @@ func gtron(ctx *cli.Context) error {
 			})
 		}
 	}
+	if commitmentBaseMode == statesnapshots.CommitmentBaseInitialOnly && (!shouldEnableDomainStatePruner(chainConfig) || (chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap && chainConfig.EffectiveHistoryMode() != params.HistoryModeArchive)) {
+		closeStores()
+		return errors.New("initial commitment base requires enabled cold state snapshots")
+	}
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		maxDeferredHistoryBlocks := maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow)
@@ -1491,6 +1501,7 @@ func gtron(ctx *cli.Context) error {
 		}
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
+				CommitmentBaseMode:          commitmentBaseMode,
 				Dir:                         stateSnapshotDir,
 				Enabled:                     coldStateSnapshotsEnabled,
 				HistoryDataset:              historyDataset,

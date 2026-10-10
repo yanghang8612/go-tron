@@ -209,3 +209,22 @@ func (a *domainPrunerChainSource) WithStateDomainChangePruneGuard(ctx context.Co
 	}
 	return a.chain.WithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work)
 }
+
+func (a *domainPrunerChainSource) BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+	if a == nil || a.chain == nil {
+		return rawdb.CommitmentBranchRotation{}, false, errors.New("initial commitment base: unavailable chain")
+	}
+	return a.chain.BeginInitialCommitmentBranchRotation()
+}
+func (a *domainPrunerChainSource) CompleteInitialCommitmentBranchRotation(ctx context.Context, rotation rawdb.CommitmentBranchRotation, proof *statesnapshots.VerifiedCommitmentBranchBase) error {
+	if a == nil || a.chain == nil {
+		return errors.New("initial commitment base: unavailable chain")
+	}
+	return a.chain.CompleteInitialCommitmentBranchRotation(ctx, rotation, proof)
+}
+func (a *domainPrunerChainSource) CleanupAcceptedInitialCommitmentBranchBase(ctx context.Context, proof *statesnapshots.VerifiedCommitmentBranchBase) (bool, error) {
+	if a == nil || a.chain == nil {
+		return false, errors.New("initial commitment base: unavailable chain")
+	}
+	return a.chain.CleanupAcceptedInitialCommitmentBranchBase(ctx, proof)
+}

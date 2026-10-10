@@ -28,6 +28,7 @@ const (
 	latestBinaryAccessorHeaderSize = 8 + 4 + 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + sha256.Size
 	latestBinaryBTreeHeaderSize    = latestBinaryAccessorHeaderSize + 8
 	latestBinaryBTreeBlockSize     = uint64(128)
+	commitmentBranchBTreeBlockSize = uint64(32)
 	latestBinaryCompressedValues   = uint16(1 << 0)
 	latestBinaryVerifyReadWindow   = 256 << 10
 
@@ -39,6 +40,13 @@ const (
 	latestBinaryMaxDecodedValueSize = 256 << 20
 	latestBinaryCompressMinValue    = 64
 )
+
+func latestBinaryBTreeBlockSizeForDataset(dataset SegmentDataset) uint64 {
+	if dataset == SegmentDatasetCommitmentBranch {
+		return commitmentBranchBTreeBlockSize
+	}
+	return latestBinaryBTreeBlockSize
+}
 
 var (
 	latestBinarySegmentMagic  = [8]byte{'g', 't', 'l', 'a', 't', 's', 'e', 'g'}
@@ -295,7 +303,7 @@ func writeLatestBinarySegmentWithCompanionsContext(ctx context.Context, dir stri
 				return err
 			}
 		}
-		if count%latestBinaryBTreeBlockSize == 0 {
+		if count%latestBinaryBTreeBlockSizeForDataset(ref.normalizedDataset()) == 0 {
 			if err := writeLatestBinaryBTreeTempEntry(btreePayload, btreeOffsets, latestBinaryBTreeEntry{
 				key:           entry.Key,
 				ordinal:       count,
@@ -353,7 +361,7 @@ func writeLatestBinarySegmentWithCompanionsContext(ctx context.Context, dir stri
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 
-	size, checksum, checksumBytes, err := latestBinaryFileMetadata(tmpName)
+	size, checksum, checksumBytes, err := latestBinaryFileMetadataContext(ctx, tmpName)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
@@ -377,12 +385,12 @@ func writeLatestBinarySegmentWithCompanionsContext(ctx context.Context, dir stri
 
 	var accessorRef SegmentRef
 	if writeAccessor {
-		accessorRef, err = writeLatestBinaryAccessorFromOffsetsFile(dir, segRef, checksumBytes, offsetsName, count)
+		accessorRef, err = writeLatestBinaryAccessorFromOffsetsFileContext(ctx, dir, segRef, checksumBytes, offsetsName, count)
 		if err != nil {
 			return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 		}
 	}
-	btreeRef, err := writeLatestBinaryBTreeFromTempFiles(dir, segRef, checksumBytes, btreePayloadName, btreeOffsetsName, btreeCount)
+	btreeRef, err := writeLatestBinaryBTreeFromTempFilesContext(ctx, dir, segRef, checksumBytes, btreePayloadName, btreeOffsetsName, btreeCount)
 	if err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
@@ -448,8 +456,15 @@ func restoreLatestBinarySegmentToStore(dir string, ref SegmentRef, store latestH
 }
 
 func checkLatestBinarySegment(dir string, ref SegmentRef) error {
+	return checkLatestBinarySegmentContext(context.Background(), dir, ref)
+}
+
+func checkLatestBinarySegmentContext(ctx context.Context, dir string, ref SegmentRef) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	path := filepath.Join(dir, ref.Path)
-	if err := verifyLatestBinaryFileRef(path, ref); err != nil {
+	if err := verifyLatestBinaryFileRefContext(ctx, path, ref); err != nil {
 		return err
 	}
 	file, header, err := openLatestBinaryReader(path, ref)
@@ -469,6 +484,9 @@ func checkLatestBinarySegment(dir string, ref SegmentRef) error {
 	}
 	var prev []byte
 	for i := uint64(0); i < header.count; i++ {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
 		key, valueLen, err := readLatestBinaryEntryKey(file, header.fileSize, header.compressedValues)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary key %d: %w", i, err)
@@ -503,8 +521,15 @@ func checkLatestBinarySegment(dir string, ref SegmentRef) error {
 }
 
 func checkLatestBinaryAccessor(dir string, ref SegmentRef) error {
+	return checkLatestBinaryAccessorContext(context.Background(), dir, ref)
+}
+
+func checkLatestBinaryAccessorContext(ctx context.Context, dir string, ref SegmentRef) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	path := filepath.Join(dir, ref.Path)
-	if err := verifyLatestBinaryFileRef(path, ref); err != nil {
+	if err := verifyLatestBinaryFileRefContext(ctx, path, ref); err != nil {
 		return err
 	}
 	file, header, err := openLatestBinaryAccessorReader(dir, ref)
@@ -531,6 +556,9 @@ func checkLatestBinaryAccessor(dir string, ref SegmentRef) error {
 	}
 	var prev uint64
 	for i := uint64(0); i < header.count; i++ {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
 		offset, err := readLatestBinaryAccessorOffsetAt(file, i)
 		if err != nil {
 			return fmt.Errorf("snapshots: decode latest binary accessor offset %d: %w", i, err)
@@ -1009,6 +1037,13 @@ func writeLatestBinaryAccessorForSegment(dir string, ref SegmentRef) (SegmentRef
 }
 
 func writeLatestBinaryAccessorFromOffsetsFile(dir string, ref SegmentRef, segmentChecksum [sha256.Size]byte, offsetsPath string, count uint64) (SegmentRef, error) {
+	return writeLatestBinaryAccessorFromOffsetsFileContext(context.Background(), dir, ref, segmentChecksum, offsetsPath, count)
+}
+
+func writeLatestBinaryAccessorFromOffsetsFileContext(ctx context.Context, dir string, ref SegmentRef, segmentChecksum [sha256.Size]byte, offsetsPath string, count uint64) (SegmentRef, error) {
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, err
+	}
 	accessorRef := SegmentRef{
 		Dataset:   ref.normalizedDataset(),
 		Domain:    ref.Domain,
@@ -1049,7 +1084,7 @@ func writeLatestBinaryAccessorFromOffsetsFile(dir string, ref SegmentRef, segmen
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
-	if n, err := io.CopyN(tmp, offsets, int64(count*8)); err != nil {
+	if n, err := io.CopyN(tmp, contextReader{ctx: ctx, r: offsets}, int64(count*8)); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	} else if uint64(n) != count*8 {
@@ -1074,12 +1109,15 @@ func writeLatestBinaryAccessorFromOffsetsFile(dir string, ref SegmentRef, segmen
 	if err := tmp.Close(); err != nil {
 		return SegmentRef{}, err
 	}
-	size, checksum, _, err := latestBinaryFileMetadata(tmpName)
+	size, checksum, _, err := latestBinaryFileMetadataContext(ctx, tmpName)
 	if err != nil {
 		return SegmentRef{}, err
 	}
 	accessorRef.Size = size
 	accessorRef.Checksum = checksum
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, err
+	}
 	if err := os.Rename(tmpName, abs); err != nil {
 		return SegmentRef{}, err
 	}
@@ -1121,6 +1159,13 @@ func writeLatestBinaryBTreeTempEntry(payload, offsets io.Writer, entry latestBin
 }
 
 func writeLatestBinaryBTreeFromTempFiles(dir string, ref SegmentRef, segmentChecksum [sha256.Size]byte, payloadPath, offsetsPath string, count uint64) (SegmentRef, error) {
+	return writeLatestBinaryBTreeFromTempFilesContext(context.Background(), dir, ref, segmentChecksum, payloadPath, offsetsPath, count)
+}
+
+func writeLatestBinaryBTreeFromTempFilesContext(ctx context.Context, dir string, ref SegmentRef, segmentChecksum [sha256.Size]byte, payloadPath, offsetsPath string, count uint64) (SegmentRef, error) {
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, err
+	}
 	btreeRef := SegmentRef{
 		Dataset:   ref.normalizedDataset(),
 		Domain:    ref.Domain,
@@ -1164,13 +1209,17 @@ func writeLatestBinaryBTreeFromTempFiles(dir string, ref SegmentRef, segmentChec
 			segmentSize:     ref.Size,
 			segmentChecksum: segmentChecksum,
 		},
-		blockSize: latestBinaryBTreeBlockSize,
+		blockSize: latestBinaryBTreeBlockSizeForDataset(ref.normalizedDataset()),
 	}); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
 	offsetBase := latestBinaryBTreeHeaderSize + count*8
 	for i := uint64(0); i < count; i++ {
+		if err := contextError(ctx); err != nil {
+			_ = tmp.Close()
+			return SegmentRef{}, err
+		}
 		var raw [8]byte
 		if _, err := io.ReadFull(offsets, raw[:]); err != nil {
 			_ = tmp.Close()
@@ -1183,7 +1232,7 @@ func writeLatestBinaryBTreeFromTempFiles(dir string, ref SegmentRef, segmentChec
 			return SegmentRef{}, err
 		}
 	}
-	if n, err := io.Copy(tmp, payload); err != nil {
+	if n, err := io.Copy(tmp, contextReader{ctx: ctx, r: payload}); err != nil {
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	} else if n == 0 && count != 0 {
@@ -1197,12 +1246,15 @@ func writeLatestBinaryBTreeFromTempFiles(dir string, ref SegmentRef, segmentChec
 	if err := tmp.Close(); err != nil {
 		return SegmentRef{}, err
 	}
-	size, checksum, _, err := latestBinaryFileMetadata(tmpName)
+	size, checksum, _, err := latestBinaryFileMetadataContext(ctx, tmpName)
 	if err != nil {
 		return SegmentRef{}, err
 	}
 	btreeRef.Size = size
 	btreeRef.Checksum = checksum
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, err
+	}
 	if err := os.Rename(tmpName, abs); err != nil {
 		return SegmentRef{}, err
 	}
@@ -2434,10 +2486,17 @@ func verifyLatestBinaryRef(path string, ref SegmentRef, data []byte) error {
 }
 
 func verifyLatestBinaryFileRef(path string, ref SegmentRef) error {
+	return verifyLatestBinaryFileRefContext(context.Background(), path, ref)
+}
+
+func verifyLatestBinaryFileRefContext(ctx context.Context, path string, ref SegmentRef) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if ref.Size == 0 && ref.Checksum == "" {
 		return nil
 	}
-	size, checksum, _, err := latestBinaryFileMetadata(path)
+	size, checksum, _, err := latestBinaryFileMetadataContext(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -2473,6 +2532,10 @@ func latestBinaryMetadata(data []byte) (uint64, string) {
 }
 
 func latestBinaryFileMetadata(path string) (uint64, string, [sha256.Size]byte, error) {
+	return latestBinaryFileMetadataContext(context.Background(), path)
+}
+
+func latestBinaryFileMetadataContext(ctx context.Context, path string) (uint64, string, [sha256.Size]byte, error) {
 	var checksum [sha256.Size]byte
 	file, err := os.Open(path)
 	if err != nil {
@@ -2480,7 +2543,7 @@ func latestBinaryFileMetadata(path string) (uint64, string, [sha256.Size]byte, e
 	}
 	defer file.Close()
 	hash := sha256.New()
-	size, err := io.Copy(hash, file)
+	size, err := io.Copy(hash, contextReader{ctx: ctx, r: file})
 	if err != nil {
 		return 0, "", checksum, err
 	}

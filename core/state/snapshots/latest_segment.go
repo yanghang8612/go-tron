@@ -1080,8 +1080,15 @@ func CheckLatestAccessorSegment(dir string, ref SegmentRef) error {
 }
 
 func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
+	return checkLatestBTreeSegmentContext(context.Background(), dir, ref)
+}
+
+func checkLatestBTreeSegmentContext(ctx context.Context, dir string, ref SegmentRef) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	path := filepath.Join(dir, ref.Path)
-	if err := verifyLatestBinaryFileRef(path, ref); err != nil {
+	if err := verifyLatestBinaryFileRefContext(ctx, path, ref); err != nil {
 		return err
 	}
 	file, header, err := openLatestBinaryBTreeReader(dir, ref)
@@ -1103,6 +1110,9 @@ func CheckLatestBTreeSegment(dir string, ref SegmentRef) error {
 	var prevEntryOffset uint64
 	var payloadEnd = payloadStart
 	for i := uint64(0); i < header.count; i++ {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
 		entryOffset, err := readLatestBinaryBTreeEntryOffsetAt(file, i)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -1377,7 +1387,7 @@ func (m *Manager) IterateCommitmentBranches(txNum uint64, fn func(prefix, encode
 
 // GetCommitmentBranch resolves one staged-trie branch from the immutable
 // baseline. Binary production segments use their sparse B-tree, bounding the
-// search to one 128-row block instead of scanning or materializing the full
+// search to one block at the index's stride instead of materializing the full
 // branch snapshot. This is the point-read half of the future hot-delta + cold-
 // baseline view; IterateCommitmentBranches remains the bootstrap/repair path.
 func (m *Manager) GetCommitmentBranch(prefix []byte, txNum uint64) ([]byte, bool, error) {
