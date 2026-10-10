@@ -36,6 +36,14 @@
 
 新增 `mover/admission_mode`（0 idle、1 busy，其余按代码枚举为拒绝原因）、`denied/{hot,stage}/{reason}`、`quantum_work_bytes`、`quantum_yields`、`quantum_wait_nanos` 、`quantum_held_nanos` 及 `resource_denied/{memory_unknown,memory_stale,memory_oom,memory_low}`。已有 skipped、moved、copied、last_success、source/uncleared census 继续保留。验收必须同时查看实际 source/target allocated bytes、冷发布进度、导入吞吐、write stall、设备物理 I/O 与峰值内存；量子数量或逻辑删除数不证明释放空间。
 
+## 固定历史读视图的认证缓存
+
+2026-10-10 的线上 CPU profile 显示，`AcquireStateHistorySourceView` 的约 3.12 秒累计 CPU 中，约 2.84 秒来自每次 pin 都加载并解析认证 sidecar。live manager 与 builder 共用已完成认证的父缓存；pin 可以复制其 persistent records，保留独立的 manifest、segment cache 和文件保留 lease，免除重复 JSON 加载。仅目录相同且为绝对路径、父缓存加载无错误时启用；nil、异目录、相对路径或 load error 仍回退原加载。
+
+副本不继承 verified memory hits、singleflight、dirty、warning 或统计；event companion slice 深拷贝。新视图首次访问每个 companion set 仍重算全部 SHA，只有成功后才允许该视图内 memory hit。父缓存尚未落盘的完成记录可以复制，但其落盘责任仍属于父缓存。子视图新认证的条目不反馈父 map，父缓存缺条目的通用查询场景可能仍重复语义认证，不能宣称所有查询都有提升。
+
+针对真实 event/chain companion 的测试要求首次 persistent、第二次 memory，拒绝同大小且恢复 mtime 的原地损坏及替换；并发复制/认证/父落盘通过 race 检查。Apple M1 Max 上用当前观察到的 70,015 条记录数构造合成合法元数据，三次 benchmark 得到重新加载约 356.3ms/386.3MB 分配，复制约 31.3ms/21.4MB 分配。这只衡量构造成本，不代表实际归档整体吞吐，且 map 复制仍为 O(N)，持有父 mutex。
+
 ## 验证
 
-测试覆盖低延迟 queue>1 的 busy lane、精确阈值、unknown/stale/hard rejection、量子中另一个 worker 取得 token、100k tiny rows 的 probe 次数与 row 数解耦、中途压力和取消、reservation 不绕过他人 recovery、瞬时 statfs 错误后的终止状态、copy 不从前缀重写、错误 proof/取消保留 source，以及等待结束后重新检查 free-space floor。原 HistoryStaging 的 mixed cold、repair/Prev、恢复、唯一来源和 retirement 测试仍须全部通过。上线后核验实际搬移/归档进度、导入吞吐与设备负载；部署验证仍须包含原生 Linux Sapling。本轮只产出本地可审阅候选，不 push 或部署。
+测试覆盖低延迟 queue>1 的 busy lane、精确阈值、unknown/stale/hard rejection、量子中另一个 worker 取得 token、100k tiny rows 的 probe 次数与 row 数解耦、中途压力和取消、reservation 不绕过他人 recovery、瞬时 statfs 错误后的终止状态、copy 不从前缀重写、错误 proof/取消保留 source，以及等待结束后重新检查 free-space floor。原 HistoryStaging 的 mixed cold、repair/Prev、恢复、唯一来源和 retirement 测试仍须全部通过。上线后核验实际搬移/归档进度、导入吞吐与设备负载；部署验证仍须包含原生 Linux Sapling。部署按用户授权直接推送 master，并在服务器执行原生测试、构建与版本核验。

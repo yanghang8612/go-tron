@@ -131,7 +131,7 @@ type ChainFreezerVerificationCache struct {
 	metrics            chainFreezerVerificationMetrics
 }
 
-func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache {
+func newEmptyChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache {
 	c := &ChainFreezerVerificationCache{
 		dir:             strings.TrimSpace(dir),
 		verified:        make(map[chainFreezerVerificationKey]struct{}),
@@ -154,6 +154,11 @@ func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache
 			eventTrustedRecorded: metrics.GetOrRegisterGauge(chainFreezerVerificationMetricsPrefix+"event_log/trusted_recorded", nil),
 		},
 	}
+	return c
+}
+
+func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache {
+	c := newEmptyChainFreezerVerificationCache(dir)
 	if c.dir != "" {
 		if c.loadErr = c.load(); c.loadErr != nil {
 			// The cache is advisory. A malformed or partial file falls back to
@@ -166,6 +171,33 @@ func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache
 	}
 	c.updateMetricsLocked()
 	return c
+}
+
+// snapshotPersistent avoids parsing the same advisory sidecar for every pin.
+// It intentionally does not inherit memory hits or verification flights: the
+// new view must still hash every companion before accepting a persistent proof.
+func (c *ChainFreezerVerificationCache) snapshotPersistent(dir string) *ChainFreezerVerificationCache {
+	if c == nil {
+		return NewChainFreezerVerificationCache(dir)
+	}
+	c.mu.Lock()
+	if c.loadErr != nil || c.dir != strings.TrimSpace(dir) || !filepath.IsAbs(c.dir) {
+		c.mu.Unlock()
+		return NewChainFreezerVerificationCache(dir)
+	}
+	snapshot := newEmptyChainFreezerVerificationCache(dir)
+	snapshot.persistent = make(map[chainFreezerVerificationRecord]struct{}, len(c.persistent))
+	snapshot.eventPersistent = make(map[string]eventLogVerificationRecord, len(c.eventPersistent))
+	for record := range c.persistent {
+		snapshot.persistent[record] = struct{}{}
+	}
+	for key, record := range c.eventPersistent {
+		record.Events = append([]SegmentRef(nil), record.Events...)
+		snapshot.eventPersistent[key] = record
+	}
+	c.mu.Unlock()
+	snapshot.updateMetricsLocked()
+	return snapshot
 }
 
 func (c *ChainFreezerVerificationCache) LoadError() error {

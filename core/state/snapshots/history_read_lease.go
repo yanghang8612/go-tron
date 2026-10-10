@@ -35,7 +35,7 @@ func (m *Manager) PinHistoryReadView() (*Manager, func(), error) {
 	if manifest == nil {
 		return nil, release, nil
 	}
-	pinned, err := OpenPinnedManager(m.dir, manifest)
+	pinned, err := openPinnedManager(m.dir, manifest, m.chainVerificationCache)
 	if err != nil {
 		release()
 		return nil, nil, err

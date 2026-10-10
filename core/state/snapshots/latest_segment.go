@@ -1193,6 +1193,10 @@ func OpenManagerWithChainVerificationCache(dir string, verificationCache *ChainF
 }
 
 func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
+	return openPinnedManager(dir, manifest, nil)
+}
+
+func openPinnedManager(dir string, manifest *Manifest, parentCache *ChainFreezerVerificationCache) (*Manager, error) {
 	if manifest == nil {
 		return nil, errors.New("snapshots: nil pinned manifest")
 	}
@@ -1204,7 +1208,7 @@ func OpenPinnedManager(dir string, manifest *Manifest) (*Manager, error) {
 		manifest:               manifestLookupView(cloneManifest(manifest)),
 		pinned:                 true,
 		cache:                  make(map[string]*LatestSegment),
-		chainVerificationCache: NewChainFreezerVerificationCache(dir),
+		chainVerificationCache: parentCache.snapshotPersistent(dir),
 	}, nil
 }
 
