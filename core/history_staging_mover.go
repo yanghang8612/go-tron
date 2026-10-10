@@ -39,6 +39,7 @@ var (
 	historyStagingMoverCensusAt         = metrics.NewRegisteredGauge("core/history_staging/mover/census_unix", nil)
 	historyStagingMoverManifestRecheck  = metrics.NewRegisteredCounter("core/history_staging/mover/manifest_revalidated", nil)
 	historyStagingMoverManifestConflict = metrics.NewRegisteredCounter("core/history_staging/mover/manifest_conflicts", nil)
+	historyStagingMoverFinalizeReuse    = metrics.NewRegisteredCounter("core/history_staging/mover/finalize_proof_reused", nil)
 )
 
 // HistoryStagingMoverConfig bounds one optional transfer. Hot and Stage
@@ -885,11 +886,13 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		if err != nil {
 			return err
 		}
-		current, err := recheckHistoryStagingColdPublication(ctx, rebindingFacts, bindingManifest, coldManager.Manifest(), *binding)
+		liveManifest := coldManager.Manifest()
+		current, err := recheckHistoryStagingColdPublication(ctx, rebindingFacts, bindingManifest, liveManifest, *binding)
 		if err != nil {
 			return err
 		}
 		*binding = current
+		bindingManifest = liveManifest
 	}
 	adoptErr := m.withValidatedProof(ctx, proof, func() error {
 		if bc.HistoryStagingManager() != manager || binding != nil && bc.stateCodeColdHistory != coldManager {
@@ -915,6 +918,16 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	}
 	if adoptErr != nil {
 		return adoptErr
+	}
+	// This proof never escapes the current run. Its pinned cold view and range
+	// protection remain held through source clearing and the final handoff.
+	var finalProof *historyStagingFinalProof
+	if binding != nil {
+		copied := *binding
+		copied.Spans = append([]rawdb.HistoryStagingColdSpan(nil), binding.Spans...)
+		finalProof = &historyStagingFinalProof{manager: manager, cold: coldManager,
+			binding: copied, manifest: bindingManifest, facts: rebindingFacts,
+			blocks: append([]rawdb.HistoryStagingBlockProof(nil), proof.Blocks...)}
 	}
 	if physicalProver != nil && binding != nil {
 		if err := physicalProver.CommitPhysicalCertificates(ctx); err != nil {
@@ -944,7 +957,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	historyStagingMoverMoved.Inc(1)
 	historyStagingMoverCopiedBytes.Inc(int64(receipt.PayloadBytes))
 	historyStagingMoverLastSuccess.Update(time.Now().Unix())
-	return m.finalizeColdBucket(ctx, bucket)
+	return m.finalizeColdBucketWithProof(ctx, bucket, finalProof)
 }
 
 // historyStagingLastCompleteBucket excludes the bucket containing an
@@ -977,6 +990,22 @@ func historyStagingBindingFull(binding rawdb.HistoryStagingColdBinding, first, l
 // finalizeColdBucket is a separate bounded retirement phase. A crash after
 // source clearing or after the COLD route Sync is resumed by the next scan.
 func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uint64) error {
+	return m.finalizeColdBucketWithProof(ctx, bucket, nil)
+}
+
+// historyStagingFinalProof ties semantic authentication to an already adopted
+// durable binding. Physical facts alone do not authorize a cold handoff. This
+// capsule is only passed directly from runAdmitted, never cached across runs.
+type historyStagingFinalProof struct {
+	manager  *rawdb.HistoryStagingManager
+	cold     *snapshots.Manager
+	binding  rawdb.HistoryStagingColdBinding
+	manifest *snapshots.Manifest
+	facts    *snapshots.HistoryStagingPhysicalFactCollector
+	blocks   []rawdb.HistoryStagingBlockProof
+}
+
+func (m *HistoryStagingMover) finalizeColdBucketWithProof(ctx context.Context, bucket uint64, reused *historyStagingFinalProof) error {
 	manager := m.bc.HistoryStagingManager()
 	route, present, err := manager.ReadRoute(bucket)
 	if err != nil || !present || !route.SourceCleared {
@@ -1004,33 +1033,46 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 		if !ok || coldManager == nil {
 			return rawdb.ErrHistoryStagingIncomplete
 		}
-		pinned, release, err := coldManager.PinHistoryReadView()
-		if err != nil {
-			return err
-		}
-		if release != nil {
-			defer release()
-		}
-		if pinned == nil || pinned.Manifest() == nil {
-			return rawdb.ErrHistoryStagingIncomplete
-		}
-		proofCtx, collector, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, pinned.HistoryStagingDir())
-		if err != nil {
-			return err
-		}
-		physicalFacts = collector
-		blocks, err := m.canonicalBucketBlocks(ctx, bucket)
-		if err != nil {
-			return err
-		}
-		releaseProof, protectionErr := protectHistoryStagingColdProof(pinned.HistoryStagingDir(), blocks)
-		if protectionErr != nil {
-			return protectionErr
-		}
-		defer releaseProof()
-		current, err := snapshots.RebindHistoryStagingColdBinding(proofCtx, pinned.HistoryStagingDir(), pinned.Manifest(), binding, blocks)
-		if err != nil {
-			return err
+		var provedManifest *snapshots.Manifest
+		var blocks []rawdb.HistoryStagingBlockProof
+		var current rawdb.HistoryStagingColdBinding
+		if reused != nil {
+			if reused.manager != manager || reused.cold != coldManager || reused.facts == nil || reused.manifest == nil ||
+				!reflect.DeepEqual(reused.binding, binding) || route.Epoch != binding.Epoch || route.ColdBindingEpoch != binding.BindingEpoch ||
+				len(reused.blocks) != int(rawdb.StateHistoryChunkBucketBlocks) || reused.blocks[0].Number != first || reused.blocks[len(reused.blocks)-1].Number != last {
+				return rawdb.ErrHistoryStagingConflict
+			}
+			physicalFacts, provedManifest, blocks, current = reused.facts, reused.manifest, reused.blocks, binding
+		} else {
+			pinned, release, err := coldManager.PinHistoryReadView()
+			if err != nil {
+				return err
+			}
+			if release != nil {
+				defer release()
+			}
+			if pinned == nil || pinned.Manifest() == nil {
+				return rawdb.ErrHistoryStagingIncomplete
+			}
+			provedManifest = pinned.Manifest()
+			proofCtx, collector, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, pinned.HistoryStagingDir())
+			if err != nil {
+				return err
+			}
+			physicalFacts = collector
+			blocks, err = m.canonicalBucketBlocks(ctx, bucket)
+			if err != nil {
+				return err
+			}
+			releaseProof, protectionErr := protectHistoryStagingColdProof(pinned.HistoryStagingDir(), blocks)
+			if protectionErr != nil {
+				return protectionErr
+			}
+			defer releaseProof()
+			current, err = snapshots.RebindHistoryStagingColdBinding(proofCtx, pinned.HistoryStagingDir(), provedManifest, binding, blocks)
+			if err != nil {
+				return err
+			}
 		}
 		releasePublication, err := snapshots.AcquireHistoryStagingPublicationRead(ctx, coldManager.HistoryStagingDir())
 		if err != nil {
@@ -1041,7 +1083,7 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 				releasePublication()
 			}
 		}()
-		current, err = recheckHistoryStagingColdPublication(ctx, physicalFacts, pinned.Manifest(), coldManager.Manifest(), current)
+		current, err = recheckHistoryStagingColdPublication(ctx, physicalFacts, provedManifest, coldManager.Manifest(), current)
 		if err != nil {
 			return err
 		}
@@ -1050,6 +1092,10 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 				return err
 			}
 			if current.ManifestEpoch != binding.ManifestEpoch || !reflect.DeepEqual(current.Spans, binding.Spans) {
+				if binding.BindingEpoch == ^uint64(0) {
+					return rawdb.ErrHistoryStagingConflict
+				}
+				current.BindingEpoch = binding.BindingEpoch + 1
 				if err := manager.CertifyColdRange(ctx, current, func() error { return nil }); err != nil {
 					return err
 				}
@@ -1063,6 +1109,9 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 			})
 		}); err != nil {
 			return err
+		}
+		if reused != nil {
+			historyStagingMoverFinalizeReuse.Inc(1)
 		}
 		releasePublication()
 		releasePublication = nil

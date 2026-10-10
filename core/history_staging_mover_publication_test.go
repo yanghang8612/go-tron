@@ -100,6 +100,7 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 				live.Generation = old.Generation + 1
 				appended := false
 				beforeRecheck := historyStagingMoverManifestRecheck.Snapshot().Count()
+				beforeReuse := historyStagingMoverFinalizeReuse.Snapshot().Count()
 				proofCtx := maintenance.WithWorkCheckpoint(ctx, func(uint64) error {
 					if appended {
 						return nil
@@ -138,6 +139,9 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 				}
 				if err != nil || !appended || historyStagingMoverManifestRecheck.Snapshot().Count() <= beforeRecheck {
 					t.Fatalf("publication did not accept unchanged dependencies: appended=%v revalidated=%d err=%v", appended, historyStagingMoverManifestRecheck.Snapshot().Count()-beforeRecheck, err)
+				}
+				if path == "adopt" && historyStagingMoverFinalizeReuse.Snapshot().Count() != beforeReuse+1 {
+					t.Fatal("same-run adoption did not reuse its authenticated final proof")
 				}
 				binding, present, err := f.manager.ReadColdBindingAt(1, 1)
 				if err != nil || !present || binding.ManifestEpoch != live.Generation {
