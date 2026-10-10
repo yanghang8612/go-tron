@@ -16,11 +16,16 @@ import (
 // This metadata-only check never yields a maintenance lease under writer locks.
 func (c *HistoryStagingPhysicalFactCollector) RecheckColdBindingPublication(ctx context.Context, proved, current *Manifest, binding rawdb.HistoryStagingColdBinding) (rawdb.HistoryStagingColdBinding, error) {
 	var zero rawdb.HistoryStagingColdBinding
-	if c == nil || ctx == nil || proved == nil || current == nil || proved.Chain == nil || current.Chain == nil || proved.Generation == 0 ||
-		binding.ManifestEpoch != proved.Generation || len(binding.Spans) == 0 ||
+	if c == nil || ctx == nil || proved == nil || current == nil || proved.Generation == 0 || len(binding.Spans) == 0 {
+		return zero, fmt.Errorf("%w: invalid_proof_context bucket=%d", rawdb.ErrHistoryStagingConflict, binding.Bucket)
+	}
+	if (proved.Chain == nil) != (current.Chain == nil) {
+		return zero, fmt.Errorf("%w: chain_binding_changed bucket=%d", rawdb.ErrHistoryStagingConflict, binding.Bucket)
+	}
+	if binding.ManifestEpoch != proved.Generation ||
 		proved.HistoryStagingResetEpoch != current.HistoryStagingResetEpoch ||
 		current.Generation < proved.Generation || current.VisibleTxStart > proved.VisibleTxStart || current.VisibleTxEnd < proved.VisibleTxEnd {
-		return zero, fmt.Errorf("%w: manifest_guard bucket=%d", rawdb.ErrHistoryStagingConflict, binding.Bucket)
+		return zero, fmt.Errorf("%w: manifest_guard bucket=%d binding_generation=%d proved_generation=%d current_generation=%d proved_reset=%d current_reset=%d proved_range=[%d,%d] current_range=[%d,%d]", rawdb.ErrHistoryStagingConflict, binding.Bucket, binding.ManifestEpoch, proved.Generation, current.Generation, proved.HistoryStagingResetEpoch, current.HistoryStagingResetEpoch, proved.VisibleTxStart, proved.VisibleTxEnd, current.VisibleTxStart, current.VisibleTxEnd)
 	}
 	if err := ctx.Err(); err != nil {
 		return zero, err
@@ -33,8 +38,14 @@ func (c *HistoryStagingPhysicalFactCollector) RecheckColdBindingPublication(ctx 
 			return zero, errors.Join(rawdb.ErrHistoryStagingConflict, err)
 		}
 	}
-	if err := current.ValidateChainIdentity(*proved.Chain); err != nil {
-		return zero, errors.Join(rawdb.ErrHistoryStagingConflict, err)
+	// Production manifests may be unbound; startup already authenticates these
+	// through durable staging receipts and ContentIDs. This only preserves an
+	// existing proof. The mover still checks canonical bucket/tx and route
+	// identity under its chain barrier before publishing any durable binding.
+	if proved.Chain != nil {
+		if err := current.ValidateChainIdentity(*proved.Chain); err != nil {
+			return zero, errors.Join(rawdb.ErrHistoryStagingConflict, err)
+		}
 	}
 	active := make(map[string]SegmentRef, len(current.Segments))
 	for _, ref := range current.Segments {

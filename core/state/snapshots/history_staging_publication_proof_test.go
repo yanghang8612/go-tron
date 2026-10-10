@@ -144,3 +144,23 @@ func TestHistoryStagingPublicationRejectsChangedProofDependencies(t *testing.T) 
 		})
 	}
 }
+
+func TestHistoryStagingPublicationWithoutOptionalChainIdentity(t *testing.T) {
+	_, proved, live, binding, facts := publicationProofFixture(t)
+	chain := *proved.Chain
+	proved.Chain, live.Chain = nil, nil
+	for _, current := range []*Manifest{proved, live} {
+		got, err := facts.RecheckColdBindingPublication(context.Background(), proved, current, binding)
+		if err != nil || got.ManifestEpoch != current.Generation {
+			t.Fatalf("unbound production publication rejected: %+v %v", got, err)
+		}
+	}
+	live.Chain = &chain
+	if _, err := facts.RecheckColdBindingPublication(context.Background(), proved, live, binding); !errors.Is(err, rawdb.ErrHistoryStagingConflict) {
+		t.Fatal("new identity admitted without recapturing proof", err)
+	}
+	proved.Chain, live.Chain = &chain, nil
+	if _, err := facts.RecheckColdBindingPublication(context.Background(), proved, live, binding); !errors.Is(err, rawdb.ErrHistoryStagingConflict) {
+		t.Fatal("lost identity admitted", err)
+	}
+}
