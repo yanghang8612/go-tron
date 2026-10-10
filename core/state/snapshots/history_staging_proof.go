@@ -50,6 +50,7 @@ type HistoryStagingProverStats struct {
 	ReaderReuses            uint64
 	FullTrioAuthenticates   uint64
 	SemanticBindingVerifies uint64
+	SpanRecordWalks         uint64
 }
 
 // EnableReaderReuse opts into retaining at most one history/index pair across
@@ -798,6 +799,13 @@ func historyStagingRecordDigestStream(change *rawdb.StateDomainChange, ordinal, 
 }
 
 func (p *HistoryStagingColdProver) Build(ctx context.Context, blocks []rawdb.HistoryStagingBlockProof, needed []bool) ([]rawdb.HistoryStagingColdSpan, error) {
+	return p.buildWithRecords(ctx, blocks, needed, nil)
+}
+
+// consume synchronously receives the same complete record digests used for
+// each new span. Rebinding can compare the old logical range without decoding
+// and hashing that cold range a second time.
+func (p *HistoryStagingColdProver) buildWithRecords(ctx context.Context, blocks []rawdb.HistoryStagingBlockProof, needed []bool, consume func([][32]byte) error) ([]rawdb.HistoryStagingColdSpan, error) {
 	if p == nil || ctx == nil || len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) || len(needed) != len(blocks) {
 		return nil, errors.New("snapshots: staging proof needs one full bucket and matching cold mask")
 	}
@@ -859,7 +867,7 @@ func (p *HistoryStagingColdProver) Build(ctx context.Context, blocks []rawdb.His
 		if err := p.authenticate(ctx, trio, id); err != nil {
 			return nil, err
 		}
-		span, err := p.buildSpan(ctx, ref, id, blocks[start:end])
+		span, err := p.buildSpanWithRecords(ctx, ref, id, blocks[start:end], consume)
 		if err != nil {
 			return nil, err
 		}
@@ -934,6 +942,7 @@ func (p *HistoryStagingColdProver) openSpanTrio(ctx context.Context, ref Segment
 }
 
 func (p *HistoryStagingColdProver) collectSpanRecords(ctx context.Context, ref SegmentRef, id [32]byte, blocks []rawdb.HistoryStagingBlockProof) ([][32]byte, error) {
+	p.stats.SpanRecordWalks++
 	open, err := p.openSpanTrio(ctx, ref, id)
 	if err != nil {
 		return nil, err
@@ -1139,6 +1148,10 @@ func historyStagingSemanticDigestContext(ctx context.Context, blocks []rawdb.His
 }
 
 func (p *HistoryStagingColdProver) buildSpan(ctx context.Context, ref SegmentRef, id [32]byte, blocks []rawdb.HistoryStagingBlockProof) (rawdb.HistoryStagingColdSpan, error) {
+	return p.buildSpanWithRecords(ctx, ref, id, blocks, nil)
+}
+
+func (p *HistoryStagingColdProver) buildSpanWithRecords(ctx context.Context, ref SegmentRef, id [32]byte, blocks []rawdb.HistoryStagingBlockProof, consume func([][32]byte) error) (rawdb.HistoryStagingColdSpan, error) {
 	records, err := p.collectSpanRecords(ctx, ref, id, blocks)
 	if err != nil {
 		return rawdb.HistoryStagingColdSpan{}, err
@@ -1146,6 +1159,11 @@ func (p *HistoryStagingColdProver) buildSpan(ctx context.Context, ref SegmentRef
 	rangeDigest, semantic, err := historyStagingSemanticDigestContext(ctx, blocks, records)
 	if err != nil {
 		return rawdb.HistoryStagingColdSpan{}, err
+	}
+	if consume != nil {
+		if err := consume(records); err != nil {
+			return rawdb.HistoryStagingColdSpan{}, err
+		}
 	}
 	first, last := blocks[0], blocks[len(blocks)-1]
 	span := rawdb.HistoryStagingColdSpan{From: first.Number, To: last.Number,
@@ -1335,13 +1353,19 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 		return zero, err
 	}
 	defer prover.Close()
+	prover.EnableReaderReuse()
+	return rebindHistoryStagingColdBinding(ctx, prover, binding, blocks)
+}
+
+func rebindHistoryStagingColdBinding(ctx context.Context, prover *HistoryStagingColdProver, binding rawdb.HistoryStagingColdBinding, blocks []rawdb.HistoryStagingBlockProof) (rawdb.HistoryStagingColdBinding, error) {
+	var zero rawdb.HistoryStagingColdBinding
 	if len(blocks) != int(rawdb.StateHistoryChunkBucketBlocks) ||
 		binding.BindingEpoch == ^uint64(0) || len(binding.Spans) == 0 {
 		return zero, errors.New("snapshots: invalid old cold binding for rebind")
 	}
 	result := binding
 	result.BindingEpoch++
-	result.ManifestEpoch = manifest.Generation
+	result.ManifestEpoch = prover.manifest.Generation
 	result.Spans = nil
 	var previous uint64
 	for i, old := range binding.Spans {
@@ -1359,33 +1383,16 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 		for j := start; j < end; j++ {
 			mask[j] = true
 		}
-		current, err := prover.Build(ctx, blocks, mask)
-		if err != nil {
-			return zero, err
-		}
 		var records [][32]byte
-		for _, span := range current {
-			a := int(span.From - blocks[0].Number)
-			b := int(span.To-blocks[0].Number) + 1
-			past := sort.Search(len(prover.refs), func(j int) bool {
-				return prover.refs[j].FromTxNum > blocks[a].BeginTxNum
-			})
-			if past == 0 {
-				return zero, errors.New("snapshots: rebound cold trio disappeared")
-			}
-			ref := prover.refs[past-1]
-			_, id, err := prover.trio(ref)
-			if err != nil || id != span.ContentID {
-				return zero, errors.New("snapshots: rebound cold trio identity differs")
-			}
-			part, err := prover.collectSpanRecords(ctx, ref, id, blocks[a:b])
-			if err != nil {
-				return zero, err
-			}
+		current, err := prover.buildWithRecords(ctx, blocks, mask, func(part [][32]byte) error {
 			if len(part) > historyStagingProofMaxRecords-len(records) {
-				return zero, errors.New("snapshots: rebind semantic record budget exceeded")
+				return errors.New("snapshots: rebind semantic record budget exceeded")
 			}
 			records = append(records, part...)
+			return maintenance.WorkCheckpoint(ctx, 0)
+		})
+		if err != nil {
+			return zero, err
 		}
 		txDigest, semantic, err := historyStagingSemanticDigestContext(ctx, blocks[start:end], records)
 		if err != nil {
@@ -1396,6 +1403,18 @@ func RebindHistoryStagingColdBinding(ctx context.Context, dir string, manifest *
 			return zero, fmt.Errorf("%w in [%d,%d]", ErrHistoryStagingColdSemanticMismatch, old.From, old.To)
 		}
 		result.Spans = append(result.Spans, current...)
+	}
+	// A file used for an early subrange must remain unchanged while later
+	// subranges are read. Publication still rechecks the pinned manifest/route.
+	for _, trio := range prover.trios {
+		if states, ok := prover.verified[trio.id]; ok {
+			if err := historyStagingCheckFileStates(prover.dir, trio.refs, states); err != nil {
+				return zero, err
+			}
+		}
+	}
+	if err := contextError(ctx); err != nil {
+		return zero, err
 	}
 	return result, nil
 }

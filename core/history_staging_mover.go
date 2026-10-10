@@ -37,6 +37,8 @@ var (
 	historyStagingMoverSourceBuckets    = metrics.NewRegisteredGauge("core/history_staging/mover/census_source_buckets", nil)
 	historyStagingMoverUnclearedBuckets = metrics.NewRegisteredGauge("core/history_staging/mover/census_target_uncleared_buckets", nil)
 	historyStagingMoverCensusAt         = metrics.NewRegisteredGauge("core/history_staging/mover/census_unix", nil)
+	historyStagingMoverManifestRecheck  = metrics.NewRegisteredCounter("core/history_staging/mover/manifest_revalidated", nil)
+	historyStagingMoverManifestConflict = metrics.NewRegisteredCounter("core/history_staging/mover/manifest_conflicts", nil)
 )
 
 // HistoryStagingMoverConfig bounds one optional transfer. Hot and Stage
@@ -470,11 +472,16 @@ func (m *HistoryStagingMover) certifyNewColdTarget(ctx context.Context, bucket u
 	}
 	defer releasePublication()
 	defer releaseCold()
-	live := coldManager.Manifest()
-	if live == nil || live.Generation != binding.ManifestEpoch {
-		return false, rawdb.ErrHistoryStagingConflict
+	binding, err = recheckHistoryStagingColdPublication(ctx, physicalFacts, manifest, coldManager.Manifest(), binding)
+	if err != nil {
+		return false, err
 	}
-	if err := manager.CertifyColdRange(ctx, binding, func() error { return nil }); err != nil {
+	if err := m.withCanonicalBucketPublication(ctx, manager, coldManager, route, blocks, func() error {
+		if err := physicalFacts.RecheckAll(ctx); err != nil {
+			return err
+		}
+		return manager.CertifyColdRange(ctx, binding, func() error { return nil })
+	}); err != nil {
 		return false, err
 	}
 	if err := physicalFacts.CommitPhysicalCertificates(ctx); err != nil {
@@ -792,6 +799,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		return err
 	}
 	var binding *rawdb.HistoryStagingColdBinding
+	var bindingManifest *snapshots.Manifest
 	var rebindingFacts *snapshots.HistoryStagingPhysicalFactCollector
 	if len(proof.ColdSpans) > 0 {
 		if coldManager == nil {
@@ -834,6 +842,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 			candidate.BindingEpoch = 1
 		}
 		binding = &candidate
+		bindingManifest = currentPinned.Manifest()
 	}
 	if err := m.recheckWork(ctx); err != nil {
 		return err
@@ -847,16 +856,22 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		if err != nil {
 			return err
 		}
+		current, err := recheckHistoryStagingColdPublication(ctx, rebindingFacts, bindingManifest, coldManager.Manifest(), *binding)
+		if err != nil {
+			return err
+		}
+		*binding = current
 	}
 	adoptErr := m.withValidatedProof(ctx, proof, func() error {
+		if bc.HistoryStagingManager() != manager || binding != nil && bc.stateCodeColdHistory != coldManager {
+			return rawdb.ErrHistoryStagingConflict
+		}
 		if binding != nil {
-			coldManager, ok := bc.stateCodeColdHistory.(*snapshots.Manager)
-			if !ok || coldManager == nil {
+			if coldManager == nil {
 				return rawdb.ErrHistoryStagingConflict
 			}
-			manifest := coldManager.Manifest()
-			if manifest == nil || manifest.Generation != binding.ManifestEpoch {
-				return rawdb.ErrHistoryStagingConflict
+			if err := rebindingFacts.RecheckAll(ctx); err != nil {
+				return err
 			}
 			if err := manager.CertifyColdRange(ctx, *binding, func() error { return nil }); err != nil {
 				return err
@@ -987,21 +1002,26 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 				releasePublication()
 			}
 		}()
-		liveManifest := coldManager.Manifest()
-		if liveManifest == nil || liveManifest.Generation != current.ManifestEpoch {
-			return rawdb.ErrHistoryStagingConflict
+		current, err = recheckHistoryStagingColdPublication(ctx, physicalFacts, pinned.Manifest(), coldManager.Manifest(), current)
+		if err != nil {
+			return err
 		}
-		if current.ManifestEpoch != binding.ManifestEpoch || !reflect.DeepEqual(current.Spans, binding.Spans) {
-			if err := manager.CertifyColdRange(ctx, current, func() error { return nil }); err != nil {
+		if err := m.withCanonicalBucketPublication(ctx, manager, coldManager, route, blocks, func() error {
+			if err := physicalFacts.RecheckAll(ctx); err != nil {
 				return err
 			}
-			binding = current
-		}
-		if err := manager.ReleaseTargetToCold(ctx, bucket, func(actual rawdb.HistoryStagingColdBinding) error {
-			if actual.BindingEpoch != binding.BindingEpoch || !reflect.DeepEqual(actual.Spans, binding.Spans) {
-				return rawdb.ErrHistoryStagingConflict
+			if current.ManifestEpoch != binding.ManifestEpoch || !reflect.DeepEqual(current.Spans, binding.Spans) {
+				if err := manager.CertifyColdRange(ctx, current, func() error { return nil }); err != nil {
+					return err
+				}
+				binding = current
 			}
-			return nil // the pinned trio was fully authenticated above
+			return manager.ReleaseTargetToCold(ctx, bucket, func(actual rawdb.HistoryStagingColdBinding) error {
+				if actual.BindingEpoch != binding.BindingEpoch || !reflect.DeepEqual(actual.Spans, binding.Spans) {
+					return rawdb.ErrHistoryStagingConflict
+				}
+				return nil // the pinned trio was fully authenticated above
+			})
 		}); err != nil {
 			return err
 		}
@@ -1028,6 +1048,53 @@ func (m *HistoryStagingMover) canonicalBucketBlocks(ctx context.Context, bucket 
 		return nil, err
 	}
 	defer bc.chainmu.Unlock()
+	return m.canonicalBucketBlocksLocked(bucket)
+}
+
+// Publication admission precedes chainmu. No cooperative checkpoint or cold
+// semantic scan may run inside this final canonical/route guard.
+func (m *HistoryStagingMover) withCanonicalBucketPublication(ctx context.Context, manager *rawdb.HistoryStagingManager, cold *snapshots.Manager, route rawdb.HistoryStagingRoute, blocks []rawdb.HistoryStagingBlockProof, publish func() error) error {
+	bc := m.bc
+	if err := lockMutexContext(ctx, &bc.chainmu); err != nil {
+		return err
+	}
+	defer bc.chainmu.Unlock()
+	if bc.closed.Load() || bc.historyStagingReplayEpoch.Load() != 0 || bc.HistoryStagingManager() != manager || bc.stateCodeColdHistory != cold {
+		return rawdb.ErrHistoryStagingConflict
+	}
+	actual, present, err := manager.ReadRoute(route.Bucket)
+	if err != nil {
+		return err
+	}
+	if !present || actual != route {
+		return rawdb.ErrHistoryStagingConflict
+	}
+	canonical, err := m.canonicalBucketBlocksLocked(route.Bucket)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(canonical, blocks) {
+		return rawdb.ErrHistoryStagingConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return publish()
+}
+
+func recheckHistoryStagingColdPublication(ctx context.Context, facts *snapshots.HistoryStagingPhysicalFactCollector, proved, live *snapshots.Manifest, binding rawdb.HistoryStagingColdBinding) (rawdb.HistoryStagingColdBinding, error) {
+	current, err := facts.RecheckColdBindingPublication(ctx, proved, live, binding)
+	if errors.Is(err, rawdb.ErrHistoryStagingConflict) {
+		historyStagingMoverManifestConflict.Inc(1)
+	}
+	if err == nil && current.ManifestEpoch != binding.ManifestEpoch {
+		historyStagingMoverManifestRecheck.Inc(1)
+	}
+	return current, err
+}
+
+func (m *HistoryStagingMover) canonicalBucketBlocksLocked(bucket uint64) ([]rawdb.HistoryStagingBlockProof, error) {
+	bc := m.bc
 	first, last, err := rawdb.StateHistoryChunkBucketBounds(bucket)
 	if err != nil {
 		return nil, err

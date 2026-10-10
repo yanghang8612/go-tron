@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -763,7 +765,13 @@ func TestHistoryStagingColdRebindTwoTriosToOne(t *testing.T) {
 	merged := NewManifestForChain(blocks[0].BeginTxNum, blocks[1023].EndTxNum, mergedRefs, chain)
 	binding := rawdb.HistoryStagingColdBinding{Version: 1, Bucket: 1, Epoch: 1,
 		BindingEpoch: 1, Spans: oldSpans}
-	updated, err := RebindHistoryStagingColdBinding(context.Background(), dir, merged, binding, blocks)
+	prover, err := NewHistoryStagingColdProver(dir, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prover.EnableReaderReuse()
+	defer prover.Close()
+	updated, err := rebindHistoryStagingColdBinding(context.Background(), prover, binding, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,6 +782,81 @@ func TestHistoryStagingColdRebindTwoTriosToOne(t *testing.T) {
 	}
 	if err := VerifyHistoryStagingColdBinding(context.Background(), dir, merged, updated, blocks); err != nil {
 		t.Fatalf("merged binding kept certified subrange boundaries: %v", err)
+	}
+	if stats := prover.Stats(); stats.SpanRecordWalks != 2 || stats.HistoryOpens != 1 || stats.ReaderReuses != 1 {
+		t.Fatalf("rebind must walk each subrange once and reuse one trio: %+v", stats)
+	}
+	// A single old span may be split by a new manifest. Compare complete old
+	// semantics over both new spans, including the many zero-change blocks.
+	whole, err := BuildHistoryStagingColdSpans(context.Background(), dir, merged, blocks, mask)
+	if err != nil || len(whole) != 1 {
+		t.Fatalf("whole span: %+v, %v", whole, err)
+	}
+	splitBinding := binding
+	splitBinding.Spans = whole
+	splitProver, err := NewHistoryStagingColdProver(dir, oldManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer splitProver.Close()
+	split, err := rebindHistoryStagingColdBinding(context.Background(), splitProver, splitBinding, blocks)
+	if err != nil || !reflect.DeepEqual(split.Spans, oldSpans) || splitProver.Stats().SpanRecordWalks != 2 {
+		t.Fatalf("one-to-two rebind: %+v, stats=%+v, %v", split, splitProver.Stats(), err)
+	}
+	unchanged, err := RebindHistoryStagingColdBinding(context.Background(), dir, oldManifest, binding, blocks)
+	if err != nil || !reflect.DeepEqual(unchanged.Spans, oldSpans) {
+		t.Fatalf("same-trio rebind: %+v, %v", unchanged, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if canceled, err := RebindHistoryStagingColdBinding(ctx, dir, merged, binding, blocks); !errors.Is(err, context.Canceled) || canceled.BindingEpoch != 0 || len(canceled.Spans) != 0 {
+		t.Fatalf("canceled rebind returned a candidate: %+v, %v", canceled, err)
+	}
+	for _, fault := range []string{"cancel-between-spans", "replace-earlier-trio"} {
+		t.Run(fault, func(t *testing.T) {
+			p, err := NewHistoryStagingColdProver(dir, oldManifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.EnableReaderReuse()
+			defer p.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			injected := false
+			ctx = maintenance.WithWorkCheckpoint(ctx, func(uint64) error {
+				if injected || p.stats.SpanRecordWalks != 2 {
+					return ctx.Err()
+				}
+				if fault == "cancel-between-spans" {
+					injected = true
+					cancel()
+					return ctx.Err()
+				}
+				if p.open == nil || p.open.refs[0].Path != oldRefs[3].Path {
+					return nil
+				}
+				injected = true
+				path := filepath.Join(dir, oldRefs[0].Path)
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(path+".replacement", data, 0o600); err != nil {
+					return err
+				}
+				return os.Rename(path+".replacement", path)
+			})
+			candidate, err := rebindHistoryStagingColdBinding(ctx, p, splitBinding, blocks)
+			if !injected || err == nil || candidate.BindingEpoch != 0 || len(candidate.Spans) != 0 {
+				t.Fatalf("fault returned a candidate: injected=%v candidate=%+v err=%v", injected, candidate, err)
+			}
+			if fault == "cancel-between-spans" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("wrong cancellation: %v", err)
+			}
+			if err := p.Close(); err != nil || p.open != nil {
+				t.Fatalf("failed rebind retained reader: %v", err)
+			}
+		})
 	}
 	changed := *changes[1]
 	changed.Prev = []byte("different logical history")

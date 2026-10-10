@@ -1326,7 +1326,7 @@ func copyStateDomainChangeBinarySegmentPayload(ctx context.Context, dir string, 
 	if source.segmentSize < source.recordOffset {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d below record offset %d", source.history.Path, source.segmentSize, source.recordOffset)
 	}
-	reader, header, logicalSize, err := openStateDomainChangeBinarySegmentSequentialReader(dir, source.history)
+	reader, header, logicalSize, err := openStateDomainChangeBinaryCompactionRecordReader(ctx, dir, source.history)
 	if err != nil {
 		return err
 	}
@@ -3958,6 +3958,26 @@ func openStateDomainChangeBinarySegmentReader(dir string, ref SegmentRef) (histo
 // readers, so neither sequential stream can evict the other's hot block.
 func openStateDomainChangeBinarySegmentSequentialReader(dir string, ref SegmentRef) (historySegmentReader, stateDomainChangeBinaryHeader, uint64, error) {
 	return openStateDomainChangeBinarySegmentReaderWithCacheLimit(dir, ref, 1)
+}
+
+// R1 records alternate between literal frames and independently stored value
+// chunks. One decoded chunk repeatedly evicts the literal frame while streaming
+// values. Retain a bounded 2 MiB working set for this private record reader;
+// ordinary compressed streams and the separate tx-range reader still keep one
+// block. Sources are copied and closed one at a time.
+func openStateDomainChangeBinaryCompactionRecordReader(ctx context.Context, dir string, ref SegmentRef) (historySegmentReader, stateDomainChangeBinaryHeader, uint64, error) {
+	reader, header, size, err := openStateDomainChangeBinarySegmentReaderWithCacheLimitContext(ctx, dir, ref, 1)
+	if err != nil {
+		return nil, stateDomainChangeBinaryHeader{}, 0, err
+	}
+	if contextual, ok := reader.(*stateDomainChangeHistoryReader); ok {
+		if reference, ok := contextual.historySegmentReader.(*historyReferenceReader); ok {
+			reference.mu.Lock()
+			reference.cacheLimit = cbCacheBlocks * historyReferenceMaxChunk
+			reference.mu.Unlock()
+		}
+	}
+	return reader, header, size, nil
 }
 
 // openStateDomainChangeBinarySegmentReaderWithCacheLimit delegates to the
