@@ -40,6 +40,7 @@ var (
 	historyStagingMoverManifestRecheck  = metrics.NewRegisteredCounter("core/history_staging/mover/manifest_revalidated", nil)
 	historyStagingMoverManifestConflict = metrics.NewRegisteredCounter("core/history_staging/mover/manifest_conflicts", nil)
 	historyStagingMoverFinalizeReuse    = metrics.NewRegisteredCounter("core/history_staging/mover/finalize_proof_reused", nil)
+	historyStagingMoverAdoptReuse       = metrics.NewRegisteredCounter("core/history_staging/mover/adopt_proof_reused", nil)
 )
 
 // HistoryStagingMoverConfig bounds one optional transfer. Hot and Stage
@@ -751,6 +752,8 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		needCold = needCold || neededBlock
 	}
 	var physicalProver *snapshots.HistoryStagingColdProver
+	var initialFacts *snapshots.HistoryStagingPhysicalFactCollector
+	var initialManifest *snapshots.Manifest
 	if needCold && !hasClaim {
 		if coldManager == nil {
 			bc.chainmu.Unlock()
@@ -779,7 +782,13 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		}
 		defer prover.Close()
 		physicalProver = prover
-		proof.ColdSpans, err = prover.Build(ctx, proof.Blocks, needed)
+		initialManifest = pinned.Manifest()
+		proofCtx, facts, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, pinned.HistoryStagingDir())
+		if err != nil {
+			return err
+		}
+		initialFacts = facts
+		proof.ColdSpans, err = prover.Build(proofCtx, proof.Blocks, needed)
 		if err != nil {
 			return err
 		}
@@ -831,6 +840,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	var binding *rawdb.HistoryStagingColdBinding
 	var bindingManifest *snapshots.Manifest
 	var rebindingFacts *snapshots.HistoryStagingPhysicalFactCollector
+	adoptReused := false
 	if len(proof.ColdSpans) > 0 {
 		if coldManager == nil {
 			return errors.New("history staging mover: cold manager unavailable at adoption")
@@ -857,22 +867,31 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		if !hasOld {
 			old = rawdb.HistoryStagingColdBinding{Version: rawdb.HistoryStagingFormatVersion, Bucket: proof.Bucket, Epoch: proof.Epoch, BindingEpoch: 1, ManifestEpoch: currentPinned.Manifest().Generation, Spans: proof.ColdSpans}
 		}
-		proofCtx, facts, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, currentPinned.HistoryStagingDir())
-		if err != nil {
-			return err
-		}
-		candidate, err := snapshots.RebindHistoryStagingColdBinding(proofCtx, currentPinned.HistoryStagingDir(), currentPinned.Manifest(), old, proof.Blocks)
-		if err != nil {
-			return err
-		}
-		rebindingFacts = facts
-		if hasOld {
-			candidate.BindingEpoch = old.BindingEpoch + 1
+		var candidate rawdb.HistoryStagingColdBinding
+		if !hasOld && physicalProver != nil && initialFacts != nil && initialManifest != nil {
+			// These exact spans were semantically proved in this run. The
+			// original view and range protection still pin their dependencies.
+			// Publication below rechecks every active ref and file fingerprint.
+			candidate = rawdb.HistoryStagingColdBinding{Version: rawdb.HistoryStagingFormatVersion, Bucket: proof.Bucket, Epoch: proof.Epoch,
+				BindingEpoch: 1, ManifestEpoch: initialManifest.Generation, Spans: append([]rawdb.HistoryStagingColdSpan(nil), proof.ColdSpans...)}
+			rebindingFacts, bindingManifest, adoptReused = initialFacts, initialManifest, true
 		} else {
-			candidate.BindingEpoch = 1
+			proofCtx, facts, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, currentPinned.HistoryStagingDir())
+			if err != nil {
+				return err
+			}
+			candidate, err = snapshots.RebindHistoryStagingColdBinding(proofCtx, currentPinned.HistoryStagingDir(), currentPinned.Manifest(), old, proof.Blocks)
+			if err != nil {
+				return err
+			}
+			rebindingFacts, bindingManifest = facts, currentPinned.Manifest()
+			if hasOld {
+				candidate.BindingEpoch = old.BindingEpoch + 1
+			} else {
+				candidate.BindingEpoch = 1
+			}
 		}
 		binding = &candidate
-		bindingManifest = currentPinned.Manifest()
 	}
 	if err := m.recheckWork(ctx); err != nil {
 		return err
@@ -918,6 +937,9 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	}
 	if adoptErr != nil {
 		return adoptErr
+	}
+	if adoptReused {
+		historyStagingMoverAdoptReuse.Inc(1)
 	}
 	// This proof never escapes the current run. Its pinned cold view and range
 	// protection remain held through source clearing and the final handoff.

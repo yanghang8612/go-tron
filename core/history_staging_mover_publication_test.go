@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,8 +16,9 @@ import (
 
 func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T) {
 	for _, chainBound := range []bool{true, false} {
-		for _, path := range []string{"adopt", "certify", "finalize"} {
+		for _, path := range []string{"adopt", "adopt-resume", "adopt-file-replace", "certify", "finalize"} {
 			t.Run(fmt.Sprintf("%s/chain-bound=%t", path, chainBound), func(t *testing.T) {
+				isAdopt := path != "certify" && path != "finalize"
 				f := newStagingIndexGCFixture(t)
 				ctx := context.Background()
 				if err := f.manager.EnsureCanonicalSourceRoute(ctx, 1, 1); err != nil {
@@ -31,7 +34,7 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 						t.Fatal(err)
 					}
 					ranges = append(ranges, &rawdb.StateTxRange{BlockNum: n, BlockHash: block.Hash(), BeginTxNum: n, EndTxNum: n})
-					if path != "adopt" {
+					if !isAdopt {
 						receipt, err := rawdb.NewHistoryStagingBlockHasher(n).Finish(block.Hash(), 1, n, n)
 						if err != nil {
 							t.Fatal(err)
@@ -50,7 +53,7 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if path != "adopt" {
+				if !isAdopt {
 					if err := mover.runAdmitted(ctx); err != nil {
 						t.Fatal(err)
 					}
@@ -99,18 +102,41 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 				}
 				live.Generation = old.Generation + 1
 				appended := false
+				replaced := false
+				if path == "adopt-file-replace" {
+					mover.cfg.Limits.Checkpoint = func(uint64) error {
+						if replaced {
+							return nil
+						}
+						file := filepath.Join(dir, old.Segments[0].Path)
+						data, err := os.ReadFile(file)
+						if err != nil {
+							return err
+						}
+						if err := os.Rename(file, file+".original"); err != nil {
+							return err
+						}
+						replaced = true
+						return os.WriteFile(file, data, 0600)
+					}
+				}
+				if path == "adopt-resume" {
+					interrupted := errors.New("interrupt after initial proof and durable claim")
+					mover.cfg.Limits.Checkpoint = func(uint64) error { return interrupted }
+					if err := mover.runAdmitted(ctx); !errors.Is(err, interrupted) {
+						t.Fatalf("claim interruption: %v", err)
+					}
+					mover.cfg.Limits.Checkpoint = nil
+					if _, present, err := f.manager.ReadClaim(1); err != nil || !present {
+						t.Fatalf("interrupted claim was not durable: %v %v", present, err)
+					}
+				}
 				beforeRecheck := historyStagingMoverManifestRecheck.Snapshot().Count()
 				beforeReuse := historyStagingMoverFinalizeReuse.Snapshot().Count()
+				beforeAdoptReuse := historyStagingMoverAdoptReuse.Snapshot().Count()
 				proofCtx := maintenance.WithWorkCheckpoint(ctx, func(uint64) error {
 					if appended {
 						return nil
-					}
-					if path == "adopt" {
-						// Wait until the adoption rebind has pinned its old view;
-						// appending during the initial proof would precede that pin.
-						if _, present, err := f.manager.ReadClaim(1); err != nil || !present {
-							return err
-						}
 					}
 					appended = true
 					if err := snapshots.PublishManifest(dir, live); err != nil {
@@ -126,7 +152,7 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 					return nil
 				})
 				switch path {
-				case "adopt":
+				case "adopt", "adopt-resume", "adopt-file-replace":
 					err = mover.runAdmitted(proofCtx)
 				case "certify":
 					var certified bool
@@ -137,11 +163,25 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 				case "finalize":
 					err = mover.finalizeColdBucket(proofCtx, 1)
 				}
+				if path == "adopt-file-replace" {
+					route, present, routeErr := f.manager.ReadRoute(1)
+					if !replaced || err == nil || routeErr != nil || !present || route.Owner != rawdb.HistoryStagingOwnerSource || route.SourceCleared ||
+						historyStagingMoverAdoptReuse.Snapshot().Count() != beforeAdoptReuse || historyStagingMoverFinalizeReuse.Snapshot().Count() != beforeReuse {
+						t.Fatalf("changed fresh-proof dependency adopted: replaced=%v route=%+v err=%v routeErr=%v", replaced, route, err, routeErr)
+					}
+					return
+				}
 				if err != nil || !appended || historyStagingMoverManifestRecheck.Snapshot().Count() <= beforeRecheck {
 					t.Fatalf("publication did not accept unchanged dependencies: appended=%v revalidated=%d err=%v", appended, historyStagingMoverManifestRecheck.Snapshot().Count()-beforeRecheck, err)
 				}
-				if path == "adopt" && historyStagingMoverFinalizeReuse.Snapshot().Count() != beforeReuse+1 {
+				if isAdopt && historyStagingMoverFinalizeReuse.Snapshot().Count() != beforeReuse+1 {
 					t.Fatal("same-run adoption did not reuse its authenticated final proof")
+				}
+				if path == "adopt" && historyStagingMoverAdoptReuse.Snapshot().Count() != beforeAdoptReuse+1 {
+					t.Fatal("same-run adoption repeated the authenticated initial proof")
+				}
+				if path == "adopt-resume" && historyStagingMoverAdoptReuse.Snapshot().Count() != beforeAdoptReuse {
+					t.Fatal("resumed claim reused a proof from a previous run")
 				}
 				binding, present, err := f.manager.ReadColdBindingAt(1, 1)
 				if err != nil || !present || binding.ManifestEpoch != live.Generation {
