@@ -47,13 +47,90 @@ func TestHistoryStagingAdmissionBoundaries(t *testing.T) {
 	}
 }
 
+func TestHistoryStagingMoverHighUtilizationAdmission(t *testing.T) {
+	now := time.Now()
+	base := maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now,
+		DeviceBusyPPM: 919_519, DeviceQueueMilli: 4_045, DeviceAwait: 1_136_501 * time.Nanosecond}
+	for _, tc := range []struct {
+		name   string
+		change func(*maintenance.StoragePressure)
+		want   historyStagingAdmission
+	}{
+		{"observed low latency", func(*maintenance.StoragePressure) {}, historyStagingBusy},
+		{"ninety percent", func(p *maintenance.StoragePressure) { p.DeviceBusyPPM = 900_000 }, historyStagingBusy},
+		{"fully busy upper envelope", func(p *maintenance.StoragePressure) {
+			p.DeviceBusyPPM = 1_000_000
+			p.DeviceQueueMilli = 7_999
+			p.DeviceAwait = 2*time.Millisecond - time.Nanosecond
+		}, historyStagingBusy},
+		{"invalid utilization", func(p *maintenance.StoragePressure) { p.DeviceBusyPPM = 1_000_001 }, historyStagingDeviceBusy},
+		{"queue boundary", func(p *maintenance.StoragePressure) { p.DeviceQueueMilli = 8_000 }, historyStagingDeviceBusy},
+		{"latency boundary", func(p *maintenance.StoragePressure) { p.DeviceAwait = 2 * time.Millisecond }, historyStagingDeviceBusy},
+		{"negative latency", func(p *maintenance.StoragePressure) { p.DeviceAwait = -time.Nanosecond }, historyStagingDeviceBusy},
+		{"high latency cannot enter idle", func(p *maintenance.StoragePressure) {
+			p.DeviceQueueMilli = 0
+			p.DeviceAwait = 19 * time.Millisecond
+		}, historyStagingDeviceBusy},
+		{"unknown engine", func(p *maintenance.StoragePressure) { p.Available = false }, historyStagingEngineUnknown},
+		{"stale engine", func(p *maintenance.StoragePressure) { p.SampledAt = now.Add(-16 * time.Second) }, historyStagingEngineStale},
+		{"future engine", func(p *maintenance.StoragePressure) { p.SampledAt = now.Add(2 * time.Second) }, historyStagingEngineStale},
+		{"stall", func(p *maintenance.StoragePressure) { p.WriteStalled = true }, historyStagingEngineHard},
+		{"memtable hard limit", func(p *maintenance.StoragePressure) {
+			p.MemTableStopWritesThreshold, p.MemTableCount = 4, 3
+		}, historyStagingEngineHard},
+		{"L0 hard limit", func(p *maintenance.StoragePressure) {
+			p.L0StopWritesThreshold, p.L0Sublevels = 64, 48
+		}, historyStagingEngineHard},
+		{"unknown device", func(p *maintenance.StoragePressure) { p.DeviceAvailable = false }, historyStagingDeviceUnknown},
+		{"stale device", func(p *maintenance.StoragePressure) { p.DeviceSampledAt = now.Add(-16 * time.Second) }, historyStagingDeviceStale},
+		{"future device", func(p *maintenance.StoragePressure) { p.DeviceSampledAt = now.Add(2 * time.Second) }, historyStagingDeviceStale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base
+			tc.change(&p)
+			if got := classifyHistoryStagingMoverPressure(p, now); got != tc.want {
+				t.Fatalf("mover admission = %d want %d", got, tc.want)
+			}
+			// The original classifier remains strict for index GC.
+			if tc.want == historyStagingBusy && classifyHistoryStagingPressure(p, now) != historyStagingDeviceBusy {
+				t.Fatal("high utilization exception escaped the mover policy")
+			}
+		})
+	}
+	for _, blockedEngine := range []string{"hot", "stage"} {
+		p := base
+		p.WriteStalled = true
+		m := &HistoryStagingMover{cfg: HistoryStagingMoverConfig{
+			HotPressure: func() maintenance.StoragePressure {
+				if blockedEngine == "hot" {
+					return p
+				}
+				return base
+			},
+			StagePressure: func() maintenance.StoragePressure {
+				if blockedEngine == "stage" {
+					return p
+				}
+				return base
+			},
+		}}
+		if got := m.admission(now); got != historyStagingEngineHard {
+			t.Fatalf("%s hard limit bypassed: %d", blockedEngine, got)
+		}
+	}
+}
+
 func TestHistoryStagingQuantumYieldsTokenAndRetainsProgress(t *testing.T) {
-	for _, trigger := range []string{"bytes", "time", "long row"} {
+	for _, trigger := range []string{"bytes", "time", "long row", "busy device"} {
 		t.Run(trigger, func(t *testing.T) {
 			now := time.Now()
 			gate := maintenance.NewHeavyWorkGateWithCooldownAfter(0, 250*time.Millisecond)
 			probe := func() maintenance.StoragePressure {
-				return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now, DeviceQueueMilli: 4_000, DeviceAwait: time.Millisecond}
+				p := maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now, DeviceQueueMilli: 4_000, DeviceAwait: time.Millisecond}
+				if trigger == "busy device" {
+					p.DeviceBusyPPM = 1_000_000
+				}
+				return p
 			}
 			m := &HistoryStagingMover{cfg: HistoryStagingMoverConfig{HeavyWorkGate: gate, HotPressure: probe, StagePressure: probe}}
 			release, ok := m.acquireHeavy(false)
@@ -110,7 +187,7 @@ func TestHistoryStagingQuantumYieldsTokenAndRetainsProgress(t *testing.T) {
 }
 
 func TestHistoryStagingQuantumPausesOnMidCopyPressure(t *testing.T) {
-	for _, pressure := range []string{"hard", "unknown", "stale"} {
+	for _, pressure := range []string{"hard", "unknown", "stale", "busy latency", "busy queue"} {
 		t.Run(pressure, func(t *testing.T) {
 			now := time.Now()
 			blocked := false
@@ -127,6 +204,12 @@ func TestHistoryStagingQuantumPausesOnMidCopyPressure(t *testing.T) {
 						p.DeviceAvailable = false
 					case "stale":
 						p.SampledAt = now.Add(-16 * time.Second)
+					case "busy latency":
+						p.DeviceBusyPPM = 1_000_000
+						p.DeviceAwait = 2 * time.Millisecond
+					case "busy queue":
+						p.DeviceBusyPPM = 1_000_000
+						p.DeviceQueueMilli = 8_000
 					}
 				}
 				return p

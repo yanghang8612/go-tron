@@ -107,6 +107,19 @@ func classifyHistoryStagingPressure(p maintenance.StoragePressure, now time.Time
 	return historyStagingBusy
 }
 
+// A continuously busy parallel device is not necessarily latency saturated.
+// Only the cooperative mover gets this stricter low-latency busy lane; index
+// GC still uses the original classifier. All freshness and engine hard limits
+// are evaluated before this exception, and quanta/recovery remain unchanged.
+func classifyHistoryStagingMoverPressure(p maintenance.StoragePressure, now time.Time) historyStagingAdmission {
+	mode := classifyHistoryStagingPressure(p, now)
+	if mode == historyStagingDeviceBusy && p.DeviceBusyPPM <= 1_000_000 &&
+		p.DeviceQueueMilli < 8_000 && p.DeviceAwait >= 0 && p.DeviceAwait < 2*time.Millisecond {
+		return historyStagingBusy
+	}
+	return mode
+}
+
 func (m *HistoryStagingMover) admission(now time.Time) historyStagingAdmission {
 	if reason := m.memoryAdmission(now); reason >= historyStagingMemoryUnknown {
 		metrics.GetOrRegisterCounter("core/history_staging/mover/resource_denied/"+historyStagingAdmissionNames[reason], nil).Inc(1)
@@ -118,7 +131,7 @@ func (m *HistoryStagingMover) admission(now time.Time) historyStagingAdmission {
 		name  string
 		probe func() maintenance.StoragePressure
 	}{{"hot", m.cfg.HotPressure}, {"stage", m.cfg.StagePressure}} {
-		reason := classifyHistoryStagingPressure(engine.probe(), now)
+		reason := classifyHistoryStagingMoverPressure(engine.probe(), now)
 		if reason > historyStagingBusy {
 			metrics.GetOrRegisterCounter("core/history_staging/mover/denied/"+engine.name+"/"+historyStagingAdmissionNames[reason], nil).Inc(1)
 			if engine.name == "hot" {

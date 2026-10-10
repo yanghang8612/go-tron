@@ -8,6 +8,8 @@
 
 保留原 idle lane：busy <90%、queue <1、await <20ms。新增 bounded busy lane：busy <90%、queue <8、await <5ms。两个 engine 都必须满足其中一个 lane；引擎或设备 unavailable、零时间戳、未来超过 1 秒、超过 15 秒的样本均拒绝。WriteStalled、memtable 接近 stop、L0 达到原 HardLimitReached 阈值仍拒绝。空间预留不降低；初次准入与每次重获 heavy token 后复查 free-space floor，copy 仍保留原有 worst-case 及 source-sized 预留检查。
 
+2026-10-10 补充：线上一次约 93 秒窗口里，mover 的工作字节、持有时间和 yield 数均不变，`device_busy` 拒绝从 28 增至 299；同时设备 await 约 1.14ms、queue 约 4.05。利用率降至约 38% 后工作恢复，说明单独的 busy 阈值确实阻塞了 mover。仅对采用协作量子的 mover 增加保守入口：90%≤busy≤100%、queue<8、0≤await<2ms 时按 busy lane 接纳。低利用率的原规则、所有 freshness/engine/memory/free-space 门禁、100ms/32MiB 量子及恢复时间不变；index GC 继续使用原分类函数，不能随之放宽。这个入口不证明设备还有带宽余量或尾延迟安全，上线仍须核验实际 await/queue、前台导入/stall 和归档推进。
+
 生产 mover 另接同一后台 sampler 的 memory-only cached observation，不重复读取 proc/cgroup，不复用 CPU parallel-read 的 Available（CPU quota、idle、GOMAXPROCS 不决定 mover 内存准入）。样本 fresh ≤15 秒、OOM 状态已知且非 underOOM、经既有 probe 审核的 memoryAvailable ≥2GiB 才接纳；clean file cache credit 仅消费 probe 已审核结果，原 uncredited/credit 指标继续解释容量。运行中内存未知、OOM 或不足作为 typed expected resource deferral 结束 pass、释放 pinned views/ETL/decoded 状态，不能保留自身大 buffer 无限等待。2GiB 是准入余量目标，不是 RSS 硬上限；现有 ETL reader 的约 1MiB × run 数等峰值限制仍存在，不能保证 32GiB 环境零 OOM。
 
 门禁每 32MiB 累计工作或 100ms 实际持有时间（先到者）复查，阶段边界另行强制复查。每次 row/ReadAt 保留取消检查，但不重复调用两引擎压力 probe。工作字节包含扫描、复制、认证和逻辑解码的记账，不能当作磁盘实际 I/O 或净新增容量。

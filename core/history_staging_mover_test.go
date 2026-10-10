@@ -453,7 +453,7 @@ func TestHistoryStagingMoverPressureFailClosed(t *testing.T) {
 	}
 	busyDevice := func() maintenance.StoragePressure {
 		now := time.Now()
-		return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now, DeviceBusyPPM: 950_000}
+		return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now, DeviceBusyPPM: 950_000, DeviceAwait: 2 * time.Millisecond}
 	}
 	m.cfg.HotPressure, m.cfg.StagePressure = busyDevice, busyDevice
 	if err := m.RunOnce(context.Background()); err != nil {
