@@ -221,7 +221,7 @@ func TestHistoryCompactionIndependentGateAndRecovery(t *testing.T) {
 		work time.Duration
 		fail bool
 		want time.Duration
-	}{{0, false, 3 * time.Second}, {2 * time.Second, false, 8 * time.Second}, {15 * time.Minute, false, time.Minute}, {time.Duration(math.MaxInt64), false, time.Minute}, {time.Millisecond, true, time.Minute}} {
+	}{{0, false, 3 * time.Second}, {2 * time.Second, false, 8 * time.Second}, {15 * time.Minute, false, time.Hour}, {time.Duration(math.MaxInt64), false, time.Duration(math.MaxInt64)}, {time.Millisecond, true, time.Minute}} {
 		if got := historyCompactionRecovery(test.work, test.fail); got != test.want {
 			t.Fatalf("work=%v fail=%v got=%v want=%v", test.work, test.fail, got, test.want)
 		}

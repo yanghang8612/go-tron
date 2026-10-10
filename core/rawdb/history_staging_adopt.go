@@ -11,7 +11,7 @@ import (
 )
 
 // AdoptClaim publishes a target-owned route only after the target receipt is
-// durable. The caller MUST keep the index→chain writer guard across its own
+// durable. The caller MUST keep the canonical chain writer guard across its own
 // renewed canonical/Finish/index/settled proof and this call. No core callback
 // is invoked inside routeMu. A sync error forbids ClearSource until retry.
 func (m *HistoryStagingManager) AdoptClaim(ctx context.Context, claim HistoryStagingClaim, proof HistoryStagingProof) (HistoryStagingRoute, error) {

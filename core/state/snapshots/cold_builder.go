@@ -1162,7 +1162,10 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	}
 	if err == nil && !spaceDeferred && (historyPassRan || result.HistoryRateLimited) && (!result.HistoryDeferred || result.HistoryRateLimited) && !result.HistoryLoadDeferred {
 		phaseStart := time.Now()
-		result.Compaction, err = r.compactHistory(ctx, result.HistoryNeedsCatchup())
+		// A pending merge's priority pass intentionally does not build history.
+		// Its verified published/eligible boundaries still describe archive debt;
+		// using HistoryNeedsCatchup (which requires Built) loses that budget.
+		result.Compaction, err = r.compactHistory(ctx, result.PublishedBlock < result.EligibleCutoffBlock)
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
 		r.recordCompactionBudget(result.Compaction)
 		if err == nil {
@@ -1598,6 +1601,23 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	result.HistoryBatchBlocks = cutoffBlock - startBlock + 1
 	result.HistoryBatchTxNums = toTxNum - fromTxNum + 1
 	readOptions, readFallback := r.selectHistoryReadOptions(result.HistoryForcedBusy, time.Now())
+	// A plain database may be a snapshot factory rather than a pinned view.
+	// Inspect the actual acquired view, and close an owned snapshot after all
+	// file builders join but before publishing any manifest or stage progress.
+	var releaseReadSource func() error
+	if readOptions.enabled() {
+		view, release, openErr := rawdb.AcquireStateHistoryReadView(historyDB)
+		if openErr != nil {
+			return result, openErr
+		}
+		historyDB, releaseReadSource = view, release
+		defer func() {
+			if releaseReadSource != nil {
+				err = errors.Join(err, releaseReadSource())
+			}
+		}()
+	}
+	readOptions, readFallback = historyReadOptionsForSource(historyDB, readOptions, readFallback)
 	result.HistorySharedReadWorkers = readOptions.Workers
 	result.HistorySharedChunkCache = readOptions.ChunkCache
 	result.HistoryReferenceContainer = readOptions.ReferenceContainer
@@ -1721,6 +1741,10 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	refs = historyOutput.refs
 	result.HistoryDuration = historyOutput.duration
 	result.EventLogDuration = eventOutput.duration
+	if releaseReadSource != nil {
+		err = errors.Join(err, releaseReadSource())
+		releaseReadSource = nil
+	}
 	if err != nil {
 		coldSnapshotLog.Warn("History cold snapshot build failed",
 			"dataset", r.cfg.HistoryDataset,

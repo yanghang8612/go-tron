@@ -63,6 +63,7 @@ type HistoryStagingMover struct {
 	cancel               context.CancelFunc
 	done                 chan struct{}
 	nextBucket           uint64
+	prefixEpoch          uint64
 	auditCursor          []byte
 	retireCursor         []byte
 	hintCursor           []byte
@@ -84,6 +85,7 @@ func NewHistoryStagingMover(bc *BlockChain, cfg HistoryStagingMoverConfig) (*His
 		return nil, errors.New("history staging mover: incomplete configuration")
 	}
 	m := &HistoryStagingMover{bc: bc, cfg: cfg, nextBucket: 1, quarantineEpoch: 1}
+	historyStagingMoverNextBucket.Update(1)
 	if !bc.historyStagingMover.CompareAndSwap(nil, m) {
 		return nil, errors.New("history staging mover: already installed")
 	}
@@ -177,6 +179,9 @@ func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
 		}
 	}()
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := m.advanceCompletedPrefix(ctx); err != nil {
 		return err
 	}
 	if m.bc != nil && m.bc.HistoryStagingManager() != nil {
@@ -400,7 +405,7 @@ func (m *HistoryStagingMover) certifyNewColdTarget(ctx context.Context, bucket u
 	if err != nil {
 		return false, err
 	}
-	// Admission precedes canonical index/chain locks. Capture the source and
+	// Admission precedes canonical chain lock. Capture the source and
 	// cold snapshots while it is held, then do expensive semantic work outside.
 	blocks, err := m.canonicalBucketBlocks(ctx, bucket)
 	if err != nil {
@@ -517,6 +522,59 @@ func (m *HistoryStagingMover) updateCensus(ctx context.Context) error {
 	return nil
 }
 
+// Locate the first source without taking the heavy lease or the index/chain
+// locks. These route reads only advance a diagnostic cursor over a contiguous
+// completed prefix; they never qualify a handoff or deletion. Retirement has
+// its own cursor and still visits TARGET/COLD rows requiring cleanup.
+func (m *HistoryStagingMover) advanceCompletedPrefix(ctx context.Context) error {
+	manager := m.bc.HistoryStagingManager()
+	if manager == nil || m.bc.historyStagingReplayEpoch.Load() != 0 {
+		return nil
+	}
+	epoch, err := manager.CurrentEpoch()
+	if err != nil {
+		return err
+	}
+	if m.prefixEpoch != 0 && m.prefixEpoch != epoch {
+		m.nextBucket = 1
+	}
+	m.prefixEpoch = epoch
+	for examined := 0; examined < 4096; examined++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		route, present, err := manager.ReadRoute(m.nextBucket)
+		if err != nil {
+			return err
+		}
+		if !present || route.Owner == rawdb.HistoryStagingOwnerSource {
+			break
+		}
+		if route.Epoch != epoch {
+			return rawdb.ErrHistoryStagingConflict
+		}
+		if _, _, err := manager.ReadClaim(m.nextBucket); err != nil {
+			return err
+		}
+		m.nextBucket++
+	}
+	currentEpoch, err := manager.CurrentEpoch()
+	if err != nil || currentEpoch != epoch {
+		m.nextBucket = 1
+		if err != nil {
+			return err
+		}
+		return rawdb.ErrHistoryStagingConflict
+	}
+	historyStagingMoverNextBucket.Update(int64(m.nextBucket))
+	return nil
+}
+
+// Only chainmu is needed for canonical proof capture/publication. The index
+// builder reads a pinned source strictly AFTER its published watermark; a
+// complete eligible bucket is at or below that watermark, with bucket-local
+// chunks. Holding its long-lived writer lock here would serialize disjoint
+// payload handoffs behind the entire index ETL pass.
 func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	proofStarted := time.Now()
 	bc := m.bc
@@ -525,7 +583,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		return errors.New("history staging mover: manager detached")
 	}
 	coldManager, ok := bc.stateCodeColdHistory.(*snapshots.Manager)
-	// This admission precedes index/chain locks and pins a proof's cold view
+	// This admission precedes chainmu and pins a proof's cold view
 	// before a concurrent manifest publication can replace its files.
 	var releasePublication func()
 	if ok && coldManager != nil {
@@ -540,28 +598,23 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 			releasePublication()
 		}
 	}()
-	bc.stateHistoryIndexMu.Lock()
 	if err := lockMutexContext(ctx, &bc.chainmu); err != nil {
-		bc.stateHistoryIndexMu.Unlock()
 		return err
 	}
 	if bc.closed.Load() || bc.historyStagingReplayEpoch.Load() != 0 {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return nil
 	}
 	solid := bc.cachedDynProps().LatestSolidifiedBlockNum()
 	head := bc.CurrentBlock()
 	if head == nil {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return errors.New("history staging mover: current head unavailable")
 	}
 	finish, finishOK, finishErr := rawdb.ReadStageProgressRow(bc.db, rawdb.StageFinish)
 	indexed, indexOK, indexErr := rawdb.ReadStageProgressRow(bc.db, rawdb.StageStateHistoryIndex)
 	if solid <= 0 || uint64(solid) <= m.cfg.HistoryWindow || finishErr != nil || indexErr != nil || !finishOK || !indexOK || !finish.HasBlockHash || !indexed.HasBlockHash {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return nil
 	}
 	eligible := min(head.Number(), uint64(solid)-m.cfg.HistoryWindow, finish.BlockNum, indexed.BlockNum)
@@ -569,13 +622,11 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	historyStagingMoverEligibleBucket.Update(int64(lastBucket))
 	if lastBucket == 0 {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return nil
 	}
 	if m.nextBucket > lastBucket {
 		historyStagingMoverNextBucket.Update(int64(m.nextBucket))
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return nil
 	}
 	var bucket uint64
@@ -590,18 +641,15 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		route, present, err := manager.ReadRoute(candidate)
 		if err != nil {
 			bc.chainmu.Unlock()
-			bc.stateHistoryIndexMu.Unlock()
 			return err
 		}
 		if !present {
 			bc.chainmu.Unlock()
-			bc.stateHistoryIndexMu.Unlock()
 			return rawdb.ErrHistoryStagingIncomplete
 		}
 		claim, claimPresent, err := manager.ReadClaim(candidate)
 		if err != nil {
 			bc.chainmu.Unlock()
-			bc.stateHistoryIndexMu.Unlock()
 			return err
 		}
 		// Only advance past metadata we successfully inspected. A transient
@@ -619,7 +667,6 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	}
 	if bucket == 0 {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return nil
 	}
 	defer func() {
@@ -630,7 +677,6 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	}()
 	if resumeAbort {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		if releasePublication != nil {
 			releasePublication()
 			releasePublication = nil
@@ -646,20 +692,17 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		proofEligible = existingClaim.Proof.EligibleThrough
 		if proofEligible > eligible {
 			bc.chainmu.Unlock()
-			bc.stateHistoryIndexMu.Unlock()
 			return rawdb.ErrHistoryStagingConflict
 		}
 	}
 	proof, needed, err := m.collectProofLocked(bucket, proofEligible, finish, indexed)
 	if err != nil {
 		bc.chainmu.Unlock()
-		bc.stateHistoryIndexMu.Unlock()
 		return err
 	}
 	if hasClaim {
 		if proof.Epoch != existingClaim.Proof.Epoch || !reflect.DeepEqual(proof.Blocks, existingClaim.Proof.Blocks) {
 			bc.chainmu.Unlock()
-			bc.stateHistoryIndexMu.Unlock()
 			return rawdb.ErrHistoryStagingConflict
 		}
 		proof = existingClaim.Proof // keep the durable stage/eligible anchors
@@ -674,13 +717,11 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	if needCold && !hasClaim {
 		if coldManager == nil {
 			bc.chainmu.Unlock()
-			bc.stateHistoryIndexMu.Unlock()
 			return errors.New("history staging mover: cold manager unavailable")
 		}
 		pinned, releaseCold, err = coldManager.PinHistoryReadView()
 	}
 	bc.chainmu.Unlock()
-	bc.stateHistoryIndexMu.Unlock()
 	if releasePublication != nil {
 		releasePublication()
 		releasePublication = nil
@@ -713,7 +754,7 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 	if err := m.recheckWork(ctx); err != nil {
 		return err
 	}
-	// Qualification and adoption both recheck under index→chain. The expensive
+	// Qualification and adoption both recheck under chainmu. The expensive
 	// checksum and bounded copy never hold either writer lock.
 	var claim rawdb.HistoryStagingClaim
 	if err := m.withValidatedProof(ctx, proof, func() error {
@@ -983,8 +1024,6 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 
 func (m *HistoryStagingMover) canonicalBucketBlocks(ctx context.Context, bucket uint64) ([]rawdb.HistoryStagingBlockProof, error) {
 	bc := m.bc
-	bc.stateHistoryIndexMu.Lock()
-	defer bc.stateHistoryIndexMu.Unlock()
 	if err := lockMutexContext(ctx, &bc.chainmu); err != nil {
 		return nil, err
 	}
@@ -1047,8 +1086,6 @@ func (m *HistoryStagingMover) collectProofLocked(bucket, eligible uint64, finish
 
 func (m *HistoryStagingMover) withValidatedProof(ctx context.Context, proof rawdb.HistoryStagingProof, action func() error) error {
 	bc := m.bc
-	bc.stateHistoryIndexMu.Lock()
-	defer bc.stateHistoryIndexMu.Unlock()
 	if err := lockMutexContext(ctx, &bc.chainmu); err != nil {
 		return err
 	}

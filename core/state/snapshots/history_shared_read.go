@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
@@ -63,7 +64,26 @@ const (
 	historyReadResourcesStale
 	historyReadMemoryLow
 	historyReadCPULow
+	historyReadSerialSource
 )
+
+// Inspect the same pinned source used by this build. Routed/overlay readers
+// can use the serial authenticated cache without claiming speculative owned
+// reads. Parallel workers require the stricter explicit capability contract.
+func historyReadOptionsForSource(source ethdb.Iteratee, reads HistoryReadOptions, reason historyReadFallback) (HistoryReadOptions, historyReadFallback) {
+	if reads.Workers == 0 {
+		return reads, reason
+	}
+	owned, ok := source.(pointread.ConcurrentOwnedKeyValueView)
+	_, presence := source.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	})
+	if !ok || !owned.IsPinnedKeyValueView() || !owned.GetReturnsOwnedBytes() || !owned.ConcurrentOwnedHistoryReads() || presence {
+		reads.Workers = 0
+		return reads, historyReadSerialSource
+	}
+	return reads, reason
+}
 
 func (r *Runner) selectHistoryReadOptions(forcedBusy bool, now time.Time) (HistoryReadOptions, historyReadFallback) {
 	requested := HistoryReadOptions{Workers: r.cfg.HistorySharedReadWorkers, ChunkCache: r.cfg.HistorySharedChunkCache, ReferenceContainer: r.cfg.HistoryReferenceContainer}
@@ -146,7 +166,11 @@ func buildStateHistoryReadContext(ctx context.Context, db ethdb.Iteratee, dir st
 	var release func() error
 	if reads.ChunkCache {
 		var cache *rawdb.StateHistoryChunkCache
-		view, cache, err = rawdb.AcquireStateHistoryChunkCacheView(ctx, db)
+		if reads.Workers == 0 {
+			view, cache, err = rawdb.AcquireSerialStateHistoryChunkCacheView(ctx, db)
+		} else {
+			view, cache, err = rawdb.AcquireStateHistoryChunkCacheView(ctx, db)
+		}
 		if err != nil {
 			return nil, err
 		}

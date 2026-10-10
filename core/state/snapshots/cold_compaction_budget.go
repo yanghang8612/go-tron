@@ -8,10 +8,10 @@ import (
 )
 
 const (
-	busyHistoryCompactionInputBytes       = uint64(512 << 20)
-	busyHistoryCompactionLogicalBytes     = uint64(2 << 30)
-	busyHistoryCompactionInputRecords     = uint64(8_000_000)
-	busyHistoryCompactionSources          = uint64(16)
+	busyHistoryCompactionInputBytes       = uint64(128 << 20)
+	busyHistoryCompactionLogicalBytes     = uint64(512 << 20)
+	busyHistoryCompactionInputRecords     = uint64(400_000)
+	busyHistoryCompactionSources          = uint64(4)
 	busyHistoryCompactionNoCandidateRetry = 30 * time.Second
 )
 
@@ -33,7 +33,7 @@ func (r *Runner) shouldPrioritizePendingCompaction(now time.Time) bool {
 		return false
 	}
 	s := &r.compactionBudget
-	if !r.throughputCatchup() || !r.historySyncBudgetActive() {
+	if !r.throughputCatchup() {
 		s.pending = false
 		return false
 	}
@@ -105,14 +105,12 @@ func (r *Runner) hasPotentialBusyCompaction() (bool, error) {
 }
 
 func historyCompactionRecovery(work time.Duration, failed bool) time.Duration {
-	recovery := time.Minute
-	if work <= 0 {
-		recovery = 3 * time.Second
-	} else if work <= time.Minute/4 {
+	recovery := time.Duration(math.MaxInt64)
+	if work <= time.Duration(math.MaxInt64)/4 {
 		recovery = max(3*time.Second, work*4)
 	}
 	if failed {
-		recovery = time.Minute
+		recovery = max(recovery, time.Minute)
 	}
 	return recovery
 }
@@ -125,7 +123,9 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		return total, err
 	}
 	r.compactionBudget.pending = false
-	busy := r.throughputCatchup() && r.historySyncBudgetActive()
+	// Network sync can briefly become idle while cold history is still far
+	// behind. That transition must not admit an unbounded catch-up merge.
+	busy := r.throughputCatchup() && (catchingUp || r.historySyncBudgetActive())
 	if busy && !r.historyLoadPermitsMerge() {
 		return HistoryCompactionResult{Deferred: true, DeferReason: "import-load"}, nil
 	}
@@ -174,7 +174,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 				// every newly published leaf when the detailed budget rejects it.
 				total.Recovery = busyHistoryCompactionNoCandidateRetry
 			}
-			r.compactionBudget.notBefore = time.Now().Add(total.Recovery)
+			r.compactionBudget.notBefore = historyRecoveryDeadline(time.Now(), total.Recovery)
 			total.RetryAfter = total.Recovery
 			total.RetryDeadline = r.compactionBudget.notBefore
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -15,6 +16,12 @@ import (
 // Keep posting runs compact so duplicate latest-key/block candidates collapse
 // before stable-cache pressure grows, matching Erigon's bounded ETL collectors.
 const stateHistoryIndexETLDefaultBufferLimit = 8 << 20
+
+var (
+	stateHistoryIndexChunkCacheHits   = metrics.NewRegisteredCounter("core/state_history_index/chunk_cache/hits", nil)
+	stateHistoryIndexChunkCacheMisses = metrics.NewRegisteredCounter("core/state_history_index/chunk_cache/misses", nil)
+	stateHistoryIndexChunkCachePeak   = metrics.NewRegisteredGauge("core/state_history_index/chunk_cache/last_peak_bytes", nil)
+)
 
 // StateHistoryIndexStageResult reports one bounded posting-256 pass.
 type StateHistoryIndexStageResult struct {
@@ -248,7 +255,21 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	if historyView != nil {
 		historySource = historyView
 	}
-	rebuilt, err := rawdb.RebuildStateHistoryIndexInterruptible(historySource, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+	// The routed MVCC source stays fixed for this entire serial pass. Shared
+	// chunks recur across blocks, so retain bounded authenticated private copies
+	// rather than repeatedly reading and hashing them. This does not certify the
+	// routed/overlay source for concurrent reads; whole-pack SHA still runs.
+	cachedSource, chunkCache, cacheErr := rawdb.AcquireSerialStateHistoryChunkCacheView(context.Background(), historySource)
+	var rebuilt *rawdb.RebuildStateHistoryIndexResult
+	err = cacheErr
+	if err == nil {
+		rebuilt, err = rawdb.RebuildStateHistoryIndexInterruptible(cachedSource, bc.db, fromBlock, toBlock, etlOptions, bc.readCanonicalHashStrict, interrupted)
+		stats := chunkCache.Stats()
+		stateHistoryIndexChunkCacheHits.Inc(int64(stats.Hits))
+		stateHistoryIndexChunkCacheMisses.Inc(int64(stats.Misses))
+		stateHistoryIndexChunkCachePeak.Update(int64(stats.PeakPayloadBytes))
+		err = errors.Join(err, chunkCache.Close())
+	}
 	var closeErr error
 	if historyView != nil {
 		closeErr = historyView.Close()

@@ -15,6 +15,7 @@ import (
 
 type priorityCompactionTestChain struct {
 	dbCalls int
+	idle    bool
 }
 
 func (c *priorityCompactionTestChain) DB() AggregatorDB {
@@ -23,11 +24,17 @@ func (c *priorityCompactionTestChain) DB() AggregatorDB {
 }
 
 func (*priorityCompactionTestChain) LatestSolidifiedBlockNum() int64 { return 100 }
-func (*priorityCompactionTestChain) SyncRemainingBlocks() (uint64, bool) {
-	return 1_000_000, true
+func (c *priorityCompactionTestChain) SyncRemainingBlocks() (uint64, bool) {
+	return 1_000_000, !c.idle
 }
 
 func TestRunnerPrioritizesPendingMergeAfterSafePrune(t *testing.T) {
+	for _, idle := range []bool{false, true} {
+		t.Run(fmt.Sprintf("network-idle-%v", idle), func(t *testing.T) { testRunnerPendingMergeAfterSafePrune(t, idle) })
+	}
+}
+
+func testRunnerPendingMergeAfterSafePrune(t *testing.T, idle bool) {
 	dir := t.TempDir()
 	var refs []SegmentRef
 	for block := uint64(1); block <= 16; block++ {
@@ -37,7 +44,7 @@ func TestRunnerPrioritizesPendingMergeAfterSafePrune(t *testing.T) {
 	if err := PublishManifest(dir, NewManifest(1, 16, refs)); err != nil {
 		t.Fatal(err)
 	}
-	chain := &priorityCompactionTestChain{}
+	chain := &priorityCompactionTestChain{idle: idle}
 	gate := maintenance.NewHeavyWorkGate()
 	r := NewRunner(chain, Config{
 		Enabled: true, Dir: dir, HistoryDataset: SegmentDatasetStateDomainChange,
@@ -107,7 +114,7 @@ func TestRunnerPrioritizesPendingMergeAfterSafePrune(t *testing.T) {
 	if !reflect.DeepEqual(order, []string{"verified-prune", "merge", "merge-complete"}) {
 		t.Fatalf("maintenance order=%v", order)
 	}
-	if !result.Compaction.Merged || result.Compaction.MergePasses != 1 || result.Compaction.InputSources != 16 || r.compactionBudget.pending {
+	if !result.Compaction.Merged || result.Compaction.MergePasses != 1 || result.Compaction.InputSources != busyHistoryCompactionSources || r.compactionBudget.pending {
 		t.Fatalf("did not execute exactly one pending merge: %+v", result.Compaction)
 	}
 	if chain.dbCalls != 0 || result.Built || result.HistoryBuildAttempted || result.HistoryEventAttempted || result.DerivedSidecarCatchup || result.LatestBuilt {

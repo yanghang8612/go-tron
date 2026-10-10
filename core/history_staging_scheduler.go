@@ -275,7 +275,6 @@ func (m *HistoryStagingMover) cancelReservation() {
 		m.reservation.Cancel()
 		m.reservation = nil
 	}
-	m.hintBucket = 0
 }
 
 func historyStagingRecovery(held, _ time.Duration) time.Duration {
@@ -388,9 +387,9 @@ func (m *HistoryStagingMover) candidateHint(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	budget := uint64(256)
-	// Revalidate the reserved candidate before advancing a diagnostic page;
+	// Revalidate a cached candidate even after its reservation expires;
 	// an unrelated empty page must not revoke its still-eligible next turn.
-	if m.reservation != nil && m.reservation.Active() && m.hintBucket != 0 {
+	if m.hintBucket != 0 {
 		route, present, err := bc.HistoryStagingManager().ReadRoute(m.hintBucket)
 		if err != nil {
 			return false, err
@@ -401,6 +400,7 @@ func (m *HistoryStagingMover) candidateHint(ctx context.Context) (bool, error) {
 			}
 		}
 		m.cancelReservation()
+		m.hintBucket = 0
 		budget--
 	}
 	routes, next, complete, err := bc.HistoryStagingManager().ScanRoutes(ctx, m.hintCursor, budget)

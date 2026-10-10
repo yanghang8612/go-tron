@@ -52,7 +52,7 @@ func (m *HistoryStagingManager) CheckHistoryStagingBucketWritable(bucket uint64)
 }
 
 // BeginClaim persists a sealed bucket claim. Core must call it while holding
-// the index→chain writer guard after proving Finish/index/solid/retention and
+// the canonical chain writer guard after proving Finish/index/solid/retention and
 // settled source. Every source mutation path must check this claim under the
 // same guard; otherwise CopyClaim cannot assume a stable source.
 func (m *HistoryStagingManager) BeginClaim(ctx context.Context, proof HistoryStagingProof, claimID [32]byte) (HistoryStagingClaim, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -65,6 +66,83 @@ func TestHistorySharedReadResourceSelection(t *testing.T) {
 			}
 			if got.enabled() && got.compressionWorkers() != 1 {
 				t.Fatal("enhanced read amplified codec workers")
+			}
+		})
+	}
+}
+
+type historyPinnedOnlySnapshot struct{ pointread.KeyValueSnapshot }
+
+func (v historyPinnedOnlySnapshot) IsPinnedKeyValueView() bool {
+	return v.KeyValueSnapshot.(pointread.PinnedKeyValueView).IsPinnedKeyValueView()
+}
+
+type historyPinnedOnlyFactory struct{ *historyExecutionSource }
+
+func (f historyPinnedOnlyFactory) NewKeyValueSnapshot() (pointread.KeyValueSnapshot, error) {
+	v, err := f.historyExecutionSource.NewKeyValueSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return historyPinnedOnlySnapshot{v}, nil
+}
+
+type historyPresenceSource struct{ rawdb.StateHistoryReadView }
+
+func (v historyPresenceSource) GetWithPresence(k []byte) ([]byte, bool, error) {
+	b, err := v.Get(k)
+	return b, err == nil, err
+}
+
+func TestHistorySharedReadSourceCapabilityFallback(t *testing.T) {
+	db := newHistorySharedSource(t)
+	view, release, err := rawdb.AcquireStateHistoryReadView(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for _, source := range []ethdb.Iteratee{struct{ rawdb.StateHistoryReadView }{view}, historyPresenceSource{view}} {
+		requested := HistoryReadOptions{Workers: 4, ChunkCache: true, ReferenceContainer: true}
+		got, reason := historyReadOptionsForSource(source, requested, historyReadEnabled)
+		if got.Workers != 0 || !got.ChunkCache || !got.ReferenceContainer || reason != historyReadSerialSource {
+			t.Fatal("source fallback lost safe options", got, reason)
+		}
+	}
+	requested := HistoryReadOptions{Workers: 4, ChunkCache: true}
+	if got, reason := historyReadOptionsForSource(view, requested, historyReadEnabled); got != requested || reason != historyReadEnabled {
+		t.Fatal("certified snapshot downgraded", got, reason)
+	}
+}
+
+func TestHistorySharedReadSerialCachePublicationAndCloseFailure(t *testing.T) {
+	old := runtime.GOMAXPROCS(8)
+	defer runtime.GOMAXPROCS(old)
+	for _, failClose := range []bool{false, true} {
+		t.Run(fmt.Sprint(failClose), func(t *testing.T) {
+			db := newHistorySharedSource(t)
+			sentinel := errors.New("serial cache source close failed")
+			source := &historyExecutionSource{KeyValueStore: db, factory: db, entered: make(chan struct{}), release: make(chan struct{})}
+			if failClose {
+				source.closeErr = sentinel
+			}
+			r := historySharedRunner(historyPinnedOnlyFactory{source}, t.TempDir())
+			defer r.cancel()
+			result, err := r.OnePass()
+			if result.HistorySharedReadWorkers != 0 || !result.HistorySharedChunkCache || result.HistoryReadFallbackReason != uint8(historyReadSerialSource) {
+				t.Fatal("serial cache not selected", result, err)
+			}
+			if source.opened.Load() != 1 || source.closed.Load() != 1 || source.late.Load() != 0 {
+				t.Fatal("source lifetime wrong")
+			}
+			if failClose {
+				if !errors.Is(err, sentinel) || result.Built {
+					t.Fatal("close failure published", result, err)
+				}
+				if _, e := LoadProductionManifest(r.cfg.Dir); !os.IsNotExist(e) {
+					t.Fatal("close failure left manifest", e)
+				}
+			} else if err != nil || !result.Built {
+				t.Fatal("serial cache build failed", result, err)
 			}
 		})
 	}

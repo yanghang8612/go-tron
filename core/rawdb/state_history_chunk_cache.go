@@ -105,6 +105,92 @@ func AcquireStateHistoryChunkCacheView(ctx context.Context, source any) (StateHi
 	return &stateHistoryChunkCachedView{StateHistoryReadView: view, cache: c, ctx: ctx}, c, nil
 }
 
+// AcquireSerialStateHistoryChunkCacheView reuses authenticated chunk copies on
+// one pinned source without granting owned or concurrent-read capabilities.
+// The caller must serialize reads and join/release all iterators before Close.
+// This supports routed/overlay views whose Get may return borrowed bytes: a
+// miss is consumed immediately and only the decoded private copy is retained.
+// Whole-pack SHA and RLP validation still run for every block. Presence-aware
+// sources retain their original atomic presence read on every miss.
+func AcquireSerialStateHistoryChunkCacheView(ctx context.Context, source any) (StateHistoryReadView, *StateHistoryChunkCache, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	view, release, err := AcquireStateHistoryReadView(source)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !view.IsPinnedKeyValueView() {
+		return nil, nil, errors.Join(ErrStateHistoryReadViewUnpinned, release())
+	}
+	if _, nested := view.(historyChunkCacheProvider); nested {
+		return nil, nil, errors.Join(errors.New("rawdb: nested build-scoped history chunk cache"), release())
+	}
+	c := newStateHistoryChunkCache(StateHistoryChunkCachePayloadBudget, StateHistoryChunkCacheEntryLimit, release)
+	c.scope = ctx
+	v := &stateHistorySerialChunkCachedView{StateHistoryReadView: view, cache: c, ctx: ctx}
+	if presence, ok := view.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	}); ok {
+		return &stateHistorySerialPresenceCachedView{stateHistorySerialChunkCachedView: v, presence: presence}, c, nil
+	}
+	return v, c, nil
+}
+
+type stateHistorySerialChunkCachedView struct {
+	StateHistoryReadView
+	cache *StateHistoryChunkCache
+	ctx   context.Context
+}
+
+func (v *stateHistorySerialChunkCachedView) historyChunkCacheState() (*StateHistoryChunkCache, context.Context) {
+	return v.cache, v.ctx
+}
+func (v *stateHistorySerialChunkCachedView) IsPinnedKeyValueView() bool {
+	return !v.cache.closed.Load()
+}
+func (v *stateHistorySerialChunkCachedView) readErr() error {
+	if v.cache.closed.Load() {
+		return ErrStateHistoryChunkCacheClosed
+	}
+	return v.cache.readContextErr(v.ctx)
+}
+func (v *stateHistorySerialChunkCachedView) Get(key []byte) ([]byte, error) {
+	if err := v.readErr(); err != nil {
+		return nil, err
+	}
+	return v.StateHistoryReadView.Get(key)
+}
+func (v *stateHistorySerialChunkCachedView) Has(key []byte) (bool, error) {
+	if err := v.readErr(); err != nil {
+		return false, err
+	}
+	return v.StateHistoryReadView.Has(key)
+}
+func (v *stateHistorySerialChunkCachedView) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if err := v.readErr(); err != nil {
+		return &stateHistoryErrorIterator{err: err}
+	}
+	return v.StateHistoryReadView.NewIterator(prefix, start)
+}
+
+type stateHistorySerialPresenceCachedView struct {
+	*stateHistorySerialChunkCachedView
+	presence interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	}
+}
+
+func (v *stateHistorySerialPresenceCachedView) GetWithPresence(key []byte) ([]byte, bool, error) {
+	if err := v.readErr(); err != nil {
+		return nil, false, err
+	}
+	return v.presence.GetWithPresence(key)
+}
+
 func newStateHistoryChunkCache(budget uint64, entries int, release func() error) *StateHistoryChunkCache {
 	return &StateHistoryChunkCache{entries: make([]historyChunkCacheEntry, entries), release: release, stats: StateHistoryChunkCacheStats{PayloadBudgetBytes: budget, EntryLimit: uint64(entries)}}
 }
