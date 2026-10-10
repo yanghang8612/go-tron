@@ -3,6 +3,7 @@ package snapshots
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -19,7 +20,7 @@ func (c *HistoryStagingPhysicalFactCollector) RecheckColdBindingPublication(ctx 
 		binding.ManifestEpoch != proved.Generation || len(binding.Spans) == 0 ||
 		proved.HistoryStagingResetEpoch != current.HistoryStagingResetEpoch ||
 		current.Generation < proved.Generation || current.VisibleTxStart > proved.VisibleTxStart || current.VisibleTxEnd < proved.VisibleTxEnd {
-		return zero, rawdb.ErrHistoryStagingConflict
+		return zero, fmt.Errorf("%w: manifest_guard bucket=%d", rawdb.ErrHistoryStagingConflict, binding.Bucket)
 	}
 	if err := ctx.Err(); err != nil {
 		return zero, err
@@ -48,20 +49,20 @@ func (c *HistoryStagingPhysicalFactCollector) RecheckColdBindingPublication(ctx 
 	for _, span := range binding.Spans {
 		fact, ok := c.entries[span.ContentID]
 		if !ok {
-			return zero, rawdb.ErrHistoryStagingConflict
+			return zero, fmt.Errorf("%w: missing_fact bucket=%d content=%x", rawdb.ErrHistoryStagingConflict, binding.Bucket, span.ContentID)
 		}
 		if _, ok := c.states[span.ContentID]; !ok {
-			return zero, rawdb.ErrHistoryStagingConflict
+			return zero, fmt.Errorf("%w: missing_file_state bucket=%d content=%x", rawdb.ErrHistoryStagingConflict, binding.Bucket, span.ContentID)
 		}
 		if id, err := historyStagingTrioID(fact.Refs); err != nil || id != span.ContentID {
-			return zero, rawdb.ErrHistoryStagingConflict
+			return zero, fmt.Errorf("%w: fact_content_id bucket=%d content=%x", rawdb.ErrHistoryStagingConflict, binding.Bucket, span.ContentID)
 		}
 		for _, ref := range fact.Refs {
 			if actual, ok := original[ref.Path]; !ok || actual != ref {
-				return zero, rawdb.ErrHistoryStagingConflict
+				return zero, fmt.Errorf("%w: proved_ref_changed bucket=%d path=%s proved_generation=%d current_generation=%d present=%t", rawdb.ErrHistoryStagingConflict, binding.Bucket, ref.Path, proved.Generation, current.Generation, ok)
 			}
 			if actual, ok := active[ref.Path]; !ok || actual != ref {
-				return zero, rawdb.ErrHistoryStagingConflict
+				return zero, fmt.Errorf("%w: active_ref_changed bucket=%d path=%s proved_generation=%d current_generation=%d present=%t", rawdb.ErrHistoryStagingConflict, binding.Bucket, ref.Path, proved.Generation, current.Generation, ok)
 			}
 		}
 	}

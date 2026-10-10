@@ -174,6 +174,9 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		}
 	}
 	candidates := historyCompactionCandidates(manifest, historyCfg)
+	if dataset == SegmentDatasetStateDomainChange {
+		candidates = filterHistoryProofProtectedCandidates(dir, candidates)
+	}
 	var selection historyCompactionSelection
 	if cfg.BusyLeafOnly {
 		selection, ok, err = selectBudgetedHistoryCompactionLeaves(ctx, candidates, cfg, readCost, readReference)
@@ -191,6 +194,16 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 			reason = historyCompactionNoSelectionReason(cfg)
 		}
 		return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: cfg.BusyLeafOnly || selection.referenceDeferReason != "", DeferReason: reason}, nil
+	}
+	if dataset == SegmentDatasetStateDomainChange {
+		release, admitted, claimErr := claimHistoryProofRange(dir, selection.fromTxNum, selection.toTxNum, true)
+		if claimErr != nil {
+			return HistoryCompactionResult{}, claimErr
+		}
+		if !admitted {
+			return HistoryCompactionResult{Dataset: dataset, Deferred: true, DeferReason: "staging-proof"}, nil
+		}
+		defer release()
 	}
 	if !cfg.BusyLeafOnly && (cfg.MaxInputBytes > 0 || cfg.MaxInputLogicalBytes > 0 || cfg.MaxInputRecords > 0 || cfg.MaxSources > 0) {
 		for _, candidate := range selection.candidates {

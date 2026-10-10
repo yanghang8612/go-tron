@@ -104,7 +104,17 @@ func TestHistoryStagingMoverPublishesAcrossUnrelatedManifestAppend(t *testing.T)
 					}
 				}
 				appended = true
-				return snapshots.PublishManifest(dir, live)
+				if err := snapshots.PublishManifest(dir, live); err != nil {
+					return err
+				}
+				merged, err := snapshots.CompactHistoryDomain(dir, snapshots.SegmentDatasetStateDomainChange, snapshots.CompactionConfig{MaxSteps: 2})
+				if err != nil {
+					return err
+				}
+				if merged.Merged {
+					return errors.New("compaction replaced the protected proof dependency")
+				}
+				return nil
 			})
 			switch path {
 			case "adopt":

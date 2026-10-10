@@ -216,6 +216,9 @@ func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
 		return err
 	}
 	moveErr := m.runAdmitted(ctx)
+	if moveErr != nil {
+		moveErr = fmt.Errorf("history staging mover: move: %w", moveErr)
+	}
 	if q.terminal != nil {
 		return errors.Join(moveErr, q.terminal)
 	}
@@ -226,6 +229,9 @@ func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
 		return errors.Join(moveErr, err)
 	}
 	retireErr := m.runRetirement(ctx)
+	if retireErr != nil {
+		retireErr = fmt.Errorf("history staging mover: retirement: %w", retireErr)
+	}
 	if q.terminal != nil {
 		return errors.Join(moveErr, retireErr, q.terminal)
 	}
@@ -238,6 +244,9 @@ func (m *HistoryStagingMover) RunOnce(ctx context.Context) (err error) {
 	// Quarantine pins publication admission across its bounded cleanup page.
 	// It must not release the shared lease from inside that lock scope.
 	quarantineErr := m.runQuarantine(maintenance.WithWorkCheckpoint(ctx, nil))
+	if quarantineErr != nil {
+		quarantineErr = fmt.Errorf("history staging mover: quarantine: %w", quarantineErr)
+	}
 	return errors.Join(moveErr, retireErr, quarantineErr)
 }
 
@@ -336,9 +345,14 @@ func (m *HistoryStagingMover) runRetirement(ctx context.Context) error {
 		case route.Owner == rawdb.HistoryStagingOwnerTarget && !route.SourceCleared && state.HasClaim && state.Claim.Epoch == epoch:
 			claim := state.Claim
 			action = func() error {
+				releaseProof, err := m.protectColdClearRoute(route)
+				if err != nil {
+					return err
+				}
+				defer releaseProof()
 				historyStagingMoverResumedClears.Inc(1)
 				started := time.Now()
-				err := manager.ClearSource(ctx, claim, m.workLimits())
+				err = manager.ClearSource(ctx, claim, m.workLimits())
 				historyStagingMoverClearNanos.Inc(time.Since(started).Nanoseconds())
 				if err != nil {
 					return err
@@ -439,6 +453,13 @@ func (m *HistoryStagingMover) certifyNewColdTarget(ctx context.Context, bucket u
 		releaseCold()
 		return false, nil // the next cold publication may cover this bucket
 	}
+	releaseProof, protectionErr := protectHistoryStagingColdProof(pinned.HistoryStagingDir(), blocks)
+	if protectionErr != nil {
+		releasePublication()
+		releaseCold()
+		return false, protectionErr
+	}
+	defer releaseProof()
 	proofCtx, physicalFacts, err := snapshots.WithHistoryStagingPhysicalFacts(ctx, pinned.HistoryStagingDir())
 	if err != nil {
 		releasePublication()
@@ -714,6 +735,14 @@ func (m *HistoryStagingMover) runAdmitted(ctx context.Context) (retErr error) {
 		}
 		proof = existingClaim.Proof // keep the durable stage/eligible anchors
 	}
+	if needProtection := coldManager != nil && (len(proof.ColdSpans) > 0 || !hasClaim); needProtection {
+		releaseProof, protectionErr := protectHistoryStagingColdProof(coldManager.HistoryStagingDir(), proof.Blocks)
+		if protectionErr != nil {
+			bc.chainmu.Unlock()
+			return protectionErr
+		}
+		defer releaseProof()
+	}
 	var pinned *snapshots.Manager
 	var releaseCold func()
 	needCold := len(existingClaim.Proof.ColdSpans) > 0
@@ -964,6 +993,11 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 	if !present || !historyStagingBindingFull(binding, first, last) {
 		return nil
 	} // mixed hot/cold bucket stays TARGET
+	releaseClearProof, err := m.protectColdClearRoute(route)
+	if err != nil {
+		return err
+	}
+	defer releaseClearProof()
 	var physicalFacts *snapshots.HistoryStagingPhysicalFactCollector
 	if route.Owner == rawdb.HistoryStagingOwnerTarget {
 		coldManager, ok := m.bc.stateCodeColdHistory.(*snapshots.Manager)
@@ -989,6 +1023,11 @@ func (m *HistoryStagingMover) finalizeColdBucket(ctx context.Context, bucket uin
 		if err != nil {
 			return err
 		}
+		releaseProof, protectionErr := protectHistoryStagingColdProof(pinned.HistoryStagingDir(), blocks)
+		if protectionErr != nil {
+			return protectionErr
+		}
+		defer releaseProof()
 		current, err := snapshots.RebindHistoryStagingColdBinding(proofCtx, pinned.HistoryStagingDir(), pinned.Manifest(), binding, blocks)
 		if err != nil {
 			return err
@@ -1204,4 +1243,48 @@ func (m *HistoryStagingMover) recheckWork(ctx context.Context) error {
 		return m.quantum.recheck()
 	}
 	return ctx.Err()
+}
+
+func protectHistoryStagingColdProof(dir string, blocks []rawdb.HistoryStagingBlockProof) (func(), error) {
+	if len(blocks) == 0 {
+		return nil, rawdb.ErrHistoryStagingIncomplete
+	}
+	from, to := blocks[0].BeginTxNum, blocks[len(blocks)-1].EndTxNum
+	release, ok, err := snapshots.TryProtectHistoryStagingProofRange(dir, from, to)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, snapshots.ErrHistoryStagingCompactionBusy
+	}
+	return release, nil
+}
+
+func (m *HistoryStagingMover) protectColdClearRoute(route rawdb.HistoryStagingRoute) (func(), error) {
+	if route.ColdBindingEpoch == 0 {
+		return func() {}, nil
+	}
+	cold, ok := m.bc.stateCodeColdHistory.(*snapshots.Manager)
+	if !ok || cold == nil {
+		return func() {}, nil // no configured cold publisher can rebind this route
+	}
+	first, last, err := rawdb.StateHistoryChunkBucketBounds(route.Bucket)
+	if err != nil {
+		return nil, err
+	}
+	begin, ok, err := rawdb.ReadStateTxRange(m.bc.db, first)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, rawdb.ErrHistoryStagingIncomplete
+	}
+	end, ok, err := rawdb.ReadStateTxRange(m.bc.db, last)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, rawdb.ErrHistoryStagingIncomplete
+	}
+	return protectHistoryStagingColdProof(cold.HistoryStagingDir(), []rawdb.HistoryStagingBlockProof{{BeginTxNum: begin.BeginTxNum}, {EndTxNum: end.EndTxNum}})
 }

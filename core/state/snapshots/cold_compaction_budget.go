@@ -69,7 +69,7 @@ func (r *Runner) hasPotentialBusyCompaction() (bool, error) {
 	}
 	var sources, bytes uint64
 	var previous SegmentRef
-	for _, candidate := range historyCompactionCandidates(manifest, cfg) {
+	for _, candidate := range filterHistoryProofProtectedCandidates(r.cfg.Dir, historyCompactionCandidates(manifest, cfg)) {
 		if candidate.history.effectiveAggregationSteps() != 1 {
 			sources, bytes = 0, 0
 			continue
