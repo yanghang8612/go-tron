@@ -707,8 +707,9 @@ func layerShardIndexString(key string) uint32 {
 // committed (and thus flush-eligible) only after its fold completes and
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
-	base            ethdb.KeyValueReader
-	blockHashReader BlockHashReader
+	base              ethdb.KeyValueReader
+	blockHashReader   BlockHashReader
+	strictBlockHashes atomic.Pointer[strictBlockHashCache]
 	// baseReadCache is populated through GetNoCopyCached. Overlay layers always
 	// win; a successful canonical flush refreshes already-cached keys directly
 	// from immutable layer values and invalidates tombstones, while Discard clears
@@ -1133,9 +1134,14 @@ func (b *Buffer) BlockHashByNumberStrict(number uint64) (common.Hash, bool, erro
 	if b == nil {
 		return common.Hash{}, false, nil
 	}
-	if data, ok, err := rawdb.ReadBlockRawStrict(b, number); err != nil {
+	if data, ok, err := rawdb.ReadBlockRawStrict(strictBlockRawReader{b}, number); err != nil {
 		return common.Hash{}, ok, err
 	} else if ok {
+		if cache := b.strictBlockHashes.Load(); cache != nil {
+			if hash, hit := cache.lookup(number, data); hit {
+				return hash, true, nil
+			}
+		}
 		block, err := types.UnmarshalBlock(data)
 		if err != nil {
 			return common.Hash{}, true, fmt.Errorf("rawdb: block %d decode: %w", number, err)
@@ -1143,7 +1149,20 @@ func (b *Buffer) BlockHashByNumberStrict(number uint64) (common.Hash, bool, erro
 		if block.Number() != number {
 			return common.Hash{}, true, fmt.Errorf("rawdb: block row %d contains block number %d", number, block.Number())
 		}
-		return block.Hash(), true, nil
+		hash := block.Hash()
+		if len(data) <= strictBlockHashMaxRowBytes {
+			cache := b.strictBlockHashes.Load()
+			if cache == nil {
+				candidate := new(strictBlockHashCache)
+				if b.strictBlockHashes.CompareAndSwap(nil, candidate) {
+					cache = candidate
+				} else {
+					cache = b.strictBlockHashes.Load()
+				}
+			}
+			cache.remember(number, data, hash)
+		}
+		return hash, true, nil
 	}
 	b.mu.RLock()
 	reader := b.blockHashReader

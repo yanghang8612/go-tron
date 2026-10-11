@@ -313,6 +313,16 @@ func (c *Collector) append(e entry) error {
 	c.seq++
 	e.seq = c.seq
 	c.ensureRows()
+	// The default append growth factor approaches 1.25 for large slices,
+	// repeatedly copying the pointer-rich metadata. Double only larger buffers
+	// within the existing pool bound; small collectors and huge one-off runs
+	// keep Go's conservative growth.
+	if len(c.rows) == cap(c.rows) && cap(c.rows) >= 1024 && cap(c.rows) < collectorRowsPoolMaxCapacity {
+		capacity := min(2*cap(c.rows), collectorRowsPoolMaxCapacity)
+		rows := make([]entry, len(c.rows), capacity)
+		copy(rows, c.rows)
+		c.rows = rows
+	}
 	c.rows = append(c.rows, e)
 	size := len(e.key) + len(e.value) + runEntryHeaderSize
 	c.bufferBytes += size
