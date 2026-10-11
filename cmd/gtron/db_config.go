@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -14,7 +15,50 @@ func openPebbleDB(ctx *cli.Context, path string) (ethdb.KeyValueStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return rawdb.NewPebbleDBWithOptions(path, cache, handles, tune)
+	hot, err := rawdb.NewPebbleDBWithOptions(path, cache, handles, tune)
+	if err != nil {
+		return nil, err
+	}
+	marked, err := rawdb.DirectHistoryLayoutInitialized(hot)
+	if err != nil {
+		hot.Close()
+		return nil, err
+	}
+	if !marked {
+		_, paired, err := rawdb.ReadDirectHistoryPair(hot)
+		if err != nil || paired {
+			hot.Close()
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("history conversion is incomplete; continue db move-history first")
+		}
+		return hot, nil
+	}
+	historyPath := ctx.String(historyStoreFlag.Name)
+	if historyPath == "" {
+		historyPath = filepath.Join(filepath.Dir(path), "history")
+	}
+	history, err := rawdb.NewDirectHistoryPebbleDB(historyPath, max(16, cache/8), max(16, handles/8), false)
+	if err != nil {
+		hot.Close()
+		return nil, err
+	}
+	if err := rawdb.EnsureDirectHistoryPair(hot, history, false); err != nil {
+		history.Close()
+		hot.Close()
+		return nil, err
+	}
+	historyMarked, err := rawdb.DirectHistoryLayoutInitialized(history)
+	if err != nil || !historyMarked {
+		history.Close()
+		hot.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("history database is missing its completed layout marker")
+	}
+	return rawdb.NewDirectHistoryStore(hot, history), nil
 }
 
 func makePebbleConfig(ctx *cli.Context) (int, int, rawdb.PebbleOptions, error) {

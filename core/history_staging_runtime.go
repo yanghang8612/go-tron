@@ -13,6 +13,16 @@ type stagedHistorySourceView struct {
 	manifest *snapshots.Manifest
 }
 
+// directHistorySourceView fixes the ordinary KV/manifest read boundary without
+// staging routes, ownership receipts, or cold-binding authentication.
+type directHistorySourceView struct {
+	snapshots.AggregatorDB
+	manifest *snapshots.Manifest
+}
+
+func (v directHistorySourceView) IsPinnedKeyValueView() bool              { return true }
+func (v directHistorySourceView) PinnedColdManifest() *snapshots.Manifest { return v.manifest }
+
 func (v stagedHistorySourceView) IsPinnedKeyValueView() bool              { return true }
 func (v stagedHistorySourceView) PinnedColdManifest() *snapshots.Manifest { return v.manifest }
 func (v stagedHistorySourceView) RequireHotRange(first, last uint64) error {
@@ -100,5 +110,26 @@ func (bc *BlockChain) AcquireStateHistorySourceView(ctx context.Context) (snapsh
 		}
 		return stagedHistorySourceView{AggregatorDB: view, manifest: manifest}, view.Close, nil
 	}
-	return rawdb.AcquireStateHistoryReadView(bc.db)
+	view, closeView, err := rawdb.AcquireStateHistoryReadView(bc.db)
+	if err != nil {
+		return nil, nil, err
+	}
+	if coldManager, ok := bc.stateCodeColdHistory.(*snapshots.Manager); ok && coldManager != nil {
+		// Publication persists cold files before pruning KV. Pin KV first, then
+		// the current manifest: old KV plus newer cold coverage cannot lose rows.
+		pinned, release, err := coldManager.PinHistoryReadView()
+		if err != nil {
+			_ = closeView()
+			return nil, nil, err
+		}
+		var manifest *snapshots.Manifest
+		if pinned != nil {
+			manifest = pinned.Manifest()
+		}
+		return directHistorySourceView{AggregatorDB: view, manifest: manifest}, func() error {
+			defer release()
+			return closeView()
+		}, nil
+	}
+	return view, closeView, nil
 }

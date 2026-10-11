@@ -3596,6 +3596,7 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 	var snapshot *blockbuffer.ReadSnapshot
 	var historyView *rawdb.HistoryStagingView
 	readerColdHistory := b.stateColdHistory
+	var releaseDirectCold func()
 	var snapshotErr error
 	if manager := b.chain.historyStaging.Load(); manager != nil {
 		coldManager, ok := b.stateColdHistory.(*snapshots.Manager)
@@ -3628,6 +3629,21 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 		}
 	} else {
 		snapshot, snapshotErr = b.chain.buffer.NewReadSnapshotThrough(headNum)
+		if snapshotErr == nil || errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) {
+			if coldManager, ok := b.stateColdHistory.(*snapshots.Manager); ok && coldManager != nil {
+				// Keep the fixed KV sequence before pinning the cold manifest.
+				// Ordinary publication is durable before history KV pruning.
+				pinned, release, err := coldManager.PinHistoryReadView()
+				if err != nil {
+					if snapshot != nil {
+						_ = snapshot.Close()
+					}
+					b.chain.chainmu.Unlock()
+					return nil, 0, tcommon.Hash{}, nil, err
+				}
+				readerColdHistory, releaseDirectCold = pinned, release
+			}
+		}
 	}
 	if releasePublication != nil {
 		releasePublication()
@@ -3639,6 +3655,9 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 		} else if snapshot != nil {
 			_ = snapshot.Close()
 		}
+		if releaseDirectCold != nil {
+			releaseDirectCold()
+		}
 	}
 	if errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) && b.chain.commitPending != nil {
 		// Backends without durable MVCC snapshots must retain chainmu for the
@@ -3646,6 +3665,7 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 		// layer above the captured head while the query is running.
 		b.chain.WaitForCommitSettled()
 		if errPtr := b.chain.commitErr.Load(); errPtr != nil {
+			closeSnapshot()
 			b.chain.chainmu.Unlock()
 			return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("settle archive state snapshot: %w", *errPtr)
 		}
@@ -3670,7 +3690,7 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("open head state: %w", err)
 	}
 	historyDB := stateHistoryReaderDB(b.chain.buffer)
-	release := b.chain.chainmu.Unlock
+	release := func() { closeSnapshot(); b.chain.chainmu.Unlock() }
 	if snapshotErr == nil {
 		if historyView != nil {
 			historyDB = historyView
@@ -3682,6 +3702,7 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 		b.chain.chainmu.Unlock()
 		release = closeSnapshot
 	} else if !errors.Is(snapshotErr, blockbuffer.ErrReadSnapshotUnsupported) {
+		closeSnapshot()
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("snapshot archive state: %w", snapshotErr)
 	}

@@ -1,10 +1,13 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"strconv"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -74,6 +77,83 @@ func PhysicalKeyFamilyName(family PhysicalKeyFamily) string {
 type PhysicalSpaceRange struct {
 	Name       string
 	Start, End []byte
+}
+
+// DirectHistoryRanges defines the fixed physical partition of historical state
+// rows. The stage progress row is an exact singleton; other stage metadata stays
+// in the hot database. Returned bounds are independently owned and half-open.
+func DirectHistoryRanges() []PhysicalSpaceRange {
+	groups := [...]struct {
+		name   string
+		prefix []byte
+	}{
+		{"state_changeset", stateChangeSetPrefix},
+		{"state_tx_range", stateTxRangePrefix},
+		{"state_history_chunk", stateHistorySharedChunkPrefix},
+		{"state_history_chunk_bucket", stateHistorySharedBucketPrefix},
+		{"state_change_posting", stateChangePostingPrefix},
+		{"state_change_directory", stateChangeKeyDirectoryPrefix},
+	}
+	ranges := make([]PhysicalSpaceRange, 0, len(groups)+1)
+	for _, group := range groups {
+		ranges = append(ranges, PhysicalSpaceRange{Name: group.name, Start: bytes.Clone(group.prefix), End: prefixUpperBound(group.prefix)})
+	}
+	key := stageProgressKey(StageStateHistoryIndex)
+	ranges = append(ranges, PhysicalSpaceRange{Name: "state_history_index_progress", Start: key, End: append(bytes.Clone(key), 0)})
+	return ranges
+}
+
+// IsDirectHistoryKey reports the schema-owned location of one physical key.
+func IsDirectHistoryKey(key []byte) bool {
+	return isDirectHistoryKeyString(string(key))
+}
+
+func isDirectHistoryKeyString(key string) bool {
+	return strings.HasPrefix(key, string(stateChangeSetPrefix)) ||
+		strings.HasPrefix(key, string(stateTxRangePrefix)) ||
+		strings.HasPrefix(key, string(stateHistorySharedChunkPrefix)) ||
+		strings.HasPrefix(key, string(stateHistorySharedBucketPrefix)) ||
+		strings.HasPrefix(key, string(stateChangePostingPrefix)) ||
+		strings.HasPrefix(key, string(stateChangeKeyDirectoryPrefix)) ||
+		key == stageProgressPrefixString+string(StageStateHistoryIndex)
+}
+
+// DirectHistoryLegacyStagingMetadataRange selects the obsolete routing and
+// staging namespace for offline conversion only.
+func DirectHistoryLegacyStagingMetadataRange() PhysicalSpaceRange {
+	return PhysicalSpaceRange{Name: "legacy_history_staging", Start: bytes.Clone(historyStagingMetadataPrefix), End: prefixUpperBound(historyStagingMetadataPrefix)}
+}
+
+// DirectHistoryLayoutInitialized checks the fixed-format offline conversion
+// marker. It does not inspect or certify history contents.
+func DirectHistoryLayoutInitialized(db ethdb.KeyValueReader) (bool, error) {
+	value, present, err := readPresentValue(db, directHistoryLayoutKey, "direct history layout")
+	if err != nil || !present {
+		return false, err
+	}
+	if !bytes.Equal(value, []byte{1}) {
+		return false, errors.New("rawdb: unsupported direct history layout marker")
+	}
+	return true, nil
+}
+
+func MarkDirectHistoryLayout(db ethdb.KeyValueWriter) error {
+	return db.Put(directHistoryLayoutKey, []byte{1})
+}
+
+// LegacyHistoryPayloadPrefix selects one old epoch for the offline converter.
+func LegacyHistoryPayloadPrefix(epoch uint64) []byte {
+	return historyStagingPayloadEpochPrefix(epoch)
+}
+
+// DecodeLegacyHistoryPayloadKey removes an old epoch namespace and returns an
+// independently owned direct-history key.
+func DecodeLegacyHistoryPayloadKey(epoch uint64, key []byte) ([]byte, error) {
+	prefix := historyStagingPayloadEpochPrefix(epoch)
+	if !bytes.HasPrefix(key, prefix) || !IsDirectHistoryKey(key[len(prefix):]) {
+		return nil, errors.New("rawdb: invalid legacy history payload key")
+	}
+	return bytes.Clone(key[len(prefix):]), nil
 }
 
 // DiskSpaceObservationRanges returns independently owned bounds for the twelve
@@ -230,6 +310,8 @@ const (
 
 var (
 	headBlockKey                = []byte("LastBlock")
+	directHistoryLayoutKey      = []byte("direct-history-layout-v1")
+	directHistoryPairKey        = []byte("direct-history-pair-v1")
 	headSolidBlockKey           = []byte("LastSolidBlock")
 	totalTransactionCountKey    = []byte("total-tx-count")
 	historyPruneModeKey         = []byte("history-prune-mode-v1")

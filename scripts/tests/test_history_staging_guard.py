@@ -66,7 +66,7 @@ class HistoryStagingGuardTests(unittest.TestCase):
         required = {'version': 1, 'format_version': 1,
                     'binary_sha256': NEW, 'stop_intent': True,
                     'prune_mode': 'snap', 'history_window': 65536}
-        with mock.patch.object(guard, 'read_root_json', side_effect=[None, None, required]):
+        with mock.patch.object(guard, 'read_root_json', side_effect=[None, None, None, required]):
             with self.assertRaises(guard.StopIntent):
                 guard.check_deploy()
 
@@ -74,12 +74,36 @@ class HistoryStagingGuardTests(unittest.TestCase):
         required = {'version': 1, 'format_version': 1,
                     'binary_sha256': NEW, 'stop_intent': False,
                     'prune_mode': 'snap', 'history_window': 65536}
-        with mock.patch.object(guard, 'read_root_json', side_effect=[None, None, required]), \
+        with mock.patch.object(guard, 'read_root_json', side_effect=[None, None, None, required]), \
                 mock.patch.object(guard, 'service_binary', return_value='/release/gtron'), \
                 mock.patch.object(guard, 'binary_sha', return_value=NEW), \
                 mock.patch.object(guard, 'capable', return_value=False):
             with self.assertRaisesRegex(ValueError, 'capability mismatch'):
                 guard.check_service()
+
+
+    def test_direct_layout_checks_capability_without_staging_inventory_or_hash(self):
+        with mock.patch.object(guard, 'direct_layout', return_value=True), \
+                mock.patch.object(guard, 'service_binary', return_value='/release/gtron'), \
+                mock.patch.object(guard, 'direct_capable', return_value=True), \
+                mock.patch.object(guard, 'binary_sha') as digest, \
+                mock.patch.object(guard, 'check_identity') as old_check:
+            guard.check_service()
+        digest.assert_not_called()
+        old_check.assert_not_called()
+
+    def test_direct_layout_blocks_legacy_start(self):
+        with mock.patch.object(guard, 'direct_layout', return_value=True), \
+                mock.patch.object(guard, 'service_binary', return_value='/old/gtron'), \
+                mock.patch.object(guard, 'direct_capable', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'requires a direct'):
+                guard.check_service()
+
+    def test_direct_move_fence_blocks_start_and_deploy(self):
+        with mock.patch.object(guard.os.path, 'lexists', side_effect=lambda p: p == guard.DIRECT_MOVE):
+            for check in (guard.check_service, guard.check_deploy):
+                with self.assertRaisesRegex(ValueError, 'move in progress'):
+                    check()
 
 
 if __name__ == '__main__':

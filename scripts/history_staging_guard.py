@@ -23,6 +23,8 @@ LATCH = STATE_DIR / 'MIGRATION_IN_PROGRESS.json'
 REQUIRED = STATE_DIR / 'HISTORY_STAGING_READER_REQUIRED.json'
 REPIN_INTENT = STATE_DIR / 'HISTORY_STAGING_REPIN_INTENT.json'
 UPGRADE_BINDING = Path('/var/lib/gtron-history-staging/apply-upgrade.json')
+DIRECT_REQUIRED = STATE_DIR / 'DIRECT_HISTORY_REQUIRED.json'
+DIRECT_MOVE = STATE_DIR / 'DIRECT_HISTORY_MOVE_IN_PROGRESS'
 MAX_JSON = 16 << 10
 MAX_BINARY = 512 << 20
 SHA = re.compile(r'[0-9a-f]{64}\Z')
@@ -160,6 +162,11 @@ def check_upgrade_fence(latch, prepared):
 
 
 def check_service():
+    if direct_layout():
+        if not direct_capable(service_binary()):
+            raise ValueError('direct history layout requires a direct history binary')
+        print(json.dumps({'ok': True, 'direct_history': True}))
+        return
     require_no_repin()
     prepared = read_root_json(PREPARED)
     latch = read_root_json(LATCH)
@@ -175,6 +182,9 @@ def check_service():
 
 
 def check_deploy():
+    if direct_layout():
+        print(json.dumps({'ok': True, 'direct_history': True}))
+        return
     require_no_repin()
     prepared = read_root_json(PREPARED)
     latch = read_root_json(LATCH)
@@ -190,6 +200,29 @@ def check_deploy():
     if required.get('stop_intent', False):
         raise StopIntent('mainnet service has persistent inactive intent')
     print(json.dumps({'ok': True, 'history_staging_deploy_guard': 1}, sort_keys=True))
+
+
+def direct_layout():
+    if os.path.lexists(DIRECT_MOVE):
+        raise ValueError('offline history move in progress; keep service stopped')
+    marker = read_root_json(DIRECT_REQUIRED)
+    if marker is None:
+        return False
+    if marker != {'version': 1, 'format_version': 1}:
+        raise ValueError('unknown direct history format')
+    return True
+
+
+def direct_capable(binary):
+    result = subprocess.run([binary, 'db', 'direct-history-capability'],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, timeout=15, check=False)
+    if result.returncode != 0 or len(result.stdout) > MAX_JSON:
+        return False
+    try:
+        return json.loads(result.stdout) == {'direct_history': True, 'format_version': 1}
+    except (ValueError, UnicodeDecodeError):
+        return False
 
 
 if __name__ == '__main__':

@@ -387,5 +387,15 @@ class MainnetReleaseTests(unittest.TestCase):
         self.assertEqual(events[-1][1], (OLD_BINARY, OLD_SHA, old['argv']))
 
 
+    def test_direct_layout_refuses_old_rollback_before_config_write(self):
+        with mock.patch.object(release.os.path, 'lexists', side_effect=lambda p: p == release.DIRECT_REQUIRED), \
+                mock.patch.object(release, 'root_bytes', return_value=(b'{"version":1,"format_version":1}', 0o644)), \
+                mock.patch.object(release, 'command', return_value='{}'), \
+                mock.patch.object(release, 'atomic_root') as write:
+            with self.assertRaisesRegex(RuntimeError, 'including rollback'):
+                release.restore(old_state())
+        write.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

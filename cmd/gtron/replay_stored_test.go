@@ -115,7 +115,7 @@ func TestGtronStoredReplayAuditAndOfflineStartup(t *testing.T) {
 			if len(records) != 4 || records[0].Type != "start" || records[1].Type != "block" || records[2].Type != "block" || records[3].Type != "complete" {
 				t.Fatalf("audit record sequence = %+v", records)
 			}
-			db, err := rawdb.NewPebbleDB(chainDataDir(fixture.dir), 8, 32)
+			db, err := openPebbleDB(makeDBFlagSet(t, nil), chainDataDir(fixture.dir))
 			if err != nil {
 				t.Fatalf("reopen replayed database: %v", err)
 			}
@@ -182,7 +182,7 @@ func TestGtronStoredReplayRejectsBadSignature(t *testing.T) {
 			t.Fatalf("failed replay produced success record: %+v", record)
 		}
 	}
-	db, err := rawdb.NewPebbleDB(chainDataDir(fixture.dir), 8, 32)
+	db, err := openPebbleDB(makeDBFlagSet(t, nil), chainDataDir(fixture.dir))
 	if err != nil {
 		t.Fatalf("reopen rejected replay database: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestGtronStoredReplayRejectsUnauthenticatedCheckpointHistoryRange(t *testin
 			if err := gtron(storedReplayTestContext(t, args...)); err != nil {
 				t.Fatalf("advance history-enabled checkpoint: %v", err)
 			}
-			db, err := rawdb.NewPebbleDB(chainDataDir(fixture.dir), 8, 32)
+			db, err := openPebbleDB(makeDBFlagSet(t, nil), chainDataDir(fixture.dir))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -230,7 +230,7 @@ func TestGtronStoredReplayRejectsUnauthenticatedCheckpointHistoryRange(t *testin
 			if _, err := os.Stat(auditPath); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("failed history preflight created an audit: %v", err)
 			}
-			db, err = rawdb.NewPebbleDB(chainDataDir(fixture.dir), 8, 32)
+			db, err = openPebbleDB(makeDBFlagSet(t, nil), chainDataDir(fixture.dir))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -287,7 +287,7 @@ func TestGtronStoredReplayRejectsExistingOutputAndNonAdvancingTarget(t *testing.
 				}
 			}
 			assertStoredReplayNoNodeKey(t, fixture.dir)
-			db, err := rawdb.NewPebbleDB(chainDataDir(fixture.dir), 8, 32)
+			db, err := openPebbleDB(makeDBFlagSet(t, nil), chainDataDir(fixture.dir))
 			if err != nil {
 				t.Fatalf("reopen rejected replay database: %v", err)
 			}
@@ -452,7 +452,7 @@ type storedReplayTestFixture struct {
 func (f storedReplayTestFixture) args(auditPath, target string) []string {
 	return []string{"--datadir", f.dir, "--genesis", f.genesisPath,
 		"--sync.replay-stored-to", target, "--sync.replay-audit", auditPath,
-		"--freezer.disable", "--db.cache", "8", "--db.memtable", "8",
+		"--freezer.disable", "--db.cache", "32", "--db.memtable", "8",
 		"--state.trie.cache", "0", "--state.code.cache", "0", "--state.commitment.cache", "0"}
 }
 
@@ -490,7 +490,7 @@ func seedStoredReplayTestDatadir(t *testing.T, badSignature bool) storedReplayTe
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := rawdb.NewPebbleDB(chainDataDir(fixture.dir), 8, 32)
+	db, _, err := openDirectHistoryRuntime(makeDBFlagSet(t, nil), fixture.dir, chainDataDir(fixture.dir), 32, 32, rawdb.DefaultPebbleOptions())
 	if err != nil {
 		t.Fatal(err)
 	}

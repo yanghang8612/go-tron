@@ -50,6 +50,8 @@ STAGING_SOURCE = Path('/data/gtron/main/datadir/gtron/chaindata')
 STAGING_TARGET = Path('/data/gtron/main/datadir/gtron/history-staging')
 STAGING_COLD = Path('/data/gtron/main/datadir/gtron/state-snapshots')
 STAGING_ANCIENT = Path('/data/gtron/main/datadir/gtron/ancient')
+DIRECT_REQUIRED = Path('/data/gtron/main/DIRECT_HISTORY_REQUIRED.json')
+DIRECT_MOVE = Path('/data/gtron/main/DIRECT_HISTORY_MOVE_IN_PROGRESS')
 STAGING_STORAGE_LOCK = '.history-staging-migration.lock'
 STAGING_PEBBLE_MAX_FILES = 200000
 LOCK = Path('/run/lock/gtron-mainnet-release.lock')
@@ -648,12 +650,24 @@ def staging_marker(digest, source, stop_intent=False, prune_mode=None, history_w
 
 
 def require_ordinary_deploy_allowed():
+    require(not os.path.lexists(DIRECT_MOVE), 'offline direct history move blocks deployment')
     require(not os.path.lexists(STAGING_REPIN_INTENT),
             'pending history-staging repin blocks ordinary release and rollback')
     require(not os.path.lexists(STAGING_LATCH),
             'history-staging migration latch blocks ordinary release and rollback')
     require(not os.path.lexists(STAGING_PREPARED) or os.path.lexists(STAGING_REQUIRED),
             'unmigrated history-staging source is pinned to its legacy reader')
+
+
+def require_direct_history_capability(binary):
+    if not os.path.lexists(DIRECT_REQUIRED):
+        return
+    raw, _ = root_bytes(DIRECT_REQUIRED, 4096)
+    require(json.loads(raw) == {'version': 1, 'format_version': 1},
+            'unknown direct history layout')
+    require(json.loads(command([binary, 'db', 'direct-history-capability'], 30)) ==
+            {'direct_history': True, 'format_version': 1},
+            'direct history layout forbids this binary, including rollback')
 
 
 def require_staging_capability(binary):
@@ -881,6 +895,9 @@ def inspect():
                 'history-staging reader marker differs')
         require(props.get('ExecStartPre', '').count(STAGING_GUARD) == 1,
                 'history-staging startup guard is missing/duplicated')
+    if os.path.lexists(DIRECT_REQUIRED):
+        require(props.get('ExecStartPre', '').count(STAGING_GUARD) == 1,
+                'direct history startup guard is missing/duplicated')
     active = props.get('ActiveState') == 'active'
     pid = int(props.get('MainPID', '0'))
     if active:
@@ -972,12 +989,13 @@ def install_release(source, digest, binary_data, has_reference):
 
 def verify(source):
     old = inspect()
+    require_direct_history_capability(old['binary'])
     if old['source'] != source:
         raise SourceDifferent('running source %s differs from requested %s' %
                               (old['source'], source))
     for _, guard_argv, _ in old['guards']:
         command(guard_argv, 60)
-    if old.get('staging') is not None:
+    if old.get('staging') is not None or os.path.lexists(DIRECT_REQUIRED):
         command(['/usr/bin/python3', STAGING_GUARD, 'check-service'], 60)
     if not old['active']:
         raise SameSourceUnhealthy('requested source is configured but service is inactive')
@@ -990,6 +1008,8 @@ def verify(source):
 
 
 def restore(old, health_timeout=None):
+    require(not os.path.lexists(DIRECT_MOVE), 'offline direct history move forbids rollback')
+    require_direct_history_capability(old['binary'])
     require(not os.path.lexists(STAGING_REPIN_INTENT),
             'pending history-staging repin blocks ordinary release and rollback')
     require(not os.path.lexists(STAGING_LATCH),
@@ -1024,6 +1044,7 @@ def deploy(source, candidate, digest, health_timeout=None):
     for _, guard_argv, _ in old['guards']:
         command(guard_argv, 60)
     binary_data = candidate_bytes(candidate, digest)
+    require_direct_history_capability(candidate)
     if old.get('staging') is not None:
         require_staging_capability(candidate)
     new_binary = install_release(source, digest, binary_data, old['reference'] is not None)

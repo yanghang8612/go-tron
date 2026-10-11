@@ -18,7 +18,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	gethmetrics "github.com/ethereum/go-ethereum/metrics"
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
@@ -493,7 +492,7 @@ var app = &cli.App{
 		stateCommitmentCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
-		historyStagingFlag,
+		historyStoreFlag,
 		dbHandlesFlag,
 		dbMemtableFlag,
 		dbTargetFileSizeFlag,
@@ -567,6 +566,7 @@ var app = &cli.App{
 			Flags: []cli.Flag{
 				dataDirFlag,
 				snapshotDirFlag,
+				historyStoreFlag,
 				testnetFlag,
 				genesisFileFlag,
 				dbCacheFlag,
@@ -594,6 +594,25 @@ func initCmd(ctx *cli.Context) error {
 	db, err := openPebbleDB(ctx, dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
+	}
+	// A new init must create the same physical layout as normal fresh startup.
+	_, hasHead, err := rawdb.ReadHeadBlockHashStrict(db)
+	if err != nil {
+		db.Close()
+		return err
+	}
+	if !hasHead {
+		if err := db.Close(); err != nil {
+			return err
+		}
+		cache, handles, tune, err := makePebbleConfig(ctx)
+		if err != nil {
+			return err
+		}
+		db, _, err = openDirectHistoryRuntime(ctx, cfg.DataDir, dbPath, cache, handles, tune)
+		if err != nil {
+			return err
+		}
 	}
 	defer db.Close()
 
@@ -681,13 +700,6 @@ func gtron(ctx *cli.Context) error {
 	}
 	log.Info("Cold snapshot compression enabled", "history", true, "latest", true, "historyFormat", historyCompressionFormat)
 	dbPath := chainDataDir(cfg.DataDir)
-	stagingRequest, err := resolveHistoryStagingRuntimeRequest(ctx, cfg.DataDir, dbPath, snapshotDir(ctx, cfg.DataDir))
-	if err != nil {
-		return err
-	}
-	if stagingRequest.Enabled && ctx.Bool("snapshot.bootstrap") {
-		return errors.New("history staging cannot use --snapshot.bootstrap without staged stores and route proof in the imported snapshot")
-	}
 
 	// In dev mode, parse witness key early so we can build the genesis with it
 	var devWitnessKey *ecdsa.PrivateKey
@@ -715,22 +727,6 @@ func gtron(ctx *cli.Context) error {
 			"witnesses", len(genesis.Witnesses),
 			"accounts", len(genesis.Accounts))
 	}
-	if stagingRequest.Enabled {
-		if genesis.Config == nil {
-			return errors.New("history staging requires configured chain history settings")
-		}
-		proposed := *genesis.Config
-		if err := applyHistoryConfig(ctx, &proposed); err != nil {
-			return err
-		}
-		if err := validateHistoryStagingRuntimeConfig(&proposed); err != nil {
-			return err
-		}
-		if stagingRequest.Required && (proposed.EffectiveHistoryMode() != stagingRequest.PruneMode ||
-			proposed.EffectiveHistoryPruneWindow() != stagingRequest.HistoryWindow) {
-			return errors.New("history staging effective mode/window differs from verified offline migration")
-		}
-	}
 	if ctx.Bool("snapshot.bootstrap") {
 		log.Info("Bootstrapping verified remote snapshot before node startup")
 		if err := bootstrapRuntimeSnapshot(ctx); err != nil {
@@ -739,48 +735,15 @@ func gtron(ctx *cli.Context) error {
 		log.Info("Verified remote snapshot bootstrap completed")
 	}
 
-	// Open the two Pebble stores from one aggregate --db.cache allowance.
-	var stageDB ethdb.KeyValueStore
 	cacheMiB, handles, tune, err := makePebbleConfig(ctx)
 	if err != nil {
 		return err
 	}
-	hotCacheMiB, stageCacheMiB := cacheMiB, 0
-	if stagingRequest.Enabled {
-		hotCacheMiB, stageCacheMiB, err = historyStagingRuntimeCacheSplit(cacheMiB)
-		if err != nil {
-			return err
-		}
-		log.Info("History staging Pebble cache split", "totalMiB", cacheMiB, "hotMiB", hotCacheMiB, "stageMiB", stageCacheMiB)
-	}
-	var db ethdb.KeyValueStore
-	db, err = rawdb.NewPebbleDBWithOptions(dbPath, hotCacheMiB, handles, tune)
+	db, historyPath, err := openDirectHistoryRuntime(ctx, cfg.DataDir, dbPath, cacheMiB, handles, tune)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	storedIdentity, stagedSource, err := rawdb.ReadHistoryStagingIdentity(db)
-	if err != nil {
-		db.Close()
 		return err
 	}
-	if stagedSource != stagingRequest.Persisted || (stagingRequest.Required && !stagedSource) {
-		db.Close()
-		return errors.New("history staging persisted source identity and required reader marker disagree")
-	}
-	if stagingRequest.Fresh && !stagingRequest.Persisted {
-		if _, hasHead, err := rawdb.ReadHeadBlockHashStrict(db); err != nil || hasHead {
-			db.Close()
-			return errors.New("history staging existing chain requires offline migration before enabling")
-		}
-	}
-	_ = storedIdentity
-	if stagingRequest.Enabled {
-		stageDB, err = rawdb.NewHistoryStagingPebbleDB(stagingRequest.Paths.Target, stageCacheMiB, max(32, handles/8), false)
-		if err != nil {
-			db.Close()
-			return fmt.Errorf("open history staging database: %w", err)
-		}
-	}
+	log.Info("History writes use independent database", "dir", historyPath)
 	var ancientStore *rawdbfreezer.Freezer
 	var storesCloseOnce sync.Once
 	var storesCloseErr error
@@ -792,12 +755,6 @@ func gtron(ctx *cli.Context) error {
 					log.Error("Ancient database close failed", "err", err)
 				}
 				ancientStore = nil
-			}
-			if stageDB != nil {
-				if err := closeRuntimeStore("history staging database", stageDB.Close); err != nil {
-					storesCloseErr = errors.Join(storesCloseErr, err)
-					log.Error("History staging database close failed", "err", err)
-				}
 			}
 			if err := closeRuntimeStore("chaindata", db.Close); err != nil {
 				storesCloseErr = errors.Join(storesCloseErr, err)
@@ -816,10 +773,6 @@ func gtron(ctx *cli.Context) error {
 			return fmt.Errorf("open freezer: %w", err)
 		}
 		ancientReader = rawdb.NewFreezerReader(ancientStore)
-	}
-	var stagingAncientWriter rawdb.AncientWriter
-	if ancientStore != nil {
-		stagingAncientWriter = ancientStore
 	}
 	stateSnapshotDir := snapshotDir(ctx, cfg.DataDir)
 	eventLogVersion, err := snapshotEventLogBuildVersion(ctx)
@@ -863,67 +816,6 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("open state snapshots: %w", err)
 	}
 	ancientReader = rawdb.NewFallbackAncientReader(ancientReader, stateSnapshotManager)
-	var stagingManager *rawdb.HistoryStagingManager
-	var stagingResetIntent *rawdb.HistoryStagingResetIntent
-	if stagingRequest.Enabled {
-		forkHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
-		if err != nil {
-			closeStores()
-			return err
-		}
-		chainIdentity, err := snapshotExpectedChainIdentityFromGenesis(genesis, forkHash)
-		if err != nil {
-			closeStores()
-			return err
-		}
-		if chainIdentity.NetworkID < 0 {
-			closeStores()
-			return errors.New("history staging network ID is negative")
-		}
-		identity := historyStagingIdentity(stagingRequest.Paths, common.HexToHash(chainIdentity.GenesisHash), uint64(chainIdentity.NetworkID))
-		if stagingRequest.Persisted && storedIdentity != identity {
-			closeStores()
-			return errors.New("history staging persisted identity differs from configured chain and paths")
-		}
-		stagingManager, err = rawdb.NewHistoryStagingManager(db, stageDB, identity)
-		if err != nil {
-			closeStores()
-			return err
-		}
-		if stagingRequest.Persisted && !stagingRequest.Fresh {
-			if err := stagingManager.VerifyIdentity(); err != nil {
-				closeStores()
-				return err
-			}
-			reset, hasReset, err := stagingManager.ReadResetIntent()
-			if err != nil {
-				closeStores()
-				return err
-			}
-			if hasReset && !reset.Complete {
-				stagingResetIntent, err = core.PrepareHistoryStagingResetStartup(context.Background(), db, ancientReader, stagingAncientWriter, stagingManager, genesis)
-				if err != nil {
-					closeStores()
-					return err
-				}
-			} else {
-				boundary, err := readOfflineChainBoundary(rawdb.NewChainDB(db, ancientReader))
-				if err != nil {
-					closeStores()
-					return fmt.Errorf("history staging pre-constructor boundary: %w", err)
-				}
-				if err := verifyHistoryStagingConstructorIndex(db, rawdb.NewChainDB(db, ancientReader), boundary); err != nil {
-					closeStores()
-					return err
-				}
-				finish, present, err := rawdb.ReadStageProgressRow(db, rawdb.StageFinish)
-				if err != nil || !present || !finish.HasBlockHash || finish.BlockNum != boundary.HeadBlock || finish.BlockHash != boundary.HeadHash {
-					closeStores()
-					return errors.New("history staging requires hash-bound Finish at head before constructor")
-				}
-			}
-		}
-	}
 
 	// Setup genesis (idempotent)
 	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
@@ -941,17 +833,6 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return err
 	}
-	if stagingRequest.Enabled {
-		if err := validateHistoryStagingRuntimeConfig(chainConfig); err != nil {
-			closeStores()
-			return err
-		}
-		if stagingRequest.Required && (chainConfig.EffectiveHistoryMode() != stagingRequest.PruneMode ||
-			chainConfig.EffectiveHistoryPruneWindow() != stagingRequest.HistoryWindow) {
-			closeStores()
-			return errors.New("history staging effective mode/window differs from verified offline migration")
-		}
-	}
 	if postingPrune && (!shouldEnableDomainStatePruner(chainConfig) || chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap || !chainConfig.HistoryEnabled) {
 		closeStores()
 		return errors.New("GTRON_POSTING_PRUNE requires snap mode with history enabled")
@@ -963,12 +844,6 @@ func gtron(ctx *cli.Context) error {
 	if err := ensureHistoryPruneModeLocked(db, chainConfig.EffectiveHistoryMode()); err != nil {
 		closeStores()
 		return err
-	}
-	if stagingRequest.Fresh {
-		if err := stagingManager.Initialize(context.Background()); err != nil {
-			closeStores()
-			return err
-		}
 	}
 	// Snap mode continuously publishes authenticated event-log segments ahead
 	// of the direct V2 freezer. Once a complete freezer segment is covered, its
@@ -1052,19 +927,6 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
 	}
-	if stagingManager != nil {
-		bc.SetStateCodeColdHistory(stateSnapshotManager)
-		if err := bc.SetHistoryStagingManager(stagingManager); err != nil {
-			closeStores()
-			return err
-		}
-		if stagingResetIntent != nil {
-			if err := bc.RestartSyncFromHeight(stagingResetIntent.TargetHeight, genesis, stagingAncientWriter, nil); err != nil {
-				closeStores()
-				return fmt.Errorf("resume history staging reset: %w", err)
-			}
-		}
-	}
 	bc.SetCommitmentBranchCacheSize(commitmentCacheMiB * 1024 * 1024)
 	bc.SetInternalTransactionPersistence(cfg.SaveInternalTx, cfg.SaveFeaturedInternalTx, cfg.SaveCancelAllUnfreezeV2Details)
 	log.Info("VM internal transaction persistence configured",
@@ -1128,23 +990,6 @@ func gtron(ctx *cli.Context) error {
 		}
 		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
 	}
-	if stagingManager != nil {
-		if stagingRequest.Fresh {
-			if err := publishFreshHistoryStagingBarrier(stagingManager, stagingRequest.ExecutableSHA256,
-				bc.CurrentBlock().Number(), bc.CurrentBlock().Hash(), genesisHash); err != nil {
-				closeStores()
-				return err
-			}
-		}
-		if err := statesnapshots.BindHistoryStagingColdRetention(stateSnapshotDir, stagingManager); err != nil {
-			closeStores()
-			return fmt.Errorf("bind history staging cold retention: %w", err)
-		}
-		if err := bc.VerifyHistoryStagingRuntimeReady(context.Background()); err != nil {
-			closeStores()
-			return fmt.Errorf("history staging runtime preflight: %w", err)
-		}
-	}
 	// Create transaction pool
 	pool := txpool.New()
 
@@ -1157,9 +1002,7 @@ func gtron(ctx *cli.Context) error {
 
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
-	if stagingManager == nil {
-		bc.SetStateCodeColdHistory(stateSnapshotManager)
-	}
+	bc.SetStateCodeColdHistory(stateSnapshotManager)
 	bc.SetStateCommitmentColdHistory(stateSnapshotManager)
 	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
 	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
@@ -1378,34 +1221,6 @@ func gtron(ctx *cli.Context) error {
 	// Register before consumers: node shutdown stops them before the sampler,
 	// and failed startup unwinds the sampler before the stores are closed.
 	stack.RegisterLifecycle(historyResources)
-	var stagingResources *runtimeHistoryResources
-	if stagingManager != nil {
-		stagingResources = newRuntimeHistoryResources(stageDB, stagingRequest.Paths.Target)
-		stack.RegisterLifecycle(stagingResources)
-		limits := rawdb.HistoryStagingLimits{
-			MaxRowBytes: 16 << 20, MaxBatchBytes: 16 << 20,
-			MaxBucketBytes: 2 << 30, MaxWorkBytes: 4 << 30,
-			MaxDecodedBytes: 64 << 20, MinFreeBytes: 16 << 30,
-			FreeBytes: func() (uint64, error) {
-				return historyStagingMinimumFreeBytes(dbPath, stagingRequest.Paths.Target)
-			},
-		}
-		mover, err := core.NewHistoryStagingMover(bc, core.HistoryStagingMoverConfig{
-			HistoryWindow: chainConfig.EffectiveHistoryPruneWindow(), Cadence: 5 * time.Second,
-			Limits: limits, HeavyWorkGate: heavyWorkGate,
-			HotPressure: historyResources.sampleLoad, StagePressure: stagingResources.sampleLoad,
-			MemoryProbe: historyResources.stagingMemoryHeadroom,
-		})
-		if err != nil {
-			closeStores()
-			return fmt.Errorf("configure history staging mover: %w", err)
-		}
-		stack.RegisterLifecycle(mover)
-		// Staging's derived posting/directory cleanup is performed during
-		// fenced offline maintenance. Keep the bounded worker implementation
-		// available, but do not delete index rows while mainnet is syncing.
-		log.Info("Staging history-index GC is offline-only")
-	}
 	historyLoadProbe := historyResources.sampleLoad
 	historyParallelReady := historyResources.parallelReady
 	heavyWorkGate.SetAdmissionCheck(func() bool {
@@ -1490,15 +1305,10 @@ func gtron(ctx *cli.Context) error {
 				return statesnapshots.PruneHotBalanceTracesWithProgress(db, stateSnapshotDir, manifest)
 			}
 		}
-		stateChangeIndexPruner := statepruning.StateChangeIndexPruner{
-			DB:            db,
-			SnapshotDir:   stateSnapshotDir,
-			HeavyWorkGate: heavyWorkGate,
-		}
-		var fullIndexPrune statepruning.StateChangeIndexPruneFunc = stateChangeIndexPruner.OnePass
-		if postingPrune || stagingManager != nil {
-			fullIndexPrune = nil
-		}
+		// A full directory sweep cannot race ordinary block/solid flush writes.
+		// Keep it offline; the separately fenced bounded posting worker remains
+		// controlled by postingPrune below.
+		var fullIndexPrune statepruning.StateChangeIndexPruneFunc
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
 				CommitmentBaseMode:          commitmentBaseMode,
@@ -1592,7 +1402,7 @@ func gtron(ctx *cli.Context) error {
 		if historyBacklog.enabled {
 			log.Info("Cold history backlog import admission enabled", "highBlocks", historyBacklog.high, "lowBlocks", historyBacklog.low, "historyWindow", prunePolicy.HistoryWindow)
 		}
-		if postingPrune && stagingManager == nil {
+		if postingPrune {
 			stack.RegisterLifecycle(statepruning.NewPostingPruneWorker(statepruning.PostingPruneWorkerConfig{
 				Boundary:      domainLifecycle.PostingPruneBoundary,
 				Chunk:         runtimePostingPruneChunk(bc, heavyWorkGate, historyResources.postingPressure),
@@ -1614,7 +1424,7 @@ func gtron(ctx *cli.Context) error {
 			"sectionBloomPrune", sectionBloomPrune != nil,
 			"balanceTracePrune", balanceTracePrune != nil,
 			"stateChangeIndexPrune", fullIndexPrune != nil,
-			"postingChunkPrune", postingPrune && stagingManager == nil,
+			"postingChunkPrune", postingPrune,
 			"historyRangePrune", historyRangePrune,
 			"historyRangeQueue", historyRangeQueue,
 			"retiredPrune", true,
