@@ -12,7 +12,7 @@ REMOTE = 'a' * 40
 
 
 class StartMainnetTests(unittest.TestCase):
-    def run_start(self, verify_status, staging_guard_status=0, staged=False):
+    def run_start(self, verify_status, staging_guard_status=0, staged=False, build_success=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / 'go-tron'
@@ -28,6 +28,7 @@ class StartMainnetTests(unittest.TestCase):
             fake('git', 'case "$1" in rev-parse) echo ' + REMOTE +
                  ';; symbolic-ref) echo master;; esac\nexit 0')
             fake('sudo', 'echo "$@" >> "$MOCK_CALLS"\n'
+                 'case "$*" in *" deploy "*) printf "deploy-arg=<%s>\\n" "$@" >> "$MOCK_CALLS";; esac\n'
                  'case "$*" in *" check-deploy") exit "$MOCK_STAGING_GUARD_STATUS";; esac\n'
                  'case "$*" in *" staging-timeout "*) echo 43200; exit 0;; esac\n'
                  'case "$*" in *" verify --source "*) '
@@ -37,7 +38,13 @@ class StartMainnetTests(unittest.TestCase):
             fake('flock', 'exit 0')
             fake('systemctl', 'exit 0')
             fake('curl', 'exit 0')
-            fake('make', 'echo "make $*" >> "$MOCK_CALLS"\nexit 7')
+            fake('make', 'echo "make $*" >> "$MOCK_CALLS"\n'
+                 '[ "$MOCK_BUILD_SUCCESS" = 1 ] || exit 7\n'
+                 'for arg in "$@"; do case "$arg" in GOBIN=*) '
+                 'out="${arg#GOBIN=}"; mkdir -p "$out"; '
+                 'printf "#!/bin/sh\\nexit 0\\n" > "$out/gtron"; '
+                 'chmod +x "$out/gtron";; esac; done\nexit 0')
+            fake('sha256sum', 'echo "' + 'b' * 64 + '  $1"')
             env = os.environ.copy()
             required = root / 'main' / 'HISTORY_STAGING_READER_REQUIRED.json'
             if staged:
@@ -51,6 +58,7 @@ class StartMainnetTests(unittest.TestCase):
                         'MOCK_CALLS': str(root / 'calls'),
                         'MOCK_SECOND_VERIFY': str(root / 'second-verify'),
                         'MOCK_VERIFY_STATUS': str(verify_status),
+                        'MOCK_BUILD_SUCCESS': '1' if build_success else '0',
                         'MOCK_STAGING_GUARD_STATUS': str(staging_guard_status),
                         'PATH': str(fake_bin) + os.pathsep + env['PATH']})
             result = subprocess.run(['/bin/bash', str(SCRIPT)], cwd=str(root), env=env,
@@ -109,6 +117,30 @@ class StartMainnetTests(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertIn('staging-timeout --staging-health-timeout-sec 43200', calls)
         self.assertIn('staging startup health timeout: 43200s', output)
+
+    def test_release_publication_optional_health_arguments_under_nounset(self):
+        # /bin/bash is macOS Bash 3.2 here; empty arrays under nounset also
+        # fail on older server Bash. Exercise the complete publication path,
+        # preserving both absence and exact argument boundaries.
+        for staged in (False, True):
+            with self.subTest(staged=staged):
+                status, output, state, calls = self.run_start(
+                    3, staged=staged, build_success=True)
+                self.assertEqual(status, 0, output)
+                self.assertEqual(state, REMOTE + '\n')
+                args = [line[len('deploy-arg=<'):-1] for line in calls.splitlines()
+                        if line.startswith('deploy-arg=<')]
+                self.assertEqual(args[:7], ['-n', '/usr/bin/python3',
+                    '/usr/local/libexec/gtron-mainnet-release.py', 'deploy',
+                    '--source', REMOTE, '--candidate'])
+                self.assertTrue(args[7].endswith('/gtron'), args)
+                self.assertEqual(args[8:10], ['--sha256', 'b' * 64])
+                self.assertEqual(len(args), 12 if staged else 10)
+                self.assertNotIn('', args)
+                if staged:
+                    self.assertEqual(args[-2:], ['--staging-health-timeout-sec', '43200'])
+                else:
+                    self.assertNotIn('--staging-health-timeout-sec', args)
 
 
 if __name__ == '__main__':

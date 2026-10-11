@@ -245,9 +245,11 @@ if [[ "$SERVICE_NAME" == "gtron.service" ]]; then
   candidate_sha="$(sha256sum "$deploy_build_dir/gtron")"
   candidate_sha="${candidate_sha%% *}"
   log "publishing root-owned mainnet release for $remote_rev"
+  # Bash before 4.4 treats an empty array as unset under nounset. The guarded
+  # expansion emits zero optional arguments, or the original quoted elements.
   sudo -n /usr/bin/python3 "$MAINNET_RELEASE_HELPER" deploy \
     --source "$remote_rev" --candidate "$deploy_build_dir/gtron" --sha256 "$candidate_sha" \
-    "${release_health_arg[@]}"
+    ${release_health_arg[@]+"${release_health_arg[@]}"}
   # The helper returns only after the effective systemd command, configured
   # reader guards, process executable SHA, and Wallet API have been verified.
   state_tmp="$STATE_FILE.tmp.$$"
