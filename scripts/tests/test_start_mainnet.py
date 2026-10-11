@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).parents[1] / 'start.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'start.sh'
 REMOTE = 'a' * 40
 
 
@@ -27,7 +27,7 @@ class StartMainnetTests(unittest.TestCase):
 
             fake('git', 'case "$1" in rev-parse) echo ' + REMOTE +
                  ';; symbolic-ref) echo master;; esac\nexit 0')
-            fake('sudo', 'echo "$@" >> "$MOCK_CALLS"\n'
+            fake('sudo', 'printf \'%s\\n\' "$*" >> "$MOCK_CALLS"\n'
                  'case "$*" in *" deploy "*) printf "deploy-arg=<%s>\\n" "$@" >> "$MOCK_CALLS";; esac\n'
                  'case "$*" in *" check-deploy") exit "$MOCK_STAGING_GUARD_STATUS";; esac\n'
                  'case "$*" in *" staging-timeout "*) echo 43200; exit 0;; esac\n'
