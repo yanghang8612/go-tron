@@ -17,7 +17,10 @@ const defaultCompactionMaxSteps = uint64(256)
 
 // CompactionConfig controls history segment compaction.
 type CompactionConfig struct {
-	MaxSteps uint64
+	// ReferenceContainer opts into R1 output. False rewrites R1 inputs through
+	// the normal streaming codec, so disabling R1 also applies to compaction.
+	ReferenceContainer bool
+	MaxSteps           uint64
 	// MinSteps defers small merges until an aligned run reaches this logical
 	// span. Zero keeps the normal two-step minimum. Catch-up builders set it to
 	// MaxSteps so fresh sync writes each frozen range once instead of rewriting
@@ -160,7 +163,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		return cost, err
 	}
 	var readReference historyReferenceCompactionBudgetRead
-	if historyCfg.Dataset == SegmentDatasetStateDomainChange {
+	if historyCfg.Dataset == SegmentDatasetStateDomainChange && cfg.ReferenceContainer {
 		cache := make(map[SegmentRef]historyReferenceCompactionInputBudget)
 		readReference = func(candidate historyCompactionCandidate) (historyReferenceCompactionInputBudget, error) {
 			if input, ok := cache[candidate.history]; ok {
@@ -195,6 +198,12 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		}
 		return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: cfg.BusyLeafOnly || selection.referenceDeferReason != "", DeferReason: reason}, nil
 	}
+	if !cfg.ReferenceContainer {
+		selection.outputMode = historyCompactionOutputStreaming
+	} else if selection.outputMode == historyCompactionOutputAuto {
+		selection.outputMode = historyCompactionOutputReference
+	}
+
 	if dataset == SegmentDatasetStateDomainChange {
 		release, admitted, claimErr := claimHistoryProofRange(dir, selection.fromTxNum, selection.toTxNum, true)
 		if claimErr != nil {

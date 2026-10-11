@@ -2593,6 +2593,17 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		"--snapshot.dir", snapshotDir,
 		"--snapshot.trusted-key", hex.EncodeToString(pub),
 	})
+	// Even a fresh target's format bit cannot certify imported state/history.
+	target, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.MarkPagedDelegationLayout(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := snapshotRestoreCmd(ctx); err != nil {
 		t.Fatalf("snapshotRestoreCmd: %v", err)
 	}
@@ -2602,6 +2613,9 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		t.Fatalf("open restored db: %v", err)
 	}
 	defer db.Close()
+	if err := ensurePagedDelegationLayout(db); err == nil || !strings.Contains(err.Error(), "sync from genesis") {
+		t.Fatalf("imported uncertified layout admitted to runtime: %v", err)
+	}
 	fz, err := rawdbfreezer.NewFreezer(ancientDataDir(dataDir), "", true, freezerTableSize, chainfreezer.FreezerTableSet())
 	if err != nil {
 		t.Fatalf("open restored freezer: %v", err)

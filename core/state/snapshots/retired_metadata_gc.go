@@ -259,8 +259,10 @@ func retiredMetadataSweepGuard(dir string, fs retiredMetadataSweepFS) (os.FileIn
 	}
 	// A pending journal binds exact before/after manifest bytes and old retired
 	// refs. Its mere presence, including a dangling symlink, forbids metadata GC.
-	if _, err := fs.lstat(filepath.Join(dir, historyReferenceMigrationJournalFile)); err == nil || !os.IsNotExist(err) {
-		return rootInfo, retiredMetadataDeferredMigration
+	for _, journal := range []string{historyReferenceMigrationJournalFile, historyCDCMigrationJournalFile} {
+		if _, err := fs.lstat(filepath.Join(dir, journal)); err == nil || !os.IsNotExist(err) {
+			return rootInfo, retiredMetadataDeferredMigration
+		}
 	}
 	// A legacy catalog leases mutable manifest.json. Immutable catalogs also
 	// have a published generation below, but treating any catalog presence as a

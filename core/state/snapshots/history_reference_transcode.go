@@ -3,7 +3,9 @@ package snapshots
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -399,12 +401,16 @@ func historyReferenceCopyCompanion(ctx context.Context, src, dst string, ref Seg
 		return err
 	}
 	defer func() { err = errors.Join(err, out.Close()) }()
-	n, err := io.CopyBuffer(out, contextReader{ctx: ctx, r: in}, make([]byte, 64<<10))
+	digest := sha256.New()
+	n, err := io.CopyBuffer(io.MultiWriter(out, digest), contextReader{ctx: ctx, r: in}, make([]byte, 64<<10))
 	if err != nil {
 		return err
 	}
 	if uint64(n) != ref.Size {
 		return errors.New("snapshots: copied companion size differs")
+	}
+	if "sha256:"+hex.EncodeToString(digest.Sum(nil)) != ref.Checksum {
+		return errors.New("snapshots: copied companion checksum differs")
 	}
 	return out.Sync()
 }

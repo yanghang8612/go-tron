@@ -654,7 +654,7 @@ func compactStateDomainChangeBinaryHistoryRunContext(ctx context.Context, dir st
 		if err != nil {
 			return nil, err
 		}
-		if string(magic[:]) == historyReferenceMagic && selection.outputMode != historyCompactionOutputStreaming {
+		if string(magic[:]) == historyReferenceMagic && selection.outputMode == historyCompactionOutputReference {
 			return compactStateDomainChangeReferenceHistoryRunContext(ctx, dir, cfg, selection, sources, progress)
 		}
 	}

@@ -3,14 +3,12 @@ package state
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
-	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -44,6 +42,8 @@ type legacyDelegationCache struct {
 type legacyDelegationEntry struct {
 	key            string
 	record         *corepb.DelegatedResourceAccountIndex
+	pages          legacyDelegationPages
+	exists         bool
 	fromSet, toSet map[string]struct{}
 	charge         int
 	newer, older   *legacyDelegationEntry
@@ -105,7 +105,11 @@ func (s *stateObject) invalidateLegacyDelegation(mapKey string) {
 	if s.legacyDelegation == nil || len(mapKey) < 2 || kvdomains.KVDomain(binary.BigEndian.Uint16([]byte(mapKey[:2]))) != kvdomains.SystemDelegation {
 		return
 	}
-	s.legacyDelegation.remove(s.legacyDelegation.entries[mapKey[2:]])
+	key := []byte(mapKey[2:])
+	if account, ok := rawdb.DrAccountIndexLegacyPageAccount(key); ok {
+		key = rawdb.DrAccountIndexLegacyStateKey(account)
+	}
+	s.legacyDelegation.remove(s.legacyDelegation.entries[string(key)])
 }
 
 func (s *StateDB) clearLegacyDelegationCache() {
@@ -129,15 +133,24 @@ func (s *StateDB) legacyDelegationCacheFor(obj *stateObject) *legacyDelegationCa
 }
 
 func newLegacyDelegationEntry(key []byte, rec *corepb.DelegatedResourceAccountIndex) *legacyDelegationEntry {
-	e := &legacyDelegationEntry{key: string(key), record: rec}
-	// Conservative accounting includes message/entry/cache-map overhead, the
-	// decoder's complete byte/header arenas, and separately owned membership
-	// keys plus map buckets. Oversized rows do not allocate membership tables.
+	return newLegacyDelegationEntryWithPages(key, rec, splitLegacyDelegationPages(rec))
+}
+
+func newLegacyDelegationEntryWithPages(key []byte, rec *corepb.DelegatedResourceAccountIndex, pages legacyDelegationPages) *legacyDelegationEntry {
+	e := &legacyDelegationEntry{key: string(key), record: rec, pages: pages}
+	// Include the materialized list and page header arrays, owned page byte
+	// arenas (at most ten framing bytes per entry), and membership map keys.
 	e.charge = 512 + len(key) + len(rec.Account) + len(rec.ProtoReflect().GetUnknown())
+	for _, direction := range [][][][]byte{pages.from, pages.to} {
+		e.charge += cap(direction) * 24
+		for _, page := range direction {
+			e.charge += cap(page)*24 + 15
+		}
+	}
 	for _, list := range [][][]byte{rec.FromAccounts, rec.ToAccounts} {
 		e.charge += cap(list) * 24
 		for _, addr := range list {
-			e.charge += len(addr)
+			e.charge += len(addr) + 10
 		}
 		if len(list) >= legacyDelegationSetMinimum {
 			for _, addr := range list {
@@ -213,23 +226,21 @@ func (s *StateDB) loadLegacyDelegation(account []byte) (*legacyDelegationEntry, 
 	if cache != nil {
 		if e := cache.get(string(key)); e != nil {
 			legacyDelegationHits.Inc(1)
+			s.recordLegacyDelegationPageReads(e)
 			return e, true, nil
 		}
 	}
 	legacyDelegationMisses.Inc(1)
-	data, exists, err := s.readSystemDelegationWithError(key)
+	rec, pages, exists, err := readPagedDelegationIndex(account, s.readSystemDelegationWithError)
 	if err != nil {
 		return nil, exists, err
 	}
 	if !exists {
 		return newLegacyDelegationEntry(key, &corepb.DelegatedResourceAccountIndex{Account: bytes.Clone(account)}), false, nil
 	}
-	rec, err := statecodec.UnmarshalDelegationIndex(data)
-	if err != nil {
-		return nil, true, fmt.Errorf("decode dr account index legacy: %w", err)
-	}
 	legacyDelegationDecoded.Inc(int64(len(rec.FromAccounts) + len(rec.ToAccounts)))
-	e := newLegacyDelegationEntry(key, rec)
+	e := newLegacyDelegationEntryWithPages(key, rec, pages)
+	e.exists = true
 	if cache != nil {
 		cache.admit(e)
 	}
@@ -247,6 +258,10 @@ func (s *StateDB) detachLegacyDelegation(e *legacyDelegationEntry) {
 // shared mutable snapshot is necessary. A failed write leaves no stale entry.
 func (s *StateDB) changeLegacyDelegation(e *legacyDelegationEntry, peer []byte, incoming, remove bool) error {
 	s.detachLegacyDelegation(e)
+	oldFromPages, oldToPages := len(e.pages.from), len(e.pages.to)
+	if err := s.changeLegacyDelegationPages(e, peer, incoming, remove); err != nil {
+		return err
+	}
 	list, set := &e.record.ToAccounts, e.toSet
 	if incoming {
 		list, set = &e.record.FromAccounts, e.fromSet
@@ -260,7 +275,7 @@ func (s *StateDB) changeLegacyDelegation(e *legacyDelegationEntry, peer []byte, 
 		oldCap := cap(*list)
 		ownedPeer := bytes.Clone(peer)
 		*list = append(*list, ownedPeer)
-		e.charge += cap(ownedPeer)
+		e.charge += 2*cap(ownedPeer) + 10
 		if cap(*list) != oldCap {
 			// The other list may still pin the old shared header arena. Retain
 			// its charge and add the whole new allocation, not just the delta.
@@ -282,12 +297,11 @@ func (s *StateDB) changeLegacyDelegation(e *legacyDelegationEntry, peer []byte, 
 			}
 		}
 	}
-	data, err := statecodec.MarshalDelegationIndex(e.record)
-	if err != nil {
-		return fmt.Errorf("dr account index: marshal legacy: %w", err)
-	}
-	if err := s.writeSystemDelegation([]byte(e.key), data); err != nil {
-		return err
+	if !e.exists || oldFromPages != len(e.pages.from) || oldToPages != len(e.pages.to) {
+		if err := s.writeLegacyDelegationDescriptor(e); err != nil {
+			return err
+		}
+		e.exists = true
 	}
 	legacyDelegationChanges.Inc(1)
 	obj := s.getStateObjectWithoutAccess(tcommon.SystemAccountAddress)

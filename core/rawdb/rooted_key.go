@@ -61,7 +61,8 @@ func LookupRootedStateKey(key []byte) (RootedStateKey, bool) {
 		return rootedSystem(kvdomains.SystemForkVote, key), true
 	case bytes.HasPrefix(key, delegationPrefix),
 		bytes.HasPrefix(key, delegationIndexPrefix),
-		bytes.HasPrefix(key, drAccIdxPrefix):
+		bytes.HasPrefix(key, drAccIdxPrefix),
+		bytes.HasPrefix(key, drAccIdxPagePrefix):
 		return rootedSystem(kvdomains.SystemDelegation, key), true
 	case bytes.HasPrefix(key, delegRewardPrefix),
 		bytes.HasPrefix(key, rewardViPrefix):

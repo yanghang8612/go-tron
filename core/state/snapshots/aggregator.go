@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -659,9 +660,21 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 			return nil, err
 		}
 	}
-	segments := append([]SegmentRef(nil), refs...)
+	segmentCapacity, retiredCapacity := len(refs), 0
+	if old != nil {
+		segmentCapacity += len(old.Segments)
+		retiredCapacity = len(old.Retired) + len(refs)
+	}
+	var segments []SegmentRef
+	if segmentCapacity > 0 {
+		segments = make([]SegmentRef, 0, segmentCapacity)
+	}
+	segments = append(segments, refs...)
 	generation := uint64(1)
 	var retired []SegmentRef
+	if retiredCapacity > 0 {
+		retired = make([]SegmentRef, 0, retiredCapacity)
+	}
 	var progress *Progress
 	var chain *ChainIdentity
 	if old != nil {
@@ -679,8 +692,12 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 			}
 		}
 	}
-	manifest := NewManifest(visibleStart, visibleEnd, segments)
-	manifest.Generation = generation
+	// These slices are already private to this integration. PublishManifest
+	// performs the one required sort and validation before durable publication.
+	manifest := &Manifest{
+		Version: CurrentManifestVersion, Generation: generation, PublishedUnix: time.Now().Unix(),
+		VisibleTxStart: visibleStart, VisibleTxEnd: visibleEnd, Segments: segments,
+	}
 	if old != nil {
 		manifest.HistoryStagingResetEpoch = old.HistoryStagingResetEpoch
 	}
@@ -705,7 +722,7 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 		manifest.Progress.AccessorBuildTxNum = accessorBuildTxNum
 		manifest.Progress.CommitmentFlushTxNum = commitmentFlushTxNum
 	}
-	manifest.Retired = dedupeSegmentRefs(retired)
+	manifest.Retired = dedupeSegmentRefsInPlace(retired)
 	if err := PublishManifest(a.dir, manifest); err != nil {
 		return nil, err
 	}
@@ -1081,11 +1098,19 @@ func segmentOverlapsAnyFamily(ref SegmentRef, refs []SegmentRef) bool {
 }
 
 func dedupeSegmentRefs(refs []SegmentRef) []SegmentRef {
+	out := dedupeSegmentRefsInPlace(append([]SegmentRef(nil), refs...))
+	sortSegments(out)
+	return out
+}
+
+// The caller must own refs. Publication sorts this result together with the
+// active catalog, avoiding another full retired-catalog copy and sort.
+func dedupeSegmentRefsInPlace(refs []SegmentRef) []SegmentRef {
 	if len(refs) == 0 {
 		return nil
 	}
 	seen := make(map[segmentRefKey]struct{}, len(refs))
-	out := make([]SegmentRef, 0, len(refs))
+	out := refs[:0]
 	for _, ref := range refs {
 		key := segmentRefKey{
 			dataset:  ref.normalizedDataset(),
@@ -1103,7 +1128,6 @@ func dedupeSegmentRefs(refs []SegmentRef) []SegmentRef {
 		seen[key] = struct{}{}
 		out = append(out, ref)
 	}
-	sortSegments(out)
 	return out
 }
 

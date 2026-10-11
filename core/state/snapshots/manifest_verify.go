@@ -129,6 +129,11 @@ func restoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir s
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
+	// Catalog identity does not certify the delegation representation. Never
+	// let imported state inherit a fresh target's paged-layout admission bit.
+	if err := rawdb.InvalidatePagedDelegationLayout(db); err != nil {
+		return nil, err
+	}
 	if err := mgr.RestoreLatestWithOptions(db, manifest.VisibleTxEnd, opts.ETL); err != nil {
 		return nil, err
 	}
@@ -169,6 +174,9 @@ func restoreHistoryFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir 
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
+	if err := rawdb.InvalidatePagedDelegationLayout(db); err != nil {
+		return nil, err
+	}
 	restored, err := mgr.RestoreStateDomainHistoryWithOptions(db, manifest.VisibleTxStart, manifest.VisibleTxEnd, opts.ETL)
 	if err != nil {
 		return nil, err
@@ -205,6 +213,9 @@ func restoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir
 	manifest = mgr.Manifest()
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
+	}
+	if err := rawdb.InvalidatePagedDelegationLayout(db); err != nil {
+		return nil, err
 	}
 	if err := mgr.RestoreLatestWithOptions(db, manifest.VisibleTxEnd, opts.ETL); err != nil {
 		return nil, err

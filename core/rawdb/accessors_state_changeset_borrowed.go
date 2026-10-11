@@ -63,7 +63,7 @@ func IterateStateTxRangesByBlockRangeBorrowed(db ethdb.Iteratee, fromBlock, toBl
 
 // IterateStateDomainChangesByBlockTxRangeBorrowed is the allocation-bounded
 // cold-build iterator for the current block-pack schema. Key and Prev in each
-// callback argument alias the Pebble value or a pooled decompression buffer and
+// callback argument alias the Pebble value or a reused decoding buffer and
 // are valid only until fn returns. Callers that retain a change must copy it.
 //
 // Fresh canonical execution writes exactly one sequence-zero block pack per
@@ -128,6 +128,9 @@ func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBloc
 		}
 		return cont, err
 	}
+	// One bounded block buffer serves this range scan. Callback fields are
+	// borrowed, so the next block may overwrite it after the callback returns.
+	var sharedScratch []byte
 	for changeIt.Next() {
 		key := changeIt.Key()
 		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
@@ -180,7 +183,14 @@ func IterateStateDomainChangesByBlockTxRangeBorrowed(db ethdb.Iteratee, fromBloc
 			continue
 		}
 		value := changeIt.Value()
-		cont, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, blockNum, &scratch, visit, historyView)
+		materialized, err := materializeStateHistorySharedPackInto(value, blockNum, []ethdb.KeyValueReader{historyView}, sharedScratch)
+		if err != nil {
+			return err
+		}
+		if isStateHistorySharedPack(value) {
+			sharedScratch = materialized
+		}
+		cont, err := iterateMaterializedStateHistoryBlock(materialized, blockNum, &scratch, visit)
 		if err != nil {
 			if isStateHistorySharedPack(value) {
 				return err

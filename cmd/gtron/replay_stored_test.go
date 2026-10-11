@@ -495,6 +495,9 @@ func seedStoredReplayTestDatadir(t *testing.T, badSignature bool) storedReplayTe
 		t.Fatal(err)
 	}
 	defer storedReplayTestClose(t, db)
+	if err := ensurePagedDelegationLayout(db); err != nil {
+		t.Fatal(err)
+	}
 	_, fixture.genesisHash, err = core.SetupGenesisBlock(db, genesis)
 	if err != nil {
 		t.Fatal(err)

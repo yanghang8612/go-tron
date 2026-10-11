@@ -52,6 +52,7 @@ var resetMutablePrefixes = [][]byte{
 	dynPropPrefix,
 	delegationPrefix,
 	delegationIndexPrefix,
+	drAccIdxPagePrefix,
 	brokeragePrefix,
 	nullifierPrefix,
 	noteCommitmentPrefix,

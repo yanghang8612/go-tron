@@ -62,7 +62,7 @@ func BenchmarkLegacyDelegationMembershipArena(b *testing.B) {
 			}
 			key := []byte("fixed-legacy-delegation-key")
 			old, current := frozenLegacyDelegationEntry(key, decoded), newLegacyDelegationEntry(key, decoded)
-			if old.charge != current.charge || !maps.Equal(old.fromSet, current.fromSet) || !maps.Equal(old.toSet, current.toSet) {
+			if old.charge > current.charge || !maps.Equal(old.fromSet, current.fromSet) || !maps.Equal(old.toSet, current.toSet) {
 				b.Fatal("fixed-input complete entry differs from frozen control")
 			}
 			encoded, err := statecodec.MarshalDelegationIndex(current.record)

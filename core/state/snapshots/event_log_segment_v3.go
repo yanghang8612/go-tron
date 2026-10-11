@@ -936,11 +936,11 @@ func buildEventLogV3Lookup(dir, base string, keySize int, postings map[string][]
 			b.close()
 			return nil, errors.New("snapshots: V4 compact lookup key block exceeds uint32 length limit")
 		}
-		// Front coding removes the repeated position/prefix bytes without adding
-		// one Zstd setup per small key block. The reader understands compressed
-		// blocks too, leaving that option available for a measured future writer.
-		stored := raw
-		storedLen := uint32(len(raw)) | eventLogV3LookupV2StoredRaw
+		stored, storedLen, err := compressEventLogLookupKeyBlock(raw, b.keys[start:end])
+		if err != nil {
+			b.close()
+			return nil, err
+		}
 		off, err := keyData.Seek(0, io.SeekCurrent)
 		if err != nil {
 			b.close()
@@ -959,6 +959,37 @@ func buildEventLogV3Lookup(dir, base string, keySize int, postings map[string][]
 	}
 	b.keyLen = uint64(keyStat.Size())
 	return b, nil
+}
+
+// Repeated posting checksums are common in sidecars: many keys point to the
+// same segment. Random row postings do not offer this redundancy after front
+// coding, so avoid spending a compression attempt on those blocks.
+func compressEventLogLookupKeyBlock(raw []byte, keys []eventLogV3LookupKey) ([]byte, uint32, error) {
+	rawLength := uint32(len(raw)) | eventLogV3LookupV2StoredRaw
+	if len(keys) < 32 {
+		return raw, rawLength, nil
+	}
+	count := 0
+	for _, key := range keys {
+		if key.checksum == keys[0].checksum {
+			count++
+		}
+	}
+	repeated := count >= 16
+	if !repeated {
+		return raw, rawLength, nil
+	}
+	enc, _, err := cbCodec()
+	if err != nil {
+		return nil, 0, err
+	}
+	compressed := enc.EncodeAll(raw, nil)
+	// Keep raw unless the measured block saves at least ten percent. CRCs and
+	// the independently decoded 128-key point-read bound remain unchanged.
+	if len(compressed)*10 > len(raw)*9 {
+		return raw, rawLength, nil
+	}
+	return compressed, uint32(len(compressed)), nil
 }
 
 func encodeEventLogV3LookupV2KeyBlock(keys []eventLogV3LookupKey) []byte {

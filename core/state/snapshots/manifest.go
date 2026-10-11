@@ -195,7 +195,7 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	}
 	sortSegments(manifest.Segments)
 	sortSegments(manifest.Retired)
-	if err := manifest.Validate(); err != nil {
+	if err := manifest.validate(true); err != nil {
 		return err
 	}
 	if historyStagingColdRetentionActive(dir) {
@@ -247,6 +247,12 @@ func PublishManifest(dir string, manifest *Manifest) error {
 }
 
 func (m *Manifest) Validate() error {
+	return m.validate(false)
+}
+
+// ordered is used only immediately after sortSegments, inside publication.
+// Public validation accepts arbitrary caller ordering.
+func (m *Manifest) validate(ordered bool) error {
 	if m == nil {
 		return errors.New("snapshots: nil manifest")
 	}
@@ -267,7 +273,10 @@ func (m *Manifest) Validate() error {
 	// checksum and other identity field. Full refs are still checked below and
 	// retained in seenPath for companion validation.
 	type validationRange struct{ from, to uint64 }
-	byFamily := make(map[segmentFamily][]validationRange)
+	var byFamily map[segmentFamily][]validationRange
+	if !ordered {
+		byFamily = make(map[segmentFamily][]validationRange)
+	}
 	for i := range m.Segments {
 		seg := &m.Segments[i]
 		if err := validateActiveSegment(*seg, m.VisibleTxStart, m.VisibleTxEnd); err != nil {
@@ -277,8 +286,23 @@ func (m *Manifest) Validate() error {
 			return fmt.Errorf("snapshots: duplicate segment path %q", seg.Path)
 		}
 		seenPath[seg.Path] = seg
-		fam := segmentFamily{dataset: seg.normalizedDataset(), domain: seg.Domain, kind: seg.Kind}
-		byFamily[fam] = append(byFamily[fam], validationRange{seg.FromTxNum, seg.ToTxNum})
+		if !ordered {
+			fam := segmentFamily{dataset: seg.normalizedDataset(), domain: seg.Domain, kind: seg.Kind}
+			byFamily[fam] = append(byFamily[fam], validationRange{seg.FromTxNum, seg.ToTxNum})
+		}
+	}
+	if ordered {
+		// sortSegments groups exactly the same dataset/domain/kind family and
+		// then orders by range start/end. Any overlap, including nesting,
+		// therefore has an overlapping adjacent pair. Check after all refs so
+		// malformed individual identities still fail before range overlap.
+		for i := 1; i < len(m.Segments); i++ {
+			prior, next := &m.Segments[i-1], &m.Segments[i]
+			if prior.normalizedDataset() == next.normalizedDataset() && prior.Domain == next.Domain && prior.Kind == next.Kind && next.FromTxNum <= prior.ToTxNum {
+				return fmt.Errorf("snapshots: overlapping %s segments for domain %#04x: [%d,%d] and [%d,%d]",
+					next.Kind, uint16(next.Domain), prior.FromTxNum, prior.ToTxNum, next.FromTxNum, next.ToTxNum)
+			}
+		}
 	}
 	for family, segments := range byFamily {
 		sort.Slice(segments, func(i, j int) bool {
@@ -728,12 +752,17 @@ func (seg SegmentRef) NormalizedDataset() SegmentDataset {
 }
 
 func hasParentDir(path string) bool {
-	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+	path = filepath.ToSlash(path)
+	for {
+		part, rest, more := strings.Cut(path, "/")
 		if part == ".." {
 			return true
 		}
+		if !more {
+			return false
+		}
+		path = rest
 	}
-	return false
 }
 
 func sortSegments(segments []SegmentRef) {

@@ -243,44 +243,16 @@ func (s *StateDB) ReadDelegationIndexStrict(from tcommon.Address) ([]tcommon.Add
 }
 
 func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedResourceAccountIndex {
-	data, ok := s.readSystemDelegation(rawdb.DrAccountIndexLegacyStateKey(account))
-	if !ok {
-		return nil
-	}
-	if len(data) == 0 {
-		s.recordStateError(fmt.Sprintf("decode dr account index legacy %x", account), fmt.Errorf("empty value"))
-		return nil
-	}
-	rec := new(corepb.DelegatedResourceAccountIndex)
-	if err := statecodec.Unmarshal(data, rec); err != nil {
+	record, _, err := s.ReadDrAccountIndexLegacyStrict(account)
+	if err != nil {
 		s.recordStateError(fmt.Sprintf("decode dr account index legacy %x", account), err)
 		return nil
 	}
-	return rec
+	return record
 }
 
 func (s *StateDB) ReadDrAccountIndexLegacyStrict(account []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
-	data, ok, err := s.readSystemDelegationWithError(rawdb.DrAccountIndexLegacyStateKey(account))
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	rec, err := statecodec.UnmarshalDelegationIndex(data)
-	if err != nil {
-		return nil, true, fmt.Errorf("decode dr account index legacy: %w", err)
-	}
-	return rec, true, nil
-}
-
-func (s *StateDB) writeDrAccountIndexLegacy(account []byte, rec *corepb.DelegatedResourceAccountIndex) error {
-	data, err := statecodec.MarshalDelegationIndex(rec)
-	if err != nil {
-		return fmt.Errorf("dr account index: marshal legacy: %w", err)
-	}
-	return s.writeSystemDelegation(rawdb.DrAccountIndexLegacyStateKey(account), data)
-}
-
-func (s *StateDB) deleteDrAccountIndexLegacy(account []byte) error {
-	return s.deleteSystemDelegation(rawdb.DrAccountIndexLegacyStateKey(account))
+	return ReadPagedDelegationIndex(account, s.readSystemDelegationWithError)
 }
 
 func (s *StateDB) WriteDrAccountIndexLegacyDelegate(from, to []byte) error {
@@ -293,10 +265,19 @@ func (s *StateDB) WriteDrAccountIndexLegacyDelegate(from, to []byte) error {
 	// The legacy implementation reads both records before either write. For
 	// self-edges, the second independent image overwrites the first; retain that
 	// exact behavior instead of aliasing a single cached message.
-	if bytes.Equal(from, to) || s.transactionVersionedReader != nil {
+	if bytes.Equal(from, to) {
 		legacyDelegationBypasses.Inc(1)
-		return s.writeDrAccountIndexLegacyDelegateUncached(from, to)
+		entry, exists, err := s.loadLegacyDelegation(from)
+		if err != nil {
+			return err
+		}
+		contains := legacyDelegationContains(entry.record.FromAccounts, entry.fromSet, from)
+		if !exists || !contains {
+			return s.changeLegacyDelegation(entry, from, true, false)
+		}
+		return nil
 	}
+
 	fromEntry, fromExists, err := s.loadLegacyDelegation(from)
 	if err != nil {
 		return err
@@ -319,30 +300,6 @@ func (s *StateDB) WriteDrAccountIndexLegacyDelegate(from, to []byte) error {
 	return s.Error()
 }
 
-func (s *StateDB) writeDrAccountIndexLegacyDelegateUncached(from, to []byte) error {
-	fromRec, _, err := s.ReadDrAccountIndexLegacyStrict(from)
-	if err != nil {
-		return err
-	}
-	if fromRec == nil {
-		fromRec = &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), from...)}
-	}
-	toRec, _, err := s.ReadDrAccountIndexLegacyStrict(to)
-	if err != nil {
-		return err
-	}
-	if toRec == nil {
-		toRec = &corepb.DelegatedResourceAccountIndex{Account: append([]byte(nil), to...)}
-	}
-
-	fromRec.ToAccounts = appendUniqueDelegationAccount(fromRec.ToAccounts, to)
-	toRec.FromAccounts = appendUniqueDelegationAccount(toRec.FromAccounts, from)
-	if err := s.writeDrAccountIndexLegacy(from, fromRec); err != nil {
-		return err
-	}
-	return s.writeDrAccountIndexLegacy(to, toRec)
-}
-
 func (s *StateDB) WriteDrAccountIndexLegacyUnDelegate(from, to []byte) error {
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("dr account index: empty address")
@@ -350,10 +307,19 @@ func (s *StateDB) WriteDrAccountIndexLegacyUnDelegate(from, to []byte) error {
 	if err := s.Error(); err != nil {
 		return err
 	}
-	if bytes.Equal(from, to) || s.transactionVersionedReader != nil {
+	if bytes.Equal(from, to) {
 		legacyDelegationBypasses.Inc(1)
-		return s.writeDrAccountIndexLegacyUnDelegateUncached(from, to)
+		entry, exists, err := s.loadLegacyDelegation(from)
+		if err != nil {
+			return err
+		}
+		contains := legacyDelegationContains(entry.record.FromAccounts, entry.fromSet, from)
+		if exists && contains {
+			return s.changeLegacyDelegation(entry, from, true, true)
+		}
+		return nil
 	}
+
 	fromEntry, fromExists, err := s.loadLegacyDelegation(from)
 	if err != nil {
 		return err
@@ -374,28 +340,6 @@ func (s *StateDB) WriteDrAccountIndexLegacyUnDelegate(from, to []byte) error {
 	}
 	legacyDelegationNoops.Inc(1)
 	return s.Error()
-}
-
-func (s *StateDB) writeDrAccountIndexLegacyUnDelegateUncached(from, to []byte) error {
-	fromRec, _, err := s.ReadDrAccountIndexLegacyStrict(from)
-	if err != nil {
-		return err
-	}
-	toRec, _, err := s.ReadDrAccountIndexLegacyStrict(to)
-	if err != nil {
-		return err
-	}
-	if fromRec != nil {
-		fromRec.ToAccounts = removeDelegationAccount(fromRec.ToAccounts, to)
-		if err := s.writeDrAccountIndexLegacy(from, fromRec); err != nil {
-			return err
-		}
-	}
-	if toRec != nil {
-		toRec.FromAccounts = removeDelegationAccount(toRec.FromAccounts, from)
-		return s.writeDrAccountIndexLegacy(to, toRec)
-	}
-	return nil
 }
 
 func (s *StateDB) ConvertDrAccountIndexLegacy(account []byte) error {

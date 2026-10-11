@@ -117,6 +117,7 @@ var inspectPrefixes = []inspectKeyspace{
 	{name: "balance-trace", pattern: "btrace-*", prefix: balanceTracePrefix},
 	{name: "checkpoint-v2", pattern: "cpv2-*", prefix: checkPointV2Prefix},
 	{name: "delegated-resource-account-index", pattern: "drax-*", prefix: drAccIdxPrefix},
+	{name: "delegated-resource-account-index-page", pattern: "drap-*", prefix: drAccIdxPagePrefix},
 	{name: "transaction-info-by-block", pattern: "tib-*", prefix: txInfoBlockPrefix},
 	{name: "transaction-info", pattern: "ti-*", prefix: txInfoPrefix},
 	{name: "transaction-index", pattern: "tx-*", prefix: txPrefix},

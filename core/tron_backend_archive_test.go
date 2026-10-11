@@ -1267,8 +1267,8 @@ func TestArchiveQuery_DelegationIndexRejectsMalformedHistory(t *testing.T) {
 		t.Fatalf("WriteStateKVLatest malformed legacy delegation index: %v", err)
 	}
 	_, err = readDelegatedResourceAccountIndexAt(reader, from, 1)
-	if err == nil || !strings.Contains(err.Error(), "non-native rooted-state value") {
-		t.Fatalf("readDelegatedResourceAccountIndexAt malformed error = %v, want native codec rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "requires DLP1 pages") {
+		t.Fatalf("readDelegatedResourceAccountIndexAt malformed error = %v, want paged layout rejection", err)
 	}
 }
 

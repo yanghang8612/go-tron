@@ -615,6 +615,9 @@ func initCmd(ctx *cli.Context) error {
 		}
 	}
 	defer db.Close()
+	if err := ensurePagedDelegationLayout(db); err != nil {
+		return err
+	}
 
 	ancientReader := rawdb.AncientReader(rawdb.NoopAncient{})
 	ancientPath := ancientDataDir(cfg.DataDir)
@@ -728,11 +731,7 @@ func gtron(ctx *cli.Context) error {
 			"accounts", len(genesis.Accounts))
 	}
 	if ctx.Bool("snapshot.bootstrap") {
-		log.Info("Bootstrapping verified remote snapshot before node startup")
-		if err := bootstrapRuntimeSnapshot(ctx); err != nil {
-			return err
-		}
-		log.Info("Verified remote snapshot bootstrap completed")
+		return errors.New("paged delegation requires sync from genesis; snapshot bootstrap does not authenticate the storage layout")
 	}
 
 	cacheMiB, handles, tune, err := makePebbleConfig(ctx)
@@ -742,6 +741,9 @@ func gtron(ctx *cli.Context) error {
 	db, historyPath, err := openDirectHistoryRuntime(ctx, cfg.DataDir, dbPath, cacheMiB, handles, tune)
 	if err != nil {
 		return err
+	}
+	if err := ensurePagedDelegationLayout(db); err != nil {
+		return errors.Join(err, db.Close())
 	}
 	log.Info("History writes use independent database", "dir", historyPath)
 	var ancientStore *rawdbfreezer.Freezer

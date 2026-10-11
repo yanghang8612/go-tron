@@ -46,8 +46,8 @@ func delegationCacheFixture(t *testing.T) (*StateDB, []byte, []byte) {
 
 func delegationCacheEncode(t *testing.T, rec *corepb.DelegatedResourceAccountIndex) []byte {
 	t.Helper()
-	// The generic codec is the independent byte-format oracle.
-	data, err := statecodec.Marshal(rec)
+	pages := splitLegacyDelegationPages(rec)
+	data, err := statecodec.MarshalDelegationDescriptor(rec, uint64(len(pages.from)), uint64(len(pages.to)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +56,7 @@ func delegationCacheEncode(t *testing.T, rec *corepb.DelegatedResourceAccountInd
 
 func delegationCachePut(t *testing.T, s *StateDB, account []byte, rec *corepb.DelegatedResourceAccountIndex) {
 	t.Helper()
-	if err := s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation,
-		rawdb.DrAccountIndexLegacyStateKey(account), delegationCacheEncode(t, rec)); err != nil {
+	if err := s.writeDrAccountIndexLegacy(account, rec); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -73,11 +72,11 @@ func delegationCacheRead(t *testing.T, s *StateDB, account []byte) *corepb.Deleg
 
 func delegationCacheAssertRow(t *testing.T, s *StateDB, account []byte, want *corepb.DelegatedResourceAccountIndex) {
 	t.Helper()
-	got, ok, err := s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation,
-		rawdb.DrAccountIndexLegacyStateKey(account))
-	if err != nil || !ok || !bytes.Equal(got, delegationCacheEncode(t, want)) {
-		t.Fatalf("legacy row %x differs from generic-codec oracle: exists=%v err=%v", account, ok, err)
+	got, ok, err := s.ReadDrAccountIndexLegacyStrict(account)
+	if err != nil || !ok || !proto.Equal(got, want) {
+		t.Fatalf("legacy record %x differs: got=%v want=%v exists=%v err=%v", account, got, want, ok, err)
 	}
+
 }
 
 func delegationCacheWarm(t *testing.T, s *StateDB, from, to []byte) {
@@ -109,6 +108,19 @@ func TestLegacyDelegationCacheGenericMutations(t *testing.T) {
 			case "put", "put-final":
 				want.Timestamp = 777
 				want.ToAccounts = want.ToAccounts[:len(want.ToAccounts)-1]
+				page, pageErr := statecodec.MarshalDelegationPage(want.ToAccounts)
+				if pageErr != nil {
+					t.Fatal(pageErr)
+				}
+				pageKey := rawdb.DrAccountIndexLegacyPageStateKey(from, false, 0)
+				if operation == "put" {
+					err = s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, pageKey, page)
+				} else {
+					err = s.SetAccountKVFinal(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, pageKey, page)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
 				data := delegationCacheEncode(t, want)
 				if operation == "put" {
 					err = s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, data)
@@ -257,6 +269,18 @@ func TestLegacyDelegationCacheReaderChanges(t *testing.T) {
 				reader := &countingGenerationBatchReader{values: map[string][]byte{
 					string(fromKey): delegationCacheEncode(t, fromRec), string(toKey): delegationCacheEncode(t, toRec),
 				}}
+				for _, entry := range []struct {
+					account []byte
+					record  *corepb.DelegatedResourceAccountIndex
+				}{{from, fromRec}, {to, toRec}} {
+					for incoming, list := range map[bool][][]byte{true: entry.record.FromAccounts, false: entry.record.ToAccounts} {
+						data, err := statecodec.MarshalDelegationPage(list)
+						if err != nil {
+							t.Fatal(err)
+						}
+						reader.values[string(rawdb.DrAccountIndexLegacyPageStateKey(entry.account, incoming, 0))] = data
+					}
+				}
 				s.setAccountKVLatestView(reader, nil)
 			case "index-store":
 				store := ethrawdb.NewMemoryDatabase()
@@ -267,6 +291,20 @@ func TestLegacyDelegationCacheReaderChanges(t *testing.T) {
 				}{{fromKey, fromRec}, {toKey, toRec}} {
 					if err := rawdb.WriteStateKVLatest(store, tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, row.key, delegationCacheEncode(t, row.rec)); err != nil {
 						t.Fatal(err)
+					}
+				}
+				for _, entry := range []struct {
+					account []byte
+					record  *corepb.DelegatedResourceAccountIndex
+				}{{from, fromRec}, {to, toRec}} {
+					for incoming, list := range map[bool][][]byte{true: entry.record.FromAccounts, false: entry.record.ToAccounts} {
+						data, err := statecodec.MarshalDelegationPage(list)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := rawdb.WriteStateKVLatest(store, tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, rawdb.DrAccountIndexLegacyPageStateKey(entry.account, incoming, 0), data); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}
 				s.SetAccountKVIndexStore(store)

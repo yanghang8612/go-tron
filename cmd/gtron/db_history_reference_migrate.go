@@ -13,7 +13,13 @@ import (
 )
 
 func dbMigrateHistoryReferenceCommand() *cli.Command {
-	return &cli.Command{
+	return dbHistoryMigrationCommand(false)
+}
+
+func dbMigrateHistoryCDCCommand() *cli.Command { return dbHistoryMigrationCommand(true) }
+
+func dbHistoryMigrationCommand(cdc bool) *cli.Command {
+	command := &cli.Command{
 		Name: "migrate-history-reference", Usage: "Migrate cold history in place, one verified trio at a time, with the node stopped",
 		Description: "Default is a read-only plan. --yes rewrites one trio at a time inside the original snapshot directory, verifies identical logical bytes, atomically switches the manifest, then removes that trio's unleased old files. No database copy is made. A small durable journal resumes interrupted publication or reclamation. Keep the node and automatic deployment stopped until this command exits; restart only a binary supporting the reference container.",
 		Flags: []cli.Flag{dataDirFlag, snapshotDirFlag,
@@ -23,6 +29,13 @@ func dbMigrateHistoryReferenceCommand() *cli.Command {
 			&cli.Uint64Flag{Name: "max-work-gib", Value: 128, Usage: "Maximum additional work estimate admitted for a single trio"},
 		}, Action: dbMigrateHistoryReferenceCmd,
 	}
+	if cdc {
+		command.Name = "migrate-history-cdc"
+		command.Usage = "Rewrite R1/V2 cold history as CDC V3, preserving logical bytes"
+		command.Description = "Offline, newest first, one verified trio at a time. Preserves every logical byte and companion offset. Default is read-only; --yes publishes and reclaims replaced files with a durable recovery journal. Keep node and automatic deployment stopped. Default keeps files without measured savings; --allow-growth explicitly forces format unification."
+		command.Flags = append(command.Flags, &cli.Uint64Flag{Name: "from-tx", Usage: "Only complete trios at or above this txNum"}, &cli.Uint64Flag{Name: "to-tx", Usage: "Only complete trios at or below this txNum (0 = unbounded)"}, &cli.Uint64Flag{Name: "min-savings-percent", Value: 5, Usage: "Minimum measured history file saving before publication (ignored with --allow-growth)"}, &cli.BoolFlag{Name: "r1-only", Usage: "Select only existing R1 files; any pending journal is resumed first"}, &cli.BoolFlag{Name: "allow-growth", Usage: "Publish CDC even when larger; bypass --min-savings-percent for explicit format unification"})
+	}
+	return command
 }
 
 type historyReferenceMigrationReport struct {
@@ -117,7 +130,11 @@ func dbMigrateHistoryReferenceCmd(ctx *cli.Context) (retErr error) {
 		retErr = errors.Join(retErr, e)
 	}()
 	before := func(refs []snapshots.SegmentRef) error {
-		work, e := snapshots.HistoryReferenceTranscodeWorkBytesContext(contextOrBackground(ctx), dir, refs)
+		estimate := snapshots.HistoryReferenceTranscodeWorkBytesContext
+		if ctx.Command.Name == "migrate-history-cdc" {
+			estimate = snapshots.HistoryCDCTranscodeWorkBytesContext
+		}
+		work, e := estimate(contextOrBackground(ctx), dir, refs)
 		if e != nil {
 			return e
 		}
@@ -129,6 +146,13 @@ func dbMigrateHistoryReferenceCmd(ctx *cli.Context) (retErr error) {
 		}
 		report.LargestAdmittedWorkBytes = max(report.LargestAdmittedWorkBytes, work)
 		return nil
+	}
+	if ctx.Command.Name == "migrate-history-cdc" {
+		report.Result, err = snapshots.MigrateHistoryCDCContext(contextOrBackground(ctx), dir, snapshots.HistoryCDCMigrationOptions{R1Only: ctx.Bool("r1-only"), AllowGrowth: ctx.Bool("allow-growth"), DryRun: report.DryRun, MaxTrios: ctx.Uint64("max-trios"), FromTxNum: ctx.Uint64("from-tx"), ToTxNum: ctx.Uint64("to-tx"), MinSavingsPercent: ctx.Uint64("min-savings-percent"), BeforeTrio: before, OnProgress: func(p snapshots.HistoryReferenceMigrationProgress) {
+			data, _ := json.Marshal(p)
+			fmt.Fprintln(ctx.App.ErrWriter, string(data))
+		}})
+		return err
 	}
 	report.Result, err = snapshots.MigrateHistoryReferenceContext(contextOrBackground(ctx), dir, snapshots.HistoryReferenceMigrationOptions{
 		DryRun: report.DryRun, MaxTrios: ctx.Uint64("max-trios"), BeforeTrio: before,

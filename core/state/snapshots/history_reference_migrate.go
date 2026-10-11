@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ type HistoryReferenceMigrationOptions struct {
 	DryRun     bool
 	BeforeTrio func(refs []SegmentRef) error
 	OnProgress func(HistoryReferenceMigrationProgress)
+	cdc        *HistoryCDCMigrationOptions // private target; the public R1 entry remains unchanged
 }
 
 type HistoryReferenceMigrationProgress struct {
@@ -56,6 +58,7 @@ type HistoryReferenceMigrationResult struct {
 	DeletedSourceFiles uint64  `json:"deletedSourceFiles"`
 	DeletedSourceBytes uint64  `json:"deletedSourceBytes"`
 	ElapsedSeconds     float64 `json:"elapsedSeconds"`
+	SkippedNoGain      uint64  `json:"skippedNoGain,omitempty"`
 }
 
 // The journal is deliberately bounded to six refs and two complete manifest
@@ -91,8 +94,8 @@ type historyReferenceMigration struct {
 // retired-file scan or whole-manifest file verification is performed per trio.
 // DryRun never creates a lock, journal, output, or manifest. BeforeTrio must
 // perform read-only work/space admission; DryRun invokes it for selected trios.
-// It is not called for a journal whose new manifest is already active and only
-// needs cleanup.
+// It is not called for a completed CDC conversion recorded in a journal, or
+// for a journal whose new manifest is already active and only needs cleanup.
 func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts HistoryReferenceMigrationOptions) (result *HistoryReferenceMigrationResult, err error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -126,12 +129,15 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 	defer func() { result.ElapsedSeconds = time.Since(started).Seconds() }()
 	m := &historyReferenceMigration{ctx: ctx, dir: dir, opts: opts, manifest: manifest, checksum: checksumBytes(data), result: result}
 	data = nil
-	journal, err := historyReferenceMigrationLoadJournal(dir)
+	journal, err := m.loadJournal()
 	if err != nil {
 		return result, err
 	}
 	result.JournalPending = journal != nil
 	if journal != nil {
+		if opts.cdc != nil && !opts.cdc.includes(journal.Old[0]) {
+			return result, errors.New("snapshots: pending CDC journal is outside requested tx bounds")
+		}
 		if err = m.journalState(journal); err != nil {
 			return result, err
 		}
@@ -149,7 +155,22 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 		if err = ctx.Err(); err != nil {
 			return result, err
 		}
+		if opts.cdc != nil && !opts.cdc.includes(candidate.history) {
+			continue
+		}
 		refs := append([]SegmentRef{candidate.history}, candidate.companions...)
+		// Recovery precedes candidate filtering: a previously completed V2 -> CDC
+		// conversion still owns its accounting even when this run selects R1 only.
+		journalSource := journal != nil && m.checksum == journal.BeforeManifestSHA && historyReferenceMigrationSameTrio(refs, journal.Old)
+		if opts.cdc != nil && opts.cdc.R1Only && !journalSource {
+			reference, e := historyReferenceMigrationIsCurrent(dir, candidate.history)
+			if e != nil {
+				return result, e
+			}
+			if !reference {
+				continue
+			}
+		}
 		if err = historyReferenceMigrationValidateTrio(refs); err != nil {
 			return result, err
 		}
@@ -159,7 +180,7 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 		}
 		result.ActiveBytesBefore += n
 		result.TotalTrios++
-		current, e := historyReferenceMigrationIsCurrent(dir, candidate.history)
+		current, e := m.isCurrent(candidate.history)
 		if e != nil {
 			return result, e
 		}
@@ -170,6 +191,9 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 			pending = append(pending, refs)
 		}
 	}
+	if opts.cdc != nil {
+		slices.Reverse(pending)
+	} // newest large-list history first
 	result.ActiveBytesAfter = result.ActiveBytesBefore
 	// Refuse a pinned source before even creating the private lock file. Recheck
 	// under the lock and immediately before publication and unlink as well.
@@ -202,7 +226,12 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 	}
 	if opts.DryRun {
 		for _, refs := range selectedTrios {
-			if err = m.beforeTrio(refs); err != nil {
+			if opts.cdc != nil && journal != nil && historyReferenceMigrationSameTrio(refs, journal.Old) {
+				err = m.validateTrio(refs)
+			} else {
+				err = m.beforeTrio(refs)
+			}
+			if err != nil {
 				return result, err
 			}
 		}
@@ -228,7 +257,7 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 	}
 	// A previous invocation may have created/finished a journal between the
 	// read-only admission and acquisition of the lock, even without publication.
-	lockedJournal, e := historyReferenceMigrationLoadJournal(dir)
+	lockedJournal, e := m.loadJournal()
 	if e != nil || !reflect.DeepEqual(lockedJournal, journal) {
 		return result, errors.Join(e, errors.New("snapshots: migration journal changed during admission"))
 	}
@@ -242,15 +271,19 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 		if journal != nil && historyReferenceMigrationSameTrio(refs, journal.Old) {
 			continue
 		}
-		if opts.MaxTrios != 0 && result.CompletedTrios >= opts.MaxTrios {
+		if opts.MaxTrios != 0 && result.CompletedTrios+result.SkippedNoGain >= opts.MaxTrios {
 			break
 		}
 		if err = m.beforeTrio(refs); err != nil {
 			return result, err
 		}
-		newRefs, _, e := ReencodeHistoryReferenceTrioContext(ctx, dir, refs)
+		newRefs, e := m.reencode(refs)
 		if e != nil {
 			return result, e
+		}
+		if newRefs == nil {
+			result.SkippedNoGain++
+			continue
 		}
 		j, _, e := historyReferenceMigrationPrepare(m.manifest, m.checksum, refs, newRefs, time.Now().Unix())
 		if e != nil {
@@ -262,7 +295,7 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 		if err = historyReferenceMigrationNoLeases(dir, refs); err != nil {
 			return result, err
 		}
-		if err = historyReferenceMigrationWriteJournal(dir, j); err != nil {
+		if err = writeHistoryMigrationJournal(dir, m.journalFile(), j); err != nil {
 			// Rename may have succeeded before a directory-sync error.
 			result.JournalPending = true
 			return result, err
@@ -275,7 +308,9 @@ func MigrateHistoryReferenceContext(ctx context.Context, dir string, opts Histor
 	return result, nil
 }
 
-func (m *historyReferenceMigration) beforeTrio(refs []SegmentRef) error {
+// validateTrio checks identity and ownership without admitting rewrite disk
+// space. Journaled CDC outputs are already complete and need no rewrite budget.
+func (m *historyReferenceMigration) validateTrio(refs []SegmentRef) error {
 	if err := m.checkManifest(); err != nil {
 		return err
 	}
@@ -286,6 +321,13 @@ func (m *historyReferenceMigration) beforeTrio(refs []SegmentRef) error {
 		if err := historyReferenceMigrationFile(m.dir, ref.Path, false); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (m *historyReferenceMigration) beforeTrio(refs []SegmentRef) error {
+	if err := m.validateTrio(refs); err != nil {
+		return err
 	}
 	if m.opts.BeforeTrio != nil {
 		if err := m.opts.BeforeTrio(append([]SegmentRef(nil), refs...)); err != nil {
@@ -299,22 +341,43 @@ func (m *historyReferenceMigration) beforeTrio(refs []SegmentRef) error {
 }
 
 func (m *historyReferenceMigration) finish(j *historyReferenceMigrationJournal, resumed bool) error {
+	newVerified := false
 	if err := m.journalState(j); err != nil {
 		return err
 	}
 	if m.checksum == j.BeforeManifestSHA {
 		if resumed {
-			if err := m.beforeTrio(j.Old); err != nil {
+			if m.opts.cdc != nil {
+				if err := m.validateTrio(j.Old); err != nil {
+					return err
+				}
+			} else if err := m.beforeTrio(j.Old); err != nil {
 				return err
 			}
-			// A pre-publication journal never substitutes for a new proof. Reuse
-			// immutable output names, but reprove every source/output byte.
-			refs, _, err := ReencodeHistoryReferenceTrioContext(m.ctx, m.dir, j.Old)
-			if err != nil {
-				return err
-			}
-			if !historyReferenceMigrationSameTrio(refs, j.New) {
-				return errors.New("snapshots: resumed transcode output identity differs")
+			if m.opts.cdc != nil {
+				// The durable journal records a completed byte-preserving conversion.
+				// Authenticate those exact immutable files rather than recompressing.
+				if err := m.verifyNew(j.New); err != nil {
+					return err
+				}
+				h, i, a, _, err := historyReferenceTranscodeIdentity(j.Old)
+				if err != nil {
+					return err
+				}
+				if err = verifyStateDomainChangeBinaryCompanionChecksumsContext(m.ctx, m.dir, h, i, a); err != nil {
+					return err
+				}
+				newVerified = true
+			} else {
+				// A pre-publication journal never substitutes for a new proof. Reuse
+				// immutable output names, but reprove every source/output byte.
+				refs, err := m.reencode(j.Old)
+				if err != nil {
+					return err
+				}
+				if !historyReferenceMigrationSameTrio(refs, j.New) {
+					return errors.New("snapshots: resumed transcode output identity differs")
+				}
 			}
 		}
 		_, next, err := historyReferenceMigrationPrepare(m.manifest, m.checksum, j.Old, j.New, j.AfterPublishedUnix)
@@ -348,8 +411,11 @@ func (m *historyReferenceMigration) finish(j *historyReferenceMigrationJournal, 
 	}
 	// This also covers resume after any subset of old files has been removed.
 	// Only the new trio is needed for verification once its manifest is active.
-	if err := historyReferenceMigrationVerifyNew(m.ctx, m.dir, j.New); err != nil {
-		return err
+	// Fresh CDC output was verified during its single streaming rewrite.
+	if m.opts.cdc == nil || resumed && !newVerified {
+		if err := m.verifyNew(j.New); err != nil {
+			return err
+		}
 	}
 	if err := m.checkManifest(); err != nil {
 		return err
@@ -392,9 +458,6 @@ func (m *historyReferenceMigration) finish(j *historyReferenceMigrationJournal, 
 		}
 		m.result.DeletedSourceFiles++
 		m.result.DeletedSourceBytes += size
-		if err = syncSnapshotDir(filepath.Dir(path)); err != nil {
-			return err
-		}
 	}
 	// Include already-missing files on resume: an earlier unlink may have
 	// completed just before its directory fsync failed.
@@ -406,7 +469,7 @@ func (m *historyReferenceMigration) finish(j *historyReferenceMigrationJournal, 
 	if err := m.checkManifest(); err != nil {
 		return err
 	}
-	if err := os.Remove(filepath.Join(m.dir, historyReferenceMigrationJournalFile)); err != nil {
+	if err := os.Remove(filepath.Join(m.dir, m.journalFile())); err != nil {
 		return err
 	}
 	if err := syncSnapshotDir(m.dir); err != nil {
@@ -744,10 +807,14 @@ func historyReferenceMigrationVerifyNew(ctx context.Context, dir string, refs []
 }
 
 func historyReferenceMigrationLoadJournal(dir string) (*historyReferenceMigrationJournal, error) {
-	if err := historyReferenceMigrationFile(dir, historyReferenceMigrationJournalFile, true); err != nil {
+	return loadHistoryMigrationJournal(dir, historyReferenceMigrationJournalFile)
+}
+
+func loadHistoryMigrationJournal(dir, journalFile string) (*historyReferenceMigrationJournal, error) {
+	if err := historyReferenceMigrationFile(dir, journalFile, true); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(filepath.Join(dir, historyReferenceMigrationJournalFile))
+	f, err := os.Open(filepath.Join(dir, journalFile))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -778,10 +845,14 @@ func historyReferenceMigrationLoadJournal(dir string) (*historyReferenceMigratio
 }
 
 func historyReferenceMigrationWriteJournal(dir string, j *historyReferenceMigrationJournal) (err error) {
+	return writeHistoryMigrationJournal(dir, historyReferenceMigrationJournalFile, j)
+}
+
+func writeHistoryMigrationJournal(dir, journalFile string, j *historyReferenceMigrationJournal) (err error) {
 	if err = historyReferenceMigrationValidateJournal(j); err != nil {
 		return err
 	}
-	if _, e := os.Lstat(filepath.Join(dir, historyReferenceMigrationJournalFile)); !os.IsNotExist(e) {
+	if _, e := os.Lstat(filepath.Join(dir, journalFile)); !os.IsNotExist(e) {
 		return errors.New("snapshots: refusing to replace an existing migration journal")
 	}
 	data, err := json.Marshal(j)
@@ -805,7 +876,7 @@ func historyReferenceMigrationWriteJournal(dir string, j *historyReferenceMigrat
 	if err != nil {
 		return err
 	}
-	if err = os.Rename(name, filepath.Join(dir, historyReferenceMigrationJournalFile)); err != nil {
+	if err = os.Rename(name, filepath.Join(dir, journalFile)); err != nil {
 		return err
 	}
 	return syncSnapshotDir(dir)

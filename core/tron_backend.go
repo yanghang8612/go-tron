@@ -23,7 +23,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
-	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -1650,16 +1649,10 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2At(addr tcommon.Address,
 }
 
 func readDelegatedResourceAccountIndexAt(reader *state.PersistentHistoryReader, addr tcommon.Address, blockNum uint64) (*corepb.DelegatedResourceAccountIndex, error) {
-	key := rawdb.DrAccountIndexLegacyStateKey(addr.Bytes())
-	data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
-	if err != nil || !ok || len(data) == 0 {
-		return nil, err
-	}
-	idx := &corepb.DelegatedResourceAccountIndex{}
-	if err := statecodec.Unmarshal(data, idx); err != nil {
-		return nil, err
-	}
-	return idx, nil
+	idx, _, err := state.ReadPagedDelegationIndex(addr.Bytes(), func(key []byte) ([]byte, bool, error) {
+		return reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
+	})
+	return idx, err
 }
 
 func readDelegationIndexAt(reader *state.PersistentHistoryReader, addr tcommon.Address, blockNum uint64) ([]tcommon.Address, error) {

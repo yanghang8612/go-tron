@@ -179,7 +179,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			total.RetryDeadline = r.compactionBudget.notBefore
 		}
 	}()
-	cfg := CompactionConfig{MaxSteps: r.cfg.CompactMaxSteps, DeleteObsolete: !r.cfg.RetainObsoleteSegments}
+	cfg := CompactionConfig{ReferenceContainer: r.cfg.HistoryReferenceContainer, MaxSteps: r.cfg.CompactMaxSteps, DeleteObsolete: !r.cfg.RetainObsoleteSegments}
 	drain := !catchingUp
 	if busy {
 		cfg.BusyLeafOnly = true

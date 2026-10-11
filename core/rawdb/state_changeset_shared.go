@@ -357,6 +357,12 @@ func sharedStateHistoryPackHeader(data []byte, blockNum uint64) (refs []byte, de
 }
 
 func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum uint64) ([]byte, error) {
+	return decodeStateHistorySharedPackInto(db, data, blockNum, nil)
+}
+
+// scratch is private to a borrowed scan; owning readers always pass nil.
+// Every byte is overwritten before the complete pack digest is checked.
+func decodeStateHistorySharedPackInto(db ethdb.KeyValueReader, data []byte, blockNum uint64, scratch []byte) ([]byte, error) {
 	if db == nil {
 		return nil, fmt.Errorf("rawdb: shared history requires a coherent database reader")
 	}
@@ -370,7 +376,12 @@ func decodeStateHistorySharedPack(db ethdb.KeyValueReader, data []byte, blockNum
 	if provider, ok := db.(historyChunkCacheProvider); ok {
 		cache, cacheContext = provider.historyChunkCacheState()
 	}
-	decoded := make([]byte, length)
+	decoded := scratch
+	if cap(decoded) < length {
+		decoded = make([]byte, length)
+	} else {
+		decoded = decoded[:length]
+	}
 	offset := 0
 	for i := 0; i < count; i++ {
 		size, n := binary.Uvarint(refs)

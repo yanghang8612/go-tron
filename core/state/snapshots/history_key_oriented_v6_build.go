@@ -724,6 +724,7 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 	metaReader := bufio.NewReaderSize(io.NewSectionReader(metaFile, 0, int64(b.keyCount)*12), 64<<10)
 	keyWriter := bufio.NewWriterSize(keyData, 1<<20)
 	var keyOffset uint64
+	var largestRawKeyBlock int
 	var blocks []stateDomainChangeBinaryAccessorV6Block
 	for blockIndex := range b.blocks {
 		if err := contextError(ctx); err != nil {
@@ -746,12 +747,16 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 		if err != nil {
 			return SegmentRef{}, postingStats, err
 		}
-		off := keyOffset
-		if _, err := keyWriter.Write(raw); err != nil {
+		stored, storedLen, err := compressHistoryDictionaryKeyBlock(raw, &largestRawKeyBlock)
+		if err != nil {
 			return SegmentRef{}, postingStats, err
 		}
-		keyOffset += uint64(len(raw))
-		blocks = append(blocks, stateDomainChangeBinaryAccessorV6Block{firstKey: append([]byte(nil), keys[0]...), dataOff: off, dataLen: uint32(len(raw)) | stateDomainChangeBinaryAccessorV6StoredRaw, rawLen: uint32(len(raw)), checksum: crc32.ChecksumIEEE(raw), keyCount: uint32(len(keys))})
+		off := keyOffset
+		if _, err := keyWriter.Write(stored); err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+		keyOffset += uint64(len(stored))
+		blocks = append(blocks, stateDomainChangeBinaryAccessorV6Block{firstKey: append([]byte(nil), keys[0]...), dataOff: off, dataLen: storedLen, rawLen: uint32(len(raw)), checksum: crc32.ChecksumIEEE(raw), keyCount: uint32(len(keys))})
 	}
 	if err := keyWriter.Flush(); err != nil {
 		return SegmentRef{}, postingStats, err
@@ -864,3 +869,23 @@ func loadHistoryETLContext(ctx context.Context, collector *etl.Collector, writer
 
 var _ ethdb.KeyValueWriter = (*stateDomainChangeV6DictionaryWriter)(nil)
 var _ ethdb.KeyValueWriter = (*stateDomainChangeV6PostingWriter)(nil)
+
+// Keeping each new largest block raw ensures aggregate physical keyDataLen is
+// at least every rawLen, as required by the existing bounded reader. Equal-size
+// later blocks may compress; no dictionary-wide second pass is needed.
+func compressHistoryDictionaryKeyBlock(raw []byte, largestRaw *int) ([]byte, uint32, error) {
+	rawLength := uint32(len(raw)) | stateDomainChangeBinaryAccessorV6StoredRaw
+	if len(raw) > *largestRaw {
+		*largestRaw = len(raw)
+		return raw, rawLength, nil
+	}
+	enc, _, err := cbCodec()
+	if err != nil {
+		return nil, 0, err
+	}
+	compressed := enc.EncodeAll(raw, nil)
+	if len(compressed)*10 > len(raw)*9 {
+		return raw, rawLength, nil
+	}
+	return compressed, uint32(len(compressed)), nil
+}

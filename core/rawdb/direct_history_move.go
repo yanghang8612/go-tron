@@ -120,7 +120,7 @@ func MoveDirectHistory(ctx context.Context, hot, legacy, history ethdb.KeyValueS
 			}
 			out, remove := history.NewBatch(), source.NewBatch()
 			it := source.NewIterator(prefix, after)
-			var last []byte
+			var first, last []byte
 			count, used := 0, 0
 			for it.Next() {
 				if len(end) != 0 && bytes.Compare(it.Key(), end) >= 0 {
@@ -158,11 +158,8 @@ func MoveDirectHistory(ctx context.Context, hot, legacy, history ethdb.KeyValueS
 				} else {
 					total.DiscardedRows++
 				}
-				if err := remove.Delete(it.Key()); err != nil {
-					it.Release()
-					out.Close()
-					remove.Close()
-					return err
+				if count == 0 {
+					first = bytes.Clone(it.Key())
 				}
 				last = append(last[:0], it.Key()...)
 				count++
@@ -174,7 +171,13 @@ func MoveDirectHistory(ctx context.Context, hot, legacy, history ethdb.KeyValueS
 			err := it.Error()
 			it.Release()
 			if err == nil && count > 0 {
-				err = out.Write()
+				// Every source key in this contiguous offline page was examined,
+				// including obsolete owners. One exact range replaces a tombstone
+				// per row; the destination must still be durable before deletion.
+				err = remove.DeleteRange(first, append(bytes.Clone(last), 0))
+				if err == nil {
+					err = out.Write()
+				}
 				if err == nil {
 					err = history.SyncKeyValue()
 				}

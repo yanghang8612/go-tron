@@ -124,6 +124,10 @@ func (*stateHistoryErrorIterator) Release()       {}
 // fetch referenced chunks. Recognition precedes legacy fallbacks; malformed
 // shared envelopes must never be treated as absent or standalone rows.
 func materializeStateHistorySharedPack(data []byte, blockNum uint64, readers []ethdb.KeyValueReader) ([]byte, error) {
+	return materializeStateHistorySharedPackInto(data, blockNum, readers, nil)
+}
+
+func materializeStateHistorySharedPackInto(data []byte, blockNum uint64, readers []ethdb.KeyValueReader, scratch []byte) ([]byte, error) {
 	if !isStateHistorySharedPack(data) {
 		return data, nil
 	}
@@ -134,7 +138,7 @@ func materializeStateHistorySharedPack(data []byte, blockNum uint64, readers []e
 	if !ok || !marker.IsPinnedKeyValueView() {
 		return nil, ErrStateHistoryReadViewUnpinned
 	}
-	raw, err := decodeStateHistorySharedPack(readers[0], data, blockNum)
+	raw, err := decodeStateHistorySharedPackInto(readers[0], data, blockNum, scratch)
 	if err != nil {
 		return nil, fmt.Errorf("rawdb: resolve shared history block %d: %w", blockNum, err)
 	}

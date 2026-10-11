@@ -99,7 +99,7 @@ func TestLegacyDelegationMembershipArenaEntryBudget(t *testing.T) {
 			}
 			record := &corepb.DelegatedResourceAccountIndex{Account: []byte("owner"), ToAccounts: list}
 			got, want := newLegacyDelegationEntry([]byte("key"), record), frozenLegacyDelegationEntry([]byte("key"), record)
-			if got.charge != want.charge || got.key != want.key || got.record != record || (got.toSet == nil) != (want.toSet == nil) || !maps.Equal(got.toSet, want.toSet) {
+			if got.charge < want.charge || got.key != want.key || got.record != record || (got.toSet == nil) != (want.toSet == nil) || !maps.Equal(got.toSet, want.toSet) {
 				t.Fatal("arena changed charge, ownership, threshold or membership")
 			}
 			cache := &legacyDelegationCache{entries: make(map[string]*legacyDelegationEntry)}

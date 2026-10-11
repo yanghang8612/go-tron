@@ -376,9 +376,11 @@ var (
 	// Value: 4-byte big-endian count || N * (21B address || 8B BE vote count)
 	genesisWitnessesKey = []byte("GenesisWitnesses")
 
-	delegationPrefix      = []byte("dr-")
-	delegationIndexPrefix = []byte("dri-")
-	brokeragePrefix       = []byte("wb-")
+	delegationPrefix         = []byte("dr-")
+	delegationIndexPrefix    = []byte("dri-")
+	drAccIdxPagePrefix       = []byte("drap-")
+	pagedDelegationLayoutKey = []byte("paged-delegation-layout-v1")
+	brokeragePrefix          = []byte("wb-")
 
 	// TRC10 asset stores (formerly ast-/astl-/astn-/asto-/asti-) are rooted into
 	// the reserved system account's SystemAsset KV; see core/state/asset_store.go.
@@ -1259,4 +1261,35 @@ func merkleTreeIndexKey(blockNum int64) []byte {
 	copy(k, merkleTreeIndexPrefix)
 	binary.BigEndian.PutUint64(k[len(merkleTreeIndexPrefix):], uint64(blockNum))
 	return k
+}
+
+// DrAccountIndexLegacyPageStateKey addresses an ordered aggregate delegation
+// page. Length framing keeps arbitrary account bytes unambiguous.
+func DrAccountIndexLegacyPageStateKey(account []byte, incoming bool, page uint64) []byte {
+	k := append([]byte{}, drAccIdxPagePrefix...)
+	k = binary.BigEndian.AppendUint32(k, uint32(len(account)))
+	k = append(k, account...)
+	if incoming {
+		k = append(k, 1)
+	} else {
+		k = append(k, 0)
+	}
+	return binary.BigEndian.AppendUint64(k, page)
+}
+
+// DrAccountIndexLegacyPageAccount identifies page keys for cache invalidation.
+func DrAccountIndexLegacyPageAccount(key []byte) ([]byte, bool) {
+	if !bytes.HasPrefix(key, drAccIdxPagePrefix) || len(key) < len(drAccIdxPagePrefix)+13 {
+		return nil, false
+	}
+	offset := len(drAccIdxPagePrefix)
+	n := uint64(binary.BigEndian.Uint32(key[offset:]))
+	if n != uint64(len(key)-offset-13) {
+		return nil, false
+	}
+	end := offset + 4 + int(n)
+	if key[end] > 1 {
+		return nil, false
+	}
+	return key[offset+4 : end], true
 }

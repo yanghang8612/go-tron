@@ -621,10 +621,16 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 		t.Fatalf("PublishManifest with event log: %v", err)
 	}
 	restored := rawdb.NewMemoryDatabase()
+	if err := rawdb.MarkPagedDelegationLayout(restored); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := RestoreSnapshotFromVerifiedManifestWithOptions(restored, dir, identity, strictBoundaryOptions(t, restored))
 	if err != nil {
 		t.Fatalf("RestoreSnapshotFromVerifiedManifest: %v", err)
+	}
+	if marked, err := rawdb.ReadPagedDelegationLayout(restored); err == nil || marked {
+		t.Fatalf("import retained startup admission: %v %v", marked, err)
 	}
 	if result.RestoredTxNum != 12 || result.ChangesRestored != 2 || result.TxRangesRestored != 2 {
 		t.Fatalf("result = %+v, want txNum=12, 2 changes, 2 tx ranges", result)

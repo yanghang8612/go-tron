@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -310,7 +311,7 @@ func TestHistoryReferenceCompactionHookRealMergeOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := referenceMergeKindBytes(t, dir, []SegmentRef{old, idx, acc})
-			result, err := CompactHistoryDomainContext(context.Background(), dir, SegmentDatasetStateDomainChange, CompactionConfig{BusyLeafOnly: busy, MaxSteps: 2, MaxSources: 2, DeleteObsolete: true})
+			result, err := CompactHistoryDomainContext(context.Background(), dir, SegmentDatasetStateDomainChange, CompactionConfig{ReferenceContainer: true, BusyLeafOnly: busy, MaxSteps: 2, MaxSources: 2, DeleteObsolete: true})
 			if err != nil || !result.Merged || result.FromTxNum != 1 || result.ToTxNum != 4 {
 				t.Fatal(result, err)
 			}
@@ -392,7 +393,7 @@ func TestHistoryReferenceCompactionHookOversizedHeaderBoundary(t *testing.T) {
 					t.Fatal(err)
 				}
 				before := referenceMigrationFiles(t, dir)
-				result, err := CompactHistoryDomainContext(context.Background(), dir, SegmentDatasetStateDomainChange, CompactionConfig{BusyLeafOnly: busy, MaxSteps: 2, MaxSources: 2, DeleteObsolete: true})
+				result, err := CompactHistoryDomainContext(context.Background(), dir, SegmentDatasetStateDomainChange, CompactionConfig{ReferenceContainer: true, BusyLeafOnly: busy, MaxSteps: 2, MaxSources: 2, DeleteObsolete: true})
 				if err != nil {
 					t.Fatal(result, err)
 				}
@@ -415,5 +416,40 @@ func TestHistoryReferenceCompactionHookOversizedHeaderBoundary(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHistoryReferenceDisabledCompactionEmitsCDC(t *testing.T) {
+	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "3")
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprint(busy), func(t *testing.T) {
+			dir, trios := referenceHookTrioFixture(t, 2)
+			cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+			selection := historyCompactionSelection{fromTxNum: 1, toTxNum: 4, aggregationSteps: 2}
+			for _, refs := range trios {
+				selection.candidates = append(selection.candidates, historyCompactionCandidate{history: refs[0], companions: refs[1:]})
+			}
+			sources, err := collectStateDomainChangeBinaryCompactionSources(context.Background(), dir, selection, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRefs, err := compactStateDomainChangeReferenceHistoryRunContext(context.Background(), dir, cfg, selection, sources, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := referenceMergeKindBytes(t, dir, wantRefs)
+			result, err := CompactHistoryDomainContext(context.Background(), dir, SegmentDatasetStateDomainChange, CompactionConfig{ReferenceContainer: false, BusyLeafOnly: busy, MaxSteps: 2, MaxSources: 2, DeleteObsolete: true})
+			if err != nil || !result.Merged {
+				t.Fatal(result, err)
+			}
+			h := referenceBuildHistoryRef(t, result.Segments)
+			current, err := historyCDCIsCurrent(dir, h)
+			if err != nil || !current {
+				t.Fatal("disabled reference compaction recreated R1", err)
+			}
+			if !reflect.DeepEqual(want, referenceMergeKindBytes(t, dir, result.Segments)) {
+				t.Fatal("streaming compaction changed canonical or companion bytes")
+			}
+		})
 	}
 }

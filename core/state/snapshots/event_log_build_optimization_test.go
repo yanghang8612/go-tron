@@ -58,11 +58,11 @@ func TestEventLogV4BuildPostingAndTopicStorageMatchesBaseline(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Frozen from the unoptimized V4 writer at HEAD on Go 1.25.5.
+		// Main bytes retain the original V4 baseline; index uses adaptive key-block compression.
 		if ref.Size != 11284 || ref.Checksum != "sha256:2d965be82d67c946b76561eb98d01be9c722f402cb3011fd4b135887ebc9cdc9" {
 			t.Fatalf("workers=%d main output changed: %+v", workers, ref)
 		}
-		if index.Size != 1970 || index.Checksum != "sha256:733239873e1c5e8e142be1b2d575152f5c76b755552823e7edcfb4d2b49c50d7" {
+		if index.Size != 842 || index.Checksum != "sha256:d193f6b96c778988e9f56c5b712b172cb0d9b04df14775d748c3f23e8c2e47dd" {
 			t.Fatalf("workers=%d index output changed: %+v", workers, index)
 		}
 		seg, err := OpenEventLogSegment(dir, ref)

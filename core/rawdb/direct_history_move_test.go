@@ -160,3 +160,36 @@ func TestDirectHistoryMoveRejectsForeignUnmarkedTargetBeforeSourceDeletion(t *te
 		})
 	}
 }
+
+func TestDirectHistoryMovePageRangeKeepsUnexaminedAndSingletonNeighbors(t *testing.T) {
+	hot, history := NewMemoryDatabase(), NewMemoryDatabase()
+	defer hot.Close()
+	defer history.Close()
+	first := stateChangeSetKey(1, 1)
+	second := append(bytes.Clone(first), 0)
+	third := stateChangeSetKey(2, 1)
+	for _, key := range [][]byte{first, second, third} {
+		directTestPut(t, hot, key, []byte("value"))
+	}
+	singleton := stageProgressKey(StageStateHistoryIndex)
+	neighbor := append(bytes.Clone(singleton), 0)
+	directTestPut(t, hot, singleton, []byte("index"))
+	directTestPut(t, hot, neighbor, []byte("keep neighbor"))
+	stop := errors.New("page stop")
+	err := MoveDirectHistory(context.Background(), hot, nil, history, 1, func(DirectHistoryMoveProgress) error { return stop })
+	if !errors.Is(err, stop) {
+		t.Fatal(err)
+	}
+	directTestAbsent(t, hot, first)
+	directTestRead(t, hot, second, []byte("value"))
+	directTestRead(t, hot, third, []byte("value"))
+	if err := MoveDirectHistory(context.Background(), hot, nil, history, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range [][]byte{first, second, third} {
+		directTestAbsent(t, hot, key)
+		directTestRead(t, history, key, []byte("value"))
+	}
+	directTestRead(t, history, singleton, []byte("index"))
+	directTestRead(t, hot, neighbor, []byte("keep neighbor"))
+}
