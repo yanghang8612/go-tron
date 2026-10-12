@@ -1264,12 +1264,15 @@ func (b *Buffer) putIntoKeyPartsStringsOwnedValuesFromKeyArena(l *layer, first [
 			s.prefixBucketIndex.invalidateIteratorKeys()
 		}
 		if !s.commitmentReserved {
-			// Reserve for the number of root-sibling batches the commitment fold
-			// actually started. Historical mainnet blocks commonly touch only one
-			// or two siblings; assuming the maximum fan-out of 16 made every sparse
-			// block allocate a mostly empty map. A dense fold still supplies 16 and
-			// preserves the single-allocation behaviour of the original fast path.
-			capacity := len(s.writes) + counts[shard]*reserveBatches + int(s.pendingOwnedPuts)
+			// Estimate total branch rows from this sibling's batch size and the
+			// fold's reservation hint, then spread them across the physical-key
+			// shards. Multiplying this shard's tiny observed count by every
+			// sibling amplifies random shard skew and overreserves dense folds.
+			// Keep room for this batch itself; an uneven later sibling may grow
+			// the ordinary Go map without changing publication semantics.
+			predicted := (len(seconds)*reserveBatches + layerShardCount - 1) / layerShardCount
+			predicted = max(counts[shard], predicted)
+			capacity := len(s.writes) + predicted + int(s.pendingOwnedPuts)
 			reserved := make(map[string][]byte, capacity)
 			for key, value := range s.writes {
 				reserved[key] = value
