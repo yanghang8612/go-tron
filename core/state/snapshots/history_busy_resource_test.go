@@ -116,7 +116,7 @@ func TestHistoryBusyResourceRequiresIndependentHeadroom(t *testing.T) {
 			for i := 0; i < historyDebtTrendPoints; i++ {
 				p.SampledAt = last.Add(time.Duration(i-6) * 5 * time.Second)
 				p.DeviceSampledAt = p.SampledAt
-				p.CompactionDebt = 3<<30 + uint64(i)*(1<<20)
+				p.CompactionDebt = 3<<30 + uint64(i)*(128<<20)
 				r.refreshHistoryLoad(p.SampledAt)
 			}
 		}},

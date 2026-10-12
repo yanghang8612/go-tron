@@ -105,7 +105,7 @@ func TestHistoryBusyObservationTraceRecoveryCadence(t *testing.T) {
 
 func TestHistoryBusyObservationTraceDebtGrowthCadence(t *testing.T) {
 	trace := makeBusyHistoryPressureTrace(2*time.Minute, func(elapsed time.Duration, p *maintenance.StoragePressure) {
-		p.CompactionDebt = 3<<30 + uint64(elapsed/(5*time.Second))*(1<<20)
+		p.CompactionDebt = 3<<30 + uint64(elapsed/(5*time.Second))*(128<<20)
 	})
 	for _, tc := range []struct {
 		name               string

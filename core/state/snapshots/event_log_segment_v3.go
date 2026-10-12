@@ -242,7 +242,7 @@ func BuildEventLogV4SegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, 
 	if chain == nil {
 		return SegmentRef{}, errors.New("snapshots: nil chain database")
 	}
-	return BuildEventLogV4SegmentFromReader(eventLogV3ChainReader{chain: chain, identities: newEventLogChainIdentityCache()}, dir, relPath, fromBlock, toBlock)
+	return buildEventLogV4ChainReplay(chain, dir, relPath, fromBlock, toBlock)
 }
 
 type EventLogV4PhysicalStats struct {

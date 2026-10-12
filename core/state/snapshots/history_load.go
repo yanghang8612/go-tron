@@ -12,11 +12,12 @@ import (
 // These are scheduling targets, not a promise that a legal complete block or
 // an in-flight filesystem operation can be interrupted at a precise boundary.
 const (
-	historyLoadRetry        = 5 * time.Second
-	historyCPUBurstRecovery = 250 * time.Millisecond
-	historyDebtTrendPoints  = 7
-	historyDebtTrendSpan    = 30 * time.Second
-	historyDebtTrendMaxGap  = 90 * time.Second
+	historyLoadRetry          = 5 * time.Second
+	historyCPUBurstRecovery   = 250 * time.Millisecond
+	historyDebtTrendPoints    = 7
+	historyDebtTrendSpan      = 30 * time.Second
+	historyDebtTrendMaxGap    = 90 * time.Second
+	historyDebtGrowthMinBytes = 256 << 20
 )
 
 type historyLoadReason uint16
@@ -185,7 +186,7 @@ func (s *historyLoadState) debtTrendPressure() historyDebtTrend {
 			break
 		}
 	}
-	if !trend.mature || trend.recent.net <= 0 || last.debt < 2<<30 {
+	if !trend.mature || !s.debtGrowthSignificant(trend.recent) || last.debt < 2<<30 {
 		return trend
 	}
 	for i := s.debtTrendCount - trend.recent.points; i >= 0; i-- {
@@ -196,6 +197,18 @@ func (s *historyLoadState) debtTrendPressure() historyDebtTrend {
 		}
 	}
 	return trend
+}
+
+// Small positive compaction sawteeth alone do not establish saturation.
+// The relative floor scales to large stores; this does not assert
+// spare disk bandwidth or replace independent hard/L0/stall/device guards.
+func (s *historyLoadState) debtGrowthSignificant(w historyDebtWindow) bool {
+	if w.points == 0 || w.net <= 0 {
+		return false
+	}
+	baseline := s.debtTrend[s.debtTrendCount-w.points].debt
+	threshold := max(uint64(historyDebtGrowthMinBytes), baseline/100)
+	return uint64(w.net) >= threshold
 }
 
 func (r *Runner) refreshHistoryLoad(now time.Time) {
@@ -251,12 +264,11 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 		trend := s.debtTrendPressure()
 		debtPressure := trend.pressure
 		soft := s.hard || newStall || devicePressure || l0Pressure || debtPressure
-		// A recovering compaction sawtooth may contain individual rises. Once
-		// independent observations establish a falling net trend, those rises
-		// should not indefinitely reset pressure hysteresis.
-		trendFalling := trend.mature && trend.recent.net <= 0
+		// Mature falling or sub-deadband debt can support recovery despite
+		// individual rises. Significant recent growth still resets good samples.
+		trendQuiet := trend.mature && !s.debtGrowthSignificant(trend.recent)
 		low := (p.L0CompactionThreshold <= 0 || p.L0Sublevels < p.L0CompactionThreshold) &&
-			(s.lastAccepted.IsZero() || p.CompactionDebt <= s.lastDebt || trendFalling)
+			(s.lastAccepted.IsZero() || p.CompactionDebt <= s.lastDebt || trendQuiet)
 		if soft {
 			s.level, s.good = 1, 0
 			if s.hard {

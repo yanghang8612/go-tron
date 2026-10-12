@@ -16,7 +16,7 @@ import (
 
 // HistoryReadOptions is local to one complete history trio. Zero keeps the
 // original serial reader and automatic codec topology. Enhanced reads retain
-// one serial record/CDC consumer and never run beside the event builder.
+// one serial record/CDC consumer; cache-only reads may join an admitted event builder.
 type HistoryReadOptions struct {
 	Workers            int
 	ChunkCache         bool

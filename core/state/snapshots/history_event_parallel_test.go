@@ -346,7 +346,8 @@ func TestParallelHistoryEventSameFilesAndQueries(t *testing.T) {
 	var wantRefs []SegmentRef
 	var wantChanges []*rawdb.StateDomainChange
 	var wantLogs []EventLog
-	for _, parallel := range []bool{false, true} {
+	for _, tc := range []struct{ parallel, cache bool }{{false, false}, {true, false}, {true, true}} {
+		parallel := tc.parallel
 		db, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
 		if err != nil {
 			t.Fatal(err)
@@ -355,6 +356,10 @@ func TestParallelHistoryEventSameFilesAndQueries(t *testing.T) {
 		seedParallelHistoryEvent(t, db, 16, 8, 3, 512)
 		r := parallelHistoryEventRunner(&coldBuilderChain{db: rawdb.NewChainDB(db, nil), solidified: 17, syncRemaining: 1000, syncRemainingOK: true}, t.TempDir(), 16, 8)
 		r.cfg.ParallelHistoryEventReady = func() bool { return parallel }
+		r.cfg.HistorySharedChunkCache = tc.cache
+		r.cfg.HistoryReadResourceProbe = func() HistoryReadResources {
+			return HistoryReadResources{Available: true, SampledAt: time.Now(), IdleCoresMilli: 16000, MemoryAvailableBytes: 8 << 30}
+		}
 		// The importer independently retires downloader staging rows. These are
 		// not canonical body/receipt/history rows and must not invalidate either
 		// live reader. Run the real write/delete accessors through the same Pebble.
@@ -388,7 +393,7 @@ func TestParallelHistoryEventSameFilesAndQueries(t *testing.T) {
 		if cleanupErr := <-cleanupDone; cleanupErr != nil {
 			t.Fatal(cleanupErr)
 		}
-		if err != nil || !result.Built || result.HistoryEventParallel != parallel {
+		if err != nil || !result.Built || result.HistoryEventParallel != parallel || result.HistorySharedChunkCache != tc.cache {
 			t.Fatalf("pair=%v: %+v %v", parallel, result, err)
 		}
 		if _, err := VerifyManifestFiles(r.cfg.Dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {

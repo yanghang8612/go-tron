@@ -85,7 +85,7 @@ func TestHistoryLoadDebtAndSharedDevicePressure(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		now = now.Add(5 * time.Second)
 		p.SampledAt, p.DeviceSampledAt = now, now
-		p.CompactionDebt += 1 << 20
+		p.CompactionDebt += 128 << 20
 		r.refreshHistoryLoad(now)
 	}
 	if r.historyLoad.level != 1 || r.historyLoad.hard {
@@ -399,13 +399,13 @@ func TestHistoryLoadReasonMetricsDebtAndSimultaneousPressure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Unix(1_700_000_000, 123)
 			p := healthyHistoryLoad(now)
-			p.CompactionDebt = tc.finalDebt - 6
+			p.CompactionDebt = tc.finalDebt - 6*(128<<20)
 			r := historyLoadMetricsFixture(t, &p)
 			r.refreshHistoryLoad(now)
 			for i := 1; i <= 6; i++ {
 				now = now.Add(5 * time.Second)
 				p.SampledAt, p.DeviceSampledAt = now, now
-				p.CompactionDebt++
+				p.CompactionDebt += 128 << 20
 				r.refreshHistoryLoad(now)
 				assertColdRunnerGauge(t, r.cfg.MetricsNamespace+"/history/budget/debt_rises", int64(i))
 			}

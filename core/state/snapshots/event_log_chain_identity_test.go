@@ -216,6 +216,16 @@ func TestEventChainIdentityCacheBuildsFromAncientWithoutHotRows(t *testing.T) {
 					t.Fatalf("hot rows remain at %d: body=%t infos=%t err=%v", number, body, infos, err)
 				}
 			}
+			// Exercise the production pinned replay path with no hot body/receipt rows.
+			pinnedHot, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pinnedHot.Close()
+			replayRef, err := BuildEventLogV4SegmentFromChain(rawdb.NewChainDB(pinnedHot, rawdb.NewFreezerReader(store)), t.TempDir(), "", 1, blocks)
+			if err != nil || replayRef.Checksum != wantRef.Checksum || replayRef.Size != wantRef.Size {
+				t.Fatalf("pinned ancient replay: %+v %v", replayRef, err)
+			}
 			chain := rawdb.NewChainDB(hot.KeyValueStore, rawdb.NewFreezerReader(store))
 			reader := &eventIdentityMutatingReader{eventLogV3ChainReader: eventLogV3ChainReader{chain: chain, identities: newEventLogChainIdentityCache()}, mutate: func() {}}
 			dir := t.TempDir()

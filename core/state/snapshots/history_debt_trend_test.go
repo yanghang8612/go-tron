@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func TestHistoryDebtTrendRisingWithRetracements(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	p := healthyHistoryLoad(now)
 	r := historyLoadMetricsFixture(t, &p)
-	for i, deltaMiB := range []uint64{0, 50, 100, 70, 130, 180, 170} {
+	for i, deltaMiB := range []uint64{0, 100, 200, 140, 260, 360, 340} {
 		p.SampledAt, p.DeviceSampledAt = now, now
 		p.CompactionDebt = 3<<30 + deltaMiB*(1<<20)
 		r.refreshHistoryLoad(now)
@@ -66,7 +67,7 @@ func TestHistoryDebtTrendRisingWithRetracements(t *testing.T) {
 		t.Fatalf("trend points = %d", r.historyLoad.debtTrendCount)
 	}
 	assertColdRunnerGauge(t, r.cfg.MetricsNamespace+"/history/budget/debt_trend_span_ns", int64(30*time.Second))
-	assertColdRunnerGauge(t, r.cfg.MetricsNamespace+"/history/budget/debt_trend_net_bytes", 170<<20)
+	assertColdRunnerGauge(t, r.cfg.MetricsNamespace+"/history/budget/debt_trend_net_bytes", 340<<20)
 	assertColdRunnerGauge(t, r.cfg.MetricsNamespace+"/history/budget/debt_trend_positive_steps", 4)
 }
 
@@ -82,7 +83,7 @@ func TestHistoryDebtTrendMonotonicAndSparse(t *testing.T) {
 			}
 			for i := 0; i < steps; i++ {
 				p.SampledAt, p.DeviceSampledAt = now, now
-				p.CompactionDebt = 3<<30 + uint64(i)*(1<<20)
+				p.CompactionDebt = 3<<30 + uint64(i)*(128<<20)
 				r.refreshHistoryLoad(now)
 				if i < steps-1 && r.historyLoad.reasons&historyLoadReasonDebtGrowth != 0 {
 					t.Fatalf("premature pressure at %d", i)
@@ -149,7 +150,7 @@ func TestHistoryDebtTrendRetracementExtendsRecentWindow(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	p := healthyHistoryLoad(now)
 	r := historyLoadMetricsFixture(t, &p)
-	for i, debtGiB := range []float64{8, 8.2, 8.1, 8.3} {
+	for i, debtGiB := range []float64{8, 8.3, 8.2, 8.6} {
 		p.SampledAt, p.DeviceSampledAt = now, now
 		p.CompactionDebt = uint64(debtGiB * float64(uint64(1)<<30))
 		r.refreshHistoryLoad(now)
@@ -178,19 +179,19 @@ func TestHistoryDebtTrendPressureRecoveryAndRenewedGrowth(t *testing.T) {
 		now = now.Add(5 * time.Second)
 	}
 	for i := 0; i < 7; i++ {
-		step(3<<30 + uint64(i)*(1<<20))
+		step(3<<30 + uint64(i)*(128<<20))
 	}
 	if r.historyLoad.level != 1 || r.historyLoad.reasons&historyLoadReasonDebtGrowth == 0 {
 		t.Fatal("initial sustained growth did not pressure")
 	}
 	for i := 0; i < 12; i++ {
-		step(3<<30 + 6<<20 - uint64(i*20)*(1<<20) + uint64(i%3*40)*(1<<20))
+		step(3<<30 + 768<<20 - uint64(i*20)*(1<<20) + uint64(i%3*40)*(1<<20))
 	}
 	if r.historyLoad.level != 3 || r.historyLoad.reasons&historyLoadReasonDebtGrowth != 0 {
 		t.Fatal("falling sawtooth did not finish recovery")
 	}
 	base := p.CompactionDebt
-	for _, deltaMiB := range []uint64{0, 50, 100, 70, 130, 180, 170} {
+	for _, deltaMiB := range []uint64{0, 100, 200, 140, 260, 360, 340} {
 		step(base + deltaMiB*(1<<20))
 	}
 	if r.historyLoad.level != 1 || r.historyLoad.reasons&historyLoadReasonDebtGrowth == 0 {
@@ -247,7 +248,7 @@ func TestHistoryDebtTrendInvalidObservationsResetWindow(t *testing.T) {
 			r := historyLoadMetricsFixture(t, &p)
 			for i := 0; i < 3; i++ {
 				p.SampledAt, p.DeviceSampledAt = now, now
-				p.CompactionDebt = 3<<30 + uint64(i)*(1<<20)
+				p.CompactionDebt = 3<<30 + uint64(i)*(128<<20)
 				r.refreshHistoryLoad(now)
 				now = now.Add(5 * time.Second)
 			}
@@ -274,7 +275,7 @@ func TestHistoryDebtTrendGapAndUnknownDevice(t *testing.T) {
 	r := historyLoadMetricsFixture(t, &p)
 	for i := 0; i < 7; i++ {
 		p.SampledAt = now
-		p.CompactionDebt = 3<<30 + uint64(i)*(1<<20)
+		p.CompactionDebt = 3<<30 + uint64(i)*(128<<20)
 		r.refreshHistoryLoad(now)
 		now = now.Add(5 * time.Second)
 	}
@@ -287,5 +288,81 @@ func TestHistoryDebtTrendGapAndUnknownDevice(t *testing.T) {
 	r.refreshHistoryLoad(now)
 	if r.historyLoad.debtTrendCount != 1 || r.historyLoad.reasons&historyLoadReasonDebtGrowth != 0 {
 		t.Fatalf("long observation gap retained trend: points=%d reasons=%d", r.historyLoad.debtTrendCount, r.historyLoad.reasons)
+	}
+}
+
+func TestHistoryDebtTrendSignificanceBoundary(t *testing.T) {
+	for _, base := range []uint64{3 << 30, 30 << 30} {
+		threshold := max(uint64(256<<20), base/100)
+		for _, net := range []uint64{threshold - 1, threshold, threshold + 1} {
+			t.Run(fmt.Sprintf("base_%d_net_%d", base, net), func(t *testing.T) {
+				now := time.Unix(1_700_000_000, 0)
+				p := healthyHistoryLoad(now)
+				r := historyLoadMetricsFixture(t, &p)
+				for i := 0; i < 7; i++ {
+					p.SampledAt, p.DeviceSampledAt = now, now
+					p.CompactionDebt = base + net*uint64(i)/6
+					r.refreshHistoryLoad(now)
+					now = now.Add(5 * time.Second)
+				}
+				pressured := r.historyLoad.reasons&historyLoadReasonDebtGrowth != 0
+				if pressured != (net >= threshold) {
+					t.Fatalf("net=%d threshold=%d pressure=%v", net, threshold, pressured)
+				}
+				if pressured && r.historyLoad.dutyPPM() != 200_000 {
+					t.Fatal("significant growth lost conservative duty")
+				}
+			})
+		}
+	}
+}
+
+func TestHistoryDebtTrendSmallPositiveRecoveryAndIndependentGuards(t *testing.T) {
+	for _, guard := range []string{"none", "hard", "stall", "l0", "device"} {
+		t.Run(guard, func(t *testing.T) {
+			now := time.Unix(1_700_000_000, 0)
+			p := healthyHistoryLoad(now)
+			r := historyLoadMetricsFixture(t, &p)
+			for i := 0; i < 10; i++ {
+				p.SampledAt, p.DeviceSampledAt = now, now
+				p.CompactionDebt = 30<<30 + uint64(i)*(20<<20)
+				p.WriteStalled = i == 0
+				if i == 9 {
+					switch guard {
+					case "hard":
+						p.WriteStalled = true
+					case "stall":
+						p.StallCount++
+					case "l0":
+						p.L0Sublevels = 2 * p.L0CompactionThreshold
+					case "device":
+						p.DeviceBusyPPM = 999_000
+						p.DeviceQueueMilli = 4000
+						p.DeviceAwait = 10 * time.Millisecond
+					}
+				}
+				r.refreshHistoryLoad(now)
+				now = now.Add(5 * time.Second)
+			}
+			if guard == "none" {
+				if r.historyLoad.level != 3 {
+					t.Fatalf("small positive trend prevented recovery: level=%d good=%d", r.historyLoad.level, r.historyLoad.good)
+				}
+			} else if r.historyLoad.level != 1 || r.historyLoad.reasons == 0 {
+				t.Fatalf("independent %s protection lost", guard)
+			}
+		})
+	}
+}
+
+func TestHistoryDebtTrendExtendedWindowCannotAmplifySmallRecentGrowth(t *testing.T) {
+	s := historyLoadState{}
+	now := time.Unix(1_700_000_000, 0)
+	for i, delta := range []uint64{0, 512, 400, 600} {
+		s.appendDebtTrend(now.Add(time.Duration(i)*15*time.Second), 3<<30+delta*(1<<20))
+	}
+	trend := s.debtTrendPressure()
+	if !trend.mature || trend.recent.net <= 0 || trend.pressure || trend.growth.points != 0 {
+		t.Fatalf("old growth amplified quiet recent suffix: %+v", trend)
 	}
 }

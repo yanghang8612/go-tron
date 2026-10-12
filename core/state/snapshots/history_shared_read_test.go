@@ -127,7 +127,11 @@ func TestHistorySharedReadSerialCachePublicationAndCloseFailure(t *testing.T) {
 			}
 			r := historySharedRunner(historyPinnedOnlyFactory{source}, t.TempDir())
 			defer r.cancel()
-			result, err := r.OnePass()
+			var maintenanceCalls int
+			result, err := r.OnePassWithMaintenanceContext(context.Background(), func(context.Context, PassResult) error { maintenanceCalls++; return nil })
+			if !result.HistoryEventParallel {
+				t.Fatal("cache-only pair was not admitted")
+			}
 			if result.HistorySharedReadWorkers != 0 || !result.HistorySharedChunkCache || result.HistoryReadFallbackReason != uint8(historyReadSerialSource) {
 				t.Fatal("serial cache not selected", result, err)
 			}
@@ -141,6 +145,16 @@ func TestHistorySharedReadSerialCachePublicationAndCloseFailure(t *testing.T) {
 				if _, e := LoadProductionManifest(r.cfg.Dir); !os.IsNotExist(e) {
 					t.Fatal("close failure left manifest", e)
 				}
+				if maintenanceCalls != 0 {
+					t.Fatal("close failure pruned source")
+				}
+				if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil || ok {
+					t.Fatal("close failure advanced stage", ok, err)
+				}
+				if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+					t.Fatal("close failure removed source", ok, err)
+				}
+
 			} else if err != nil || !result.Built {
 				t.Fatal("serial cache build failed", result, err)
 			}
@@ -206,6 +220,8 @@ func (s *historyExecutionSource) NewKeyValueSnapshot() (pointread.KeyValueSnapsh
 type historyExecutionView struct {
 	pointread.KeyValueSnapshot
 	source *historyExecutionSource
+	closed atomic.Bool
+	active atomic.Int32
 }
 
 func (v *historyExecutionView) IsPinnedKeyValueView() bool {
@@ -219,12 +235,14 @@ func (v *historyExecutionView) ConcurrentOwnedHistoryReads() bool {
 }
 func (v *historyExecutionView) Get(key []byte) ([]byte, error) {
 	s := v.source
-	if s.closed.Load() != 0 {
+	if v.closed.Load() {
 		s.late.Add(1)
 		return nil, errors.New("read after snapshot close")
 	}
 	s.active.Add(1)
 	defer s.active.Add(-1)
+	v.active.Add(1)
+	defer v.active.Add(-1)
 	if s.first.CompareAndSwap(false, true) {
 		close(s.entered)
 		if s.block {
@@ -236,14 +254,24 @@ func (v *historyExecutionView) Get(key []byte) ([]byte, error) {
 func (v *historyExecutionView) Close() error {
 	s := v.source
 	s.closed.Add(1)
-	if s.active.Load() != 0 {
+	v.closed.Store(true)
+	if v.active.Load() != 0 {
 		s.late.Add(1)
 	}
 	return errors.Join(v.KeyValueSnapshot.Close(), s.closeErr)
 }
 
 func historySharedRunner(source ethdb.KeyValueStore, dir string) *Runner {
-	chain := &parallelHistoryEventChain{&coldBuilderChain{db: source, solidified: 5, syncRemaining: 1000, syncRemainingOK: true}, rawdb.NewChainDB(source, nil)}
+	// The instrumented history snapshot owns its own lifetime counters. Event
+	// construction acquires a separate snapshot from the actual shared backend.
+	eventSource := source
+	switch v := source.(type) {
+	case *historyExecutionSource:
+		eventSource = v.KeyValueStore
+	case historyPinnedOnlyFactory:
+		eventSource = v.KeyValueStore
+	}
+	chain := &parallelHistoryEventChain{&coldBuilderChain{db: source, solidified: 5, syncRemaining: 1000, syncRemainingOK: true}, rawdb.NewChainDB(eventSource, nil)}
 	r := parallelHistoryEventRunner(chain, dir, 4, 2)
 	r.cfg.HistorySharedReadWorkers = 4
 	r.cfg.HistorySharedChunkCache = true
