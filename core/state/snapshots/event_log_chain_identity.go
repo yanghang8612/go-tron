@@ -7,7 +7,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -58,15 +57,16 @@ func (c *eventLogChainIdentityCache) put(number uint64, identity eventLogChainId
 
 func (r eventLogV3ChainReader) readBlock(number uint64) (eventLogChainIdentity, []*corepb.TransactionInfo, error) {
 	var identity eventLogChainIdentity
-	data, ok, err := rawdb.ReadBlockRawStrict(r.chain, number)
-	if err != nil {
-		return identity, nil, err
-	}
-	if !ok {
-		return identity, nil, fmt.Errorf("snapshots: missing block %d during V4 event-log build", number)
-	}
 	if r.identities != nil {
 		if cached, exists := r.identities.blocks[number]; exists {
+			data, ok, err := rawdb.ReadBlockRawStrict(r.chain, number)
+			if err != nil {
+				return identity, nil, err
+			}
+			if !ok {
+				return identity, nil, fmt.Errorf("snapshots: missing block %d during V4 event-log build", number)
+			}
+
 			if sha256.Sum256(data) != cached.bodyDigest {
 				return identity, nil, fmt.Errorf("snapshots: event-log source block %d changed between passes", number)
 			}
@@ -90,16 +90,12 @@ func (r eventLogV3ChainReader) readBlock(number uint64) (eventLogChainIdentity, 
 			return cached, infos, nil
 		}
 	}
-	block, err := types.UnmarshalBlock(data)
-	if err != nil {
-		return identity, nil, fmt.Errorf("rawdb: block %d decode: %w", number, err)
-	}
-	if block.Number() != number {
-		return identity, nil, fmt.Errorf("rawdb: block row %d contains block number %d", number, block.Number())
-	}
-	infos, _, err := rawdb.ReadTransactionInfosByBlockStrict(r.chain, number)
+	data, block, infos, ok, err := rawdb.ReadBlockAndTransactionInfosStrict(r.chain, number)
 	if err != nil {
 		return identity, nil, err
+	}
+	if !ok {
+		return identity, nil, fmt.Errorf("snapshots: missing block %d during V4 event-log build", number)
 	}
 	txs := block.Transactions()
 	if err := rawdb.ValidateTransactionInfosForBlock(number, txs, infos, "V4 event-log segment build"); err != nil {

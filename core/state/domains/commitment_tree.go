@@ -716,7 +716,6 @@ func (b *BranchData) nodeHashWith(h *pooledKeccak) common.Hash {
 }
 
 func (b *BranchData) nodeHashWithStats(h *pooledKeccak, stats *commitmentFoldStats) common.Hash {
-	h.Reset()
 	h.nodeBuf[0] = 0x01
 	off := 1
 	for remaining := b.presentMask(); remaining != 0; remaining &= remaining - 1 {
@@ -728,8 +727,7 @@ func (b *BranchData) nodeHashWithStats(h *pooledKeccak, stats *commitmentFoldSta
 		off += common.HashLength
 	}
 	stats.observeNodeHashPreimage(uint64(off))
-	_, _ = h.Write(h.nodeBuf[:off])
-	return readKeccakHash(h)
+	return branchPreimageHash(h, h.nodeBuf[:off])
 }
 
 // ----------------------------------------------------------------------------

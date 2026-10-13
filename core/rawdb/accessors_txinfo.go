@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -363,6 +364,34 @@ func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.Transac
 // rebuild/snapshot publishers can fail loudly instead of treating corrupt
 // coverage as an ordinary miss.
 func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.TransactionInfo, bool, error) {
+	return readTransactionInfosByBlockStrict(db, blockNum, nil)
+}
+
+// ReadBlockAndTransactionInfosStrict authenticates the body before decoding
+// receipts. Only a pinned view permits reusing that internally read block for
+// external logs; live views retain the independent hydration body read.
+// The returned raw bytes back the borrowed block and must remain immutable.
+func ReadBlockAndTransactionInfosStrict(db *ChainDB, blockNum uint64) ([]byte, *types.Block, []*corepb.TransactionInfo, bool, error) {
+	data, ok, err := ReadBlockRawStrict(db, blockNum)
+	if err != nil || !ok {
+		return nil, nil, nil, ok, err
+	}
+	block, err := types.UnmarshalBlockBorrowed(data)
+	if err != nil {
+		return nil, nil, nil, true, fmt.Errorf("rawdb: block %d decode: %w", blockNum, err)
+	}
+	if block.Number() != blockNum {
+		return nil, nil, nil, true, fmt.Errorf("rawdb: block row %d contains block number %d", blockNum, block.Number())
+	}
+	var reuse *types.Block
+	if pinned, ok := db.KeyValueStore.(pointread.PinnedKeyValueView); ok && pinned.IsPinnedKeyValueView() {
+		reuse = block
+	}
+	infos, _, err := readTransactionInfosByBlockStrict(db, blockNum, reuse)
+	return data, block, infos, true, err
+}
+
+func readTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64, block *types.Block) ([]*corepb.TransactionInfo, bool, error) {
 	if db == nil {
 		return nil, false, fmt.Errorf("rawdb: nil database during read transaction infos by block")
 	}
@@ -370,14 +399,14 @@ func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.
 		if err != nil {
 			return nil, ok, err
 		}
-		infos, err := decodeTransactionRetForBlock(db, data, blockNum)
+		infos, err := decodeTransactionRetForBlockWithBlock(db, data, blockNum, block)
 		return infos, true, err
 	}
 	data, ok, err := readValueThenVerifyMiss(db, txInfoBlockKey(blockNum), fmt.Sprintf("transaction infos for block %d", blockNum), nil)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	infos, err := decodeTransactionRetForBlock(db, data, blockNum)
+	infos, err := decodeTransactionRetForBlockWithBlock(db, data, blockNum, block)
 	return infos, true, err
 }
 
@@ -395,7 +424,7 @@ func readAncientTransactionInfosStrict(db *ChainDB, blockNum uint64) ([]byte, bo
 	return data, true, nil
 }
 
-func decodeTransactionRetForBlock(db *ChainDB, data []byte, blockNum uint64) ([]*corepb.TransactionInfo, error) {
+func decodeTransactionRetForBlockWithBlock(db *ChainDB, data []byte, blockNum uint64, block *types.Block) ([]*corepb.TransactionInfo, error) {
 	stored, err := decodeTransactionRetStorage(data)
 	if err != nil {
 		return nil, err
@@ -419,7 +448,7 @@ func decodeTransactionRetForBlock(db *ChainDB, data []byte, blockNum uint64) ([]
 		}
 	}
 	if stored.externalLogs {
-		if err := hydrateExternalTransactionInfoLogs(db, blockNum, ret.Transactioninfo, stored.expectedLogCount); err != nil {
+		if err := hydrateExternalTransactionInfoLogsWithBlock(db, blockNum, ret.Transactioninfo, stored.expectedLogCount, block); err != nil {
 			return nil, err
 		}
 	}

@@ -213,7 +213,11 @@ func (p *OrderedCommitmentPipeline) runPartition(partition int, root BranchData,
 func (p *OrderedCommitmentPipeline) composePartitions(job *orderedCommitmentJob) error {
 	h := borrowKeccak()
 	defer returnKeccak(h)
-	trie := commitmentTrie{store: job.store, hasher: h, foldStats: job.stats}
+	// Owners have joined. These depth-one mutations have no early reader;
+	// collect them into one immutable encoding arena before publishing root.
+	buf := borrowBufferedBranchStore(job.store)
+	defer returnBufferedBranchStore(buf)
+	trie := commitmentTrie{store: buf, hasher: h, foldStats: job.stats}
 	for partition := range job.partitions.stats {
 		job.stats.merge(&job.partitions.stats[partition])
 	}
@@ -246,5 +250,5 @@ func (p *OrderedCommitmentPipeline) composePartitions(job *orderedCommitmentJob)
 			job.root.SetHashChild(nb, trie.nodeHash(child))
 		}
 	}
-	return nil
+	return buf.flush(job.store, 1, 0)
 }

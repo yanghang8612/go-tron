@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"math"
 
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -128,11 +129,15 @@ func decodeTransactionRetStorage(data []byte) (decodedTransactionRetStorage, err
 	}, nil
 }
 
-func hydrateExternalTransactionInfoLogs(db *ChainDB, blockNum uint64, infos []*corepb.TransactionInfo, expected uint64) error {
+func hydrateExternalTransactionInfoLogsWithBlock(db *ChainDB, blockNum uint64, infos []*corepb.TransactionInfo, expected uint64, block *types.Block) error {
 	if db == nil || db.eventLog == nil {
 		return fmt.Errorf("rawdb: transaction receipts for block %d require cold event-log coverage", blockNum)
 	}
-	block, ok, err := ReadBlockStrict(db, blockNum)
+	ok := block != nil
+	var err error
+	if block == nil {
+		block, ok, err = ReadBlockStrict(db, blockNum)
+	}
 	if err != nil {
 		return fmt.Errorf("rawdb: read block %d for external transaction logs: %w", blockNum, err)
 	}

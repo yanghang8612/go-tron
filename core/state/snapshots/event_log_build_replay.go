@@ -24,6 +24,7 @@ func (s eventLogSnapshotStore) Has(key []byte) (bool, error)   { return s.snapsh
 func (s eventLogSnapshotStore) NewIterator(prefix, start []byte) ethdb.Iterator {
 	return s.snapshot.NewIterator(prefix, start)
 }
+func (s eventLogSnapshotStore) IsPinnedKeyValueView() bool { return true }
 func (s eventLogSnapshotStore) Close() error {
 	return errors.New("snapshots: event-log snapshot facade does not own live store")
 }
