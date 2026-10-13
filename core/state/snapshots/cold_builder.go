@@ -1290,7 +1290,7 @@ func (r *Runner) PreflightCatalog() error {
 	if err := r.cfg.validate(); err != nil {
 		return err
 	}
-	if _, err := LoadProductionManifest(r.cfg.Dir); err != nil {
+	if _, err := loadProductionManifestReadOnly(r.cfg.Dir); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -1329,7 +1329,7 @@ func (r *Runner) PublishCatalogIfManifestChanged() (bool, error) {
 	if err := r.cfg.validate(); err != nil {
 		return false, err
 	}
-	if _, err := LoadProductionManifest(r.cfg.Dir); err != nil {
+	if _, err := loadProductionManifestReadOnly(r.cfg.Dir); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
@@ -1430,7 +1430,9 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 
 	metadataStarted := time.Now()
 	var productionManifest *Manifest
-	if pinned, ok := historyDB.(interface{ PinnedColdManifest() *Manifest }); ok {
+	if pinned, ok := historyDB.(interface{ PinnedColdManifestView() PinnedManifestView }); ok {
+		productionManifest = pinned.PinnedColdManifestView().manifest
+	} else if pinned, ok := historyDB.(interface{ PinnedColdManifest() *Manifest }); ok {
 		productionManifest = pinned.PinnedColdManifest()
 	} else {
 		productionManifest, err = loadOptionalProductionManifest(r.cfg.Dir)
@@ -3665,7 +3667,9 @@ func coldSnapshotVisibleTxEnd(dir string, dataset SegmentDataset) (uint64, error
 }
 
 func loadOptionalProductionManifest(dir string) (*Manifest, error) {
-	manifest, err := LoadProductionManifest(dir)
+	// Every builder use is a read-only coverage/planning input. Integration
+	// allocates its own containers and progress before publishing a successor.
+	manifest, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

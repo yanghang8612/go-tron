@@ -113,7 +113,7 @@ func (r *Runner) initHistoryLoadMetrics() {
 	}
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
 	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_gc_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery",
-		"reason_bits", "debt_tier", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "debt_trend_points", "debt_trend_span_ns", "debt_trend_net_bytes", "debt_trend_positive_steps", "debt_trend_growth_points", "debt_trend_growth_span_ns", "debt_trend_growth_net_bytes", "debt_trend_growth_positive_steps", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
+		"reason_bits", "debt_tier", "debt_recovery", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "debt_trend_points", "debt_trend_span_ns", "debt_trend_net_bytes", "debt_trend_positive_steps", "debt_trend_growth_points", "debt_trend_growth_span_ns", "debt_trend_growth_net_bytes", "debt_trend_growth_positive_steps", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
 		r.historyLoad.metrics[name] = metrics.GetOrRegisterGauge(strings.TrimRight(r.cfg.MetricsNamespace, "/")+"/history/budget/"+name, nil)
 	}
 	for i, reason := range historyLoadReasonMetrics {
@@ -280,10 +280,11 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 		trend := s.debtTrendPressure()
 		debtPressure := trend.pressure
 		soft := s.hard || newStall || devicePressure || l0Pressure || debtPressure
-		s.debtModerate = (newSample || previousModerate) && debtPressure && !s.debtGrowthSevere(trend.recent) &&
+		middleEligible := !reset && !s.debtGrowthSevere(trend.recent) &&
 			!s.hard && !newStall && !devicePressure && !l0Pressure &&
 			p.L0CompactionThreshold > 0 && p.L0Sublevels < p.L0CompactionThreshold &&
 			deviceKnown && p.DeviceAwait >= 0 && p.DeviceAwait <= 2*time.Millisecond
+		s.debtModerate = (newSample || previousModerate) && debtPressure && middleEligible
 		// Mature falling or sub-deadband debt can support recovery despite
 		// individual rises. Significant recent growth still resets good samples.
 		trendQuiet := trend.mature && !s.debtGrowthSignificant(trend.recent)
@@ -320,6 +321,12 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 			if previousLevel == 1 && s.good < 2 {
 				s.level = 1
 				reasons |= historyLoadReasonPressureHysteresis
+				// Debt-only pressure already admitted 60% duty. Its first healthy
+				// recovery point must not perversely drop to 20% while waiting for
+				// the second good sample. Carry only existing, comparable admission;
+				// lost/reset/stale protection cannot be reacquired by reusing a probe.
+				s.debtModerate = previousModerate && middleEligible &&
+					!s.lastAccepted.IsZero() && p.SampledAt.Sub(s.lastAccepted) <= historyDebtTrendMaxGap
 			}
 			if s.good >= 3 && deviceKnown {
 				s.level = 3
@@ -348,6 +355,7 @@ func (r *Runner) refreshHistoryLoadFromProbe(now time.Time, probe func() mainten
 		}
 	}
 	s.metric("debt_tier", debtTier)
+	s.metric("debt_recovery", boolGauge(reasons&historyLoadReasonPressureHysteresis != 0 && s.debtModerateReady(now)))
 	s.metric("duty_ppm", int64(s.dutyPPM()))
 	s.metric("cpu_burst", boolGauge(s.cpuBurstReady(now)))
 	s.metric("device_known", boolGauge(p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now)))

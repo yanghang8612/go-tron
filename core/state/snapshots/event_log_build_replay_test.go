@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -59,6 +60,25 @@ func TestEventLogBuildReplayEquivalentAndBounded(t *testing.T) {
 			}
 			if source.scans != wantScans || replay.charge > limit || replay.overflow != overflow {
 				t.Fatalf("reads=%d charge=%d overflow=%v", source.scans, replay.charge, replay.overflow)
+			}
+			if replay.sourcePasses != wantScans || replay.sourceRows != uint64(len(rows)) || replay.peakCharge > limit || replay.replayed == overflow {
+				t.Fatalf("incorrect replay telemetry: %+v", replay)
+			}
+			if !overflow && replay.peakCharge != charge {
+				t.Fatal("peak charge does not account for all retained rows")
+			}
+			prefix := "test/" + t.Name() + "/"
+			m := newEventReplayMetrics(prefix)
+			t.Cleanup(func() {
+				for _, key := range []string{"attempts", "replayed", "overflows", "source_passes", "snapshot_unavailable", "last/peak_charge_bytes", "last/source_rows", "last/source_passes"} {
+					metrics.Unregister(prefix + key)
+				}
+			})
+			m.record(replay)
+			if m.attempts.Snapshot().Count() != 1 || m.sourcePasses.Snapshot().Count() != int64(wantScans) ||
+				m.overflows.Snapshot().Count() != int64(boolGauge(overflow)) || m.replayed.Snapshot().Count() != int64(boolGauge(!overflow)) ||
+				m.lastRows.Snapshot().Value() != int64(len(rows)) || m.lastPeakBytes.Snapshot().Value() != int64(replay.peakCharge) {
+				t.Fatal("replay metrics lost source scans or overflow")
 			}
 			data, err := os.ReadFile(filepath.Join(root, got.Path))
 			if err != nil {

@@ -49,7 +49,7 @@ func (r *Runner) shouldPrioritizePendingCompaction(now time.Time) bool {
 // Waiting for the source target can leave a small record/logical-limited run
 // pending briefly, but avoids prioritizing an empty merge for every two leaves.
 func (r *Runner) hasPotentialBusyCompaction() (bool, error) {
-	manifest, err := LoadProductionManifest(r.cfg.Dir)
+	manifest, err := loadProductionManifestReadOnly(r.cfg.Dir)
 	if os.IsNotExist(err) {
 		return false, nil
 	}

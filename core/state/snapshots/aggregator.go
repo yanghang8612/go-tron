@@ -621,7 +621,7 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
 	var old *Manifest
-	if manifest, err := LoadProductionManifest(a.dir); err == nil {
+	if manifest, err := loadProductionManifestReadOnly(a.dir); err == nil {
 		old = manifest
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -631,7 +631,7 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 
 func (a *Aggregator) integrateCommitmentBranchBase(visibleStart, visibleEnd uint64, refs []SegmentRef) (*Manifest, error) {
 	var old *Manifest
-	if manifest, err := LoadProductionManifest(a.dir); err == nil {
+	if manifest, err := loadProductionManifestReadOnly(a.dir); err == nil {
 		old = manifest
 	} else if !os.IsNotExist(err) {
 		return nil, err

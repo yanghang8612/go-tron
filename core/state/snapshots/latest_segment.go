@@ -1203,13 +1203,34 @@ func openPinnedManager(dir string, manifest *Manifest, parentCache *ChainFreezer
 	if err := manifest.ValidateProduction(); err != nil {
 		return nil, err
 	}
+	return newPinnedManager(dir, manifestLookupView(cloneManifest(manifest)), parentCache), nil
+}
+
+// newPinnedManager accepts only manager-owned immutable metadata. Public
+// OpenPinnedManager validates/detaches first; PinHistoryReadView already has
+// a validated current generation and holds the file-retention lease.
+func newPinnedManager(dir string, manifest *Manifest, parentCache *ChainFreezerVerificationCache) *Manager {
 	return &Manager{
 		dir:                    dir,
-		manifest:               manifestLookupView(cloneManifest(manifest)),
+		manifest:               manifest,
 		pinned:                 true,
 		cache:                  make(map[string]*LatestSegment),
 		chainVerificationCache: parentCache.snapshotPersistent(dir),
-	}, nil
+	}
+}
+
+// PinnedManifestView is an opaque immutable generation, not a public mutable
+// Manifest. Keeping its internals private lets the cold builder reuse the
+// source view's already pinned metadata without another complete catalog copy.
+type PinnedManifestView struct{ manifest *Manifest }
+
+// PinnedManifestView is available only for an explicitly pinned manager. The
+// caller must retain the associated history read lease while using its files.
+func (m *Manager) PinnedManifestView() PinnedManifestView {
+	if m == nil || !m.pinned {
+		return PinnedManifestView{}
+	}
+	return PinnedManifestView{manifest: m.manifest}
 }
 
 func (m *Manager) Manifest() *Manifest {

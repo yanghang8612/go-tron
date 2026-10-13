@@ -35,11 +35,10 @@ func (m *Manager) PinHistoryReadView() (*Manager, func(), error) {
 	if manifest == nil {
 		return nil, release, nil
 	}
-	pinned, err := openPinnedManager(m.dir, manifest, m.chainVerificationCache)
-	if err != nil {
-		release()
-		return nil, nil, err
-	}
+	// currentManifest is manager-owned, validated and immutable. Reuse its
+	// existing path/companion index while the lease pins its files; the public
+	// OpenPinnedManager still detaches externally mutable input.
+	pinned := newPinnedManager(m.dir, manifest, m.chainVerificationCache)
 	return pinned, release, nil
 }
 

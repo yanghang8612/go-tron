@@ -10,21 +10,25 @@ import (
 
 type stagedHistorySourceView struct {
 	snapshots.AggregatorDB
-	manifest *snapshots.Manifest
+	manifest snapshots.PinnedManifestView
 }
 
 // directHistorySourceView fixes the ordinary KV/manifest read boundary without
 // staging routes, ownership receipts, or cold-binding authentication.
 type directHistorySourceView struct {
 	snapshots.AggregatorDB
-	manifest *snapshots.Manifest
+	manifest snapshots.PinnedManifestView
 }
 
-func (v directHistorySourceView) IsPinnedKeyValueView() bool              { return true }
-func (v directHistorySourceView) PinnedColdManifest() *snapshots.Manifest { return v.manifest }
+func (v directHistorySourceView) IsPinnedKeyValueView() bool { return true }
+func (v directHistorySourceView) PinnedColdManifestView() snapshots.PinnedManifestView {
+	return v.manifest
+}
 
-func (v stagedHistorySourceView) IsPinnedKeyValueView() bool              { return true }
-func (v stagedHistorySourceView) PinnedColdManifest() *snapshots.Manifest { return v.manifest }
+func (v stagedHistorySourceView) IsPinnedKeyValueView() bool { return true }
+func (v stagedHistorySourceView) PinnedColdManifestView() snapshots.PinnedManifestView {
+	return v.manifest
+}
 func (v stagedHistorySourceView) RequireHotRange(first, last uint64) error {
 	routed, ok := v.AggregatorDB.(interface{ RequireHotRange(uint64, uint64) error })
 	if !ok {
@@ -104,9 +108,9 @@ func (bc *BlockChain) AcquireStateHistorySourceView(ctx context.Context) (snapsh
 		if err != nil {
 			return nil, nil, err
 		}
-		var manifest *snapshots.Manifest
+		var manifest snapshots.PinnedManifestView
 		if pinnedCold != nil {
-			manifest = pinnedCold.Manifest()
+			manifest = pinnedCold.PinnedManifestView()
 		}
 		return stagedHistorySourceView{AggregatorDB: view, manifest: manifest}, view.Close, nil
 	}
@@ -122,9 +126,9 @@ func (bc *BlockChain) AcquireStateHistorySourceView(ctx context.Context) (snapsh
 			_ = closeView()
 			return nil, nil, err
 		}
-		var manifest *snapshots.Manifest
+		var manifest snapshots.PinnedManifestView
 		if pinned != nil {
-			manifest = pinned.Manifest()
+			manifest = pinned.PinnedManifestView()
 		}
 		return directHistorySourceView{AggregatorDB: view, manifest: manifest}, func() error {
 			defer release()

@@ -85,6 +85,19 @@ func manifestCacheConfiguredBudget() (uint64, error) {
 }
 
 func loadManifestFile(dir string, production bool) (*Manifest, error) {
+	return loadManifestFileMode(dir, production, false)
+}
+
+// loadProductionManifestReadOnly may borrow the cache's immutable generation.
+// Keep it package-private: callers must neither mutate this object/its slices
+// nor hand it to any public API that may do so. A publication replaces the
+// resident pointer, never its contents, so an older borrowed view stays valid.
+// Every load still authenticates all current file bytes, including cache hits.
+func loadProductionManifestReadOnly(dir string) (*Manifest, error) {
+	return loadManifestFileMode(dir, true, true)
+}
+
+func loadManifestFileMode(dir string, production, readOnly bool) (*Manifest, error) {
 	budget, err := manifestCacheConfiguredBudget()
 	if err != nil {
 		return nil, err
@@ -111,7 +124,7 @@ func loadManifestFile(dir string, production bool) (*Manifest, error) {
 		if equal {
 			loadedManifestCache.mu.Lock()
 			if loadedManifestCache.manifest == cachedManifest {
-				m, hitErr := loadedManifestCache.cloneHitLocked(production)
+				m, hitErr := loadedManifestCache.hitLocked(production, readOnly)
 				loadedManifestCache.mu.Unlock()
 				return m, hitErr
 			}
@@ -133,7 +146,7 @@ func loadManifestFile(dir string, production bool) (*Manifest, error) {
 		}
 		return decodeManifest(data)
 	}
-	return loadedManifestCache.decodeOwned(data, production, budget)
+	return loadedManifestCache.decodeMode(data, production, budget, readOnly)
 }
 
 // readManifestAgainstCache reads through EOF even on a mismatch, including
@@ -208,11 +221,15 @@ func compareManifestReader(reader io.Reader, cached []byte) ([]byte, bool, error
 // decodeOwned takes ownership of data, which comes from a private ReadFile
 // buffer. Returned manifests never share mutable containers with the cache.
 func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget uint64) (*Manifest, error) {
+	return c.decodeMode(data, production, budget, false)
+}
+
+func (c *manifestDecodeCache) decodeMode(data []byte, production bool, budget uint64, readOnly bool) (*Manifest, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.resizeLocked(budget)
 	if c.manifest != nil && bytes.Equal(data, c.data) {
-		return c.cloneHitLocked(production)
+		return c.hitLocked(production, readOnly)
 	}
 	manifestCacheMisses.Inc(1)
 	// An old entry is no longer useful for these bytes. In particular, do not
@@ -231,7 +248,7 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 	return m, nil
 }
 
-func (c *manifestDecodeCache) cloneHitLocked(production bool) (*Manifest, error) {
+func (c *manifestDecodeCache) hitLocked(production, readOnly bool) (*Manifest, error) {
 	manifestCacheHits.Inc(1)
 	if c.publication {
 		manifestCachePublicationHits.Inc(1)
@@ -239,6 +256,9 @@ func (c *manifestDecodeCache) cloneHitLocked(production bool) (*Manifest, error)
 	manifestCacheCandidate.Update(int64(c.charge))
 	if production && c.productionErr != nil {
 		return nil, c.productionErr
+	}
+	if readOnly {
+		return c.manifest, nil
 	}
 	return cloneDecodedManifest(c.manifest), nil
 }
