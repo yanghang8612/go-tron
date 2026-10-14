@@ -179,8 +179,16 @@ func TestPointGetCallbackLifetime(t *testing.T) {
 				t.Fatalf("callback result: %v %v", found, err)
 			}
 		}()
-		if got := db.db.Metrics().TableIters; got != 0 {
-			t.Fatalf("leaked %d table iterators", got)
+		if got := db.db.Metrics().TableIters; got > 4 {
+			t.Fatalf("unbounded %d table iterators", got)
+		}
+		if found, err := c.View([]byte("p/key"), func(v []byte) error {
+			if string(v) != "value" {
+				t.Fatal("reuse after callback failure changed value")
+			}
+			return nil
+		}); err != nil || !found {
+			t.Fatalf("reuse after callback failure: %v/%v", found, err)
 		}
 	}
 	closed := make(chan error, 1)
@@ -192,6 +200,9 @@ func TestPointGetCallbackLifetime(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if got := db.db.Metrics().TableIters; got != 0 {
+		t.Fatalf("final Close retained %d table iterators", got)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -208,7 +219,9 @@ func TestPointGetCallbackLifetime(t *testing.T) {
 
 type pointGetFailFS struct {
 	vfs.FS
-	fail atomic.Bool
+	fail             atomic.Bool
+	readErr          error
+	failFrom, failTo int64
 }
 type pointGetFailFile struct {
 	vfs.File
@@ -225,7 +238,10 @@ func (fs *pointGetFailFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, e
 	return &pointGetFailFile{File: f, fs: fs}, nil
 }
 func (f *pointGetFailFile) ReadAt(p []byte, off int64) (int, error) {
-	if f.fs.fail.Load() {
+	if f.fs.fail.Load() && (f.fs.failTo == 0 || (off < f.fs.failTo && off+int64(len(p)) > f.fs.failFrom)) {
+		if f.fs.readErr != nil {
+			return 0, f.fs.readErr
+		}
 		return 0, errPointGetIO
 	}
 	return f.File.ReadAt(p, off)

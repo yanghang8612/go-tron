@@ -81,3 +81,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+// Audited v1.1.5 runtime copy with snapshot-scoped bounded GetCursor.
+replace github.com/cockroachdb/pebble => ./third_party/pebble

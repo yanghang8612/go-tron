@@ -2,7 +2,6 @@ package pebbledb
 
 import (
 	"bytes"
-	"errors"
 	"time"
 
 	"github.com/cockroachdb/pebble"
@@ -20,10 +19,22 @@ func (c *pointReadCursor) viewGet(key []byte, fn func([]byte) error) (found bool
 		return false, nil
 	}
 	started := time.Now()
-	value, closer, readErr := c.getSnapshot.Get(key)
+	// The MVCC snapshot/lifecycle lease is eager, but an unused cursor need
+	// not allocate or pin a second readState. Include first construction in the
+	// existing lookup wall measurement.
+	var value []byte
+	var readErr error
+	if c.getCursor == nil {
+		c.getCursor, readErr = c.getSnapshot.NewGetCursor()
+	}
+	if readErr == nil {
+		value, readErr = c.getCursor.Get(key)
+	}
 	c.getNanos += uint64(time.Since(started))
 	c.getCalls++
-	if errors.Is(readErr, pebble.ErrNotFound) {
+	// Only the exact sentinel means absence. Joined operation/cleanup errors
+	// may contain ErrNotFound alongside a real failure and must propagate.
+	if readErr == pebble.ErrNotFound {
 		return false, nil
 	}
 	if readErr != nil {
@@ -32,7 +43,7 @@ func (c *pointReadCursor) viewGet(key []byte, fn func([]byte) error) (found bool
 	}
 	c.getHits++
 	defer func() {
-		if closeErr := closer.Close(); closeErr != nil {
+		if closeErr := c.getCursor.ReleaseValue(); closeErr != nil {
 			c.getErrors++
 			if err == nil {
 				err = closeErr
@@ -68,4 +79,28 @@ func (m *pointGetMetrics) observe(c *pointReadCursor) {
 	m.hits.Inc(int64(c.getHits))
 	m.errors.Inc(int64(c.getErrors))
 	m.nanos.Inc(int64(c.getNanos))
+}
+
+// Cursor reuse counts are new measurements, not zero-valued historical Get stats.
+// Each cursor records locally; only Close publishes to the process counters.
+type getCursorMetrics struct {
+	requests, opens, reuses, fallbacks, evictions, peakSum *metrics.Counter
+}
+
+var commitmentGetCursorMetrics = &getCursorMetrics{
+	requests:  metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_requests", nil),
+	opens:     metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_iterator_opens", nil),
+	reuses:    metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_reuses", nil),
+	fallbacks: metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_fallbacks", nil),
+	evictions: metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_evictions", nil),
+	peakSum:   metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/retained_peak_sum", nil),
+}
+
+func (m *getCursorMetrics) observe(s pebble.GetCursorStats) {
+	m.requests.Inc(int64(s.TableRequests))
+	m.opens.Inc(int64(s.TableOpens))
+	m.reuses.Inc(int64(s.TableReuses))
+	m.fallbacks.Inc(int64(s.TableFallbacks))
+	m.evictions.Inc(int64(s.TableEvictions))
+	m.peakSum.Inc(int64(s.MaxRetained))
 }

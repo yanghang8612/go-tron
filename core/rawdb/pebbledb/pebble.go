@@ -385,6 +385,7 @@ func (s *keyValueSnapshot) IsPinnedKeyValueView() bool {
 }
 
 type pointReadCursor struct {
+	getCursor                              *pebble.GetCursor
 	iter                                   *pebble.Iterator
 	unbounded                              bool
 	getSnapshot                            *pebble.Snapshot
@@ -653,10 +654,19 @@ func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, e
 
 func (c *pointReadCursor) Close() error {
 	if c != nil && c.getSnapshot != nil {
+		var err error
+		if c.getCursor != nil {
+			err = c.getCursor.Close()
+			if err != nil {
+				c.getErrors++
+			}
+			commitmentGetCursorMetrics.observe(c.getCursor.Stats())
+		}
 		commitmentPointGetMetrics.observe(c)
+		c.getCursor = nil
 		c.getSnapshot = nil
 		c.prefix = nil
-		return nil
+		return err
 	}
 	if c == nil || c.iter == nil {
 		return nil
