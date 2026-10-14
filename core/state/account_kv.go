@@ -15,6 +15,8 @@ import (
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // kvPresencePrefix wraps persisted KV values so an empty-but-present value
@@ -1203,6 +1205,9 @@ func appendKVCompositeHashKeyString(arena *[]byte, domain kvdomains.KVDomain, ke
 // lookupKVEntry builds the common <=64-byte logical key in stack storage. The
 // transient []byte-to-string conversion is allocation-free for map lookup.
 func lookupKVEntry(entries map[string]kvEntry, domain kvdomains.KVDomain, key []byte) (kvEntry, bool) {
+	if len(entries) == 0 {
+		return kvEntry{}, false
+	}
 	var stack [66]byte
 	var composite []byte
 	if size := 2 + len(key); size <= len(stack) {
@@ -1483,6 +1488,13 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 // internal decoding. Callers must neither mutate nor retain the returned slice.
 // GetAccountKV remains the owning public API.
 func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) (value []byte, exists bool, err error) {
+	return s.getAccountKVForDecodingFromObject(nil, owner, domain, key)
+}
+
+// getAccountKVForDecodingFromObject reuses an object already resolved by the
+// current read. It preserves the generic dirty/fresh/versioned/latest order;
+// the caller must have recorded the owner's existence dependency.
+func (s *StateDB) getAccountKVForDecodingFromObject(obj *stateObject, owner tcommon.Address, domain kvdomains.KVDomain, key []byte) (value []byte, exists bool, err error) {
 	defer func() {
 		if err != nil {
 			err = s.recordStateError(fmt.Sprintf("read rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
@@ -1492,7 +1504,9 @@ func (s *StateDB) getAccountKVForDecoding(owner tcommon.Address, domain kvdomain
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
-	obj := s.getStateObjectForField(owner, TransactionAccountFieldExistence)
+	if obj == nil {
+		obj = s.getStateObjectForField(owner, TransactionAccountFieldExistence)
+	}
 	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
@@ -2051,14 +2065,31 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	if !prevGenerationExists {
 		_, prevGenerationExists, _ = s.readStateKVGeneration(owner)
 	}
+	var prevContractMeta *contractpb.SmartContract
+	if obj.contractMeta != nil {
+		prevContractMeta = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
+	}
 	s.journal.append(kvResetChange{
-		address:              owner,
-		prevRoot:             obj.accountKVRoot,
-		prevGeneration:       obj.accountKVGeneration,
-		prevGenerationExists: prevGenerationExists,
-		prevGenerationDirty:  obj.accountKVGenerationDirty,
-		prevDirty:            prevDirty,
+		address:                   owner,
+		prevRoot:                  obj.accountKVRoot,
+		prevGeneration:            obj.accountKVGeneration,
+		prevGenerationExists:      prevGenerationExists,
+		prevGenerationDirty:       obj.accountKVGenerationDirty,
+		prevDirty:                 prevDirty,
+		prevContractMeta:          prevContractMeta,
+		prevContractMetaDirty:     obj.contractMetaDirty,
+		prevStorage:               obj.storage,
+		prevStorageHighWater:      obj.storageHighWater,
+		prevDirtyStorage:          obj.dirtyStorage,
+		prevDirtyStorageHighWater: obj.dirtyStorageHighWater,
 	})
+	// Transfer the old namespace's maps to the journal instead of releasing
+	// them to pools: reset/revert must preserve pending SSTOREs and pre-images.
+	// New-generation reads/writes receive separate maps.
+	obj.storage = nil
+	obj.storageHighWater = 0
+	obj.dirtyStorage = nil
+	obj.dirtyStorageHighWater = 0
 	obj.releaseKVDirty()
 	obj.contractMeta = nil
 	obj.contractMetaDirty = false

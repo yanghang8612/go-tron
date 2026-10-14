@@ -308,12 +308,18 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 // snapshots the prior root, generation, AND the dirty overlay, because the
 // reset clears the overlay and the post-reset overlay belongs to a new generation.
 type kvResetChange struct {
-	address              tcommon.Address
-	prevRoot             tcommon.Hash
-	prevGeneration       uint64
-	prevGenerationExists bool
-	prevGenerationDirty  bool
-	prevDirty            map[string]kvEntry
+	address                   tcommon.Address
+	prevRoot                  tcommon.Hash
+	prevGeneration            uint64
+	prevGenerationExists      bool
+	prevGenerationDirty       bool
+	prevDirty                 map[string]kvEntry
+	prevContractMeta          *contractpb.SmartContract
+	prevContractMetaDirty     bool
+	prevStorage               map[tcommon.Hash]storageSlot
+	prevStorageHighWater      int
+	prevDirtyStorage          map[tcommon.Hash]storageOrigin
+	prevDirtyStorageHighWater int
 }
 
 func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
@@ -328,6 +334,20 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.releaseKVDirty()
 	obj.kvDirty = e.prevDirty
 	obj.kvDirtyHighWater = len(e.prevDirty)
+	obj.contractMeta = e.prevContractMeta
+	obj.contractMetaDirty = e.prevContractMetaDirty
+	obj.contractRuntime = ContractRuntimeMetadata{}
+	obj.contractRuntimeLoaded = false
+	obj.contractRuntimeExists = false
+	obj.invalidateStorageKeyLayout()
+	// Release only the replaced generation's maps. The saved maps were detached
+	// at reset and belong to this object again after restoration.
+	obj.releaseStorage()
+	obj.releaseDirtyStorage()
+	obj.storage = e.prevStorage
+	obj.storageHighWater = e.prevStorageHighWater
+	obj.dirtyStorage = e.prevDirtyStorage
+	obj.dirtyStorageHighWater = e.prevDirtyStorageHighWater
 	obj.accountMapsLoaded = false
 	obj.accountPermissionsLoaded = false
 	clearAccountPermissionCaches(obj)

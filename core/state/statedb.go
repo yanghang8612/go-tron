@@ -3047,8 +3047,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 	// Load from persistent storage on cache miss.
 	s.storageObservability.coldReads++
 	rowKey := storageReadKeyPool.Get().(*tcommon.Hash)
-	*rowKey = s.storageRowKey(addr, key)
-	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractStorage, rowKey[:])
+	*rowKey = s.storageRowKeyForObject(obj, key)
+	raw, ok, err := s.getAccountKVForDecodingFromObject(obj, addr, kvdomains.ContractStorage, rowKey[:])
 	storageReadKeyPool.Put(rowKey)
 	if err != nil {
 		s.storageObservability.coldErrors++
@@ -3110,12 +3110,21 @@ func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.
 	if obj == nil || obj.deleted {
 		return javaStorageRowKey(addr, key, nil)
 	}
+	return s.storageRowKeyForObject(obj, key)
+}
+
+// storageRowKeyForObject is the SLOAD path after account existence and contract
+// metadata dependencies have already been recorded by the caller.
+func (s *StateDB) storageRowKeyForObject(obj *stateObject, key tcommon.Hash) tcommon.Hash {
+	if obj.deleted {
+		return javaStorageRowKey(obj.address, key, nil)
+	}
 	if !obj.storageKeyLayoutCached {
 		if meta, ok := s.contractRuntime(obj); ok {
 			obj.storageKeyPrefix = meta.storageKeyPrefix
 			obj.storageKeyHashSlot = meta.storageKeyHashSlot
 		} else {
-			obj.storageKeyPrefix, obj.storageKeyHashSlot = javaStorageKeyLayoutFields(addr, nil, 0)
+			obj.storageKeyPrefix, obj.storageKeyHashSlot = javaStorageKeyLayoutFields(obj.address, nil, 0)
 		}
 		obj.storageKeyLayoutCached = true
 	}

@@ -105,7 +105,36 @@ func DirectHistoryRanges() []PhysicalSpaceRange {
 
 // IsDirectHistoryKey reports the schema-owned location of one physical key.
 func IsDirectHistoryKey(key []byte) bool {
-	return isDirectHistoryKeyString(string(key))
+	// Keep byte-key reads borrowed: converting a complete physical key to an
+	// owned string here allocates for every long SLOAD/commitment point read.
+	return bytes.HasPrefix(key, stateChangeSetPrefix) ||
+		bytes.HasPrefix(key, stateTxRangePrefix) ||
+		bytes.HasPrefix(key, stateHistorySharedChunkPrefix) ||
+		bytes.HasPrefix(key, stateHistorySharedBucketPrefix) ||
+		bytes.HasPrefix(key, stateChangePostingPrefix) ||
+		bytes.HasPrefix(key, stateChangeKeyDirectoryPrefix) ||
+		bytes.Equal(key, []byte(stageProgressPrefixString+string(StageStateHistoryIndex)))
+}
+
+// directHistoryPrefixPartition proves whether the entire cursor prefix range
+// belongs to one engine. A prefix containing the exact history stage singleton
+// can also contain hot extensions, so it must keep both cursors.
+func directHistoryPrefixPartition(prefix []byte) (history, exclusive bool) {
+	for _, family := range [...][]byte{
+		stateChangeSetPrefix, stateTxRangePrefix, stateHistorySharedChunkPrefix,
+		stateHistorySharedBucketPrefix, stateChangePostingPrefix, stateChangeKeyDirectoryPrefix,
+	} {
+		if bytes.HasPrefix(prefix, family) {
+			return true, true
+		}
+		if bytes.HasPrefix(family, prefix) {
+			return false, false
+		}
+	}
+	if bytes.HasPrefix([]byte(stageProgressPrefixString+string(StageStateHistoryIndex)), prefix) {
+		return false, false
+	}
+	return false, true
 }
 
 func isDirectHistoryKeyString(key string) bool {

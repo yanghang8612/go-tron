@@ -551,6 +551,15 @@ func (d *DirectHistoryStore) NewPointReadSnapshotWithCapacity(capacity int) (poi
 	return &directHistoryPointSnapshot{hot: hot, history: history}, nil
 }
 func (s *directHistoryPointSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
+	// Both engine snapshots were already pinned under the mutation lock. Omit
+	// only the cursor whose prefix range cannot contain a routed key.
+	if history, exclusive := directHistoryPrefixPartition(prefix); exclusive {
+		if history {
+			return s.history.NewCursor(prefix)
+		}
+		return s.hot.NewCursor(prefix)
+	}
+
 	hot, err := s.hot.NewCursor(prefix)
 	if err != nil {
 		return nil, err

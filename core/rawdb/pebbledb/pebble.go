@@ -363,6 +363,7 @@ type pointReadSnapshot struct {
 	// immutable arena. NewCursor is called concurrently by fold workers, so the
 	// small reservation index and first-prefix initialization are protected.
 	cursorMu          sync.Mutex
+	cursorCapacity    int
 	reservedCursors   []pointReadCursor
 	reservedBounds    []byte
 	reservedPrefixLen int
@@ -460,7 +461,7 @@ func (d *Database) newPointReadSnapshot(cursors int) (pointread.Snapshot, error)
 	}
 	s := &pointReadSnapshot{db: d, snapshot: d.db.NewSnapshot()}
 	if cursors > 0 {
-		s.reservedCursors = make([]pointReadCursor, cursors)
+		s.cursorCapacity = cursors
 	}
 	return s, nil
 }
@@ -587,8 +588,14 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 func (s *pointReadSnapshot) reserveCursor(prefix []byte) (cursor *pointReadCursor, lower, upper []byte) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
-	if s.nextReserved >= len(s.reservedCursors) {
+	if s.nextReserved >= s.cursorCapacity {
 		return nil, nil, nil
+	}
+	// A schema-partitioned wrapper pins both stores but may only open cursors
+	// on one side. Keep the snapshot cut/lifecycle lease eager while allocating
+	// cursor storage only when this particular snapshot actually needs it.
+	if s.reservedCursors == nil {
+		s.reservedCursors = make([]pointReadCursor, s.cursorCapacity)
 	}
 	if !s.reservedReady {
 		s.reservedPrefixLen = len(prefix)

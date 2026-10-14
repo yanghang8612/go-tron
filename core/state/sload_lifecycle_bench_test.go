@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -16,17 +18,18 @@ import (
 // the clean object cache, exercising durable and bounded-base-cache reads.
 // The trace includes zero/missing rows and scope pending writes. A benchmark
 // operation is one complete block, including state-root commit.
-func BenchmarkSLOADLifecycle(b *testing.B) {
+func BenchmarkSLOADLifecycle(b *testing.B) { benchmarkSLOADLifecycle(b, false) }
+
+func BenchmarkSLOADDirectHistoryLifecycle(b *testing.B) { benchmarkSLOADLifecycle(b, true) }
+
+func benchmarkSLOADLifecycle(b *testing.B, directHistory bool) {
 	for _, cacheBytes := range []int{0, 1 << 20} {
 		name := "uncached"
 		if cacheBytes != 0 {
 			name = "cached"
 		}
 		b.Run(name, func(b *testing.B) {
-			disk, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
-			if err != nil {
-				b.Fatal(err)
-			}
+			disk := newSLOADBenchmarkStore(b, directHistory)
 			defer disk.Close()
 			db := NewDatabase(rawdb.WrapKeyValueStore(disk))
 			defer db.Close()
@@ -104,17 +107,18 @@ func BenchmarkSLOADLifecycle(b *testing.B) {
 // BenchmarkSLOADReadPath isolates fixed repeated durable/cache reads from
 // commitment work. Each cycle invalidates only the object cache; the base-cache
 // policy itself is unchanged. Slots include present, zero and absent rows.
-func BenchmarkSLOADReadPath(b *testing.B) {
+func BenchmarkSLOADReadPath(b *testing.B) { benchmarkSLOADReadPath(b, false) }
+
+func BenchmarkSLOADDirectHistoryReadPath(b *testing.B) { benchmarkSLOADReadPath(b, true) }
+
+func benchmarkSLOADReadPath(b *testing.B, directHistory bool) {
 	for _, cacheBytes := range []int{0, 1 << 20} {
 		name := "uncached"
 		if cacheBytes != 0 {
 			name = "cached"
 		}
 		b.Run(name, func(b *testing.B) {
-			disk, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
-			if err != nil {
-				b.Fatal(err)
-			}
+			disk := newSLOADBenchmarkStore(b, directHistory)
 			defer disk.Close()
 			db := NewDatabase(rawdb.WrapKeyValueStore(disk))
 			defer db.Close()
@@ -164,4 +168,23 @@ func BenchmarkSLOADReadPath(b *testing.B) {
 			}
 		})
 	}
+}
+
+// Production uses the fixed hot/history router even for a hot storage row.
+// Keep both engines and the exact block/storage trace in the wrapper variant.
+func newSLOADBenchmarkStore(b *testing.B, directHistory bool) ethdb.KeyValueStore {
+	b.Helper()
+	hot, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if !directHistory {
+		return hot
+	}
+	history, err := rawdb.NewPebbleDB(b.TempDir(), 16, 16)
+	if err != nil {
+		hot.Close()
+		b.Fatal(err)
+	}
+	return rawdb.NewDirectHistoryStore(hot, history)
 }
