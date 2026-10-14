@@ -286,6 +286,12 @@ var (
 		Usage: "Generation-safe commitment/flat-latest base-read cache size in MiB (0 disables)",
 		Value: 512,
 	}
+	stateCommitmentCacheTailFlag = &cli.IntFlag{
+		Name:    "state.commitment.cache.tail",
+		Usage:   "Additional commitment CLOCK tail capacity in MiB, preserving base cache reservations (0 disables)",
+		Value:   0,
+		EnvVars: []string{"GTRON_STATE_COMMITMENT_CACHE_TAIL"},
+	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history])",
@@ -490,6 +496,7 @@ var app = &cli.App{
 		stateTrieCacheFlag,
 		stateCodeCacheFlag,
 		stateCommitmentCacheFlag,
+		stateCommitmentCacheTailFlag,
 		configFileFlag,
 		dbCacheFlag,
 		historyStoreFlag,
@@ -919,9 +926,11 @@ func gtron(ctx *cli.Context) error {
 		log.Info("Immutable contract code cache disabled")
 	}
 	commitmentCacheMiB := ctx.Int("state.commitment.cache")
-	if commitmentCacheMiB < 0 {
+	commitmentCacheTailMiB := ctx.Int(stateCommitmentCacheTailFlag.Name)
+	commitmentCacheBytes, commitmentCacheTailBytes, err := commitmentCacheSizeBytes(commitmentCacheMiB, commitmentCacheTailMiB)
+	if err != nil {
 		closeStores()
-		return fmt.Errorf("--state.commitment.cache must be >= 0")
+		return err
 	}
 	sdb := state.NewDatabaseWithConfig(rawdb.WrapKeyValueStore(db), stateDBConfig)
 	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)
@@ -929,7 +938,7 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
 	}
-	bc.SetCommitmentBranchCacheSize(commitmentCacheMiB * 1024 * 1024)
+	bc.SetCommitmentBranchCacheSizeWithTail(commitmentCacheBytes, commitmentCacheTailBytes)
 	bc.SetInternalTransactionPersistence(cfg.SaveInternalTx, cfg.SaveFeaturedInternalTx, cfg.SaveCancelAllUnfreezeV2Details)
 	log.Info("VM internal transaction persistence configured",
 		"saveInternalTx", cfg.SaveInternalTx,
@@ -953,7 +962,7 @@ func gtron(ctx *cli.Context) error {
 	parallelVMEnabled := bc.SetParallelVMExecution(parallelVMRequested)
 	log.Info("Speculative VM publication configured", "requested", parallelVMRequested, "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true, "publishAudit", true, "serialRetryCircuit", true)
 	if commitmentCacheMiB > 0 {
-		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB)
+		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB, "additionalTailMiB", commitmentCacheTailMiB, "totalMiB", commitmentCacheMiB+commitmentCacheTailMiB)
 	} else {
 		log.Info("Commitment branch base-read cache disabled")
 	}

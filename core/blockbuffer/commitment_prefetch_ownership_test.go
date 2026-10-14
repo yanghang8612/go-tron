@@ -118,7 +118,7 @@ func checkCommitmentOwnershipBudget(t testing.TB, cache *baseReadCache) {
 				t.Fatal("invalid/beyond-budget reusable entry storage")
 			}
 		}
-		if used != s.used || trunk != s.trunkUsed || window != s.windowUsed || other != s.nonCommitmentUsed || used > s.limit || trunk > s.trunkLimit || window > s.windowLimit || freeBytes != s.freeValueBytes || freeCount != s.freeEntryCount || freeBytes > s.limit/baseReadCacheFreeValueBudgetDivisor {
+		if used != s.used || trunk != s.trunkUsed || window != s.windowUsed || other != s.nonCommitmentUsed || used > s.limit || trunk > s.trunkLimit || window > s.windowLimit || freeBytes != s.freeValueBytes || freeCount != s.freeEntryCount || freeBytes > (s.limit-s.additionalTail)/baseReadCacheFreeValueBudgetDivisor {
 			t.Fatalf("shard %d budget mismatch used=%d/%d limit=%d free=%d/%d", i, used, s.used, s.limit, freeBytes, s.freeValueBytes)
 		}
 		s.mu.RUnlock()
@@ -128,6 +128,14 @@ func checkCommitmentOwnershipBudget(t testing.TB, cache *baseReadCache) {
 // Real Buffer topology capture and canonical FlushUpTo operate on a real Pebble
 // snapshot. Only the legacy session's two prefetch admission sites differ.
 func TestCommitmentPrefetchOwnershipSessionFlushOracle(t *testing.T) {
+	testCommitmentPrefetchOwnershipSessionFlushOracle(t, 0)
+}
+
+func TestCommitmentTailCachePrefetchOwnershipSessionFlushOracle(t *testing.T) {
+	testCommitmentPrefetchOwnershipSessionFlushOracle(t, 1<<20)
+}
+
+func testCommitmentPrefetchOwnershipSessionFlushOracle(t *testing.T, tailBytes int) {
 	for _, kind := range []string{"legacy", "delta", "generic"} {
 		for _, size := range []int{0, 64, 256, 1024, 4096} {
 			for _, direct := range []bool{false, true} {
@@ -148,7 +156,7 @@ func TestCommitmentPrefetchOwnershipSessionFlushOracle(t *testing.T) {
 								t.Fatal(err)
 							}
 							buf := New(disk)
-							buf.SetBaseReadCacheSizeWithTrunk(1<<20, 4, rawdb.CommitmentBranchKeyPrefix)
+							buf.SetBaseReadCacheSizeWithTrunkAndTail(1<<20, tailBytes, 4, rawdb.CommitmentBranchKeyPrefix)
 							buf.BeginBlock(bufHash(1), 1)
 							h, _ := buf.NewestInflight()
 							session, err := newCommitmentOwnershipSession(buf.ViewLayer(h), candidate)

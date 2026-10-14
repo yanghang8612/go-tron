@@ -218,8 +218,11 @@ type baseReadCacheShard struct {
 	// windowAdmissions is process-lifetime for this cache owner. It stays
 	// monotonic across clear so the metrics publisher can expose it as a gauge
 	// without adding a contended global atomic to every durable admission.
-	windowAdmissions       uint64
-	limit                  int
+	windowAdmissions uint64
+	limit            int
+	// Keep recycled idle payload bounded by the original base budget even
+	// when the resident CLOCK tail has additional capacity.
+	additionalTail         int
 	nonCommitmentLimit     int
 	trunkLimit             int
 	windowLimit            int
@@ -337,8 +340,19 @@ func newBaseReadCache(sizeBytes int, flushAdmissionPrefix ...string) *baseReadCa
 }
 
 func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix ...string) *baseReadCache {
+	return newBaseReadCacheWithTrunkAndTail(sizeBytes, 0, trunkDepth, flushAdmissionPrefix...)
+}
+
+// Additional tail capacity shares the existing entry map and lifecycle. Keep
+// the trunk, first-read window, other namespace reservation and admission
+// metadata sized from the base budget: more deep branch residency should not
+// also enlarge the scan window or reserve more space for shallow rows.
+func newBaseReadCacheWithTrunkAndTail(sizeBytes, tailBytes, trunkDepth int, flushAdmissionPrefix ...string) *baseReadCache {
 	if sizeBytes <= 0 {
 		return nil
+	}
+	if tailBytes < 0 || tailBytes > int(^uint(0)>>1)-sizeBytes {
+		tailBytes = 0
 	}
 	c := &baseReadCache{trunkDepth: trunkDepth, reuse: newBaseReadCacheReuseObserver(), reuseOwnerID: baseReadCacheReuseOwnerSequence.Add(1)}
 	if len(flushAdmissionPrefix) > 0 {
@@ -375,6 +389,11 @@ func newBaseReadCacheWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix .
 			}
 			c.shards[i].nonCommitmentAdmission = make([]uint64, otherSlots)
 		}
+		c.shards[i].additionalTail = tailBytes / baseReadCacheShardCount
+		if i < tailBytes%baseReadCacheShardCount {
+			c.shards[i].additionalTail++
+		}
+		c.shards[i].limit += c.shards[i].additionalTail
 	}
 	return c
 }
@@ -1101,7 +1120,7 @@ func (s *baseReadCacheShard) recycleEntry(entry *baseReadCacheEntry) {
 	retainValue := entry.live && entry.value != nil && !entry.exposed.Load() &&
 		s.freeEntryCount < baseReadCacheMaxFreeStorageEntries &&
 		cap(entry.value) <= baseReadCacheMaxFreeValueSize &&
-		s.freeValueBytes+cap(entry.value) <= s.limit/baseReadCacheFreeValueBudgetDivisor
+		s.freeValueBytes+cap(entry.value) <= (s.limit-s.additionalTail)/baseReadCacheFreeValueBudgetDivisor
 	if !retainValue {
 		entry.value = nil
 	}

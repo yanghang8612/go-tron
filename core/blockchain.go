@@ -927,10 +927,17 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 // immediately after construction. The cache lives below rewindable buffer
 // layers, invalidates flushed mutations, and is cleared by buffer reset/unwind.
 func (bc *BlockChain) SetCommitmentBranchCacheSize(sizeBytes int) {
+	bc.SetCommitmentBranchCacheSizeWithTail(sizeBytes, 0)
+}
+
+// SetCommitmentBranchCacheSizeWithTail preserves the base cache's namespace
+// reservations while adding bounded capacity for the commitment CLOCK tail.
+// Configure it before block insertion or other concurrent use of the chain.
+func (bc *BlockChain) SetCommitmentBranchCacheSizeWithTail(sizeBytes, tailBytes int) {
 	if bc == nil || bc.buffer == nil {
 		return
 	}
-	bc.buffer.SetBaseReadCacheSizeWithTrunk(sizeBytes, 4, rawdb.CommitmentBranchKeyPrefix)
+	bc.buffer.SetBaseReadCacheSizeWithTrunkAndTail(sizeBytes, tailBytes, 4, rawdb.CommitmentBranchKeyPrefix)
 }
 
 func (bc *BlockChain) stateCommitOptions(_ *types.Block, _ bool) state.CommitOptions {

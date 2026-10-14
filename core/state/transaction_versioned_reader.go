@@ -154,6 +154,12 @@ func (s *StateDB) hydrateTransactionVersionedAccount(addr tcommon.Address, obj *
 }
 
 func (s *StateDB) readTransactionVersionedAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, bool) {
+	// Constructing an owned logical key is only necessary for an active retry
+	// reader. Canonical reads otherwise allocated a string before the lower
+	// helper could reject the absent reader.
+	if s == nil || s.transactionVersionedReader == nil {
+		return nil, false, false
+	}
 	value, _, ok := s.readTransactionVersionedValue(TransactionAccessKey{
 		Kind: TransactionAccessAccountKV, Address: owner, KVDomain: domain, LogicalKey: string(key),
 	})

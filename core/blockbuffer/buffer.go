@@ -1226,7 +1226,7 @@ func (b *Buffer) loadReadView() *bufferReadView {
 // An optional schema prefix lets a successful flush count as the second cache
 // observation for read-before-write rows in that namespace.
 func (b *Buffer) SetBaseReadCacheSize(sizeBytes int, flushAdmissionPrefix ...string) {
-	b.setBaseReadCacheSize(sizeBytes, -1, flushAdmissionPrefix...)
+	b.setBaseReadCacheSize(sizeBytes, 0, -1, flushAdmissionPrefix...)
 }
 
 // SetBaseReadCacheSizeWithTrunk additionally reserves a bounded fixed tier for
@@ -1234,16 +1234,24 @@ func (b *Buffer) SetBaseReadCacheSize(sizeBytes int, flushAdmissionPrefix ...str
 // bytes. It is intended for commitment tries whose byte suffix is one nibble per
 // depth; other durable-cache users retain SetBaseReadCacheSize's CLOCK-only policy.
 func (b *Buffer) SetBaseReadCacheSizeWithTrunk(sizeBytes, trunkDepth int, flushAdmissionPrefix string) {
-	b.setBaseReadCacheSize(sizeBytes, trunkDepth, flushAdmissionPrefix)
+	b.setBaseReadCacheSize(sizeBytes, 0, trunkDepth, flushAdmissionPrefix)
 }
 
-func (b *Buffer) setBaseReadCacheSize(sizeBytes, trunkDepth int, flushAdmissionPrefix ...string) {
+// SetBaseReadCacheSizeWithTrunkAndTail adds bounded CLOCK tail capacity while
+// preserving all reservations and admission metadata from sizeBytes. Like the
+// other configuration methods, call it before concurrent use. A disabled base
+// cache stays disabled; negative or overflowing tailBytes are ignored.
+func (b *Buffer) SetBaseReadCacheSizeWithTrunkAndTail(sizeBytes, tailBytes, trunkDepth int, flushAdmissionPrefix string) {
+	b.setBaseReadCacheSize(sizeBytes, tailBytes, trunkDepth, flushAdmissionPrefix)
+}
+
+func (b *Buffer) setBaseReadCacheSize(sizeBytes, tailBytes, trunkDepth int, flushAdmissionPrefix ...string) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	old := b.baseReadCache
-	current := newBaseReadCacheWithTrunk(sizeBytes, trunkDepth, flushAdmissionPrefix...)
+	current := newBaseReadCacheWithTrunkAndTail(sizeBytes, tailBytes, trunkDepth, flushAdmissionPrefix...)
 	b.baseReadCache = current
 	b.publishReadViewLocked()
 	b.mu.Unlock()

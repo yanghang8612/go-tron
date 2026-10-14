@@ -14,6 +14,14 @@ import (
 // epoch. The old snapshot must remain readable without seeding the shared cache
 // with a stale present value or negative entry for a later session.
 func TestCommitmentCacheSnapshotGuardAfterFlushBeforeFirstProbe(t *testing.T) {
+	testCommitmentCacheSnapshotGuardAfterFlushBeforeFirstProbe(t, 0)
+}
+
+func TestCommitmentTailCacheSnapshotGuardAfterFlushBeforeFirstProbe(t *testing.T) {
+	testCommitmentCacheSnapshotGuardAfterFlushBeforeFirstProbe(t, 1<<20)
+}
+
+func testCommitmentCacheSnapshotGuardAfterFlushBeforeFirstProbe(t *testing.T, tailBytes int) {
 	for _, source := range []string{"foreground", "prefetch"} {
 		for _, tc := range []struct {
 			name   string
@@ -41,7 +49,7 @@ func TestCommitmentCacheSnapshotGuardAfterFlushBeforeFirstProbe(t *testing.T) {
 					}
 				}
 				buf := New(disk)
-				buf.SetBaseReadCacheSizeWithTrunk(1<<20, 4, rawdb.CommitmentBranchKeyPrefix)
+				buf.SetBaseReadCacheSizeWithTrunkAndTail(1<<20, tailBytes, 4, rawdb.CommitmentBranchKeyPrefix)
 				buf.BeginBlock(bufHash(1), 1)
 				first, _ := buf.NewestInflight()
 				old, err := buf.ViewLayer(first).NewCommitmentParentReadSession(1)
