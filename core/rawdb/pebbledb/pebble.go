@@ -816,9 +816,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 
 	// Four memory tables are configured. The size of an individual memtable is
 	// taken from the caller (go-tron deviation) rather than derived from the
-	// cache; the cache stays a dedicated read cache. Having multiple smaller
-	// memtables while keeping the per-table size bounded lets writes flush more
-	// smoothly and limits write stalls under heavy compaction.
+	// cache. Arena reservations still reduce the read-cache target. Having
+	// multiple smaller memtables with bounded per-table sizes lets writes flush
+	// more smoothly and limits write stalls under heavy compaction.
 	memTableNumber := 4
 	memTableSize := tune.MemTableSizeBytes
 
@@ -850,9 +850,11 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	opt := &pebble.Options{
 		Comparer: exactPointComparer,
 		FS:       newPhysicalReadFS(vfs.Default, namespace),
-		// Pebble has a single combined cache area; this fork dedicates the
-		// caller-provided cache budget to reads and sizes memtables
-		// independently from `tune.MemTableSizeBytes`.
+		// The caller sets the total Pebble cache budget. Memtable arena sizes
+		// are configured separately, but Pebble reserves their bytes (and
+		// flushable batches) against this budget; recycled memtables retain
+		// reservations. These reduce the actual block cache target. Configured
+		// capacity is not a dedicated read-only budget.
 		Cache:        pebble.NewCache(int64(cache * 1024 * 1024)),
 		MaxOpenFiles: handles,
 
