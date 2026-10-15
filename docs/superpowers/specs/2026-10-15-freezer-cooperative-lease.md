@@ -27,6 +27,15 @@ be uninterruptible. The approximately ten-second work quantum is a soft time
 bound plus the current window/operation, not a deadline or RSS guarantee.
 
 Only fresh history contention (at most ten seconds old) triggers yielding.
+Named history acquisition failures and prerequisite-heavy-work deferrals share
+one bounded atomic waiting-intent notification. In particular the production
+sync event target's nonblocking raw layout probe may defer before any gate
+attempt; that early return must notify too. A known future history recovery
+deadline suppresses this early notification without changing that deadline or
+its retry hint. Notification never acquires/rejects a lease, calls admission,
+changes owner/reservations/cooldown, or promises an actual sidecar gap. A fully
+caught-up target can become known only during the opportunity; it then does no
+work and the direct job resumes after the existing opportunity timeout.
 The freezer releases its current lease, honors the existing recovery interval,
 and gives ordinary history at least its three-second retry opportunity. That
 opportunity starts only while CanTryAcquire reports no active owner,

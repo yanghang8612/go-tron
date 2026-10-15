@@ -62,6 +62,8 @@ func TestHeavyWorkRetryPreservesKnownCooldown(t *testing.T) {
 
 func TestHistoryEventUnknownFreezerTargetDefersWithoutPublication(t *testing.T) {
 	r, _, address, topic := historyEventBudgetFixture(t)
+	gate := maintenance.NewHeavyWorkGate()
+	r.cfg.HeavyWorkGate = gate
 	busy := true
 	r.cfg.SyncEventLogTargetBlock = func() (uint64, bool, bool) { return 4, !busy, busy }
 	deadline := time.Now().Add(time.Minute).UnixNano()
@@ -73,6 +75,9 @@ func TestHistoryEventUnknownFreezerTargetDefersWithoutPublication(t *testing.T) 
 	result, err := r.OnePass()
 	if err != nil || !result.HistoryGateDeferred || !result.DerivedSidecarsDeferred || result.HistoryBuildAttempted || result.HistoryEventAttempted || result.EventLogBuilt || result.Built {
 		t.Fatalf("unknown freezer layout was treated as an uncapped target: %+v %v", result, err)
+	}
+	if gate.HistoryContended(time.Second) {
+		t.Fatal("target deferral advertised demand during known recovery")
 	}
 	if r.historyNotBefore.Load() != deadline || result.HistoryRetryDeadline.UnixNano() != deadline || result.MaintenanceRetryRemaining(time.Now()) <= 0 {
 		t.Fatalf("unknown target lost existing admission deadline/retry: %+v", result)
@@ -105,4 +110,20 @@ func TestPublishedEventKeepsUnknownNextTargetPending(t *testing.T) {
 		t.Fatalf("unknown next target falsely completed event handoff: %+v %v", result, err)
 	}
 	assertHistoryEventBudgetQuery(t, r, address, topic)
+}
+
+func TestHistoryEventUnknownFreezerTargetNotifiesBeforeGateAdmission(t *testing.T) {
+	r, _, _, _ := historyEventBudgetFixture(t)
+	g := maintenance.NewHeavyWorkGate()
+	r.cfg.HeavyWorkGate = g
+	r.cfg.SyncEventLogTargetBlock = func() (uint64, bool, bool) { return 0, false, true }
+	before := g.Observation()
+	result, err := r.OnePass()
+	after := g.Observation()
+	if err != nil || !result.DerivedSidecarsDeferred || !result.HistoryGateDeferred {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if !g.HistoryContended(time.Second) || before != after {
+		t.Fatal("pre-gate demand must be fresh without admission/ownership changes")
+	}
 }

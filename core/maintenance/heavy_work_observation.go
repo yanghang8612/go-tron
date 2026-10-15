@@ -35,6 +35,17 @@ func (g *HeavyWorkGate) Observation() HeavyWorkObservation {
 	return o
 }
 
+// NotifyHistoryContention records fresh waiting intent when a prerequisite
+// probe defers before history can attempt gate admission. It is bounded,
+// nil-safe and does not acquire a lease, alter owner/reservations/recovery,
+// call admission, or count a rejected acquisition. Callers must retain their
+// own eligibility/recovery checks; this signal does not promise runnable work.
+func (g *HeavyWorkGate) NotifyHistoryContention() {
+	if g != nil {
+		g.historyContendedAt.Store(g.currentTime().UnixNano())
+	}
+}
+
 func (g *HeavyWorkGate) HistoryContended(maxAge time.Duration) bool {
 	if g == nil {
 		return false
@@ -59,7 +70,7 @@ func (g *HeavyWorkGate) TryAcquireNamedWithCooldown(owner HeavyWorkOwner, cooldo
 func (g *HeavyWorkGate) tryAcquireNamed(cooldown time.Duration, owner HeavyWorkOwner) (func(), bool) {
 	release, ok := g.tryAcquireReservedPolicy(cooldown, nil, nil, owner)
 	if owner == HeavyWorkHistory && !ok {
-		g.historyContendedAt.Store(g.currentTime().UnixNano())
+		g.NotifyHistoryContention()
 	}
 	return release, ok
 }

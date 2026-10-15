@@ -8,6 +8,13 @@ import "time"
 func (r *Runner) deferHistoryForHeavyWork(result *PassResult) {
 	result.HistoryDeferred, result.HistoryGateDeferred = true, true
 	now := time.Now()
+	// A nonblocking freezer layout probe may defer before TryAcquireNamed.
+	// Publish only waiting intent, and do not advertise work during an already
+	// known history recovery deadline. Admission and actual gap planning still
+	// run normally after the freezer gives us a scheduling opportunity.
+	if r.historyNotBefore.Load() <= now.UnixNano() {
+		r.cfg.HeavyWorkGate.NotifyHistoryContention()
+	}
 	after := r.cfg.HeavyWorkGate.CooldownRemaining()
 	if after <= 0 {
 		after = 3 * time.Second
