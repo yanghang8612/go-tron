@@ -51,6 +51,7 @@ type manifestDecodeCache struct {
 	charge        uint64
 	budget        uint64
 	publication   bool
+	stringSlack   uint64 // owned publication-block capacity beyond string lengths
 }
 
 // A budget of zero disables the cache. Parse both settings even when disabled,
@@ -241,7 +242,14 @@ func (c *manifestDecodeCache) decodeMode(data []byte, production bool, budget ui
 		return nil, err
 	}
 	productionErr := m.ValidateProduction()
-	c.retainDecodedLocked(data, m, productionErr, false)
+	if readOnly {
+		// The decoder owns this generation exclusively. Unlike the public load
+		// path, no mutable result escapes, so transferring it avoids a catalog
+		// clone. Charge the actual growable decoder slice capacities.
+		c.retainReadOnlyDecodedLocked(data, m, productionErr)
+	} else {
+		c.retainDecodedLocked(data, m, productionErr, false)
+	}
 	if production && productionErr != nil {
 		return nil, productionErr
 	}
@@ -318,19 +326,29 @@ func (c *manifestDecodeCache) retainDecodedLocked(data []byte, m *Manifest, prod
 	manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))
 	if charge <= c.budget {
 		owned := cloneDecodedManifest(m)
+		var stringSlack uint64
 		if publication {
 			// The public publisher retains its mutable containers. Strings are
 			// immutable but may be small substrings of arbitrarily large caller
 			// buffers: clone them too so the resident charge bounds what we own.
-			clonePublishedManifestStrings(owned)
+			stringSlack = clonePublishedManifestStrings(owned)
 			// Retired is omitempty, unlike Segments. Its empty-array input is
 			// absent in the encoded JSON and decodes back to nil.
 			if len(owned.Retired) == 0 {
 				owned.Retired = nil
 			}
 		}
+		charge = manifestCacheChargeWithStringSlack(data, owned, stringSlack)
+		manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))
+		if charge > c.budget {
+			manifestCacheBypasses.Inc(1)
+			manifestCacheRejections.Inc(1)
+			manifestCacheRejectedCharge.Update(manifestCacheMetricBytes(charge))
+			return false
+		}
 		c.data, c.manifest, c.productionErr, c.charge = data, owned, productionErr, charge
 		c.publication = publication
+		c.stringSlack = stringSlack
 		manifestCacheResident.Update(int64(charge))
 		manifestCacheHeadroom.Update(int64(c.budget - charge))
 		return true
@@ -340,6 +358,24 @@ func (c *manifestDecodeCache) retainDecodedLocked(data []byte, m *Manifest, prod
 		manifestCacheRejectedCharge.Update(manifestCacheMetricBytes(charge))
 	}
 	return false
+}
+
+// Called only with a freshly decoded, exclusively owned read-only generation.
+// Rejected generations remain local to the read-only caller, never cached.
+func (c *manifestDecodeCache) retainReadOnlyDecodedLocked(data []byte, m *Manifest, productionErr error) {
+	charge := manifestCacheCharge(data, m)
+	manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))
+	if charge > c.budget {
+		manifestCacheBypasses.Inc(1)
+		manifestCacheRejections.Inc(1)
+		manifestCacheRejectedCharge.Update(manifestCacheMetricBytes(charge))
+		return
+	}
+	c.data, c.manifest, c.productionErr, c.charge = data, m, productionErr, charge
+	c.publication = false
+	c.stringSlack = 0
+	manifestCacheResident.Update(int64(charge))
+	manifestCacheHeadroom.Update(int64(c.budget - charge))
 }
 
 func manifestStringsValidUTF8(m *Manifest) bool {
@@ -357,20 +393,77 @@ func manifestStringsValidUTF8(m *Manifest) bool {
 	return true
 }
 
-func clonePublishedManifestStrings(m *Manifest) {
+func clonePublishedManifestStrings(m *Manifest) uint64 {
 	if m.Chain != nil {
 		m.Chain.GenesisHash = strings.Clone(m.Chain.GenesisHash)
 		m.Chain.ForkConfigHash = strings.Clone(m.Chain.ForkConfigHash)
 	}
-	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
-		for i := range refs {
-			ref := &refs[i]
-			ref.Dataset = SegmentDataset(strings.Clone(string(ref.Dataset)))
-			ref.Kind = SegmentKind(strings.Clone(string(ref.Kind)))
-			ref.Path = strings.Clone(ref.Path)
-			ref.Checksum = strings.Clone(ref.Checksum)
+	return clonePublishedRefStrings(m.Segments) + clonePublishedRefStrings(m.Retired)
+}
+
+// Pack private strings in bounded blocks instead of four allocations per ref.
+// Finish each block before exposing any of its substrings. A caller retaining
+// one field can keep at most a 64 KiB block alive; an oversized field gets its
+// own allocation. The resident charge still counts every string byte and
+// doubles it for allocation rounding/metadata, as it does for decoded strings.
+func clonePublishedRefStrings(refs []SegmentRef) uint64 {
+	const maxBlock = 64 << 10
+	var slack uint64
+	field := func(index int) string {
+		ref := &refs[index/4]
+		switch index % 4 {
+		case 0:
+			return string(ref.Dataset)
+		case 1:
+			return string(ref.Kind)
+		case 2:
+			return ref.Path
+		default:
+			return ref.Checksum
 		}
 	}
+	for first := 0; first < len(refs)*4; {
+		last, size := first, 0
+		for last < len(refs)*4 {
+			n := len(field(last))
+			if last > first && size+n > maxBlock {
+				break
+			}
+			size += n
+			last++
+			if size >= maxBlock {
+				break
+			}
+		}
+		var block strings.Builder
+		block.Grow(size)
+		for i := first; i < last; i++ {
+			block.WriteString(field(i))
+		}
+		// Count actual capacity in addition to all logical string bytes, before
+		// applying the ordinary allocation-rounding and metadata allowance.
+		slack += uint64(block.Cap() - size)
+		owned := block.String()
+		offset := 0
+		for i := first; i < last; i++ {
+			n := len(field(i))
+			value := owned[offset : offset+n]
+			ref := &refs[i/4]
+			switch i % 4 {
+			case 0:
+				ref.Dataset = SegmentDataset(value)
+			case 1:
+				ref.Kind = SegmentKind(value)
+			case 2:
+				ref.Path = value
+			default:
+				ref.Checksum = value
+			}
+			offset += n
+		}
+		first = last
+	}
+	return slack
 }
 
 func (c *manifestDecodeCache) resizeLocked(budget uint64) {
@@ -398,6 +491,7 @@ func (c *manifestDecodeCache) clear() {
 func (c *manifestDecodeCache) clearLocked() {
 	c.data, c.manifest, c.productionErr, c.charge = nil, nil, nil, 0
 	c.publication = false
+	c.stringSlack = 0
 	manifestCacheResident.Update(0)
 	manifestCacheHeadroom.Update(manifestCacheMetricBytes(c.budget))
 }
@@ -443,4 +537,12 @@ func manifestCacheCharge(data []byte, m *Manifest) uint64 {
 		n += uint64(unsafe.Sizeof(*m.Progress))
 	}
 	return n*2 + 4096
+}
+
+func manifestCacheChargeWithStringSlack(data []byte, m *Manifest, slack uint64) uint64 {
+	charge := manifestCacheCharge(data, m)
+	if slack > (math.MaxUint64-charge)/2 {
+		return math.MaxUint64
+	}
+	return charge + slack*2
 }

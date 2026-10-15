@@ -55,9 +55,9 @@ func (r *HeavyWorkReservation) TryAcquire(cooldown time.Duration) (func(), bool)
 
 // TryAcquireWithReleaseCooldown consumes this reservation under the same
 // measured-recovery contract as HeavyWorkGate.TryAcquireWithReleaseCooldown.
-func (r *HeavyWorkReservation) TryAcquireWithReleaseCooldown(policy ReleaseCooldownPolicy) (func(), bool) {
+func (r *HeavyWorkReservation) TryAcquireWithReleaseCooldown(policy ReleaseCooldownPolicy, names ...HeavyWorkOwner) (func(), bool) {
 	if r == nil || r.gate == nil {
 		return nil, false
 	}
-	return r.gate.tryAcquireReservedPolicy(r.gate.cooldown, r, policy)
+	return r.gate.tryAcquireReservedPolicy(r.gate.cooldown, r, policy, names...)
 }

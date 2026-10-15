@@ -97,8 +97,10 @@ type Freezer struct {
 	// the "atomic" (batched) read operations.
 	writeLock  sync.RWMutex
 	writeBatch *freezerBatch
-	v2Mu       sync.RWMutex
-	v2Migrate  sync.Mutex
+	// mutationGeneration detects layout ABA while a direct build yields.
+	mutationGeneration atomic.Uint64
+	v2Mu               sync.RWMutex
+	v2Migrate          sync.Mutex
 	// tailMutation prevents an external snapshot tail-prune from advancing the
 	// V1 source while MigrateV2 is writing and verifying a segment. MigrateV2
 	// uses truncateTailLocked for its own post-publication reclamation.
@@ -958,6 +960,7 @@ func (f *Freezer) ModifyAncients(fn func(AncientWriteOp) error) (writeSize int64
 		}
 	}()
 
+	f.mutationGeneration.Add(1)
 	f.writeBatch.reset()
 	if err := fn(f.writeBatch); err != nil {
 		return 0, err
@@ -986,6 +989,7 @@ func (f *Freezer) TruncateHead(items uint64) (uint64, error) {
 	if oitems <= items {
 		return oitems, nil
 	}
+	f.mutationGeneration.Add(1)
 	for _, table := range f.tables {
 		if err := table.truncateHead(items); err != nil {
 			return 0, err
@@ -1029,6 +1033,7 @@ func (f *Freezer) truncateTailLocked(items uint64) (uint64, error) {
 			return 0, fmt.Errorf("freezer table %s is not prunable", kind)
 		}
 	}
+	f.mutationGeneration.Add(1)
 	for _, table := range f.tables {
 		if err := table.truncateTail(items); err != nil {
 			return 0, err

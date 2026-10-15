@@ -47,6 +47,10 @@ type v2FrameEncodeJob struct {
 // and uses the primary encoder alone, keeping exceptional large frames from
 // expanding every worker's retained compression workspace.
 func writeV2FramePipeline(workers int, frames uint64, primary *zstd.Encoder, newEncoder func() (*zstd.Encoder, error), read func([]byte) (v2RawFrame, error), write func(v2EncodedFrame) error) error {
+	return writeV2FramePipelineWithCheckpoint(workers, frames, primary, newEncoder, read, write, 0, nil)
+}
+
+func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zstd.Encoder, newEncoder func() (*zstd.Encoder, error), read func([]byte) (v2RawFrame, error), write func(v2EncodedFrame) error, windowFrames uint64, checkpoint func() error) error {
 	encoders := []*zstd.Encoder{primary}
 	defer func() {
 		for _, encoder := range encoders[1:] {
@@ -101,6 +105,21 @@ func writeV2FramePipeline(workers int, frames uint64, primary *zstd.Encoder, new
 		return nil
 	}
 	for i := uint64(0); i < frames; i++ {
+		// The first frame was synchronously written before this pipeline. At a
+		// preparation-window boundary, drain every prior compression job before
+		// permitting the caller to hand off its shared I/O lease. Workers remain
+		// idle and own no frame during the callback; the final prepared Read has
+		// already joined its source/transform workers.
+		if checkpoint != nil && windowFrames > 0 && (i+1)%windowFrames == 0 {
+			for len(pending) > 0 {
+				if err := drain(); err != nil {
+					return err
+				}
+			}
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		}
 		if len(pending) >= workers*2 {
 			if err := drain(); err != nil {
 				return err

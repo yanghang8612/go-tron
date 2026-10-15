@@ -187,10 +187,12 @@ func TestManifestPublicationSeedBudgetOwnsStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	charge := manifestCacheCharge(raw, cloneDecodedManifest(m))
+	owned := cloneDecodedManifest(m)
+	slack := clonePublishedManifestStrings(owned)
+	charge := manifestCacheChargeWithStringSlack(raw, owned, slack)
 	var cache manifestDecodeCache
 	cache.retainPublished(raw, m, charge)
-	if cache.manifest == nil || cache.charge != charge || manifestCacheCharge(cache.data, cache.manifest) != charge {
+	if cache.manifest == nil || cache.charge != charge || manifestCacheChargeWithStringSlack(cache.data, cache.manifest, cache.stringSlack) != charge {
 		t.Fatal("publication seed changed exact budget accounting")
 	}
 	if unsafe.StringData(cache.manifest.Segments[0].Path) == unsafe.StringData(m.Segments[0].Path) ||
@@ -198,7 +200,7 @@ func TestManifestPublicationSeedBudgetOwnsStrings(t *testing.T) {
 		t.Fatal("publication seed retained uncharged caller string backing")
 	}
 	input := bytes.Clone(raw)
-	cache.retainPublished(input, m, manifestCacheCharge(input, cloneDecodedManifest(m))-1)
+	cache.retainPublished(input, m, manifestCacheChargeWithStringSlack(input, owned, slack)-1)
 	if cache.manifest != nil || cache.charge != 0 || cache.publication {
 		t.Fatal("over-budget publication retained its prior cache entry")
 	}

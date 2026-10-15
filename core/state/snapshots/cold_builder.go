@@ -1620,9 +1620,9 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	var releaseHeavyWork func()
 	var admitted bool
 	if (result.HistoryAccelerated || result.HistoryForcedBusy) && r.cfg.CatchupHeavyWorkCooldown > 0 {
-		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.historyLeaseCooldown())
+		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireNamedWithCooldown(maintenance.HeavyWorkHistory, r.historyLeaseCooldown())
 	} else {
-		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquire()
+		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkHistory)
 	}
 	if !admitted {
 		r.deferHistoryForHeavyWork(&result)
@@ -2619,9 +2619,9 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 	var release func()
 	var admitted bool
 	if r.cfg.CatchupHeavyWorkCooldown > 0 {
-		release, admitted = r.cfg.HeavyWorkGate.TryAcquireWithCooldown(r.historyLeaseCooldown())
+		release, admitted = r.cfg.HeavyWorkGate.TryAcquireNamedWithCooldown(maintenance.HeavyWorkHistory, r.historyLeaseCooldown())
 	} else {
-		release, admitted = r.cfg.HeavyWorkGate.TryAcquire()
+		release, admitted = r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkHistory)
 	}
 	if !admitted {
 		result.DerivedSidecarsDeferred = true

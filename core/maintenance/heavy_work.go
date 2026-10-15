@@ -13,14 +13,24 @@ import (
 // deferral and retries on its normal cadence instead of adding an invisible
 // queue behind another long-running maintenance task.
 type HeavyWorkGate struct {
-	token          chan struct{}
-	cooldown       time.Duration
-	cooldownAfter  time.Duration
-	nextAllowed    atomic.Int64
-	admissionCheck atomic.Pointer[heavyWorkAdmission]
-	now            func() time.Time
-	reservationMu  sync.Mutex
-	reservation    *HeavyWorkReservation
+	token               chan struct{}
+	cooldown            time.Duration
+	cooldownAfter       time.Duration
+	nextAllowed         atomic.Int64
+	admissionCheck      atomic.Pointer[heavyWorkAdmission]
+	now                 func() time.Time
+	reservationMu       sync.Mutex
+	reservation         *HeavyWorkReservation
+	owner               atomic.Uint32
+	acquiredAt          atomic.Int64
+	totalHold           atomic.Int64
+	maxHold             atomic.Int64
+	acquisitions        atomic.Uint64
+	historyAcquisitions atomic.Uint64
+	historyContendedAt  atomic.Int64
+	rejectedHeld        atomic.Uint64
+	rejectedCooldown    atomic.Uint64
+	rejectedAdmission   atomic.Uint64
 }
 
 type heavyWorkAdmission struct {
@@ -132,11 +142,11 @@ type ReleaseCooldownPolicy func(held, defaultCooldown time.Duration) time.Durati
 // lease. Existing cooldowns, active owners and pressure admission still apply.
 // The normal minimum-work threshold remains in effect after a successful
 // policy evaluation. A nil policy keeps the configured default behavior.
-func (g *HeavyWorkGate) TryAcquireWithReleaseCooldown(policy ReleaseCooldownPolicy) (release func(), ok bool) {
+func (g *HeavyWorkGate) TryAcquireWithReleaseCooldown(policy ReleaseCooldownPolicy, names ...HeavyWorkOwner) (release func(), ok bool) {
 	if g == nil {
 		return func() {}, true
 	}
-	return g.tryAcquireReservedPolicy(g.cooldown, nil, policy)
+	return g.tryAcquireReservedPolicy(g.cooldown, nil, policy, names...)
 }
 
 func (g *HeavyWorkGate) tryAcquire(recoveryCooldown time.Duration) (release func(), ok bool) {
@@ -147,8 +157,10 @@ func (g *HeavyWorkGate) tryAcquireReserved(recoveryCooldown time.Duration, owner
 	return g.tryAcquireReservedPolicy(recoveryCooldown, owner, nil)
 }
 
-func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration, owner *HeavyWorkReservation, policy ReleaseCooldownPolicy) (release func(), ok bool) {
+func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration, owner *HeavyWorkReservation, policy ReleaseCooldownPolicy, names ...HeavyWorkOwner) (release func(), ok bool) {
+	defer g.publishObservation()
 	if !g.reservationMu.TryLock() {
+		g.rejectedHeld.Add(1)
 		return nil, false
 	}
 	locked := true
@@ -162,12 +174,15 @@ func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration,
 		g.reservation = nil
 	}
 	if owner != nil && g.reservation != owner {
+		g.rejectedHeld.Add(1)
 		return nil, false
 	}
 	if g.reservation != nil && g.reservation != owner {
+		g.rejectedHeld.Add(1)
 		return nil, false
 	}
 	if g.coolingDown(now) {
+		g.rejectedCooldown.Add(1)
 		return nil, false
 	}
 	select {
@@ -175,6 +190,7 @@ func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration,
 		// Recheck after owning the token. A release may have installed a
 		// cooldown between the optimistic timestamp check and admission.
 		if g.coolingDown(g.currentTime()) {
+			g.rejectedCooldown.Add(1)
 			<-g.token
 			return nil, false
 		}
@@ -182,16 +198,36 @@ func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration,
 		g.reservationMu.Unlock()
 		locked = false
 		if admission := g.admissionCheck.Load(); admission != nil && !admission.check() {
+			g.rejectedAdmission.Add(1)
 			<-g.token
 			return nil, false
 		}
+		name := HeavyWorkUnspecified
+		if len(names) > 0 && names[0] <= HeavyWorkTransactionIndex {
+			name = names[0]
+		}
 		acquiredAt := g.currentTime()
+		g.owner.Store(uint32(name))
+		g.acquiredAt.Store(acquiredAt.UnixNano())
+		g.acquisitions.Add(1)
+		if name == HeavyWorkHistory {
+			g.historyAcquisitions.Add(1)
+			g.historyContendedAt.Store(0)
+		}
 		var once sync.Once
 		return func() {
 			once.Do(func() {
-				defer func() { <-g.token }()
+				defer func() { <-g.token; g.publishObservation() }()
 				now := g.currentTime()
 				held := max(0, now.Sub(acquiredAt))
+				g.totalHold.Add(int64(held))
+				for old := g.maxHold.Load(); int64(held) > old; old = g.maxHold.Load() {
+					if g.maxHold.CompareAndSwap(old, int64(held)) {
+						break
+					}
+				}
+				g.acquiredAt.Store(0)
+				g.owner.Store(uint32(HeavyWorkUnspecified))
 				if policy == nil {
 					if recoveryCooldown > 0 && held >= g.cooldownAfter {
 						g.nextAllowed.Store(now.Add(recoveryCooldown).UnixNano())
@@ -212,6 +248,7 @@ func (g *HeavyWorkGate) tryAcquireReservedPolicy(recoveryCooldown time.Duration,
 			})
 		}, true
 	default:
+		g.rejectedHeld.Add(1)
 		return nil, false
 	}
 }

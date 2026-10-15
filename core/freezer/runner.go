@@ -648,7 +648,11 @@ type Runner struct {
 	lastTxIndexMaintenanceError   atomic.Int64
 	txIndexBudget                 transactionIndexBudget
 	txIndexMu                     sync.Mutex
-	startedAt                     time.Time
+	// workMu serializes all public maintenance entrypoints before shared-gate
+	// admission, including while a direct V2 job cooperatively yields its lease.
+	// One Runner owns each underlying freezer instance.
+	workMu    sync.Mutex
+	startedAt time.Time
 
 	// pauseCtx wraps the quit channel for callers that prefer a Context
 	// API. Sealed only when Stop is called.
@@ -658,7 +662,9 @@ type Runner struct {
 
 // New constructs a Runner against the supplied chain source and freezer
 // store. The Config is shallow-copied and zero fields are defaulted; the
-// caller's struct stays untouched.
+// caller's struct stays untouched. Exactly one Runner must own each underlying
+// freezer instance. All public maintenance entrypoints serialize with workMu
+// before shared-gate admission, including explicit concurrent callers.
 //
 // Returns a nil runner when freezer == nil — callers (cmd/gtron) use this
 // to skip Lifecycle registration when the freezer is disabled at the CLI
@@ -927,7 +933,11 @@ func (r *Runner) beginHeavyMaintenance(kind heavyMaintenanceKind, lastCatchup, l
 			return nil, false
 		}
 	}
-	releaseGate, ok := r.cfg.HeavyWorkGate.TryAcquire()
+	owner := maintenance.HeavyWorkTransactionIndex
+	if kind == heavyMaintenanceV2 {
+		owner = maintenance.HeavyWorkDirectV2
+	}
+	releaseGate, ok := r.cfg.HeavyWorkGate.TryAcquireNamed(owner)
 	if !ok {
 		r.recordHeavyMaintenanceDeferred(kind, heavyMaintenanceDeferredResource)
 		return nil, false
@@ -1051,6 +1061,10 @@ func syncActivationDeferred(ctx context.Context, err error) bool {
 // the runner; the freezer enforces the time budget between crash-safe segment
 // publication boundaries.
 func (r *Runner) CompactV2Once() (uint64, error) {
+	if !r.workMu.TryLock() {
+		return 0, nil
+	}
+	defer r.workMu.Unlock()
 	if !r.cfg.Enabled || !r.cfg.V2Enabled {
 		return 0, nil
 	}
@@ -1221,6 +1235,10 @@ func (r *Runner) compactV2Scheduled() (uint64, error) {
 // prune one newly V2-covered quantum. Publication always precedes hot-row
 // deletion, whose durable stage advances only after the deletes complete.
 func (r *Runner) MaintainTransactionIndexOnce() (bool, error) {
+	if !r.workMu.TryLock() {
+		return false, nil
+	}
+	defer r.workMu.Unlock()
 	// The lifecycle and explicit callers can request maintenance together.
 	// Keep both scratch ownership and budget accounting single-writer even
 	// when a test/tool has not configured the shared heavy-work gate.
@@ -1697,7 +1715,7 @@ func (r *Runner) serviceDirectTransactionIndexDebt(maxEnd uint64) (handled, sync
 			return true, false, nil
 		}
 	}
-	release, ok := r.cfg.HeavyWorkGate.TryAcquire()
+	release, ok := r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkTransactionIndex)
 	if !ok {
 		r.recordHeavyMaintenanceDeferred(heavyMaintenanceTxIndex, heavyMaintenanceDeferredResource)
 		return true, false, nil
@@ -1746,6 +1764,10 @@ func (r *Runner) updateMetrics() {
 // the freezer in a consistent state thanks to ModifyAncients' atomic
 // rollback; the next pass simply retries.
 func (r *Runner) OnePass() (frozen uint64, err error) {
+	if !r.workMu.TryLock() {
+		return 0, nil
+	}
+	defer r.workMu.Unlock()
 	if err := r.checkStopping(); err != nil {
 		return 0, err
 	}
@@ -1887,6 +1909,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	if directV2 && r.cfg.V2PromotionAllowed != nil && !r.cfg.V2PromotionAllowed() {
 		return 0, nil
 	}
+	var directLease *directV2Lease
 	if directV2 && freezeFromN%r.cfg.V2SegmentBlocks == 0 {
 		if capExclusive-freezeFromN < r.cfg.V2SegmentBlocks {
 			return 0, nil
@@ -1914,12 +1937,18 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 				}
 			}
 		}
-		release, ok := r.cfg.HeavyWorkGate.TryAcquire()
+		release, ok := r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkDirectV2)
 		if !ok {
 			r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, heavyMaintenanceDeferredResource)
 			return 0, nil
 		}
-		defer release()
+		directLease = &directV2Lease{r: r, release: release, since: time.Now(), jobStart: time.Now()}
+		directLease.metric("job_active", 1)
+		directLease.addMetric("job_start_count", 1)
+		directLease.metric("job_start_unix_ns", directLease.jobStart.UnixNano())
+		directLease.metric("held", 1)
+		log.Info("Freezer: direct V2 shared job started", "from", freezeFromN, "to", capExclusive)
+		defer func() { directLease.finish(err) }()
 	} else if r.cfg.BatchBlocks > 0 && capExclusive-freezeFromN > r.cfg.BatchBlocks {
 		capExclusive = freezeFromN + r.cfg.BatchBlocks
 	}
@@ -1957,7 +1986,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 			appendCtx, stopWatch = r.contextWithSyncActiveCancellation()
 		}
 		var appendErr error
-		blockHashes, appendErr = r.appendDirectV2Segment(appendCtx, directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs, buildDirectTransactionIndex)
+		blockHashes, appendErr = r.appendDirectV2Segment(appendCtx, directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs, buildDirectTransactionIndex, directLease.hooks())
 		stopWatch()
 		if syncActivationDeferred(appendCtx, appendErr) {
 			buildDirectTransactionIndex = false
@@ -1968,7 +1997,10 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 			// A canceled fused build has not made transaction-index coverage
 			// visible. Retry the same direct V2 segment without that optional sidecar;
 			// MigrateV2 owns stale-file cleanup and manifest recovery.
-			blockHashes, appendErr = r.appendDirectV2Segment(r.pauseCtx, directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs, false)
+			if acquireErr := directLease.ensure(r.pauseCtx); acquireErr != nil {
+				return 0, acquireErr
+			}
+			blockHashes, appendErr = r.appendDirectV2Segment(r.pauseCtx, directAppender, freezeFromN, capExclusive, r.cfg.ExternalizeV2ReceiptLogs, false, directLease.hooks())
 		}
 		if appendErr != nil {
 			return 0, appendErr
@@ -2056,6 +2088,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		deferDirectTransactionIndexIfSyncActive()
 	}
 
+	directLease.phase("prune")
 	// Phase 2: explicit fsync. This is the durability barrier, NOT
 	// belt-and-braces: freezerTableBatch.commit() only fsyncs periodically
 	// (every ~30s past freezerTableFlushThreshold), so without this call a
@@ -2131,6 +2164,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	// Compact triggers a synchronous compaction so the operator sees the
 	// datadir shrink without waiting for background compaction to roll
 	// through (which can take hours on a healthy LSM).
+	directLease.phase("compact")
 	r.compactFrozenHotRanges(freezeFromN, frozenHi, "freeze")
 	if err := r.pruneFrozenStateRoots(frozenHi); err != nil {
 		return 0, err
@@ -2147,11 +2181,11 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 	return frozen, r.sampleHotBlockNamespaceSize()
 }
 
-func (r *Runner) appendDirectV2Segment(ctx context.Context, appender V2DirectAppender, start, end uint64, externalizeReceiptLogs, buildTransactionIndex bool) ([]tcommon.Hash, error) {
-	return r.appendDirectV2SegmentWithWorkers(ctx, appender, start, end, externalizeReceiptLogs, buildTransactionIndex, directV2PreparationWorkers())
+func (r *Runner) appendDirectV2Segment(ctx context.Context, appender V2DirectAppender, start, end uint64, externalizeReceiptLogs, buildTransactionIndex bool, cooperative ...*rawdbfreezer.V2CooperativeYield) ([]tcommon.Hash, error) {
+	return r.appendDirectV2SegmentWithWorkers(ctx, appender, start, end, externalizeReceiptLogs, buildTransactionIndex, directV2PreparationWorkers(), cooperative...)
 }
 
-func (r *Runner) appendDirectV2SegmentWithWorkers(ctx context.Context, appender V2DirectAppender, start, end uint64, externalizeReceiptLogs, buildTransactionIndex bool, workers int) ([]tcommon.Hash, error) {
+func (r *Runner) appendDirectV2SegmentWithWorkers(ctx context.Context, appender V2DirectAppender, start, end uint64, externalizeReceiptLogs, buildTransactionIndex bool, workers int, cooperative ...*rawdbfreezer.V2CooperativeYield) ([]tcommon.Hash, error) {
 	if appender == nil || end <= start {
 		return nil, errors.New("freezer: invalid direct V2 segment")
 	}
@@ -2228,6 +2262,9 @@ func (r *Runner) appendDirectV2SegmentWithWorkers(ctx context.Context, appender 
 		Transform:                  transform,
 		PreparationWorkers:         workers,
 		TransactionIndexPrefixBits: r.cfg.TransactionIndexPrefixBits,
+	}
+	if len(cooperative) > 0 {
+		options.CooperativeYield = cooperative[0]
 	}
 	if r.cfg.TransactionIndexEnabled && buildTransactionIndex {
 		options.TransactionIndexEntries = rawdb.AncientTransactionIndexEntries

@@ -48,7 +48,7 @@ ExecStart=/data/gtron/go-tron/build/bin/gtron \
     --metrics.addr 127.0.0.1 \
     --metrics.port 6071 \
     --maxpeers 30 \
-    --db.cache 8192 \
+    --db.cache 12288 \
     --db.handles 8192 \
     --state.trie.cache 128 \
     --log.file /data/gtron/main/gtron.log \
@@ -72,9 +72,9 @@ LimitNOFILE=131072
 
 # CentOS 7 / systemd 219: MemorySoftLimit is unsupported. The 40 GiB hard
 # limit is the selected mainnet cold-history budget. Keep the Go
-# runtime soft limit at 8 GiB. The 8 GiB Pebble budget splits into 7.5 GiB
+# runtime soft limit at 8 GiB. The 12 GiB Pebble budget splits into 11.5 GiB
 # hot / 0.5 GiB history; memtable reservations reduce actual block-cache targets.
-# These are not additive RSS bounds. See docs/dev/mainnet-random-read-cache-20261014.md.
+# These are not additive RSS bounds. See docs/superpowers/specs/2026-10-15-pebble-data-cache-budget.md.
 MemoryLimit=40G
 
 [Install]

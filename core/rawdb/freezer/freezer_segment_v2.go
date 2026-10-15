@@ -742,6 +742,10 @@ func writeV2TableSegment(path, kind string, start, count uint64, frameBlocks uin
 }
 
 func writeV2TableSegmentWithWorkers(path, kind string, start, count uint64, frameBlocks uint32, read, dictionaryRead func(uint64) ([]byte, error), workers int) error {
+	return writeV2TableSegmentWithCheckpoint(path, kind, start, count, frameBlocks, read, dictionaryRead, workers, 0, nil)
+}
+
+func writeV2TableSegmentWithCheckpoint(path, kind string, start, count uint64, frameBlocks uint32, read, dictionaryRead func(uint64) ([]byte, error), workers int, windowRecords uint64, checkpoint func() error) error {
 	if workers <= 0 {
 		workers = v2CompressionWorkers()
 	}
@@ -750,14 +754,14 @@ func writeV2TableSegmentWithWorkers(path, kind string, start, count uint64, fram
 		if dictionaryRead == nil {
 			return errors.New("ancient V2: bodies writer requires a side-effect-free dictionary reader")
 		}
-		return writeV2SegmentProfileWithWorkers(path, start, count, frameBlocks, v2CodecBodiesTrainedDict, zstd.SpeedBetterCompression, read, dictionaryRead, workers)
+		return writeV2SegmentProfileWithCheckpoint(path, start, count, frameBlocks, v2CodecBodiesTrainedDict, zstd.SpeedBetterCompression, read, dictionaryRead, workers, windowRecords, checkpoint)
 	}
 	if kind == "state_roots" {
 		// These rows are normally empty or one hash. Multiple encoder
 		// workspaces cost more than compressing the tiny table serially.
 		workers = 1
 	}
-	return writeV2SegmentProfileWithWorkers(path, start, count, frameBlocks, v2CodecDefault, zstd.SpeedDefault, read, nil, workers)
+	return writeV2SegmentProfileWithCheckpoint(path, start, count, frameBlocks, v2CodecDefault, zstd.SpeedDefault, read, nil, workers, windowRecords, checkpoint)
 }
 
 func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error)) error {
@@ -765,6 +769,10 @@ func writeV2SegmentProfile(path string, start, count uint64, frameBlocks, codec 
 }
 
 func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error), workers int) error {
+	return writeV2SegmentProfileWithCheckpoint(path, start, count, frameBlocks, codec, level, read, dictionaryRead, workers, 0, nil)
+}
+
+func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error), workers int, windowRecords uint64, checkpoint func() error) error {
 	if count == 0 || frameBlocks == 0 {
 		return errors.New("ancient V2: empty segment dimensions")
 	}
@@ -934,11 +942,16 @@ func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlo
 			first, records, err := readFrame()
 			return v2RawFrame{first: first, records: records, data: buffer}, err
 		}
-		if err := writeV2FramePipeline(workers, remainingFrames, activeEncoder, newEncoder, readNextFrame, writeEncodedFrame); err != nil {
+		if err := writeV2FramePipelineWithCheckpoint(workers, remainingFrames, activeEncoder, newEncoder, readNextFrame, writeEncodedFrame, windowRecords/uint64(frameBlocks), checkpoint); err != nil {
 			return err
 		}
 	} else {
 		for written < count {
+			if checkpoint != nil && windowRecords > 0 && written%windowRecords == 0 {
+				if err := checkpoint(); err != nil {
+					return err
+				}
+			}
 			first, records, err = readFrame()
 			if err != nil {
 				return err

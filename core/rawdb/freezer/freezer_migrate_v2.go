@@ -24,10 +24,13 @@ const fusedTransactionIndexETLBufferBytes = 32 << 20
 // amplification. Mainnet measurement selected 64 records per frame and 65,536
 // records per segment.
 type V2MigrationOptions struct {
-	Tables        []string
-	SegmentBlocks uint64
-	FrameBlocks   uint32
-	MaxSegments   uint64
+	// CooperativeYield is supported only for a direct source; nil preserves
+	// the original uninterrupted migration path.
+	CooperativeYield *V2CooperativeYield
+	Tables           []string
+	SegmentBlocks    uint64
+	FrameBlocks      uint32
+	MaxSegments      uint64
 	// CompressionWorkers bounds independent frame encoders; zero uses the CPU
 	// default (at most eight), and one preserves the serial frame encoder. Source
 	// reads and record delivery remain ordered; PreparationWorkers controls CPU
@@ -116,10 +119,21 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	f.v2Migrate.Lock()
 	defer f.v2Migrate.Unlock()
 	f.tailMutation.Lock()
-	defer f.tailMutation.Unlock()
+	tailLocked, writeLocked := true, false
+	defer func() {
+		if writeLocked {
+			f.writeLock.Unlock()
+		}
+		if tailLocked {
+			f.tailMutation.Unlock()
+		}
+	}()
 	if direct {
 		f.writeLock.Lock()
-		defer f.writeLock.Unlock()
+		writeLocked = true
+	}
+	if options.CooperativeYield != nil && (!direct || options.CooperativeYield.Due == nil || options.CooperativeYield.Yield == nil) {
+		return result, errors.New("ancient V2: cooperative yield requires a direct source and both hooks")
 	}
 	if f.readonly {
 		return result, errReadOnly
@@ -237,6 +251,38 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 	}
 	base := filepath.Join(f.datadir, "v2")
 	removeOrphanV2Temps(base)
+	// Only the private build/migration mutex stays owned during a handoff.
+	// Cold readers/pruners must be able to take writeLock/tailMutation after
+	// acquiring the shared gate. Revalidate mutations (including ABA) before
+	// any further source I/O or publication. No-op tail pruning is harmless.
+	generation := f.mutationGeneration.Load()
+	var checkpoint func() error
+	if options.CooperativeYield != nil {
+		checkpoint = func() error {
+			if !options.CooperativeYield.Due() {
+				return options.Context.Err()
+			}
+			f.writeLock.Unlock()
+			writeLocked = false
+			f.tailMutation.Unlock()
+			tailLocked = false
+			yieldErr := options.CooperativeYield.Yield(options.Context)
+			f.tailMutation.Lock()
+			tailLocked = true
+			f.writeLock.Lock()
+			writeLocked = true
+			if yieldErr != nil {
+				return yieldErr
+			}
+			if err := options.Context.Err(); err != nil {
+				return err
+			}
+			if f.mutationGeneration.Load() != generation || !f.canAppendV2DirectLocked(start) {
+				return errV2LayoutChanged
+			}
+			return nil
+		}
+	}
 	sourceReader := readSourceForKind(options, f, direct)
 	transactionIndexCoverage := f.TransactionIndexCoverage()
 	for start < target && (options.MaxSegments == 0 || result.Segments < options.MaxSegments) {
@@ -297,6 +343,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			}
 		}
 		for _, kind := range options.Tables {
+			if options.CooperativeYield != nil && options.CooperativeYield.Phase != nil {
+				options.CooperativeYield.Phase("writing")
+			}
 			name := v2SegmentName(start, count)
 			path := filepath.Join(base, kind, name)
 			lastProgress := time.Now()
@@ -321,29 +370,38 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return f.transformV2MigrationRecord(options, kind, number, data, sourceReader)
 			}
 			var prepared *v2PreparedReader
+			windowRecords := count
+			if options.CooperativeYield != nil {
+				windowRecords = max(uint64(options.FrameBlocks), v2CooperativeRecords/uint64(options.FrameBlocks)*uint64(options.FrameBlocks))
+			}
 			if options.PreparationWorkers > 1 && options.Transform != nil && kind != "state_roots" {
-				prepared = newV2PreparedReader(options.Context, start, count, options.PreparationWorkers,
-					func(number uint64) ([]byte, []byte, error) {
-						data, err := readSource(number)
-						if err != nil {
-							return nil, nil, err
-						}
-						// Copy before any other source read: even bodies and receipts
-						// may share one borrowed source buffer.
-						data = bytes.Clone(data)
-						var body []byte
-						if kind == "tx_infos" {
-							body, err = sourceReader("bodies", number)
-							if err != nil {
-								return nil, nil, err
-							}
-							body = bytes.Clone(body)
-						}
-						return data, body, nil
-					}, func(number uint64, data, body []byte) ([]byte, error) {
-						return options.Transform(kind, number, data, body)
-					})
-				readPrepared = prepared.Read
+				readPrepared = func(number uint64) ([]byte, error) {
+					if prepared == nil || number == prepared.end {
+						windowCount := min(windowRecords, start+count-number)
+						prepared = newV2PreparedReader(options.Context, number, windowCount, options.PreparationWorkers,
+							func(number uint64) ([]byte, []byte, error) {
+								data, err := readSource(number)
+								if err != nil {
+									return nil, nil, err
+								}
+								// Copy before any other source read: even bodies and receipts
+								// may share one borrowed source buffer.
+								data = bytes.Clone(data)
+								var body []byte
+								if kind == "tx_infos" {
+									body, err = sourceReader("bodies", number)
+									if err != nil {
+										return nil, nil, err
+									}
+									body = bytes.Clone(body)
+								}
+								return data, body, nil
+							}, func(number uint64, data, body []byte) ([]byte, error) {
+								return options.Transform(kind, number, data, body)
+							})
+					}
+					return prepared.Read(number)
+				}
 			}
 			readForWrite := func(number uint64) ([]byte, error) {
 				if err := options.Context.Err(); err != nil {
@@ -384,6 +442,11 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 				return data, nil
 			}
 			readExpected := func(number uint64) ([]byte, error) {
+				if checkpoint != nil {
+					if err := checkpoint(); err != nil {
+						return nil, err
+					}
+				}
 				data, err := readSource(number)
 				if err != nil {
 					return nil, err
@@ -392,23 +455,28 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			}
 			unpublished = append(unpublished, path)
 			writeErr := func() error {
-				if prepared != nil {
-					// Writer errors (including frame/ETL/fsync failures) may leave
-					// prefetched work. Join it before verification, file cleanup or
-					// any subsequent table can use the same Source/Transform.
-					defer prepared.Close()
-				}
-				return writeV2TableSegmentWithWorkers(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected, options.CompressionWorkers)
+				defer func() {
+					if prepared != nil {
+						prepared.Close()
+					}
+				}()
+				return writeV2TableSegmentWithCheckpoint(path, kind, start, count, options.FrameBlocks, readForWrite, readExpected, options.CompressionWorkers, windowRecords, checkpoint)
 			}()
 			if writeErr != nil {
 				cleanupUnpublished()
 				return result, fmt.Errorf("write ancient V2 %s segment %d: %w", kind, start, writeErr)
 			}
-			if err := verifyV2Segment(options.Context, path, kind, start, count, readExpected); err != nil {
+			if options.CooperativeYield != nil && options.CooperativeYield.Phase != nil {
+				options.CooperativeYield.Phase("verification")
+			}
+			if err := verifyV2SegmentWithCheckpoint(options.Context, path, kind, start, count, readExpected, checkpoint); err != nil {
 				cleanupUnpublished()
 				return result, err
 			}
 			manifest.Tables[kind] = name
+		}
+		if options.CooperativeYield != nil && options.CooperativeYield.Phase != nil {
+			options.CooperativeYield.Phase("index")
 		}
 		var transactionIndexResult TransactionIndexBuildResult
 		if buildTransactionIndex {
@@ -431,6 +499,9 @@ func (f *Freezer) MigrateV2(options V2MigrationOptions) (V2MigrationResult, erro
 			}
 			transactionIndexCollector = nil
 			_ = recovered // Recovery and a fresh build have identical publication semantics.
+		}
+		if options.CooperativeYield != nil && options.CooperativeYield.Phase != nil {
+			options.CooperativeYield.Phase("commit")
 		}
 		if err := publishV2Manifest(base, manifest); err != nil {
 			return result, fmt.Errorf("publish ancient V2 segment %d: %w", start, err)
@@ -728,6 +799,10 @@ func (f *Freezer) installV2ManifestState(manifest v2Manifest, index *Transaction
 }
 
 func verifyV2Segment(ctx context.Context, path, kind string, start, count uint64, readV1 func(uint64) ([]byte, error)) error {
+	return verifyV2SegmentWithCheckpoint(ctx, path, kind, start, count, readV1, nil)
+}
+
+func verifyV2SegmentWithCheckpoint(ctx context.Context, path, kind string, start, count uint64, readV1 func(uint64) ([]byte, error), checkpoint func() error) error {
 	reader, err := openV2Segment(path, kind)
 	if err != nil {
 		return fmt.Errorf("open new ancient V2 segment %s: %w", path, err)
@@ -748,6 +823,11 @@ func verifyV2Segment(ctx context.Context, path, kind string, start, count uint64
 	}
 	defer store.Close()
 	for frameIndex, frame := range reader.frames {
+		if checkpoint != nil && frameIndex%32 == 0 {
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

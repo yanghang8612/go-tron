@@ -47,6 +47,7 @@ func updateManifestPruneProgressWithSync(dir string, blockNum, txNum, indexBlock
 	c := &loadedManifestCache
 	c.mu.Lock()
 	trusted := configErr == nil && budget != 0 && prior.Generation != 0 && prior.PublishedUnix != 0 && c.manifest == prior && c.productionErr == nil && utf8.Valid(c.data)
+	stringSlack := c.stringSlack
 	c.mu.Unlock()
 	if !trusted {
 		owned := cloneDecodedManifest(prior)
@@ -63,13 +64,13 @@ func updateManifestPruneProgressWithSync(dir string, blockNum, txNum, indexBlock
 	if err := writeManifestBytesWithSync(dir, data, syncDir); err != nil {
 		return err
 	}
-	rememberManifestProgress(data, &m)
+	rememberManifestProgress(data, &m, stringSlack)
 	return nil
 }
 
 // Unlike public publication, m and every catalog it references are already
 // immutable owned generations. No caller owns these containers or strings.
-func rememberManifestProgress(data []byte, m *Manifest) {
+func rememberManifestProgress(data []byte, m *Manifest, stringSlack uint64) {
 	budget, err := manifestCacheConfiguredBudget()
 	if err != nil {
 		return
@@ -78,7 +79,7 @@ func rememberManifestProgress(data []byte, m *Manifest) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.resizeLocked(budget)
-	charge := manifestCacheCharge(data, m)
+	charge := manifestCacheChargeWithStringSlack(data, m, stringSlack)
 	manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))
 	if budget == 0 || charge > budget {
 		c.clearLocked()
@@ -92,6 +93,7 @@ func rememberManifestProgress(data []byte, m *Manifest) {
 	}
 	c.data, c.manifest, c.productionErr, c.charge = data, m, nil, charge
 	c.publication = true
+	c.stringSlack = stringSlack
 	manifestCacheResident.Update(int64(charge))
 	manifestCacheHeadroom.Update(int64(budget - charge))
 	manifestCachePublicationSeeds.Inc(1)

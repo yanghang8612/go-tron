@@ -192,10 +192,10 @@ func (r *Runner) beginTransactionIndexBudget() (*heavyMaintenanceLease, bool) {
 	}
 	if healthy && valid {
 		if b.reservation.Active() {
-			release, ok = b.reservation.TryAcquireWithReleaseCooldown(recoveryPolicy)
+			release, ok = b.reservation.TryAcquireWithReleaseCooldown(recoveryPolicy, maintenance.HeavyWorkTransactionIndex)
 		} else {
 			b.cancelReservation()
-			release, ok = r.cfg.HeavyWorkGate.TryAcquireWithReleaseCooldown(recoveryPolicy)
+			release, ok = r.cfg.HeavyWorkGate.TryAcquireWithReleaseCooldown(recoveryPolicy, maintenance.HeavyWorkTransactionIndex)
 		}
 	} else {
 		release, ok = r.cfg.HeavyWorkGate.TryAcquire()
