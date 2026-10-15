@@ -13,6 +13,9 @@ const directV2LeaseQuantum = 10 * time.Second
 const directV2HistoryFresh = 10 * time.Second
 const directV2HistoryOpportunity = 3 * time.Second
 
+// Recovery diagnostics reuse the fixed txindex health reasons 0..15, plus 16.
+const directV2HealthRepeatedEvidence transactionIndexHealthReason = 16
+
 // The Runner's workMu owns this object for the entire direct job. A rotating
 // release callback is never captured by defer: Close always releases the latest
 // lease, including after a canceled fused build switches to an unfused retry.
@@ -23,18 +26,112 @@ type directV2Lease struct {
 	jobStart   time.Time
 	phaseName  string
 	phaseSince time.Time
+	pressure   transactionIndexPressureState // independent from txIndexBudget
+	recovery   *directV2Recovery
 }
 
 func (l *directV2Lease) metric(name string, value int64) {
 	metrics.GetOrRegisterGauge(normalizeMetricNamespace(l.r.cfg.MetricsNamespace)+"v2/cooperative/"+name, nil).Update(value)
 }
+
+// Each acquisition owns a fresh release decision. The gate invokes this pure
+// policy with its actual hold time while returning that same token.
+type directV2Recovery struct {
+	begin                      transactionIndexHealthReason
+	engineSample, deviceSample time.Time
+	cooperative                bool
+}
+
+func (r *directV2Recovery) cooldown(held, defaultCooldown time.Duration) time.Duration {
+	if r.cooperative {
+		return min(defaultCooldown, max(time.Second, held/4))
+	}
+	return defaultCooldown
+}
+func (l *directV2Lease) probePressure() (transactionIndexHealthReason, maintenance.StoragePressure) {
+	p := maintenance.StoragePressure{}
+	if l.r.cfg.TransactionIndexLoadProbe != nil {
+		p = l.r.cfg.TransactionIndexLoadProbe()
+	}
+	// Assess after the bounded probe returns, including evidence age then.
+	return l.pressure.assess(p, time.Now()), p
+}
+func (l *directV2Lease) tryAcquire() (ok bool) {
+	decision := &directV2Recovery{}
+	release, ok := l.r.cfg.HeavyWorkGate.TryAcquireWithReleaseCooldown(decision.cooldown, maintenance.HeavyWorkDirectV2)
+	if !ok {
+		return false
+	}
+	l.release, l.recovery = release, decision
+	l.since = time.Now()
+	l.phaseSince = l.since
+	// A failing probe cannot leak a token or install optimistic recovery.
+	completed := false
+	defer func() {
+		if !completed {
+			l.Close()
+		}
+	}()
+	reason, sample := l.probePressure()
+	decision.begin = reason
+	decision.engineSample, decision.deviceSample = sample.SampledAt, sample.DeviceSampledAt
+	l.metric("recovery/begin_reason", int64(decision.begin))
+	l.metric("recovery/end_reason", int64(txIndexHealthUnobserved))
+	l.metric("recovery/requested", 0)
+	l.metric("recovery/mode", 0)
+	l.metric("held", 1)
+	completed = true
+	return true
+}
+func (l *directV2Lease) releaseCurrent() {
+	if l.recovery != nil && l.recovery.cooperative {
+		l.addMetric("recovery/bounded_policy_count", 1)
+	} else {
+		l.addMetric("recovery/default_policy_count", 1)
+	}
+	l.chargePhase()
+	l.release()
+	l.release, l.recovery = nil, nil
+	l.metric("held", 0)
+}
 func (l *directV2Lease) Close() {
 	if l != nil && l.release != nil {
-		l.chargePhase()
-		l.release()
-		l.release = nil
-		l.metric("held", 0)
+		if l.recovery != nil {
+			l.recovery.cooperative = false
+		}
+		l.metric("recovery/requested", 0)
+		l.metric("recovery/mode", 0)
+		l.releaseCurrent()
 	}
+}
+func (l *directV2Lease) releaseForYield(ctx context.Context) time.Duration {
+	// Any exceptional probe completion releases with the conservative default.
+	defer l.Close()
+	l.metric("recovery/requested", 1)
+	end := txIndexHealthWorkError
+	if ctx.Err() == nil {
+		var sample maintenance.StoragePressure
+		end, sample = l.probePressure()
+		if end == txIndexHealthHealthy && l.recovery != nil &&
+			(!sample.SampledAt.After(l.recovery.engineSample) || !sample.DeviceSampledAt.After(l.recovery.deviceSample)) {
+			end = directV2HealthRepeatedEvidence
+		}
+	}
+	if ctx.Err() != nil {
+		end = txIndexHealthWorkError
+	}
+	l.metric("recovery/end_reason", int64(end))
+	if l.recovery != nil {
+		l.recovery.cooperative = ctx.Err() == nil && l.recovery.begin == txIndexHealthHealthy && end == txIndexHealthHealthy
+		if l.recovery.cooperative {
+			l.metric("recovery/mode", 1)
+		} else {
+			l.metric("recovery/mode", 0)
+		}
+	}
+	held := time.Since(l.since)
+	l.releaseCurrent()
+	return held
 }
 func (l *directV2Lease) ensure(ctx context.Context) error {
 	if l == nil {
@@ -50,11 +147,11 @@ func (l *directV2Lease) ensure(ctx context.Context) error {
 			return err
 		}
 		if l.r.cfg.V2PromotionAllowed == nil || l.r.cfg.V2PromotionAllowed() {
-			if release, ok := l.r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkDirectV2); ok {
-				l.release = release
-				l.since = time.Now()
-				l.phaseSince = l.since
-				l.metric("held", 1)
+			if l.tryAcquire() {
+				if err := ctx.Err(); err != nil {
+					l.Close()
+					return err
+				}
 				return nil
 			}
 		}
@@ -76,8 +173,7 @@ func (l *directV2Lease) hooks() *rawdbfreezer.V2CooperativeYield {
 func (l *directV2Lease) yield(ctx context.Context) error {
 	g := l.r.cfg.HeavyWorkGate
 	before := g.Observation().HistoryAcquisitions
-	held := time.Since(l.since)
-	l.Close()
+	held := l.releaseForYield(ctx)
 	started := time.Now()
 	l.metric("yield_count", metrics.GetOrRegisterGauge(normalizeMetricNamespace(l.r.cfg.MetricsNamespace)+"v2/cooperative/yield_count", nil).Snapshot().Value()+1)
 	// Give history one observed acquisition, or a bounded opportunity after the

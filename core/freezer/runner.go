@@ -1937,12 +1937,12 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 				}
 			}
 		}
-		release, ok := r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkDirectV2)
-		if !ok {
+		directLease = &directV2Lease{r: r}
+		if !directLease.tryAcquire() {
 			r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, heavyMaintenanceDeferredResource)
 			return 0, nil
 		}
-		directLease = &directV2Lease{r: r, release: release, since: time.Now(), jobStart: time.Now()}
+		directLease.jobStart = time.Now()
 		directLease.metric("job_active", 1)
 		directLease.addMetric("job_start_count", 1)
 		directLease.metric("job_start_unix_ns", directLease.jobStart.UnixNano())

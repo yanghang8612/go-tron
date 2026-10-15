@@ -48,6 +48,53 @@ shutdown cancellation remains interruptible. No global queue or guard bypass
 is added. Same-Runner transaction-index work remains serial until the segment
 job finishes; this change makes no mid-segment index fairness claim.
 
+## Pressure-qualified cooperative recovery
+
+The first natural fixed job held actual work for about108 seconds but spent
+about210 seconds in nine cooperative waits. Every10-second lease originally
+installed the production15-second recovery, including two no-work opportunities.
+A separate unlabelled third owner held one lease for46.6 seconds; that delay is
+legitimate contention, not an idle gate or a recovery exemption candidate.
+
+The work quantum stays10 seconds. Every initial and resumed direct lease uses
+the existing measured release-policy gate API. Only a cooperative release at a
+quiescent checkpoint can request `min(defaultCooldown, max(1s, actualHeld/4))`.
+Zero default remains zero, and the gate's minimum-work threshold still applies.
+The callback only computes this duration from its immutable per-release decision
+and the gate's actual measured hold; it performs no probe, I/O or gate reentry.
+
+A job-private transactionIndexPressureState assesses the existing independent
+TransactionIndexLoadProbe after acquiring the token, and again at a cooperative
+checkpoint while still owning that token. Probes run outside gate coordination
+locks and only with workers/readers joined. Assessment checks freshness after
+probe completion. Both ends must be fresh healthy and the ending engine and
+device SampledAt must each be strictly newer than the saved admission sample.
+A repeated cached sample, unknown/stale/future evidence, soft/hard pressure or
+recovery uses the default. Pressure trends/recovery evidence persist across the
+job's leases, without touching transaction-index budget state. After pressure,
+two distinct spaced healthy engine/device observations are still required by
+the existing assessor; a lease admitted while recovering cannot shorten its
+release even if its ending sample finishes recovery. Each new token resets its
+begin/end release authorization so a prior healthy pause cannot leak to it.
+
+Completion/error/cancel releases while holding a token always use the default,
+as do exceptional begin/end probes. Cancellation is checked again after a probe
+and before a cooperative release. Cancellation after that token was already
+validly yielded cannot retroactively rewrite another owner's recovery deadline;
+it simply cancels the waiting job. Initial/resumed probe failures cannot leak
+tokens. Final fsync/install/prune, hard admission, promotion permission,
+reservations and third-owner/current recovery remain unchanged. This is a
+recovery-duty policy, not permission to run heavy jobs concurrently or to lower
+memory/space/pressure thresholds. The pending encoder/ETL memory remains live.
+
+Fixed diagnostics under v2/cooperative/recovery include requested (0 normal /
+1 cooperative), begin_reason/end_reason (existing transaction-index health
+reason IDs0..15, plus16 for non-distinct ending evidence), and mode (0 default /
+1 bounded healthy policy). Mode1 describes selection, not guaranteed shortening:
+a zero/small default or the minimum-work threshold can still produce zero or a
+smaller capped recovery. bounded_policy_count/default_policy_count preserve
+release totals when the next acquisition resets per-lease gauges.
+
 ## Ownership and locks
 
 Exactly one Runner owns each underlying Freezer. OnePass, CompactV2Once and

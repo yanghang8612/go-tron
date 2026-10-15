@@ -96,9 +96,10 @@ func TestSyncEventLogTargetDeferredNotifiesActualDirectV2Job(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer f.Close()
-			gate := maintenance.NewHeavyWorkGate()
+			gate := maintenance.NewHeavyWorkGateWithCooldownAfter(15*time.Second, 250*time.Millisecond)
 			probe := makeSyncEventLogTargetBlock(f, 64, nil)
 			cfg.HistoryCatchupMode = snapshots.HistoryCatchupThroughput
+			cfg.CatchupHeavyWorkCooldown = 3 * time.Second
 			cfg.BuildEventLogsWhileSyncing = true
 			cfg.SyncEventLogCatchupBlocks = 64
 			cfg.SyncEventLogTargetBlock = probe
@@ -109,7 +110,10 @@ func TestSyncEventLogTargetDeferredNotifiesActualDirectV2Job(t *testing.T) {
 			var resume sync.Once
 			unblock := func() { resume.Do(func() { close(chain.resume) }) }
 			defer unblock()
-			freezer := chainfreezer.New(chain, newFreezerStore(f), chainfreezer.Config{Enabled: true, V2Enabled: true, DirectV2: true, V2SegmentBlocks: 64, V2FrameBlocks: 8, HeavyWorkGate: gate, SyncActive: func() bool { return true }, MetricsNamespace: "test/target-notify/freezer/"})
+			freezer := chainfreezer.New(chain, newFreezerStore(f), chainfreezer.Config{Enabled: true, V2Enabled: true, DirectV2: true, V2SegmentBlocks: 64, V2FrameBlocks: 8, HeavyWorkGate: gate, TransactionIndexLoadProbe: func() maintenance.StoragePressure {
+				now := time.Now()
+				return maintenance.StoragePressure{Available: true, SampledAt: now, DeviceAvailable: true, DeviceSampledAt: now, DeviceAwait: time.Millisecond, L0CompactionThreshold: 4, L0StopWritesThreshold: 12}
+			}, SyncActive: func() bool { return true }, MetricsNamespace: "test/target-notify/freezer/"})
 			done := make(chan error, 1)
 			go func() {
 				n, err := freezer.OnePass()
@@ -142,7 +146,7 @@ func TestSyncEventLogTargetDeferredNotifiesActualDirectV2Job(t *testing.T) {
 			unblock()
 			var resumed snapshots.PassResult
 			for i := 0; i < 100; i++ {
-				if _, ok, deferred := probe(); ok && !deferred {
+				if _, ok, deferred := probe(); ok && !deferred && gate.CanTryAcquire() {
 					if f.V2Coverage() != 0 {
 						t.Fatal("freezer committed without making a pre-publication cold opportunity")
 					}
@@ -186,7 +190,7 @@ func TestSyncEventLogTargetDeferredNotifiesActualDirectV2Job(t *testing.T) {
 					t.Fatalf("receipts%d: %v", n, err)
 				}
 			}
-			if !gate.CanTryAcquire() {
+			if gate.Observation().Owner != maintenance.HeavyWorkUnspecified {
 				t.Fatal("direct job leaked shared lease")
 			}
 		})
