@@ -730,48 +730,12 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 }
 
 func UpdateHotPruneProgress(dir string, blockNum, txNum uint64) error {
-	if dir == "" {
-		return nil
-	}
-	manifest, err := LoadProductionManifest(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	progress := cloneProgress(manifest.Progress)
-	if progress == nil {
-		progress = new(Progress)
-	}
-	progress.HotPruneTxNum = max(progress.HotPruneTxNum, txNum)
-	progress.HotPruneBlockNum = max(progress.HotPruneBlockNum, blockNum)
-	manifest.Progress = progress
-	return PublishManifest(dir, manifest)
+	return updateManifestPruneProgress(dir, blockNum, txNum, 0)
 }
 
-// UpdateStateChangeIndexPruneProgress records the inclusive authoritative hot
-// history boundary covered by the latest full stale-posting sweep. Keeping the
-// cursor in the snapshot manifest makes the maintenance restart-safe without
-// turning a rebuildable accelerator into a canonical execution stage.
+// UpdateStateChangeIndexPruneProgress records the inclusive completed sweep.
 func UpdateStateChangeIndexPruneProgress(dir string, blockNum uint64) error {
-	if dir == "" {
-		return nil
-	}
-	manifest, err := LoadProductionManifest(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	progress := cloneProgress(manifest.Progress)
-	if progress == nil {
-		progress = new(Progress)
-	}
-	progress.StateChangeIndexPruneBlockNum = max(progress.StateChangeIndexPruneBlockNum, blockNum)
-	manifest.Progress = progress
-	return PublishManifest(dir, manifest)
+	return updateManifestPruneProgress(dir, 0, 0, blockNum)
 }
 
 func WriteManifestProgressStages(db ethdb.KeyValueWriter, progress *Progress) error {

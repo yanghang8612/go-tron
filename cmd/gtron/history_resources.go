@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,10 +25,26 @@ type runtimeHistoryResources struct {
 	running atomic.Bool
 }
 
-func newRuntimeHistoryResources(db any, path string) *runtimeHistoryResources {
-	return &runtimeHistoryResources{
+func newRuntimeHistoryResources(db any, path string, etlBuffer int) *runtimeHistoryResources {
+	p := &runtimeHistoryResources{
 		load: newRuntimeHistoryLoadProbe(db, path), parallel: newRuntimeHistoryParallelProbe(),
 	}
+	p.parallel.busyMinimumMemory = historyBusyMemoryTarget(etlBuffer)
+	return p
+}
+
+// Two accessor collectors may each retain a full ETL run. Add 512 MiB for
+// metadata, identity/replay caches, codec/sort scratch and GC overlap. This is
+// conservative opportunity headroom, not a hard bound on a large block or RSS.
+func historyBusyMemoryTarget(etlBuffer int) uint64 {
+	if etlBuffer <= 0 {
+		return historyBusyMinimumMemory
+	}
+	const reserve = uint64(512 << 20)
+	if uint64(etlBuffer) > (math.MaxUint64-reserve)/2 {
+		return math.MaxUint64
+	}
+	return max(uint64(historyBusyMinimumMemory), 2*uint64(etlBuffer)+reserve)
 }
 
 func waitHistoryResourceSample(ctx context.Context, after time.Duration) bool {
@@ -117,4 +134,10 @@ func (p *runtimeHistoryResources) sharedReadResources() snapshots.HistoryReadRes
 		}
 	}
 	return snapshots.HistoryReadResources{}
+}
+
+// The Runner separately retains storage admission, lease and complete-work
+// recovery. Stopped/failed samplers never open this opportunity.
+func (p *runtimeHistoryResources) busyBuildReady() bool {
+	return p.running.Load() && p.parallel.observeCapacity().busyReady && p.running.Load()
 }

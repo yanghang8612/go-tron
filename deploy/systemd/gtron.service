@@ -25,6 +25,7 @@ Environment=ZCASH_PARAMS_DIR=/data/gtron/params
 EnvironmentFile=-/etc/gtron/snapshot.env
 
 # Go runtime
+Environment=GTRON_STATE_COMMITMENT_CACHE_TAIL=1024
 Environment=GOMEMLIMIT=8GiB
 Environment=GOGC=100
 
@@ -69,12 +70,12 @@ KillSignal=SIGTERM
 
 LimitNOFILE=131072
 
-# CentOS 7 / systemd 219: MemorySoftLimit is unsupported. The 32 GiB hard
+# CentOS 7 / systemd 219: MemorySoftLimit is unsupported. The 40 GiB hard
 # limit is the selected mainnet cold-history budget. Keep the Go
 # runtime soft limit at 8 GiB. The 8 GiB Pebble budget splits into 7.5 GiB
 # hot / 0.5 GiB history; memtable reservations reduce actual block-cache targets.
 # These are not additive RSS bounds. See docs/dev/mainnet-random-read-cache-20261014.md.
-MemoryLimit=32G
+MemoryLimit=40G
 
 [Install]
 WantedBy=multi-user.target

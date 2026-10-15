@@ -21,6 +21,7 @@ const (
 	historyParallelSampleInterval = 5 * time.Second
 	historyParallelMaxSpan        = 30 * time.Second
 	historyParallelMinimumMemory  = 2 << 30
+	historyBusyMinimumMemory      = 1 << 30
 	historyParallelProcLimit      = 1 << 20
 	historyParallelSmallLimit     = 64 << 10
 	historyParallelCgroupLimit    = 4096
@@ -49,23 +50,25 @@ type historyParallelObservation struct {
 // gate. The node resource sampler refreshes its bounded proc/cgroup observations
 // even when storage admission short-circuits the parallel-readiness callback.
 type runtimeHistoryParallelProbe struct {
-	mu          sync.Mutex
-	now         func() time.Time
-	read        func() (historyParallelObservation, error)
-	gomax       func() int
-	numCPU      func() int
-	lastAttempt time.Time
-	previous    *historyParallelObservation
-	known       bool
-	idlePPM     uint64
-	metrics     map[string]*metrics.Gauge
+	mu                sync.Mutex
+	now               func() time.Time
+	read              func() (historyParallelObservation, error)
+	gomax             func() int
+	numCPU            func() int
+	lastAttempt       time.Time
+	previous          *historyParallelObservation
+	known             bool
+	idlePPM           uint64
+	memorySafe        bool
+	busyMinimumMemory uint64
+	metrics           map[string]*metrics.Gauge
 }
 
 func newRuntimeHistoryParallelProbe() *runtimeHistoryParallelProbe {
 	p := &runtimeHistoryParallelProbe{now: time.Now, read: readRuntimeHistoryParallel,
 		gomax: func() int { return runtime.GOMAXPROCS(0) }, numCPU: runtime.NumCPU,
 		metrics: make(map[string]*metrics.Gauge)}
-	for _, name := range []string{"known", "idle_ppm", "idle_cores_milli", "memory_available_bytes", "memory_uncredited_bytes", "memory_clean_credit_bytes", "memory_under_oom", "memory_oom_known", "ready"} {
+	for _, name := range []string{"known", "idle_ppm", "idle_cores_milli", "memory_available_bytes", "memory_uncredited_bytes", "memory_clean_credit_bytes", "memory_under_oom", "memory_oom_known", "ready", "busy_ready", "busy_memory_minimum_bytes"} {
 		p.metrics[name] = metrics.GetOrRegisterGauge("state/snapshot/cold/history/parallel/runtime/"+name, nil)
 	}
 	return p
@@ -74,20 +77,21 @@ func newRuntimeHistoryParallelProbe() *runtimeHistoryParallelProbe {
 func (p *runtimeHistoryParallelProbe) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.lastAttempt, p.previous, p.known, p.idlePPM = time.Time{}, nil, false, 0
+	p.lastAttempt, p.previous, p.known, p.idlePPM, p.memorySafe = time.Time{}, nil, false, 0, false
 	for _, gauge := range p.metrics {
 		gauge.Update(0)
 	}
 }
 
 type historyRuntimeCapacity struct {
-	ready bool
-	reads snapshots.HistoryReadResources
+	ready     bool
+	busyReady bool
+	reads     snapshots.HistoryReadResources
 }
 
 func (p *runtimeHistoryParallelProbe) ready() bool { return p.observeCapacity().ready }
 
-// Both old pair admission and new bounded read selection consume one sampler.
+// Parallel pairing, bounded busy builds and read selection consume one sampler.
 // Neither callback invents a second baseline or loosens finite-quota evidence.
 func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 	p.mu.Lock()
@@ -95,7 +99,7 @@ func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 	now := p.now()
 	age := now.Sub(p.lastAttempt)
 	if p.lastAttempt.IsZero() || age < 0 || age >= historyParallelSampleInterval {
-		p.lastAttempt, p.known, p.idlePPM = now, false, 0
+		p.lastAttempt, p.known, p.idlePPM, p.memorySafe = now, false, 0, false
 		previous := p.previous
 		p.previous = nil
 		current, err := p.read()
@@ -113,9 +117,10 @@ func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 			if freshPair {
 				p.idlePPM, p.known = historyParallelIdle(previous.cpus, current.cpus)
 			}
+			p.memorySafe = freshPair && p.known && historyParallelMemoryCreditReady(previous, &current)
 			// Require a valid pair for credit even if CPU readiness fails.
 			// Failcnt increments alone are normal with cache reclaim.
-			if current.memoryCredit > 0 && (!freshPair || !p.known || !historyParallelMemoryCreditReady(previous, &current)) {
+			if current.memoryCredit > 0 && !p.memorySafe {
 				current.memoryAvailable = current.memoryUncredited
 				current.memoryCredit = 0
 			}
@@ -147,11 +152,17 @@ func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 			}
 		}
 	}
-	ready := p.known && unlimitedCPU && gomax >= 8 && p.idlePPM >= 250_000 && idleCores >= 2000 && memory >= historyParallelMinimumMemory
+	cpuReady := p.known && unlimitedCPU && gomax >= 8 && p.idlePPM >= 250_000 && idleCores >= 2000
+	ready := cpuReady && memory >= historyParallelMinimumMemory
+	// Only the existing bounded, serial opportunity uses this smaller target.
+	// This does not admit event pairing/shared reads or reserve actual RSS.
+	busyMinimum := max(uint64(historyBusyMinimumMemory), p.busyMinimumMemory)
+	busyReady := cpuReady && p.memorySafe && memory >= busyMinimum
 	for name, value := range map[string]uint64{"known": historyParallelBool(p.known), "idle_ppm": p.idlePPM,
 		"idle_cores_milli": idleCores, "memory_available_bytes": memory,
 		"memory_uncredited_bytes": uncredited, "memory_clean_credit_bytes": credit,
-		"memory_under_oom": underOOM, "memory_oom_known": oomKnown, "ready": historyParallelBool(ready)} {
+		"memory_under_oom": underOOM, "memory_oom_known": oomKnown, "ready": historyParallelBool(ready),
+		"busy_ready": historyParallelBool(busyReady), "busy_memory_minimum_bytes": busyMinimum} {
 		if gauge := p.metrics[name]; gauge != nil {
 			gauge.Update(int64(min(value, uint64(math.MaxInt64))))
 		}
@@ -160,7 +171,7 @@ func (p *runtimeHistoryParallelProbe) observeCapacity() historyRuntimeCapacity {
 	if p.previous != nil {
 		sampledAt = p.previous.at
 	}
-	return historyRuntimeCapacity{ready: ready, reads: snapshots.HistoryReadResources{
+	return historyRuntimeCapacity{ready: ready, busyReady: busyReady, reads: snapshots.HistoryReadResources{
 		Available: p.known && unlimitedCPU && gomax >= 8 && p.idlePPM >= 250_000,
 		SampledAt: sampledAt, IdleCoresMilli: idleCores, MemoryAvailableBytes: memory,
 	}}

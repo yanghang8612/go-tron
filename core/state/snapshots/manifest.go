@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -179,7 +180,21 @@ func LoadProductionManifest(dir string) (*Manifest, error) {
 	return loadManifestFile(dir, true)
 }
 
+// Serialize progress read-modify-publish against in-process publishers. The
+// public API still publishes the caller's complete generation, as before.
+var manifestPublicationMu sync.Mutex
+
 func PublishManifest(dir string, manifest *Manifest) error {
+	manifestPublicationMu.Lock()
+	defer manifestPublicationMu.Unlock()
+	return publishManifestLocked(dir, manifest)
+}
+
+func publishManifestLocked(dir string, manifest *Manifest) error {
+	return publishManifestLockedWithSync(dir, manifest, syncSnapshotDir)
+}
+
+func publishManifestLockedWithSync(dir string, manifest *Manifest, syncDir func(string) error) error {
 	if manifest == nil {
 		return errors.New("snapshots: nil manifest")
 	}
@@ -216,6 +231,19 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	if err != nil {
 		return err
 	}
+	if err := writeManifestBytesWithSync(dir, data, syncDir); err != nil {
+		return err
+	}
+	rememberPublishedManifest(data, manifest)
+	return nil
+}
+
+// Keep the durability boundary identical for complete and progress-only writes.
+func writeManifestBytes(dir string, data []byte) error {
+	return writeManifestBytesWithSync(dir, data, syncSnapshotDir)
+}
+
+func writeManifestBytesWithSync(dir string, data []byte, syncDir func(string) error) error {
 	tmp, err := os.CreateTemp(dir, ".manifest-*.tmp")
 	if err != nil {
 		return err
@@ -239,10 +267,9 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	// The manifest is the publication boundary for cold coverage. Persist the
 	// directory entry after the atomic rename before a caller may use that
 	// coverage to delete duplicate hot rows.
-	if err := syncSnapshotDir(dir); err != nil {
+	if err := syncDir(dir); err != nil {
 		return err
 	}
-	rememberPublishedManifest(data, manifest)
 	return nil
 }
 
