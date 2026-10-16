@@ -145,6 +145,11 @@ func newTailPipelineFixture(t testing.TB, mode string) *tailPipelineFixture {
 
 func (f *tailPipelineFixture) run(t testing.TB, db *tailCountedDB, tail int) (uint64, uint64) {
 	t.Helper()
+	return f.runWithStore(t, db, db, tail)
+}
+
+func (f *tailPipelineFixture) runWithStore(t testing.TB, counted *tailCountedDB, db ethdb.KeyValueStore, tail int) (uint64, uint64) {
+	t.Helper()
 	buf := blockbuffer.New(db)
 	buf.SetMaxInflight(3)
 	buf.SetBaseReadCacheSizeWithTrunkAndTail(32<<10, tail, 4, rawdb.CommitmentBranchKeyPrefix)
@@ -169,10 +174,10 @@ func (f *tailPipelineFixture) run(t testing.TB, db *tailCountedDB, tail int) (ui
 		}
 	}
 	var total uint64
-	for i := range db.reads {
-		total += db.reads[i].Load()
+	for i := range counted.reads {
+		total += counted.reads[i].Load()
 	}
-	return total, db.reads[6].Load() + db.reads[7].Load()
+	return total, counted.reads[6].Load() + counted.reads[7].Load()
 }
 
 func (f *tailPipelineFixture) database(t testing.TB) *tailCountedDB {

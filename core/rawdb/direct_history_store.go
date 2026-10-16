@@ -107,6 +107,21 @@ func (d *DirectHistoryStore) NewBatchWithSize(size int) ethdb.Batch {
 	// allocation. Histories normally dominate; let hot grow when necessary.
 	return &directHistoryBatch{db: d, hot: d.hot.NewBatch(), history: d.history.NewBatchWithSize(size)}
 }
+
+// NewSplitBatchWithSize reserves the independently encoded hot and history
+// records after a caller has classified the final batch contents. Sizes include
+// each engine's header and temporary encoding slack; an empty side uses zero.
+// Reservation only changes allocation, retaining the normal durability order.
+func (d *DirectHistoryStore) NewSplitBatchWithSize(hotSize, historySize int) ethdb.Batch {
+	newBatch := func(db ethdb.KeyValueStore, size int) ethdb.Batch {
+		if size > 0 {
+			return db.NewBatchWithSize(size)
+		}
+		return db.NewBatch()
+	}
+	return &directHistoryBatch{db: d, hot: newBatch(d.hot, hotSize), history: newBatch(d.history, historySize)}
+}
+
 func (d *DirectHistoryStore) SyncKeyValue() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

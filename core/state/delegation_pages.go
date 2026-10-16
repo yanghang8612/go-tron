@@ -36,6 +36,7 @@ func readPagedDelegationIndex(account []byte, get func([]byte) ([]byte, bool, er
 		pages    *[][][]byte
 		list     *[][]byte
 	}{{true, fromCount, &pages.from, &record.FromAccounts}, {false, toCount, &pages.to, &record.ToAccounts}} {
+		entries := 0
 		for i := uint64(0); i < dir.count; i++ {
 			data, ok, err := get(rawdb.DrAccountIndexLegacyPageStateKey(account, dir.incoming, i))
 			if err != nil {
@@ -48,8 +49,29 @@ func readPagedDelegationIndex(account []byte, get func([]byte) ([]byte, bool, er
 			if err != nil {
 				return nil, pages, true, fmt.Errorf("decode delegation page %d: %w", i, err)
 			}
+			// Include one spare header and reject arithmetic overflow before
+			// accumulating counts or computing the aggregate allocation size.
+			maxEntries := int(^uint(0)>>1)/24 - 1
+			if len(list) > maxEntries-entries {
+				return nil, pages, true, fmt.Errorf("delegation index entry count overflows addressable memory")
+			}
 			*dir.pages = append(*dir.pages, list)
-			*dir.list = append(*dir.list, list...)
+			entries += len(list)
+		}
+		if entries != 0 {
+			// Count actual decoded entries, including interior empty pages. Do
+			// not reserve from the untrusted descriptor's page count. Growing
+			// the aggregate once per page repeatedly copies large header arrays.
+			// Page and aggregate headers must stay separate: page removal and
+			// aggregate removal compact their respective arrays independently.
+			// Edge edits commonly append immediately after loading. A single
+			// spare header avoids copying the full aggregate on that append;
+			// cache admission already accounts for the complete capacity.
+			*dir.list = make([][]byte, entries, entries+1)
+			offset := 0
+			for _, page := range *dir.pages {
+				offset += copy((*dir.list)[offset:], page)
+			}
 		}
 	}
 	return record, pages, true, nil

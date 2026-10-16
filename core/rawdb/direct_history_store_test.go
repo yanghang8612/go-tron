@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -198,6 +199,14 @@ func (b *directRecordingBatch) Write() error {
 	return nil
 }
 func TestDirectHistoryWriteDurabilityOrder(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		t.Run(fmt.Sprintf("split=%t", split), func(t *testing.T) {
+			testDirectHistoryWriteDurabilityOrder(t, split)
+		})
+	}
+}
+
+func testDirectHistoryWriteDurabilityOrder(t *testing.T, split bool) {
 	sentinel := errors.New("injected")
 	for _, failure := range []string{"", "write", "sync"} {
 		t.Run(failure, func(t *testing.T) {
@@ -212,7 +221,12 @@ func TestDirectHistoryWriteDurabilityOrder(t *testing.T) {
 			}
 			db := NewDirectHistoryStore(hot, history)
 			defer db.Close()
-			batch := db.NewBatch()
+			var batch ethdb.Batch
+			if split {
+				batch = db.NewSplitBatchWithSize(128, 128)
+			} else {
+				batch = db.NewBatch()
+			}
 			defer batch.Close()
 			directTestPut(t, batch, headBlockKey, []byte("new"))
 			directTestPut(t, batch, stateChangeSetPrefix, []byte("new"))
@@ -310,6 +324,14 @@ func TestDirectHistorySnapshotCoherenceDuringMixedWrite(t *testing.T) {
 }
 
 func TestDirectHistoryPebbleReorgAndPointSnapshots(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		t.Run(fmt.Sprintf("split=%t", split), func(t *testing.T) {
+			testDirectHistoryPebbleReorgAndPointSnapshots(t, split)
+		})
+	}
+}
+
+func testDirectHistoryPebbleReorgAndPointSnapshots(t *testing.T, split bool) {
 	dir := t.TempDir()
 	hotPath, historyPath := filepath.Join(dir, "hot"), filepath.Join(dir, "history")
 	db := NewDirectHistoryStore(directTestPebble(t, hotPath), directTestPebble(t, historyPath))
@@ -328,7 +350,12 @@ func TestDirectHistoryPebbleReorgAndPointSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch := db.NewBatchWithSize(128)
+	var batch ethdb.Batch
+	if split {
+		batch = db.NewSplitBatchWithSize(128, 128)
+	} else {
+		batch = db.NewBatchWithSize(128)
+	}
 	strings := batch.(interface {
 		PutString(string, []byte) error
 		DeleteString(string) error
@@ -414,5 +441,77 @@ func TestDirectHistorySchemaConversionHelpers(t *testing.T) {
 	ranges[0].Start[0] ^= 0xff
 	if !IsDirectHistoryKey(DirectHistoryRanges()[0].Start) {
 		t.Fatal("ranges alias schema")
+	}
+}
+
+type directSizedBatchDB struct {
+	ethdb.KeyValueStore
+	sizes   []int
+	unsized int
+}
+
+func (d *directSizedBatchDB) NewBatch() ethdb.Batch {
+	d.unsized++
+	return d.KeyValueStore.NewBatch()
+}
+func (d *directSizedBatchDB) NewBatchWithSize(size int) ethdb.Batch {
+	d.sizes = append(d.sizes, size)
+	return d.KeyValueStore.NewBatchWithSize(size)
+}
+func TestDirectHistorySplitBatchSizeHints(t *testing.T) {
+	for _, sizes := range [][2]int{{12345, 67890}, {12345, 0}, {0, 67890}, {0, 0}} {
+		t.Run(fmt.Sprint(sizes), func(t *testing.T) {
+			hot := &directSizedBatchDB{KeyValueStore: NewMemoryDatabase()}
+			history := &directSizedBatchDB{KeyValueStore: NewMemoryDatabase()}
+			db := NewDirectHistoryStore(hot, history)
+			defer db.Close()
+			batch := db.NewSplitBatchWithSize(sizes[0], sizes[1])
+			defer batch.Close()
+			for side, engine := range []*directSizedBatchDB{hot, history} {
+				if sizes[side] > 0 {
+					if !reflect.DeepEqual(engine.sizes, []int{sizes[side]}) || engine.unsized != 0 {
+						t.Fatalf("side=%d sizes=%v unsized=%d", side, engine.sizes, engine.unsized)
+					}
+				} else if len(engine.sizes) != 0 || engine.unsized != 1 {
+					t.Fatalf("empty side=%d sizes=%v unsized=%d", side, engine.sizes, engine.unsized)
+				}
+			}
+			// Hints do not restrict routing, replay, or reuse, even if an initially
+			// empty side later receives records. Put still copies caller-owned bytes.
+			value := []byte("first")
+			directTestPut(t, batch, headBlockKey, value)
+			directTestPut(t, batch, stateChangeSetPrefix, value)
+			value[0] = 'X'
+			if batch.ValueSize() == 0 {
+				t.Fatal("empty logical size")
+			}
+			if err := batch.Write(); err != nil {
+				t.Fatal(err)
+			}
+			directTestRead(t, hot, headBlockKey, []byte("first"))
+			directTestRead(t, history, stateChangeSetPrefix, []byte("first"))
+			replay := NewMemoryDatabase()
+			defer replay.Close()
+			if err := batch.Replay(replay); err != nil {
+				t.Fatal(err)
+			}
+			directTestRead(t, replay, headBlockKey, []byte("first"))
+			directTestRead(t, replay, stateChangeSetPrefix, []byte("first"))
+			batch.Reset()
+			if batch.ValueSize() != 0 {
+				t.Fatal("reset logical size")
+			}
+			if err := batch.Delete(headBlockKey); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Delete(stateChangeSetPrefix); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Write(); err != nil {
+				t.Fatal(err)
+			}
+			directTestAbsent(t, hot, headBlockKey)
+			directTestAbsent(t, history, stateChangeSetPrefix)
+		})
 	}
 }

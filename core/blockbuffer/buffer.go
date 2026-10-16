@@ -2966,7 +2966,7 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	if batcher, ok := w.(ethdb.Batcher); ok {
 		_, encodedSize, _ := layerWriteStats(l)
-		batch := batcher.NewBatchWithSize(pebbleBatchHeaderSize + encodedSize + pebbleBatchRecordSlack)
+		batch := newFlushBatch(batcher, pebbleBatchHeaderSize+encodedSize, l, nil)
 		defer closeBatch(batch)
 		if err := writeLayerSorted(l, batch); err != nil {
 			return err
@@ -2974,6 +2974,54 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 		return batch.Write()
 	}
 	return writeLayer(l, w)
+}
+
+// newFlushBatch preserves exact final-size reservation through the optional
+// hot/history router. Only point-only groups use split sizing: range tombstones
+// can fan out into several records at schema boundaries and retain the existing
+// generic reservation path. All inputs remain pinned and immutable until write.
+func newFlushBatch(batcher ethdb.Batcher, encodedSize int, l *layer, merged *flushMergedOps) ethdb.Batch {
+	splitter, ok := batcher.(interface {
+		NewSplitBatchWithSize(hotSize, historySize int) ethdb.Batch
+	})
+	if !ok || l.hasRangeDeletes() {
+		return batcher.NewBatchWithSize(encodedSize + pebbleBatchRecordSlack)
+	}
+	historySize := 0
+	addHistory := func(key string, value []byte, deleted bool) {
+		if rawdb.IsDirectHistoryKey([]byte(key)) {
+			_, size := mergedLayerOpWriteStats(key, mergedLayerOp{value: value, delete: deleted})
+			historySize += size
+		}
+	}
+	if merged != nil {
+		for key, op := range merged.ops {
+			addHistory(key, op.value, op.delete)
+		}
+	} else {
+		for i := range l.shards {
+			s := &l.shards[i]
+			s.mu.RLock()
+			for key, value := range s.writes {
+				if durable, ok := s.durableWrites[key]; ok && bytes.Equal(durable, value) {
+					continue
+				}
+				addHistory(key, value, false)
+			}
+			for key := range s.deletes {
+				addHistory(key, nil, true)
+			}
+			s.mu.RUnlock()
+		}
+	}
+	hotSize := encodedSize - pebbleBatchHeaderSize - historySize
+	if hotSize > 0 {
+		hotSize += pebbleBatchHeaderSize + pebbleBatchRecordSlack
+	}
+	if historySize > 0 {
+		historySize += pebbleBatchHeaderSize + pebbleBatchRecordSlack
+	}
+	return splitter.NewSplitBatchWithSize(hotSize, historySize)
 }
 
 func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
@@ -3027,7 +3075,7 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 		// calculation. Allocate each bounded group at its FINAL encoded size plus
 		// the one-record scratch allowance so every batch performs one final
 		// allocation and no grow/copy cycle.
-		batch := batcher.NewBatchWithSize(group.outputEncoded + pebbleBatchRecordSlack)
+		batch := newFlushBatch(batcher, group.outputEncoded, layers[start], merged)
 		var writeErr error
 		if merged == nil {
 			writeErr = writeLayerSorted(layers[start], batch)
@@ -3338,6 +3386,11 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		plan.outputEncoded = pebbleBatchHeaderSize + outputRecords
 
 		for plan.end < len(layers) {
+			// Extension must preserve the same point-only boundary as the
+			// initial window; mergeLayers cannot represent range tombstones.
+			if layers[plan.end].hasRangeDeletes() {
+				break
+			}
 			next := sizes[plan.end]
 			if plan.inputValue+next.value > limits.mergeValue ||
 				plan.inputEncoded+next.encoded > limits.mergeEncoded {

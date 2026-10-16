@@ -22,6 +22,17 @@ KV snapshots, undo, generation changes and archive AsOf reads continue to own
 version semantics. Decoded caches must be invalidated by any anchor/page write,
 and cache hits must re-emit the dependencies needed by optimistic execution.
 
+Aggregate reconstruction reads and owns each page once in the original order,
+then allocates the number of headers required by its decoded entries, plus at
+most one spare header for an immediate append. Empty aggregates stay nil, and
+cache accounting includes the spare capacity. Entry totals are checked for
+overflow before accumulation and allocation.
+Descriptor page counts must not drive up-front allocation: malformed descriptors
+must still fail at the first missing or invalid page without reserving a huge
+directory. Page and aggregate header arrays remain independent because removal
+compacts each separately; address bytes retain their existing shared owned
+page arenas. This allocation change does not alter the decoded-cache budget.
+
 There is no aggregate-value runtime fallback and no latest-only conversion.
 Latest-only conversion would make earlier archive states unreadable in the new
 representation. This change requires a fresh database and genesis sync. Normal
