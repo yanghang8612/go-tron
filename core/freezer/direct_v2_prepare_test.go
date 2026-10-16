@@ -163,3 +163,45 @@ func BenchmarkDirectV2PreparedMigration(b *testing.B) {
 		})
 	}
 }
+
+// The reference decoder remains independently owned. Borrowing only changes
+// byte ownership within the direct transform's synchronous consumption scope.
+func TestDirectV2BorrowedDecodeKeepsReferenceSemantics(t *testing.T) {
+	chain := newDirectV2PreparedFixture(t, 2, 2)
+	defer chain.db.Close()
+	valid := chain.blockRaw[1]
+	unknown := append(bytes.Clone(valid), 0xf8, 0x07, 0x03) // unknown varint field127
+	// Transaction field6 predates PQAuthSig. Its invalid nested payload must
+	// retain the same historical fallback as the independently owned decoder.
+	legacy := append([]byte{0x0a, 0x03, 0x32, 0x01, 0xff}, valid...)
+	for name, raw := range map[string][]byte{"valid": valid, "unknown": unknown, "legacy": legacy, "malformed": {0x0a, 0xff}, "empty": nil} {
+		t.Run(name, func(t *testing.T) {
+			before := bytes.Clone(raw)
+			want, wantErr := decodeFreezerBlockRaw(1, raw)
+			if name == "legacy" && wantErr != nil {
+				t.Fatalf("legacy fixture did not exercise accepted fallback: %v", wantErr)
+			}
+			got, gotErr := decodeDirectV2BlockBorrowed(1, raw)
+			if (wantErr == nil) != (gotErr == nil) {
+				t.Fatalf("decoder error changed: %v/%v", wantErr, gotErr)
+			}
+			if wantErr != nil {
+				if wantErr.Error() != gotErr.Error() {
+					t.Fatalf("error changed: %v/%v", wantErr, gotErr)
+				}
+				return
+			}
+			wantWire, e := want.Marshal()
+			if e != nil {
+				t.Fatal(e)
+			}
+			gotWire, e := got.Marshal()
+			if e != nil {
+				t.Fatal(e)
+			}
+			if want.Hash() != got.Hash() || !bytes.Equal(wantWire, gotWire) || !bytes.Equal(before, raw) {
+				t.Fatal("decoded value or source bytes changed")
+			}
+		})
+	}
+}

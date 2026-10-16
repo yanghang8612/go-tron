@@ -8,7 +8,12 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const v2CompressionInputBytes = uint64(64 << 20)
+const (
+	v2CompressionInputBytes = uint64(64 << 20)
+	// Idle encoded destinations are additional to input buffers and in-flight
+	// compression results. This bounds only retained reusable output capacity.
+	v2CompressionOutputReuseBytes = uint64(32 << 20)
+)
 
 func v2CompressionWorkers() int {
 	return max(1, min(8, runtime.GOMAXPROCS(0)-1))
@@ -29,15 +34,48 @@ type v2EncodedFrame struct {
 }
 
 func encodeV2Frame(encoder *zstd.Encoder, raw v2RawFrame) v2EncodedFrame {
-	compressed := encoder.EncodeAll(raw.data, nil)
+	return encodeV2FrameInto(encoder, raw, nil)
+}
+
+func encodeV2FrameInto(encoder *zstd.Encoder, raw v2RawFrame, dst []byte) v2EncodedFrame {
+	compressed := encoder.EncodeAll(raw.data, dst[:0])
 	return v2EncodedFrame{first: raw.first, records: raw.records, rawBytes: uint64(len(raw.data)),
 		compressed: compressed, checksum: crc32.Checksum(compressed, v2CRC)}
 }
 
 type v2FrameEncodeJob struct {
 	raw       v2RawFrame
+	dst       []byte
 	footprint uint64
 	done      chan v2EncodedFrame
+}
+
+// v2FrameOutputPool is private to the ordered writer. It caps idle capacity,
+// not destinations leased to jobs or transient EncodeAll growth.
+type v2FrameOutputPool struct {
+	buffers [][]byte
+	bytes   uint64
+}
+
+func (p *v2FrameOutputPool) take() []byte {
+	if len(p.buffers) == 0 {
+		return nil
+	}
+	n := len(p.buffers) - 1
+	dst := p.buffers[n]
+	p.buffers[n] = nil
+	p.buffers = p.buffers[:n]
+	p.bytes -= uint64(cap(dst))
+	return dst[:0]
+}
+
+func (p *v2FrameOutputPool) put(dst []byte) {
+	size := uint64(cap(dst))
+	if size == 0 || size > v2CompressionOutputReuseBytes-p.bytes {
+		return
+	}
+	p.buffers = append(p.buffers, dst[:0])
+	p.bytes += size
 }
 
 // Read/transform and disk writes stay in one goroutine and preserve record
@@ -45,7 +83,8 @@ type v2FrameEncodeJob struct {
 // frame count and input allocation are bounded; encoded results are released
 // in source order. A frame exceeding the queue budget drains all prior work
 // and uses the primary encoder alone, keeping exceptional large frames from
-// expanding every worker's retained compression workspace.
+// expanding every worker's retained compression workspace. The write callback
+// synchronously consumes compressed bytes; they are borrowed only until it returns.
 func writeV2FramePipeline(workers int, frames uint64, primary *zstd.Encoder, newEncoder func() (*zstd.Encoder, error), read func([]byte) (v2RawFrame, error), write func(v2EncodedFrame) error) error {
 	return writeV2FramePipelineWithCheckpoint(workers, frames, primary, newEncoder, read, write, 0, nil)
 }
@@ -78,7 +117,7 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 					return
 				default:
 				}
-				encoded := encodeV2Frame(encoder, job.raw)
+				encoded := encodeV2FrameInto(encoder, job.raw, job.dst)
 				job.done <- encoded
 			}
 		}(i)
@@ -88,6 +127,9 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 	var inputBytes uint64
 	var reusable [][]byte
 	var reusableBytes uint64
+	// Only the ordered writer accesses this pool. A job exclusively owns its
+	// destination until write returns successfully; workers never recycle it.
+	var reusableOutput v2FrameOutputPool
 	drain := func() error {
 		job := pending[0]
 		encoded := <-job.done
@@ -97,6 +139,9 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 		if err := write(encoded); err != nil {
 			return err
 		}
+		job.dst = nil
+		reusableOutput.put(encoded.compressed)
+		encoded.compressed = nil
 		if job.footprint <= v2CompressionInputBytes-reusableBytes {
 			reusable = append(reusable, job.raw.data[:0])
 			reusableBytes += job.footprint
@@ -151,7 +196,8 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 			}
 			continue
 		}
-		job := &v2FrameEncodeJob{raw: raw, footprint: footprint, done: make(chan v2EncodedFrame, 1)}
+		dst := reusableOutput.take()
+		job := &v2FrameEncodeJob{raw: raw, dst: dst, footprint: footprint, done: make(chan v2EncodedFrame, 1)}
 		pending = append(pending, job)
 		inputBytes += footprint
 		jobs <- job

@@ -7,6 +7,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
 )
 
 func directV2PreparationWorkers() int {
@@ -34,13 +35,13 @@ func directV2Transform(ctx context.Context, start uint64, hashes []tcommon.Hash,
 		}
 		switch kind {
 		case rawdbAncientBlocks:
-			block, err := decodeFreezerBlockRaw(number, data)
+			block, err := decodeDirectV2BlockBorrowed(number, data)
 			if err != nil {
 				return nil, err
 			}
 			hashes[number-start] = block.Hash()
 		case rawdbAncientTxInfos:
-			block, err := decodeFreezerBlockRaw(number, body)
+			block, err := decodeDirectV2BlockBorrowed(number, body)
 			if err != nil {
 				return nil, err
 			}
@@ -56,4 +57,19 @@ func directV2Transform(ctx context.Context, start uint64, hashes []tcommon.Hash,
 		}
 		return compact(kind, number, data, body)
 	}
+}
+
+// A direct transform consumes the block synchronously while its source bytes
+// remain immutable. Parallel preparation already owns both body and data; the
+// serial dictionary/verification paths finish before another source read.
+// Keep the complete decoder, including malformed and pre-PQ legacy fallback.
+func decodeDirectV2BlockBorrowed(blockNum uint64, raw []byte) (*coretypes.Block, error) {
+	block, err := coretypes.UnmarshalBlockBorrowed(raw)
+	if err != nil {
+		return nil, fmt.Errorf("freezer: decode block %d: %w", blockNum, err)
+	}
+	if block.Number() != blockNum {
+		return nil, fmt.Errorf("freezer: block row %d contains block number %d", blockNum, block.Number())
+	}
+	return block, nil
 }

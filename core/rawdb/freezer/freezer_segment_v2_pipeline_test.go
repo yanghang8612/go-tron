@@ -44,7 +44,7 @@ func TestV2ParallelFramesMatchSerialLayoutAndAllRecords(t *testing.T) {
 			for _, pair := range []struct {
 				path    string
 				workers int
-			}{{serial, 1}, {parallel, 4}} {
+			}{{serial, 1}, {parallel, 8}} {
 				if err := writeV2SegmentProfileWithWorkers(pair.path, 0, uint64(len(rows)), 8, codec, zstd.SpeedBetterCompression, read, read, pair.workers); err != nil {
 					t.Fatal(err)
 				}

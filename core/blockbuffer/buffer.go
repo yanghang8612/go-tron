@@ -2862,6 +2862,9 @@ func (b *Buffer) FlushUpTo(
 ) error {
 	b.flushMu.Lock()
 	defer b.flushMu.Unlock()
+	flushCallAttempts.Inc(1)
+	var call flushCallObservation
+	defer call.publish()
 
 	// Step 1: mark the exact committed prefix before any batch can write to
 	// it. The write lock waits for an already-running batch's writes to finish,
@@ -2876,6 +2879,8 @@ func (b *Buffer) FlushUpTo(
 		}
 		eligible++
 	}
+	call.eligibleLayers = eligible
+	call.solidCutoff = eligible < len(snapshot)
 	if eligible == 0 {
 		b.mu.Unlock()
 		return nil
@@ -2917,7 +2922,8 @@ func (b *Buffer) FlushUpTo(
 			b.promoteBaseReadCacheMerged(merged)
 		}
 	}
-	flushed, err := flushLayersObserved(snapshot[:eligible], w, observe)
+	flushed, err := flushLayersObservedWithStats(snapshot[:eligible], w, observe, &call)
+	call.failed = err != nil
 	if err != nil {
 		// A failed batch may have been applied partially by the backend. Clear the
 		// whole cache rather than guessing which base values became durable.
@@ -3034,6 +3040,10 @@ func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
 type flushGroupObserver func(group []*layer, merged *flushMergedOps)
 
 func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushGroupObserver) (int, error) {
+	return flushLayersObservedWithStats(layers, w, observe, nil)
+}
+
+func flushLayersObservedWithStats(layers []*layer, w ethdb.KeyValueWriter, observe flushGroupObserver, call *flushCallObservation) (int, error) {
 	if len(layers) == 0 {
 		return 0, nil
 	}
@@ -3052,10 +3062,16 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 		return flushed, nil
 	}
 
+	if call != nil {
+		call.batched = true
+	}
 	sizes := make([]layerBatchSize, len(layers))
 	for i, l := range layers {
 		valueSize, encodedSize, ops := layerWriteStats(l)
 		sizes[i] = layerBatchSize{value: valueSize, encoded: encodedSize, ops: ops}
+		if call != nil {
+			call.inputEncoded += int64(encodedSize)
+		}
 	}
 
 	flushed := 0
@@ -3068,6 +3084,7 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 		})
 		end := group.end
 		merged := group.merged
+		observeFlushPlan(&group, end-start, false)
 
 		// Pebble deliberately drops buffers larger than batchMaxRetainedSize on
 		// Reset. Reusing one large batch therefore made every group after the
@@ -3091,6 +3108,11 @@ func flushLayersObserved(layers []*layer, w ethdb.KeyValueWriter, observe flushG
 			closeBatch(batch)
 			returnFlushMergedOps(merged)
 			return flushed, err
+		}
+		observeFlushPlan(&group, end-start, true)
+		if call != nil {
+			call.groups++
+			call.outputEncoded += int64(group.outputEncoded - pebbleBatchHeaderSize)
 		}
 		if flushPhysicalFamilySampleSequence.Add(1)%flushPhysicalFamilySampleInterval == 1 {
 			var families flushPhysicalFamilyStats
@@ -3325,6 +3347,9 @@ type flushGroupPlan struct {
 	outputEncoded  int
 	extendedLayers int
 	merged         *flushMergedOps
+	stopReason     flushStopReason
+	capHits        uint8
+	oversize       bool
 }
 
 // selectFlushGroup first builds the conventional source window bounded by the
@@ -3355,6 +3380,8 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		plan.inputOps = next.ops
 		plan.outputValue = next.value
 		plan.outputEncoded = pebbleBatchHeaderSize + next.encoded
+		plan.stopReason = flushStopOwnRange
+		plan.oversize = plan.outputValue > limits.batchValue || plan.outputEncoded > limits.batchEncoded
 		return plan
 	}
 	for plan.end < len(layers) {
@@ -3375,6 +3402,19 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		}
 	}
 	baseEnd := plan.end
+	if plan.end < len(layers) {
+		if layers[plan.end].hasRangeDeletes() {
+			plan.stopReason = flushStopNextRange
+		} else {
+			plan.stopReason = flushStopSourceCap
+			if plan.inputValue+sizes[plan.end].value > limits.mergeValue {
+				plan.capHits |= flushCapSourceValue
+			}
+			if plan.inputEncoded+sizes[plan.end].encoded > limits.mergeEncoded {
+				plan.capHits |= flushCapSourceEncoded
+			}
+		}
+	}
 	canProbeExtension := plan.end < len(layers) && !layers[plan.end].hasRangeDeletes() &&
 		plan.inputValue+sizes[plan.end].value <= limits.mergeValue &&
 		plan.inputEncoded+sizes[plan.end].encoded <= limits.mergeEncoded
@@ -3385,20 +3425,41 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		plan.outputValue = outputValue
 		plan.outputEncoded = pebbleBatchHeaderSize + outputRecords
 
+		// The initial-window boundary is provisional; only the extension
+		// decision (or exhaustion) describes the final group stop.
+		plan.stopReason = flushStopSelectedEnd
+		plan.capHits = 0
 		for plan.end < len(layers) {
 			// Extension must preserve the same point-only boundary as the
 			// initial window; mergeLayers cannot represent range tombstones.
 			if layers[plan.end].hasRangeDeletes() {
+				plan.stopReason = flushStopNextRange
 				break
 			}
 			next := sizes[plan.end]
-			if plan.inputValue+next.value > limits.mergeValue ||
-				plan.inputEncoded+next.encoded > limits.mergeEncoded {
+			sourceValue := plan.inputValue+next.value > limits.mergeValue
+			sourceEncoded := plan.inputEncoded+next.encoded > limits.mergeEncoded
+			if sourceValue || sourceEncoded {
+				plan.stopReason = flushStopSourceCap
+				if sourceValue {
+					plan.capHits |= flushCapSourceValue
+				}
+				if sourceEncoded {
+					plan.capHits |= flushCapSourceEncoded
+				}
 				break
 			}
 			valueDelta, encodedDelta := mergedLayerSizeDelta(layers[plan.end], plan.merged.ops)
-			if plan.outputValue+valueDelta > limits.batchValue ||
-				plan.outputEncoded+encodedDelta > limits.batchEncoded {
+			finalValue := plan.outputValue+valueDelta > limits.batchValue
+			finalEncoded := plan.outputEncoded+encodedDelta > limits.batchEncoded
+			if finalValue || finalEncoded {
+				plan.stopReason = flushStopFinalCap
+				if finalValue {
+					plan.capHits |= flushCapFinalValue
+				}
+				if finalEncoded {
+					plan.capHits |= flushCapFinalEncoded
+				}
 				break
 			}
 			mergeLayers(layers[plan.end:plan.end+1], plan.merged)
@@ -3417,6 +3478,7 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		plan.outputValue = plan.inputValue
 		plan.outputEncoded = plan.inputEncoded
 	}
+	plan.oversize = plan.outputValue > limits.batchValue || plan.outputEncoded > limits.batchEncoded
 	return plan
 }
 

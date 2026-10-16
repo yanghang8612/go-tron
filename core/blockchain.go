@@ -2454,10 +2454,12 @@ func (bc *BlockChain) startFlushWorker() {
 // controllable channel to pin the delayed-arrival behaviour without sleeping.
 func collectFlushCutoffs(queue <-chan uint64, cutoff uint64, wait <-chan time.Time) (uint64, int, bool) {
 	pending := 1
+	collectionEnd := flushCollectionQueued
 	for wait != nil {
 		select {
 		case next, ok := <-queue:
 			if !ok {
+				flushCollectionCounters[flushCollectionClosed].Inc(1)
 				return cutoff, pending, true
 			}
 			pending++
@@ -2465,12 +2467,14 @@ func collectFlushCutoffs(queue <-chan uint64, cutoff uint64, wait <-chan time.Ti
 				cutoff = next
 			}
 		case <-wait:
+			collectionEnd = flushCollectionTimeout
 			wait = nil
 		}
 	}
 	for queued := len(queue); queued > 0; queued-- {
 		next, ok := <-queue
 		if !ok {
+			flushCollectionCounters[flushCollectionClosed].Inc(1)
 			return cutoff, pending, true
 		}
 		pending++
@@ -2478,6 +2482,7 @@ func collectFlushCutoffs(queue <-chan uint64, cutoff uint64, wait <-chan time.Ti
 			cutoff = next
 		}
 	}
+	flushCollectionCounters[collectionEnd].Inc(1)
 	return cutoff, pending, false
 }
 
@@ -2531,6 +2536,7 @@ func (bc *BlockChain) postFlush(solidified int64) error {
 	cutoff := uint64(solidified)
 	bc.flushPending.post()
 	if bc.flushClosed || bc.flushQueue == nil {
+		flushInlineUnavailable.Inc(1)
 		bc.runFlushCutoff(cutoff)
 		if errPtr := bc.flushErr.Load(); errPtr != nil {
 			return *errPtr
@@ -2541,6 +2547,7 @@ func (bc *BlockChain) postFlush(solidified int64) error {
 	case bc.flushQueue <- cutoff:
 		return nil
 	default:
+		flushInlineFull.Inc(1)
 		// Queue full: drop back to sync flush. runFlushCutoff balances
 		// the Add(1) above via its deferred Done().
 		bc.runFlushCutoff(cutoff)
