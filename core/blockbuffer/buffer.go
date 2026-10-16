@@ -750,9 +750,10 @@ type Buffer struct {
 // overlay; advertising explicit failure is safer than accidentally mutating a
 // snapshot if that invariant ever changes.
 type ReadSnapshot struct {
-	view   *bufferReadView
-	base   pointread.KeyValueSnapshot
-	closed atomic.Bool
+	view        *bufferReadView
+	base        pointread.KeyValueSnapshot
+	historyOnly bool
+	closed      atomic.Bool
 }
 
 var _ ethdb.KeyValueReader = (*ReadSnapshot)(nil)
@@ -775,7 +776,7 @@ func (b *Buffer) NewReadSnapshot() (*ReadSnapshot, error) {
 // b.mu and the base snapshot can still wait. The caller retains the same
 // external single-writer capture requirement as NewReadSnapshot.
 func (b *Buffer) TryNewReadSnapshot() (*ReadSnapshot, error) {
-	return b.captureReadSnapshot(nil, true)
+	return b.captureReadSnapshot(nil, true, false)
 }
 
 // NewReadSnapshotThrough captures the durable base plus committed buffer
@@ -792,15 +793,15 @@ func (b *Buffer) NewReadSnapshotThrough(maxBlock uint64) (*ReadSnapshot, error) 
 }
 
 func (b *Buffer) newReadSnapshot(maxBlock *uint64) (*ReadSnapshot, error) {
-	return b.captureReadSnapshot(maxBlock, false)
+	return b.captureReadSnapshot(maxBlock, false, false)
 }
 
-func (b *Buffer) captureReadSnapshot(maxBlock *uint64, try bool) (*ReadSnapshot, error) {
+func (b *Buffer) captureReadSnapshot(maxBlock *uint64, try, historyOnly bool) (*ReadSnapshot, error) {
 	if b == nil || b.base == nil {
 		return nil, ErrReadSnapshotUnsupported
 	}
 	factory, ok := b.base.(pointread.KeyValueSnapshotter)
-	if !ok {
+	if !ok && !historyOnly {
 		return nil, ErrReadSnapshotUnsupported
 	}
 
@@ -812,14 +813,20 @@ func (b *Buffer) captureReadSnapshot(maxBlock *uint64, try bool) (*ReadSnapshot,
 		b.flushMu.Lock()
 	}
 	b.mu.RLock()
-	base, err := factory.NewKeyValueSnapshot()
+	var base pointread.KeyValueSnapshot
+	var err error
+	if historyOnly {
+		base, err = newStateHistoryReadBase(b.base)
+	} else {
+		base, err = factory.NewKeyValueSnapshot()
+	}
 	if err != nil {
 		b.mu.RUnlock()
 		b.flushMu.Unlock()
 		// Wrappers may expose the optional factory even when their underlying
 		// store cannot pin a view. Preserve the existing locked-read fallback
 		// only for that explicit capability error, never for a real failure.
-		if errors.Is(err, pointread.ErrKeyValueSnapshotUnsupported) {
+		if !historyOnly && errors.Is(err, pointread.ErrKeyValueSnapshotUnsupported) {
 			return nil, errors.Join(ErrReadSnapshotUnsupported, err)
 		}
 		return nil, err
@@ -845,10 +852,13 @@ func (b *Buffer) captureReadSnapshot(maxBlock *uint64, try bool) (*ReadSnapshot,
 	}
 	b.mu.RUnlock()
 	b.flushMu.Unlock()
-	return &ReadSnapshot{view: view, base: base}, nil
+	return &ReadSnapshot{view: view, base: base, historyOnly: historyOnly}, nil
 }
 
 func (s *ReadSnapshot) GetWithPresence(key []byte) ([]byte, bool, error) {
+	if s != nil && s.historyOnly && !rawdb.IsDirectHistoryKey(key) {
+		return nil, false, rawdb.ErrStateHistorySnapshotScope
+	}
 	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
 		return nil, false, nil
 	}
@@ -882,6 +892,9 @@ func (s *ReadSnapshot) IsKeyNotFound(err error) bool {
 }
 
 func (s *ReadSnapshot) Has(key []byte) (bool, error) {
+	if s != nil && s.historyOnly && !rawdb.IsDirectHistoryKey(key) {
+		return false, rawdb.ErrStateHistorySnapshotScope
+	}
 	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
 		return false, nil
 	}
@@ -908,6 +921,9 @@ func (*ReadSnapshot) Delete([]byte) error {
 }
 
 func (s *ReadSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if s != nil && s.historyOnly && !rawdb.IsDirectHistoryPrefix(prefix) {
+		return &bufferIterator{err: rawdb.ErrStateHistorySnapshotScope}
+	}
 	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
 		return &bufferIterator{err: ErrNotFound}
 	}
@@ -922,6 +938,9 @@ func (s *ReadSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
 }
 
 func (s *ReadSnapshot) SeekPrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	if s != nil && s.historyOnly && !rawdb.IsDirectHistoryPrefix(prefix) {
+		return nil, nil, false, rawdb.ErrStateHistorySnapshotScope
+	}
 	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
 		return nil, nil, false, ErrNotFound
 	}
@@ -940,6 +959,9 @@ func (s *ReadSnapshot) SeekPrefix(prefix, start []byte) (key, value []byte, ok b
 // no overlay-only rows. Keeping this separate from SeekPrefix makes bypassing
 // the logical overlay an explicit, auditable choice by the accessor.
 func (s *ReadSnapshot) SeekDurablePrefix(prefix, start []byte) (key, value []byte, ok bool, err error) {
+	if s != nil && s.historyOnly && !rawdb.IsDirectHistoryPrefix(prefix) {
+		return nil, nil, false, rawdb.ErrStateHistorySnapshotScope
+	}
 	if s == nil || s.closed.Load() || s.base == nil {
 		return nil, nil, false, ErrNotFound
 	}
@@ -950,6 +972,9 @@ func (s *ReadSnapshot) SeekDurablePrefix(prefix, start []byte) (key, value []byt
 }
 
 func (s *ReadSnapshot) NewStateKVLatestIterator(schemaPrefix []byte, accountID common.AccountID, physicalPrefix []byte) ethdb.Iterator {
+	if s != nil && s.historyOnly {
+		return &bufferIterator{err: rawdb.ErrStateHistorySnapshotScope}
+	}
 	if s == nil || s.closed.Load() || s.view == nil || s.base == nil {
 		return &bufferIterator{err: ErrNotFound}
 	}

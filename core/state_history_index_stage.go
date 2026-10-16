@@ -227,7 +227,10 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 			return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: range [%d,%d] lacks hot source: %w", fromBlock, toBlock, err)
 		}
 	} else {
-		snapshot, snapshotErr = bc.buffer.NewReadSnapshotThrough(toBlock)
+		// ETL reads only changesets, shared chunks and tx ranges. Canonical
+		// hashes are verified through bc.readCanonicalHashStrict below. Avoid
+		// fixing an unused hot MVCC sequence during the entire index pass.
+		snapshot, snapshotErr = bc.buffer.NewStateHistoryReadSnapshotThrough(toBlock)
 	}
 	if releasePublication != nil {
 		releasePublication()
