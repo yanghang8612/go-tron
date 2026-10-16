@@ -15,6 +15,7 @@ func NewDirectHistoryPebbleDB(path string, cache, handles int, readOnly bool) (e
 		return nil, errors.New("rawdb: invalid direct history database options")
 	}
 	tune := pebbledb.DefaultOptions()
+	tune.EnableL6Filter = false
 	tune.MemTableSizeBytes = 128 << 20
 	tune.MaxConcurrentCompactions = 2
 	if !readOnly {

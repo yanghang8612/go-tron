@@ -190,6 +190,10 @@ func sameBatchBacking(data, pooled []byte) bool {
 // (cache, handles) surface. Callers can leave fields at their zero value to
 // pick the package defaults documented on each field.
 type Options struct {
+	// EnableL6Filter writes Bloom filters into new L6 tables. Reading them is
+	// separately enabled for unbounded cursors (currently used by state prefetch).
+	EnableL6Filter bool
+
 	// MemTableSizeBytes controls the size of an individual memtable / write
 	// buffer. Larger memtables produce fewer (but bigger) L0 SSTables, which
 	// trades write-burst smoothing for higher per-flush cost. Default: 256 MiB.
@@ -577,7 +581,7 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 			// State-prefetch cursors were already eager. Pin their Get readState
 			// here as well; bounded commitment cursors remain lazy.
 			var err error
-			cursor.getCursor, err = s.snapshot.NewGetCursor()
+			cursor.getCursor, err = s.snapshot.NewGetCursorWithOptions(pebble.GetCursorOptions{UseL6Filters: true})
 			if err != nil {
 				return nil, err
 			}
@@ -913,8 +917,8 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
 		// Full-sync state writes benefit from fewer, larger SSTables. Bloom
-		// filters remain enabled through L5; as before, L6 omits one because
-		// Pebble does not use it for read efficiency there.
+		// filters remain enabled through L5. L6 filters are a separate writer
+		// option for the state-prefetch reader; ordinary Get ignores them.
 		Levels:           levelOptions(tune.TargetFileSizeBytes),
 		ReadOnly:         readonly,
 		ErrorIfNotExists: readonly,
@@ -962,6 +966,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	// either L0 read amplification or total debt becomes substantial.
 	opt.Experimental.L0CompactionConcurrency = l0CompactionConcurrency
 	opt.Experimental.CompactionDebtConcurrency = compactionDebtConcurrency
+	if tune.EnableL6Filter {
+		opt.Levels[6].FilterPolicy = bloom.FilterPolicy(10)
+	}
 	opt.DisableAutomaticCompactions = tune.DisableAutomaticCompactions
 	if tune.MaxConcurrentCompactions > 0 {
 		opt.MaxConcurrentCompactions = func() int { return tune.MaxConcurrentCompactions }

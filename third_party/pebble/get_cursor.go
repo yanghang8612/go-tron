@@ -37,17 +37,18 @@ type GetCursorStats struct {
 // and Close do not re-report an error already delivered by an earlier operation;
 // Close reports fresh cleanup failures and releases every resource.
 type GetCursor struct {
-	db         *DB
-	seqNum     uint64
-	readState  *readState
-	tableIters tableNewIters
-	iter       *Iterator
-	active     bool
-	closed     bool
-	err        error
-	clock      uint64
-	tables     [getCursorTableLimit]getCursorTable
-	stats      GetCursorStats
+	db           *DB
+	seqNum       uint64
+	readState    *readState
+	tableIters   tableNewIters
+	iter         *Iterator
+	active       bool
+	closed       bool
+	err          error
+	clock        uint64
+	tables       [getCursorTableLimit]getCursorTable
+	stats        GetCursorStats
+	useL6Filters bool
 }
 
 type getCursorTable struct {
@@ -76,16 +77,30 @@ type getCursorRangeDelIter struct{ keyspan.FragmentIterator }
 
 func (i *getCursorRangeDelIter) Close() error { return i.Error() }
 
-// NewGetCursor opens a bounded cursor without reading any SST. Only Snapshot
-// exposes this API; ordinary DB.Get and Batch.Get remain unchanged.
+// GetCursorOptions fixes optional read policy for one snapshot-scoped cursor.
+// Zero values preserve the default Get behavior.
+type GetCursorOptions struct {
+	// UseL6Filters checks existing L6 point-key Bloom filters. Missing filters
+	// fall back to ordinary lookup. Range deletions remain independently read.
+	UseL6Filters bool
+}
+
+// NewGetCursor opens a cursor with the default Get read policy, without SST IO.
+// Ordinary DB.Get and Batch.Get remain unchanged.
 func (s *Snapshot) NewGetCursor() (*GetCursor, error) {
+	return s.NewGetCursorWithOptions(GetCursorOptions{})
+}
+
+// NewGetCursorWithOptions opens a cursor with immutable read options. It does
+// not read an SST until the first Get.
+func (s *Snapshot) NewGetCursorWithOptions(opts GetCursorOptions) (*GetCursor, error) {
 	if s.db == nil {
 		return nil, ErrClosed
 	}
 	if err := s.db.closed.Load(); err != nil {
 		return nil, ErrClosed
 	}
-	c := &GetCursor{db: s.db, seqNum: s.seqNum, readState: s.db.loadReadState()}
+	c := &GetCursor{db: s.db, seqNum: s.seqNum, readState: s.db.loadReadState(), useL6Filters: opts.UseL6Filters}
 	c.tableIters = c.newIters
 	return c, nil
 }
@@ -109,7 +124,7 @@ func (c *GetCursor) Get(key []byte) ([]byte, error) {
 	*get = getIter{
 		logger: c.db.opts.Logger, comparer: c.db.opts.Comparer, newIters: c.tableIters,
 		snapshot: c.seqNum, key: key, mem: c.readState.memtables,
-		l0: c.readState.current.L0SublevelFiles, version: c.readState.current,
+		l0: c.readState.current.L0SublevelFiles, version: c.readState.current, useL6Filters: c.useL6Filters,
 	}
 	// Mutable memtables may receive writes after cursor construction. Preserve
 	// Get's sequence filtering rather than treating their contents as immutable.
@@ -212,7 +227,7 @@ func (c *GetCursor) newIters(ctx context.Context, file *manifest.FileMetadata,
 	// cached iterator configured for different bounds, filters or statistics.
 	compatible := opts != nil && opts.snapshotForHideObsoletePoints == c.seqNum &&
 		opts.LowerBound == nil && opts.UpperBound == nil && opts.TableFilter == nil && opts.SkipPoint == nil &&
-		len(opts.PointKeyFilters) == 0 && len(opts.RangeKeyFilters) == 0 && !opts.UseL6Filters &&
+		len(opts.PointKeyFilters) == 0 && len(opts.RangeKeyFilters) == 0 && opts.UseL6Filters == (c.useL6Filters && manifest.LevelToInt(opts.level) == numLevels-1) &&
 		opts.KeyTypes == IterKeyTypePointsOnly && !opts.OnlyReadGuaranteedDurable && !opts.disableLazyCombinedIteration &&
 		internalOpts.bytesIterated == nil && internalOpts.bufferPool == nil && internalOpts.stats == nil && internalOpts.boundLimitedFilter == nil
 	if compatible {

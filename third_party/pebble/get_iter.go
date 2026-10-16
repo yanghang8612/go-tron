@@ -41,6 +41,7 @@ type getIter struct {
 	// Retained SST iterators never borrow this context; levelIter owns the
 	// reference and the complete allocation is cleared by Iterator.Close.
 	boundaryContext levelIterBoundaryContext
+	useL6Filters    bool
 }
 
 // TODO(sumeer): CockroachDB code doesn't use getIter, but, for completeness,
@@ -163,7 +164,7 @@ func (g *getIter) Next() (*InternalKey, base.LazyValue) {
 			if n := len(g.l0); n > 0 {
 				files := g.l0[n-1].Iter()
 				g.l0 = g.l0[:n-1]
-				iterOpts := IterOptions{logger: g.logger, snapshotForHideObsoletePoints: g.snapshot}
+				iterOpts := IterOptions{logger: g.logger, snapshotForHideObsoletePoints: g.snapshot, UseL6Filters: g.useL6Filters && g.level == numLevels-1}
 				g.levelIter.init(context.Background(), iterOpts, g.comparer, g.newIters,
 					files, manifest.L0Sublevel(n), internalIterOpts{})
 				g.levelIter.initRangeDel(&g.rangeDelIter)
@@ -196,7 +197,7 @@ func (g *getIter) Next() (*InternalKey, base.LazyValue) {
 			continue
 		}
 
-		iterOpts := IterOptions{logger: g.logger, snapshotForHideObsoletePoints: g.snapshot}
+		iterOpts := IterOptions{logger: g.logger, snapshotForHideObsoletePoints: g.snapshot, UseL6Filters: g.useL6Filters && g.level == numLevels-1}
 		g.levelIter.init(context.Background(), iterOpts, g.comparer, g.newIters,
 			g.version.Levels[g.level].Iter(), manifest.Level(g.level), internalIterOpts{})
 		g.levelIter.initRangeDel(&g.rangeDelIter)

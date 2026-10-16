@@ -63,7 +63,7 @@ func (bc *BlockChain) HistoryStagingManager() *rawdb.HistoryStagingManager {
 }
 
 // AcquireStateHistorySourceView pins the history-source generation used by a
-// cold build. The short chain lock serializes the hot snapshot with the route
+// cold build. The short chain lock serializes the history-source snapshot with the route
 // lease; the returned view stays fixed while the costly build runs unlocked.
 func (bc *BlockChain) AcquireStateHistorySourceView(ctx context.Context) (snapshots.AggregatorDB, func() error, error) {
 	if bc == nil || bc.db == nil {
@@ -114,7 +114,7 @@ func (bc *BlockChain) AcquireStateHistorySourceView(ctx context.Context) (snapsh
 		}
 		return stagedHistorySourceView{AggregatorDB: view, manifest: manifest}, view.Close, nil
 	}
-	view, closeView, err := rawdb.AcquireStateHistoryReadView(bc.db)
+	view, closeView, err := rawdb.AcquireStateHistoryBuildReadView(bc.db)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -485,6 +485,73 @@ func (d *DirectHistoryStore) NewKeyValueSnapshot() (pointread.KeyValueSnapshot, 
 	}
 	return &directHistorySnapshot{hot: hot, history: history}, nil
 }
+
+// NewStateHistoryReadSnapshot pins only history, under the same mutation lock
+// as mixed writes. Cold history builders never read hot canonical/latest rows.
+// Keep the general snapshot factory above dual-engine and scope this view so
+// accidental hot reads fail rather than silently observing missing data.
+func (d *DirectHistoryStore) NewStateHistoryReadSnapshot() (pointread.KeyValueSnapshot, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	factory, ok := d.history.(pointread.KeyValueSnapshotter)
+	if !ok {
+		return nil, pointread.ErrKeyValueSnapshotUnsupported
+	}
+	snapshot, err := factory.NewKeyValueSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	if snapshot == nil {
+		return nil, errors.New("rawdb: history partition snapshot factory returned nil")
+	}
+	if marker, ok := snapshot.(pointread.PinnedKeyValueView); !ok || !marker.IsPinnedKeyValueView() {
+		return nil, errors.Join(errors.New("rawdb: history partition snapshot is not pinned"), snapshot.Close())
+	}
+	return &directHistoryReadSnapshot{source: snapshot}, nil
+}
+
+// ErrStateHistorySnapshotScope identifies an attempted non-history read through
+// the explicitly restricted cold-source view.
+var ErrStateHistorySnapshotScope = errors.New("rawdb: read outside history snapshot partition")
+
+type directHistoryReadSnapshot struct{ source pointread.KeyValueSnapshot }
+
+func (s *directHistoryReadSnapshot) Get(key []byte) ([]byte, error) {
+	if !IsDirectHistoryKey(key) {
+		return nil, ErrStateHistorySnapshotScope
+	}
+	return s.source.Get(key)
+}
+func (s *directHistoryReadSnapshot) Has(key []byte) (bool, error) {
+	if !IsDirectHistoryKey(key) {
+		return false, ErrStateHistorySnapshotScope
+	}
+	return s.source.Has(key)
+}
+func (s *directHistoryReadSnapshot) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if history, exclusive := directHistoryPrefixPartition(prefix); !history || !exclusive {
+		return &stateHistoryErrorIterator{err: ErrStateHistorySnapshotScope}
+	}
+	return s.source.NewIterator(prefix, start)
+}
+func (s *directHistoryReadSnapshot) SeekPrefix(prefix, start []byte) ([]byte, []byte, bool, error) {
+	if history, exclusive := directHistoryPrefixPartition(prefix); !history || !exclusive {
+		return nil, nil, false, ErrStateHistorySnapshotScope
+	}
+	if seeker, ok := s.source.(pointread.PrefixSeeker); ok {
+		return seeker.SeekPrefix(prefix, start)
+	}
+	return directHistorySeek(s, prefix, start)
+}
+func (s *directHistoryReadSnapshot) Close() error             { return s.source.Close() }
+func (*directHistoryReadSnapshot) IsPinnedKeyValueView() bool { return true }
+func (s *directHistoryReadSnapshot) GetReturnsOwnedBytes() bool {
+	return directHistoryOwned(s.source)
+}
+func (s *directHistoryReadSnapshot) ConcurrentOwnedHistoryReads() bool {
+	reader, ok := s.source.(pointread.ConcurrentOwnedKeyValueView)
+	return ok && reader.ConcurrentOwnedHistoryReads()
+}
 func (s *directHistorySnapshot) reader(key []byte) pointread.KeyValueSnapshot {
 	if IsDirectHistoryKey(key) {
 		return s.history

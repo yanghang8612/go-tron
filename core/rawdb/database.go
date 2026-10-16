@@ -34,12 +34,16 @@ type PebbleOptions = pebbledb.Options
 // MemTableStopWritesThreshold=8, the per-level TargetFileSize ramp, bloom
 // filters, and the metrics surface — matches the upstream go-ethereum wrapper.
 func NewPebbleDB(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
-	return NewPebbleDBWithOptions(path, cache, handles, pebbledb.DefaultOptions())
+	return NewPebbleDBWithOptions(path, cache, handles, DefaultPebbleOptions())
 }
 
 // DefaultPebbleOptions returns the production defaults used by NewPebbleDB.
 func DefaultPebbleOptions() PebbleOptions {
-	return pebbledb.DefaultOptions()
+	tune := pebbledb.DefaultOptions()
+	// Only normal hot defaults produce L6 filters. Direct history and staging
+	// constructors use the unmodified lower-level defaults.
+	tune.EnableL6Filter = true
+	return tune
 }
 
 // NewPebbleDBWithOptions opens a Pebble database with explicit cache, handle,
@@ -69,6 +73,7 @@ func NewHistoryStagingPebbleDB(path string, cache int, handles int, readOnly boo
 		return nil, errors.New("rawdb: invalid history staging database options")
 	}
 	tune := pebbledb.DefaultOptions()
+	tune.EnableL6Filter = false // Staging keeps its existing filter policy.
 	tune.MemTableSizeBytes = 32 << 20
 	tune.MaxConcurrentCompactions = 1
 	if !readOnly {

@@ -27,7 +27,9 @@ func (c *pointReadCursor) viewGet(key []byte, fn func([]byte) error) (found bool
 	var value []byte
 	var readErr error
 	if c.getCursor == nil {
-		c.getCursor, readErr = c.getSnapshot.NewGetCursor()
+		// Unbounded cursors currently serve state prefetch, whose key mix
+		// includes misses. Commitment prefixes keep the default L6 read policy.
+		c.getCursor, readErr = c.getSnapshot.NewGetCursorWithOptions(pebble.GetCursorOptions{UseL6Filters: c.unbounded})
 	}
 	if readErr == nil {
 		value, readErr = c.getCursor.Get(key)

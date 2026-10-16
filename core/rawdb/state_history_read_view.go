@@ -21,6 +21,39 @@ type StateHistoryReadView interface {
 	pointread.PinnedKeyValueView
 }
 
+// StateHistoryReadSnapshotter optionally pins just the historical partition.
+// It is selected only by the cold-source acquisition API below. General KV
+// snapshots may also need current state or canonical chain metadata.
+type StateHistoryReadSnapshotter interface {
+	NewStateHistoryReadSnapshot() (pointread.KeyValueSnapshot, error)
+}
+
+// AcquireStateHistoryBuildReadView acquires the source used by cold history
+// builders. A partition-aware factory must return a pinned view and errors must
+// not fall back to a moving source. Ordinary stores retain their existing
+// snapshot acquisition. The known KV facade adds no overlay or read semantics;
+// forward through it to preserve the underlying optional partition capability.
+func AcquireStateHistoryBuildReadView(source any) (StateHistoryReadView, func() error, error) {
+	if db, ok := source.(*stateHistorySnapshotDatabase); ok {
+		return AcquireStateHistoryBuildReadView(db.source)
+	}
+	factory, ok := source.(StateHistoryReadSnapshotter)
+	if !ok {
+		return AcquireStateHistoryReadView(source)
+	}
+	snapshot, err := factory.NewStateHistoryReadSnapshot()
+	if err != nil {
+		return nil, nil, err
+	}
+	if snapshot == nil {
+		return nil, nil, errors.New("rawdb: history partition snapshot factory returned nil")
+	}
+	if view, ok := snapshot.(StateHistoryReadView); ok && view.IsPinnedKeyValueView() {
+		return view, snapshot.Close, nil
+	}
+	return nil, nil, errors.Join(errors.New("rawdb: history partition snapshot is not pinned"), snapshot.Close())
+}
+
 // AcquireStateHistoryReadView borrows an explicitly pinned view, otherwise
 // acquires one snapshot from an optional factory. The returned release closes
 // only a snapshot owned by this call. Nested history accessors reuse the view;

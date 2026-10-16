@@ -48,3 +48,15 @@ The original get_iter.go hash in UPSTREAM_FILES.json remains the upstream
 v1.1.5 hash; it must not be replaced with a hash of the patched file.
 See docs/superpowers/specs/2026-10-16-pebble-get-boundary-scratch.md in the parent
 repository for scope, measurements and validation.
+
+## October 16: optional L6 filters for snapshot Get cursors
+
+`GetCursorOptions.UseL6Filters` is opt-in and immutable per cursor; default Get
+and ordinary DB/Snapshot.Get keep their prior policy. The existing getIter
+resolver carries that bool only into L6 table options. Range-deletion iterators,
+MVCC, merge resolution, four retained entries and ownership/error cleanup are
+unchanged. The root adapter opts in for unbounded reads and separately enables
+the existing compatible Bloom writer policy only in normal hot defaults. Legacy
+SSTs without filters remain readable; no table version or provenance SHA in
+UPSTREAM_FILES.json is replaced. See the root repository spec
+`docs/superpowers/specs/2026-10-16-prefetch-l6-bloom.md` for costs and limits.
