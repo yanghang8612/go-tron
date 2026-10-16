@@ -66,11 +66,8 @@ func TestPointGetMVCCDifferential(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if unbounded.(*pointReadCursor).iter == nil {
-			t.Fatal("unbounded prefetch lost iterator")
-		}
-		if err := unbounded.Close(); err != nil {
-			t.Fatal(err)
+		if unbounded.(*pointReadCursor).getCursor == nil || !unbounded.(*pointReadCursor).unbounded {
+			t.Fatal("unbounded prefetch did not eagerly pin its Get cursor")
 		}
 		oracle, err := s.(*pointReadSnapshot).snapshot.NewIter(nil)
 		if err != nil {
@@ -97,16 +94,18 @@ func TestPointGetMVCCDifferential(t *testing.T) {
 			if wantFound {
 				want = bytes.Clone(oracle.Value())
 			}
-			called := false
-			found, err := cursor.View(key, func(value []byte) error {
-				called = true
-				if !bytes.Equal(value, want) {
-					t.Fatalf("wave %d key %x: %q != %q", wave, key, value, want)
+			for _, reader := range []*pointReadCursor{cursor.(*pointReadCursor), unbounded.(*pointReadCursor)} {
+				called := false
+				found, err := reader.View(key, func(value []byte) error {
+					called = true
+					if !bytes.Equal(value, want) {
+						t.Fatalf("wave %d key %x: %q != %q", wave, key, value, want)
+					}
+					return nil
+				})
+				if err != nil || found != wantFound || called != wantFound {
+					t.Fatalf("key %x found=%v called=%v err=%v want=%v", key, found, called, err, wantFound)
 				}
-				return nil
-			})
-			if err != nil || found != wantFound || called != wantFound {
-				t.Fatalf("key %x found=%v called=%v err=%v want=%v", key, found, called, err, wantFound)
 			}
 		}
 		if err := oracle.Error(); err != nil {
@@ -122,6 +121,9 @@ func TestPointGetMVCCDifferential(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := cursor.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := unbounded.Close(); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := cursor.View(keys[0], nil); !errors.Is(err, pebble.ErrClosed) {

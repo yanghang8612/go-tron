@@ -33,7 +33,7 @@ writes after construction. Close cursors before Snapshot.Close and DB.Close; the
 existing engine lifecycle lease remains in force in the go-tron wrapper.
 
 Get returns read-only bytes borrowed until ReleaseValue, the next Get or Close;
-only one value may be borrowed. The wrapper constructs the GetCursor lazily on
+only one value may be borrowed. The bounded wrapper constructs the GetCursor lazily on
 its first in-prefix read, so unused/out-of-prefix wrappers allocate no GetCursor
 or extra readState. It consumes borrowed values synchronously and defers
 ReleaseValue through callback error and panic. Timing stops after lookup, so
@@ -119,3 +119,8 @@ synthetic fixture configures64 partitions but activates only one; raw helper
 gains cannot establish node throughput. Native validation and stable online
 sampling are separate evidence, and existing cache/memory warmup effects must
 not be attributed to the new interface.
+
+The October 16 unbounded state-prefetch follow-up uses the same four-entry
+engine cursor with a wrapper-specific retry/last-error policy. Its eager
+construction, metrics and preserved fail-to-Close behavior are specified in
+`2026-10-16-unbounded-prefetch-get.md`; the bounded policy above is unchanged.

@@ -2,6 +2,7 @@ package pebbledb
 
 import (
 	"bytes"
+	"errors"
 	"time"
 
 	"github.com/cockroachdb/pebble"
@@ -12,8 +13,9 @@ import (
 // A merging iterator seeks every overlapping level even when an upper table
 // already contains the answer. Keep the original snapshot sequence, prefix
 // restriction and callback-scoped ownership; Get's closer must survive through
-// the callback, including its error/panic paths. Unbounded sorted state-prefetch
-// cursors continue using the reusable iterator.
+// the callback, including its error/panic paths. Unbounded state-prefetch
+// cursors discard a failed inner cursor so the next View can retry at the same
+// snapshot; bounded commitment cursors retain their existing poisoned state.
 func (c *pointReadCursor) viewGet(key []byte, fn func([]byte) error) (found bool, err error) {
 	if !bytes.HasPrefix(key, c.prefix) {
 		return false, nil
@@ -39,18 +41,49 @@ func (c *pointReadCursor) viewGet(key []byte, fn func([]byte) error) (found bool
 	}
 	if readErr != nil {
 		c.getErrors++
+		if c.unbounded {
+			readErr = c.discardUnboundedGet(readErr)
+		}
 		return false, readErr
 	}
 	c.getHits++
 	defer func() {
 		if closeErr := c.getCursor.ReleaseValue(); closeErr != nil {
 			c.getErrors++
-			if err == nil {
+			if c.unbounded {
+				closeErr = c.discardUnboundedGet(closeErr)
+				err = errors.Join(err, closeErr)
+			} else if err == nil {
 				err = closeErr
 			}
 		}
 	}()
 	return true, fn(value)
+}
+
+// closeGetCursor detaches and publishes each inner cursor exactly once. An
+// unbounded logical cursor may own several inners after recoverable failures;
+// its wrapper-level counters are still published only at wrapper Close.
+func (c *pointReadCursor) closeGetCursor() error {
+	inner := c.getCursor
+	if inner == nil {
+		return nil
+	}
+	c.getCursor = nil
+	err := inner.Close()
+	if c.unbounded {
+		statePrefetchGetCursorMetrics.observe(inner.Stats())
+		statePrefetchGetCursorInners.Inc(1)
+	} else {
+		commitmentGetCursorMetrics.observe(inner.Stats())
+	}
+	return err
+}
+
+func (c *pointReadCursor) discardUnboundedGet(err error) error {
+	err = errors.Join(err, c.closeGetCursor())
+	c.lastUnboundedError = err
+	return err
 }
 
 // Pebble v1.1.5 Get does not expose internal block stats (getIter's upstream
@@ -62,6 +95,7 @@ type pointGetMetrics struct {
 }
 
 var commitmentPointGetMetrics = newPointGetMetrics("blockbuffer/commitment_parent/pebble/get/")
+var statePrefetchPointGetMetrics = newPointGetMetrics("blockbuffer/state_prefetch/pebble/get/")
 
 func newPointGetMetrics(prefix string) *pointGetMetrics {
 	return &pointGetMetrics{
@@ -87,13 +121,23 @@ type getCursorMetrics struct {
 	requests, opens, reuses, fallbacks, evictions, peakSum *metrics.Counter
 }
 
-var commitmentGetCursorMetrics = &getCursorMetrics{
-	requests:  metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_requests", nil),
-	opens:     metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_iterator_opens", nil),
-	reuses:    metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_reuses", nil),
-	fallbacks: metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_fallbacks", nil),
-	evictions: metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/table_evictions", nil),
-	peakSum:   metrics.GetOrRegisterCounter("blockbuffer/commitment_parent/pebble/get_cursor/retained_peak_sum", nil),
+var (
+	commitmentGetCursorMetrics = newGetCursorMetrics("blockbuffer/commitment_parent/pebble/get_cursor/", "retained_peak_sum")
+	// Recreated inner cursors contribute separately to the peak sum. These are
+	// handle counts, not pinned-byte or block-cache capacity measurements.
+	statePrefetchGetCursorMetrics = newGetCursorMetrics("blockbuffer/state_prefetch/pebble/get_cursor/", "inner_retained_peak_sum")
+	statePrefetchGetCursorInners  = metrics.GetOrRegisterCounter("blockbuffer/state_prefetch/pebble/get_cursor/inner_cursors", nil)
+)
+
+func newGetCursorMetrics(prefix, peakName string) *getCursorMetrics {
+	return &getCursorMetrics{
+		requests:  metrics.GetOrRegisterCounter(prefix+"table_requests", nil),
+		opens:     metrics.GetOrRegisterCounter(prefix+"table_iterator_opens", nil),
+		reuses:    metrics.GetOrRegisterCounter(prefix+"table_reuses", nil),
+		fallbacks: metrics.GetOrRegisterCounter(prefix+"table_fallbacks", nil),
+		evictions: metrics.GetOrRegisterCounter(prefix+"table_evictions", nil),
+		peakSum:   metrics.GetOrRegisterCounter(prefix+peakName, nil),
+	}
 }
 
 func (m *getCursorMetrics) observe(s pebble.GetCursorStats) {

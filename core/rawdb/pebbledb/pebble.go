@@ -391,6 +391,7 @@ type pointReadCursor struct {
 	getSnapshot                            *pebble.Snapshot
 	prefix                                 []byte
 	getCalls, getHits, getErrors, getNanos uint64
+	lastUnboundedError                     error
 }
 
 var _ pointread.Viewer = (*Database)(nil)
@@ -568,9 +569,19 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 		lower = append([]byte(nil), prefix...)
 		upper = upperBound(lower)
 	}
-	if s.db.boundedPointGet && len(prefix) != 0 {
+	if s.db.boundedPointGet {
 		cursor.getSnapshot = s.snapshot
 		cursor.prefix = lower
+		cursor.unbounded = len(prefix) == 0
+		if cursor.unbounded {
+			// State-prefetch cursors were already eager. Pin their Get readState
+			// here as well; bounded commitment cursors remain lazy.
+			var err error
+			cursor.getCursor, err = s.snapshot.NewGetCursor()
+			if err != nil {
+				return nil, err
+			}
+		}
 		return cursor, nil
 	}
 	iter, err := s.snapshot.NewIter(&pebble.IterOptions{
@@ -635,6 +646,12 @@ func (s *pointReadSnapshot) Close() error {
 
 func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, error) {
 	if c != nil && c.getSnapshot != nil {
+		if c.unbounded {
+			// SeekPrefixGE clears the previous seek error before a new attempt.
+			// Preserve that contract while retrying through a fresh Get cursor
+			// at the same snapshot sequence after an engine failure.
+			c.lastUnboundedError = nil
+		}
 		return c.viewGet(key, fn)
 	}
 	if c == nil || c.iter == nil {
@@ -654,18 +671,22 @@ func (c *pointReadCursor) View(key []byte, fn func(value []byte) error) (bool, e
 
 func (c *pointReadCursor) Close() error {
 	if c != nil && c.getSnapshot != nil {
-		var err error
-		if c.getCursor != nil {
-			err = c.getCursor.Close()
-			if err != nil {
-				c.getErrors++
-			}
-			commitmentGetCursorMetrics.observe(c.getCursor.Stats())
+		err := c.closeGetCursor()
+		if err != nil {
+			c.getErrors++
 		}
-		commitmentPointGetMetrics.observe(c)
+		if c.unbounded {
+			// An iterator Close repeats its last seek error unless a later
+			// positioning attempt cleared it. Join only fresh cleanup errors.
+			err = errors.Join(c.lastUnboundedError, err)
+			statePrefetchPointGetMetrics.observe(c)
+		} else {
+			commitmentPointGetMetrics.observe(c)
+		}
 		c.getCursor = nil
 		c.getSnapshot = nil
 		c.prefix = nil
+		c.lastUnboundedError = nil
 		return err
 	}
 	if c == nil || c.iter == nil {
