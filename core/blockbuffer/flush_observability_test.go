@@ -29,17 +29,17 @@ func TestFlushStopReasons(t *testing.T) {
 		hits     uint8
 		oversize bool
 	}{
-		{"extended_exhaustion", []*layer{point("a"), point("a")}, flushGroupLimits{150, 200, 1000, 1000}, 2, flushStopSelectedEnd, 0, false},
-		{"source_value", []*layer{point("a"), point("a")}, flushGroupLimits{150, 200, 150, 1000}, 1, flushStopSourceCap, flushCapSourceValue, false},
-		{"source_encoded", []*layer{point("a"), point("a")}, flushGroupLimits{150, 200, 1000, 200}, 1, flushStopSourceCap, flushCapSourceEncoded, false},
-		{"source_both_before_final", []*layer{point("a"), point("b")}, flushGroupLimits{150, 200, 150, 200}, 1, flushStopSourceCap, flushCapSourceValue | flushCapSourceEncoded, false},
-		{"final_value", []*layer{point("a"), point("b")}, flushGroupLimits{150, 1000, 1000, 1000}, 1, flushStopFinalCap, flushCapFinalValue, false},
-		{"final_encoded", []*layer{point("a"), point("b")}, flushGroupLimits{1000, 200, 1000, 1000}, 1, flushStopFinalCap, flushCapFinalEncoded, false},
-		{"final_both", []*layer{point("a"), point("b")}, flushGroupLimits{150, 200, 1000, 1000}, 1, flushStopFinalCap, flushCapFinalValue | flushCapFinalEncoded, false},
-		{"own_range", []*layer{ranged, point("a")}, flushGroupLimits{150, 200, 1000, 1000}, 1, flushStopOwnRange, 0, false},
-		{"next_range", []*layer{point("a"), ranged}, flushGroupLimits{150, 200, 1000, 1000}, 1, flushStopNextRange, 0, false},
-		{"extension_next_range", []*layer{point("a"), point("a"), ranged}, flushGroupLimits{150, 200, 1000, 1000}, 2, flushStopNextRange, 0, false},
-		{"oversized_single", []*layer{point("a")}, flushGroupLimits{50, 60, 1000, 1000}, 1, flushStopSelectedEnd, 0, true},
+		{"extended_exhaustion", []*layer{point("a"), point("a")}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 1000}, 2, flushStopSelectedEnd, 0, false},
+		{"source_value", []*layer{point("a"), point("a")}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 150, mergeEncoded: 1000}, 1, flushStopSourceCap, flushCapSourceValue, false},
+		{"source_encoded", []*layer{point("a"), point("a")}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 200}, 1, flushStopSourceCap, flushCapSourceEncoded, false},
+		{"source_both_before_final", []*layer{point("a"), point("b")}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 150, mergeEncoded: 200}, 1, flushStopSourceCap, flushCapSourceValue | flushCapSourceEncoded, false},
+		{"final_value", []*layer{point("a"), point("b")}, flushGroupLimits{batchValue: 150, batchEncoded: 1000, mergeValue: 1000, mergeEncoded: 1000}, 1, flushStopFinalCap, flushCapFinalValue, false},
+		{"final_encoded", []*layer{point("a"), point("b")}, flushGroupLimits{batchValue: 1000, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 1000}, 1, flushStopFinalCap, flushCapFinalEncoded, false},
+		{"final_both", []*layer{point("a"), point("b")}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 1000}, 1, flushStopFinalCap, flushCapFinalValue | flushCapFinalEncoded, false},
+		{"own_range", []*layer{ranged, point("a")}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 1000}, 1, flushStopOwnRange, 0, false},
+		{"next_range", []*layer{point("a"), ranged}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 1000}, 1, flushStopNextRange, 0, false},
+		{"extension_next_range", []*layer{point("a"), point("a"), ranged}, flushGroupLimits{batchValue: 150, batchEncoded: 200, mergeValue: 1000, mergeEncoded: 1000}, 2, flushStopNextRange, 0, false},
+		{"oversized_single", []*layer{point("a")}, flushGroupLimits{batchValue: 50, batchEncoded: 60, mergeValue: 1000, mergeEncoded: 1000}, 1, flushStopSelectedEnd, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sizes := make([]layerBatchSize, len(tc.layers))

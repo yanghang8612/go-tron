@@ -19,12 +19,15 @@ const (
 )
 
 var (
-	legacyDelegationHits     = metrics.NewRegisteredCounter("state/delegation_legacy/cache_hits", nil)
-	legacyDelegationMisses   = metrics.NewRegisteredCounter("state/delegation_legacy/cache_misses", nil)
-	legacyDelegationBypasses = metrics.NewRegisteredCounter("state/delegation_legacy/cache_bypasses", nil)
-	legacyDelegationNoops    = metrics.NewRegisteredCounter("state/delegation_legacy/unchanged_sides", nil)
-	legacyDelegationChanges  = metrics.NewRegisteredCounter("state/delegation_legacy/changed_sides", nil)
-	legacyDelegationDecoded  = metrics.NewRegisteredCounter("state/delegation_legacy/decoded_addresses", nil)
+	legacyDelegationHits         = metrics.NewRegisteredCounter("state/delegation_legacy/cache_hits", nil)
+	legacyDelegationMisses       = metrics.NewRegisteredCounter("state/delegation_legacy/cache_misses", nil)
+	legacyDelegationBypasses     = metrics.NewRegisteredCounter("state/delegation_legacy/cache_bypasses", nil)
+	legacyDelegationNoops        = metrics.NewRegisteredCounter("state/delegation_legacy/unchanged_sides", nil)
+	legacyDelegationChanges      = metrics.NewRegisteredCounter("state/delegation_legacy/changed_sides", nil)
+	legacyDelegationBaseOversize = metrics.NewRegisteredCounter("state/delegation_legacy/cache_base_oversize_loads", nil)
+	legacyDelegationMapSkipped   = metrics.NewRegisteredCounter("state/delegation_legacy/optional_map_skipped", nil)
+	legacyDelegationWithoutSet   = metrics.NewRegisteredCounter("state/delegation_legacy/cache_admitted_without_set", nil)
+	legacyDelegationDecoded      = metrics.NewRegisteredCounter("state/delegation_legacy/decoded_addresses", nil)
 )
 
 // legacyDelegationCache is private to the system stateObject. Encoded KV rows
@@ -98,6 +101,9 @@ func (c *legacyDelegationCache) admit(e *legacyDelegationEntry) {
 	for c.oldest != nil && (c.bytes+e.charge > legacyDelegationCacheBytes || len(c.entries) >= legacyDelegationCacheRows) {
 		c.remove(c.oldest)
 	}
+	if e.record != nil && ((len(e.record.FromAccounts) >= legacyDelegationSetMinimum && e.fromSet == nil) || (len(e.record.ToAccounts) >= legacyDelegationSetMinimum && e.toSet == nil)) {
+		legacyDelegationWithoutSet.Inc(1)
+	}
 	c.insert(e)
 }
 
@@ -152,17 +158,44 @@ func newLegacyDelegationEntryWithPages(key []byte, rec *corepb.DelegatedResource
 		for _, addr := range list {
 			e.charge += len(addr) + 10
 		}
-		if len(list) >= legacyDelegationSetMinimum {
-			for _, addr := range list {
-				e.charge += 96 + len(addr)
-			}
-		}
 	}
-	if e.charge <= legacyDelegationCacheBytes {
+	// Membership maps are optional accelerators. A list whose owned pages fit
+	// must not bypass the cache because of maps which were never allocated.
+	fromCharge, fromFits := legacyDelegationMembershipCharge(rec.FromAccounts, legacyDelegationCacheBytes-e.charge)
+	toCharge, toFits := legacyDelegationMembershipCharge(rec.ToAccounts, legacyDelegationCacheBytes-e.charge-fromCharge)
+	if e.charge > legacyDelegationCacheBytes {
+		legacyDelegationBaseOversize.Inc(1)
+	} else if !fromFits || !toFits {
+		legacyDelegationMapSkipped.Inc(1)
+	}
+	if fromFits && toFits {
+		e.charge += fromCharge + toCharge
 		e.fromSet = legacyDelegationMembership(rec.FromAccounts)
 		e.toSet = legacyDelegationMembership(rec.ToAccounts)
 	}
 	return e
+}
+
+// Return the conservative map/owned-key-arena charge only if the complete
+// optional index fits. Do not charge failed construction attempts; membership
+// without a map uses the original bytewise scan over the owned list.
+func legacyDelegationMembershipCharge(list [][]byte, budget int) (charge int, fits bool) {
+	if budget < 0 {
+		return 0, false
+	}
+	if len(list) < legacyDelegationSetMinimum {
+		return 0, true
+	}
+	if len(list) > budget/96 {
+		return 0, false
+	}
+	for _, addr := range list {
+		if budget-charge < 96 || len(addr) > budget-charge-96 {
+			return 0, false
+		}
+		charge += 96 + len(addr)
+	}
+	return charge, true
 }
 
 func legacyDelegationMembership(list [][]byte) map[string]struct{} {
@@ -284,16 +317,17 @@ func (s *StateDB) changeLegacyDelegation(e *legacyDelegationEntry, peer []byte, 
 		if set != nil {
 			set[string(peer)] = struct{}{}
 			e.charge += 96 + len(peer)
-		} else if len(*list) >= legacyDelegationSetMinimum && e.charge <= legacyDelegationCacheBytes {
-			for _, addr := range *list {
-				e.charge += 96 + len(addr)
-			}
-			if e.charge <= legacyDelegationCacheBytes {
+		} else {
+			charge, fits := legacyDelegationMembershipCharge(*list, legacyDelegationCacheBytes-e.charge)
+			if fits {
+				e.charge += charge
 				if incoming {
 					e.fromSet = legacyDelegationMembership(*list)
 				} else {
 					e.toSet = legacyDelegationMembership(*list)
 				}
+			} else if e.charge <= legacyDelegationCacheBytes {
+				legacyDelegationMapSkipped.Inc(1)
 			}
 		}
 	}

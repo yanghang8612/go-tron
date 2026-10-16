@@ -99,12 +99,24 @@ func TestLegacyDelegationMembershipArenaEntryBudget(t *testing.T) {
 			}
 			record := &corepb.DelegatedResourceAccountIndex{Account: []byte("owner"), ToAccounts: list}
 			got, want := newLegacyDelegationEntry([]byte("key"), record), frozenLegacyDelegationEntry([]byte("key"), record)
-			if got.charge < want.charge || got.key != want.key || got.record != record || (got.toSet == nil) != (want.toSet == nil) || !maps.Equal(got.toSet, want.toSet) {
-				t.Fatal("arena changed charge, ownership, threshold or membership")
+			if got.key != want.key || got.record != record || (got.toSet == nil) != (want.toSet == nil) || !maps.Equal(got.toSet, want.toSet) {
+				t.Fatal("arena changed ownership, threshold or membership")
+			}
+			if degree < 250_000 && got.charge < want.charge {
+				t.Fatal("resident membership lost conservative allocation charge")
+			}
+			// The frozen implementation remains the arena/membership oracle.
+			// Its hypothetical-map admission charge is intentionally obsolete:
+			// this base fits without allocating the oversized optional map.
+			if degree == 250_000 && (want.charge <= legacyDelegationCacheBytes || got.charge >= want.charge || got.charge > legacyDelegationCacheBytes || got.toSet != nil) {
+				t.Fatal("map-free admission charged an unallocated membership map")
 			}
 			cache := &legacyDelegationCache{entries: make(map[string]*legacyDelegationEntry)}
 			cache.admit(got)
 			assertDelegationCacheBounds(t, cache)
+			if degree == 250_000 && cache.entries[got.key] != got {
+				t.Fatal("fitting map-free base was bypassed")
+			}
 			if got.charge > legacyDelegationCacheBytes && (got.toSet != nil || cache.entries[got.key] != nil) {
 				t.Fatal("oversized row built or retained membership")
 			}

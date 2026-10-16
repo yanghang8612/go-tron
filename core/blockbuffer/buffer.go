@@ -548,15 +548,19 @@ type bufferReadView struct {
 
 const (
 	// The Pebble adapter has bounded reusable batch buffers through 32 MiB. Use
-	// that whole range for the FINAL solid-layer batch. Production commitment
+	// that whole range for the base solid-layer batch. Production commitment
 	// branches are hot full post-images: a 32 MiB stream of source layers often
 	// collapses to only a few MiB. Permit a larger source window, Erigon-style,
 	// while checking every appended layer against the final 32 MiB output. This
-	// preserves the bounded Pebble batch/WAL allocation and atomicity contract.
+	// preserves bounded source ownership. A guarded, high-coverage extension may
+	// exceed the reusable batch pool; see canExpandFlushGroup.
 	maxFlushBatchValueSize   = 32 << 20
 	maxFlushBatchEncodedSize = 32 << 20
-	maxFlushMergeValueSize   = 128 << 20
-	maxFlushMergeEncodedSize = 128 << 20
+	// High-coverage point merges may use this bounded final output ceiling.
+	maxExpandedFlushBatchValueSize   = 64 << 20
+	maxExpandedFlushBatchEncodedSize = 64 << 20
+	maxFlushMergeValueSize           = 128 << 20
+	maxFlushMergeEncodedSize         = 128 << 20
 )
 
 func newLayer(hash common.Hash, number uint64) *layer {
@@ -3077,10 +3081,12 @@ func flushLayersObservedWithStats(layers []*layer, w ethdb.KeyValueWriter, obser
 	flushed := 0
 	for start := 0; start < len(layers); {
 		group := selectFlushGroup(layers, sizes, start, flushGroupLimits{
-			batchValue:   maxFlushBatchValueSize,
-			batchEncoded: maxFlushBatchEncodedSize,
-			mergeValue:   maxFlushMergeValueSize,
-			mergeEncoded: maxFlushMergeEncodedSize,
+			batchValue:      maxFlushBatchValueSize,
+			batchEncoded:    maxFlushBatchEncodedSize,
+			mergeValue:      maxFlushMergeValueSize,
+			mergeEncoded:    maxFlushMergeEncodedSize,
+			expandedValue:   maxExpandedFlushBatchValueSize,
+			expandedEncoded: maxExpandedFlushBatchEncodedSize,
 		})
 		end := group.end
 		merged := group.merged
@@ -3328,10 +3334,12 @@ type layerBatchSize struct {
 }
 
 type flushGroupLimits struct {
-	batchValue   int
-	batchEncoded int
-	mergeValue   int
-	mergeEncoded int
+	batchValue      int
+	batchEncoded    int
+	mergeValue      int
+	mergeEncoded    int
+	expandedValue   int
+	expandedEncoded int
 }
 
 // flushGroupPlan describes one durable Pebble batch. input* measures all
@@ -3350,19 +3358,19 @@ type flushGroupPlan struct {
 	stopReason     flushStopReason
 	capHits        uint8
 	oversize       bool
+	expanded       bool
 }
 
 // selectFlushGroup first builds the conventional source window bounded by the
 // final Pebble batch size. It then probes subsequent layers against the live
-// coalesced map and admits them only when both:
-//
-//   - total source bytes remain inside the larger aggregation bound; and
-//   - the resulting final Pebble batch remains inside the original bound.
-//
-// The second condition is evaluated before mutating the map, so an unrelated
-// append-only layer cannot transiently grow the merge map or final WAL batch
-// past the established limit. A one-layer result returns nil merged to retain
-// the allocation-free direct path. The caller owns and must return merged.
+// coalesced map. Source limits always apply. The final output must fit the
+// base limits or pass canExpandFlushGroup before mutating the map. That guard
+// requires both existing coverage and positive elimination by the next layer,
+// with bounded projected output and a conservative entry-count upper bound.
+// A subsequent extension fitting the base limits follows the original path;
+// the expansion entry bound does not constrain that below-base path.
+// A one-layer result returns nil merged to retain the allocation-free direct
+// path. The caller owns and must return merged.
 func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits flushGroupLimits) flushGroupPlan {
 	plan := flushGroupPlan{
 		end:           start,
@@ -3452,7 +3460,7 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 			valueDelta, encodedDelta := mergedLayerSizeDelta(layers[plan.end], plan.merged.ops)
 			finalValue := plan.outputValue+valueDelta > limits.batchValue
 			finalEncoded := plan.outputEncoded+encodedDelta > limits.batchEncoded
-			if finalValue || finalEncoded {
+			if (finalValue || finalEncoded) && !canExpandFlushGroup(&plan, next, valueDelta, encodedDelta, limits) {
 				plan.stopReason = flushStopFinalCap
 				if finalValue {
 					plan.capHits |= flushCapFinalValue
@@ -3461,6 +3469,9 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 					plan.capHits |= flushCapFinalEncoded
 				}
 				break
+			}
+			if finalValue || finalEncoded {
+				plan.expanded = true
 			}
 			mergeLayers(layers[plan.end:plan.end+1], plan.merged)
 			plan.inputValue += next.value
@@ -3478,7 +3489,7 @@ func selectFlushGroup(layers []*layer, sizes []layerBatchSize, start int, limits
 		plan.outputValue = plan.inputValue
 		plan.outputEncoded = plan.inputEncoded
 	}
-	plan.oversize = plan.outputValue > limits.batchValue || plan.outputEncoded > limits.batchEncoded
+	plan.oversize = !plan.expanded && (plan.outputValue > limits.batchValue || plan.outputEncoded > limits.batchEncoded)
 	return plan
 }
 

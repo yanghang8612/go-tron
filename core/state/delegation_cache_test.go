@@ -642,7 +642,7 @@ func TestLegacyDelegationCacheByteBudgetAndOversizedBypass(t *testing.T) {
 	// must budget the complete decoded-row shape before allocating membership.
 	const addressBytes = 1024
 	peer := bytes.Repeat([]byte{0x41}, addressBytes)
-	count := legacyDelegationCacheBytes/(2*addressBytes+120) + 1
+	count := legacyDelegationCacheBytes/(addressBytes+58) + 1
 	list := make([][]byte, count)
 	for i := range list {
 		list[i] = peer

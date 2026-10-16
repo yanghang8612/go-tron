@@ -8,8 +8,8 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
-// Every iteration reads the same rooted input. The two large rows bypass the
-// decoded cache's unchanged 32 MiB limit, as in the live repeated-decode profile.
+// Every iteration reads the same rooted input. The million-entry row exceeds
+// the unchanged 32 MiB decoded-cache limit; the smaller rows cover admission.
 // Include the journal/revert and production history flush paths, rather than
 // measuring only slice assembly. The backing database and history sink are RAM.
 func BenchmarkDelegationPagedLoadMutation(b *testing.B) {

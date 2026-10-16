@@ -51,6 +51,7 @@ var flushCapHitCounters = func() [4]*metrics.Counter {
 var flushAcceptedOversizeCounter = metrics.NewRegisteredCounter("blockbuffer/flush/accepted_oversize/groups", nil)
 
 func observeFlushPlan(plan *flushGroupPlan, layers int, committed bool) {
+	observeFlushExpansion(plan, committed)
 	counters := &flushPlanStopCounters[plan.stopReason]
 	if committed {
 		counters = &flushCommittedStopCounters[plan.stopReason]
