@@ -5,8 +5,10 @@ Module checksum: `h1:5AAWCBWbat0uE0blr8qzufZP5tBjkRyy/jWe1QWLnvw=`.
 Upstream go.mod checksum: `h1:17wO9el1YEigxkP/YtV8NtCivQDgoCyBg5c4VR/eOWo=`.
 Original license is retained in LICENSE. Upstream has no separate NOTICE file.
 
-UPSTREAM_FILES.json lists original source paths and SHA256 values. These files
-are unchanged. The copy contains the runtime dependency closure for the root
+UPSTREAM_FILES.json lists original source paths and SHA256 values, not patched
+file hashes. All copied runtime files remain unchanged except get_iter.go,
+whose October 16 patch is described below. The copy contains the runtime
+dependency closure for the root
 Pebble package plus go-tron's bloom use; all source/build-tag/platform variants
 within those directories are retained. Broad upstream tests, fixtures, command
 line tools and replay/metamorphic programs are omitted. Local additions are
@@ -20,11 +22,29 @@ measurement limits and validation commands are documented in the parent repo's
 Focused nested-module checks (use the approved absolute Go1.25.5 and GOROOT):
 
 ```
-go test -C third_party/pebble . -run TestGetCursor -count=1 -timeout 60s
-go test -C third_party/pebble . -race -run TestGetCursor -count=1 -timeout 90s
+go test -C third_party/pebble . -run 'TestGet(Cursor|Boundary)' -count=1 -timeout 60s
+go test -C third_party/pebble . -race -run 'TestGet(Cursor|Boundary)' -count=1 -timeout 90s
 ```
 
-The original Snapshot.Get is retained as the differential oracle. There is no
+Snapshot.Get is retained as a cursor differential oracle. Since both paths
+share getIter, TestGetBoundaryScratchExpectedVersions independently checks
+literal expected values across DB, snapshot, batch, cursor and merged iterator
+reads. There is no
 DB/batch cursor, merged-iterator replacement, format change or memory-budget
 increase. GetCursor errors that were already reported by an operation are not
 re-reported by Close; fresh cleanup errors still propagate.
+
+## October 16: pooled Get boundary scratch
+
+get_iter.go embeds one levelIterBoundaryContext in the already pooled getIter.
+It resets that field before opening each L0 sublevel or non-L0 level instead of
+allocating a separate context at each level. Only one levelIter is live at a
+time. SST point/range iterators retain no pointer to the context, and the
+existing Iterator.Close still clears the complete Get allocation before
+returning it to the pool. DB.Get, Snapshot.Get, indexed Batch.Get and GetCursor
+share this allocation change and preserve their existing resolver semantics.
+
+The original get_iter.go hash in UPSTREAM_FILES.json remains the upstream
+v1.1.5 hash; it must not be replaced with a hash of the patched file.
+See docs/superpowers/specs/2026-10-16-pebble-get-boundary-scratch.md in the parent
+repository for scope, measurements and validation.

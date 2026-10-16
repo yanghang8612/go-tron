@@ -35,6 +35,12 @@ type getIter struct {
 	iterKey      *InternalKey
 	iterValue    base.LazyValue
 	err          error
+
+	// Only one levelIter is live at a time. Keep its boundary scratch in this
+	// pooled Get allocation instead of allocating it again at every level.
+	// Retained SST iterators never borrow this context; levelIter owns the
+	// reference and the complete allocation is cleared by Iterator.Close.
+	boundaryContext levelIterBoundaryContext
 }
 
 // TODO(sumeer): CockroachDB code doesn't use getIter, but, for completeness,
@@ -161,8 +167,9 @@ func (g *getIter) Next() (*InternalKey, base.LazyValue) {
 				g.levelIter.init(context.Background(), iterOpts, g.comparer, g.newIters,
 					files, manifest.L0Sublevel(n), internalIterOpts{})
 				g.levelIter.initRangeDel(&g.rangeDelIter)
-				bc := levelIterBoundaryContext{}
-				g.levelIter.initBoundaryContext(&bc)
+				g.boundaryContext = levelIterBoundaryContext{}
+				bc := &g.boundaryContext
+				g.levelIter.initBoundaryContext(bc)
 				g.iter = &g.levelIter
 
 				// Compute the key prefix for bloom filtering if split function is
@@ -193,8 +200,9 @@ func (g *getIter) Next() (*InternalKey, base.LazyValue) {
 		g.levelIter.init(context.Background(), iterOpts, g.comparer, g.newIters,
 			g.version.Levels[g.level].Iter(), manifest.Level(g.level), internalIterOpts{})
 		g.levelIter.initRangeDel(&g.rangeDelIter)
-		bc := levelIterBoundaryContext{}
-		g.levelIter.initBoundaryContext(&bc)
+		g.boundaryContext = levelIterBoundaryContext{}
+		bc := &g.boundaryContext
+		g.levelIter.initBoundaryContext(bc)
 		g.level++
 		g.iter = &g.levelIter
 

@@ -3,7 +3,9 @@
 Baseline: `8bf634fb15eca46804544c59a672bd3aa18dbacf`. Production capacity is
 8192 MiB, independently of this interface change. No cache budget, concurrency,
 GC, table format, key ordering, encoding or consensus behavior changes here.
-Ordinary DB.Get, Snapshot.Get, Batch.Get and merged Iterator are unchanged.
+Ordinary DB.Get, Snapshot.Get, Batch.Get and merged Iterator retain their
+semantics. The October 16 follow-up coallocates Get's per-level boundary scratch
+inside its pooled allocation; see `2026-10-16-pebble-get-boundary-scratch.md`.
 
 ## Scope
 
@@ -16,10 +18,11 @@ not implement a Set-only fast path or seek every overlapping level eagerly.
 
 The repository uses a local third_party Pebble module through go.mod replace.
 Runtime source files and all platform variants in selected runtime package
-directories are copied verbatim from v1.1.5, with LICENSE and upstream module
-metadata. No module-cache modification, unsafe or linkname is used.
-UPSTREAM_FILES.json records each original source SHA; the only new runtime file
-is get_cursor.go. Upstream fixtures, tools and broad test corpus are excluded.
+directories originate from v1.1.5, with LICENSE and upstream module metadata.
+No module-cache modification, unsafe or linkname is used. UPSTREAM_FILES.json
+records each original source SHA; the only new runtime file is get_cursor.go.
+The October 16 patch modifies get_iter.go's scratch allocation, documented in
+GO_TRON_FORK.md. Upstream fixtures, tools and broad test corpus are excluded.
 
 ## Ownership and errors
 
