@@ -2,53 +2,68 @@ package snapshots
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 const (
-	historyCostCacheEntries = 32768
-	historyCostCacheBytes   = 64 << 20
+	historyCostCacheBytes       = 64 << 20
+	historyCostCacheEntryCharge = uint64(512)
+	historyCostCacheEntries     = historyCostCacheBytes / int(historyCostCacheEntryCharge)
 )
 
-// This admission-only cache belongs to one Runner, under its passMu. It never
-// replaces source authentication. Its conservative retained-metadata charge
-// bounds keys, file observations and map overhead, not process RSS.
+// Runner.passMu protects this volatile selection-hint cache. No hit authorizes
+// source use: only selected fresh metadata and complete codec authentication do.
+// Keys/values own no refs, FileInfo or manifest string slabs. Charge is a bounded
+// conservative map allowance, not a process RSS promise.
 type historyCompactionCostCache struct {
 	dir        string
 	directory  os.FileInfo
 	epoch      uint64
-	entries    map[historyCompactionCostKey]historyCompactionCachedCost
+	entries    map[historyCompactionCostKey]historyCompactionInputCost
 	bytes      uint64
 	maxEntries int
 	maxBytes   uint64
-	// Private per-instance filesystem seam; production uses os.Stat. Tests count
-	// the cache's actual extra Stats without changing process-global readers.
-	stat func(string) (os.FileInfo, error)
+	stat       func(string) (os.FileInfo, error)
+	stats      historyCompactionCostCacheStats
+}
+type historyCompactionCostKey [sha256.Size]byte
+type historyCompactionInputRefs [3]SegmentRef
+
+type historyCompactionCostCacheStats struct {
+	Hits, Misses, MetadataReads, FreshReads, EvictedRetired, CapacityRejects, Resets uint64
+	Entries, ChargedBytes                                                            uint64
 }
 
-// Values, rather than a borrowed companion slice, preserve the complete trio
-// identity even when the caller reuses its manifest or candidate storage.
-type historyCompactionCostKey [3]SegmentRef
-
-type historyCompactionCachedCost struct {
-	files  [3]os.FileInfo
-	cost   historyCompactionInputCost
-	charge uint64
+func (c *historyCompactionCostCache) snapshot() historyCompactionCostCacheStats {
+	if c == nil {
+		return historyCompactionCostCacheStats{}
+	}
+	s := c.stats
+	s.Entries = uint64(len(c.entries))
+	s.ChargedBytes = c.bytes
+	return s
 }
-
 func newHistoryCompactionCostCache() *historyCompactionCostCache {
 	return &historyCompactionCostCache{maxEntries: historyCostCacheEntries, maxBytes: historyCostCacheBytes}
 }
-
 func (c *historyCompactionCostCache) clear() {
-	c.entries = make(map[historyCompactionCostKey]historyCompactionCachedCost)
+	c.entries = make(map[historyCompactionCostKey]historyCompactionInputCost)
 	c.bytes = 0
+	c.stats.Resets++
 }
-
+func (c *historyCompactionCostCache) statFile(path string) (os.FileInfo, error) {
+	if c.stat != nil {
+		return c.stat(path)
+	}
+	return os.Stat(path)
+}
 func (c *historyCompactionCostCache) bind(ctx context.Context, dir string, epoch uint64) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -74,42 +89,85 @@ func (c *historyCompactionCostCache) bind(ctx context.Context, dir string, epoch
 	return contextError(ctx)
 }
 
-func historyCompactionCacheKey(candidate historyCompactionCandidate) (historyCompactionCostKey, bool) {
-	var key historyCompactionCostKey
-	if candidate.history.Dataset != SegmentDatasetStateDomainChange || len(candidate.companions) != 2 {
-		return key, false
+// Canonical slots remove companion-order dependence, not raw ref identity.
+func historyCompactionCacheRefs(candidate historyCompactionCandidate) (historyCompactionInputRefs, bool) {
+	var refs historyCompactionInputRefs
+	if candidate.history.Dataset != SegmentDatasetStateDomainChange || candidate.history.Kind != SegmentHistory || len(candidate.companions) != 2 {
+		return refs, false
 	}
-	key[0] = candidate.history
-	copy(key[1:], candidate.companions)
-	accessor, inverted := false, false
-	for _, ref := range key {
-		if ref.Size == 0 || ref.Checksum == "" {
-			return key, false
-		}
-		if ref.Kind == SegmentAccessor {
-			accessor = true
-		}
-		if ref.Kind == SegmentInverted {
+	refs[0] = candidate.history
+	var inverted, accessor bool
+	for _, ref := range candidate.companions {
+		switch ref.Kind {
+		case SegmentInverted:
+			if inverted {
+				return refs, false
+			}
+			refs[1] = ref
 			inverted = true
+		case SegmentAccessor:
+			if accessor {
+				return refs, false
+			}
+			refs[2] = ref
+			accessor = true
+		default:
+			return refs, false
 		}
 	}
-	return key, accessor && inverted
-}
-
-func statHistoryCompactionInputs(ctx context.Context, dir string, key historyCompactionCostKey) ([3]os.FileInfo, error) {
-	return statHistoryCompactionInputsWith(ctx, dir, key, os.Stat)
-}
-
-func (c *historyCompactionCostCache) statFile(path string) (os.FileInfo, error) {
-	if c.stat != nil {
-		return c.stat(path)
+	if !inverted || !accessor {
+		return refs, false
 	}
-	return os.Stat(path)
+	for _, ref := range refs {
+		if ref.Size == 0 || ref.Checksum == "" {
+			return refs, false
+		}
+	}
+	return refs, true
+}
+func historyCompactionCacheKey(candidate historyCompactionCandidate) (historyCompactionCostKey, bool) {
+	refs, ok := historyCompactionCacheRefs(candidate)
+	if !ok {
+		return historyCompactionCostKey{}, false
+	}
+	return digestHistoryCompactionRefs(refs), true
 }
 
-func statHistoryCompactionInputsWith(ctx context.Context, dir string, key historyCompactionCostKey, stat func(string) (os.FileInfo, error)) ([3]os.FileInfo, error) {
+// Encode all nine raw SegmentRef fields with lengths/fixed-width numbers and a
+// dedicated domain. Do not reuse staging IDs (different identity/ownership).
+// The field-inventory test deliberately fails when SegmentRef gains a field.
+func digestHistoryCompactionRefs(refs historyCompactionInputRefs) historyCompactionCostKey {
+	h := sha256.New()
+	_, _ = h.Write([]byte("go-tron/history-compaction-cost-hint/v1\x00"))
+	var number [8]byte
+	writeNumber := func(n uint64) { binary.LittleEndian.PutUint64(number[:], n); _, _ = h.Write(number[:]) }
+	for _, ref := range refs {
+		writeHistoryCostHintString(h, string(ref.Dataset), number[:])
+		writeNumber(uint64(ref.Domain))
+		writeHistoryCostHintString(h, string(ref.Kind), number[:])
+		writeNumber(ref.FromTxNum)
+		writeNumber(ref.ToTxNum)
+		writeNumber(ref.AggregationSteps)
+		writeHistoryCostHintString(h, ref.Path, number[:])
+		writeNumber(ref.Size)
+		writeHistoryCostHintString(h, ref.Checksum, number[:])
+	}
+	var key historyCompactionCostKey
+	h.Sum(key[:0])
+	return key
+}
+func writeHistoryCostHintString(h hash.Hash, s string, number []byte) {
+	binary.LittleEndian.PutUint64(number, uint64(len(s)))
+	_, _ = h.Write(number)
+	_, _ = h.Write([]byte(s))
+}
+
+func statHistoryCompactionInputs(ctx context.Context, dir string, refs historyCompactionInputRefs) ([3]os.FileInfo, error) {
+	return statHistoryCompactionInputsWith(ctx, dir, refs, os.Stat)
+}
+func statHistoryCompactionInputsWith(ctx context.Context, dir string, refs historyCompactionInputRefs, stat func(string) (os.FileInfo, error)) ([3]os.FileInfo, error) {
 	var files [3]os.FileInfo
-	for i, ref := range key {
+	for i, ref := range refs {
 		if err := contextError(ctx); err != nil {
 			return files, err
 		}
@@ -124,7 +182,6 @@ func statHistoryCompactionInputsWith(ctx context.Context, dir string, key histor
 	}
 	return files, contextError(ctx)
 }
-
 func sameHistoryCompactionFiles(a, b [3]os.FileInfo) bool {
 	for i := range a {
 		if a[i] == nil || b[i] == nil || !os.SameFile(a[i], b[i]) || a[i].Size() != b[i].Size() || a[i].Mode() != b[i].Mode() || !a[i].ModTime().Equal(b[i].ModTime()) {
@@ -133,102 +190,92 @@ func sameHistoryCompactionFiles(a, b [3]os.FileInfo) bool {
 	}
 	return true
 }
-
-func (c *historyCompactionCostCache) remove(key historyCompactionCostKey) {
-	if entry, ok := c.entries[key]; ok {
-		c.bytes -= entry.charge
+func (c *historyCompactionCostCache) remove(key historyCompactionCostKey) bool {
+	if _, ok := c.entries[key]; ok {
 		delete(c.entries, key)
+		c.bytes -= historyCostCacheEntryCharge
+		return true
 	}
+	return false
 }
-
-func (c *historyCompactionCostCache) remember(key historyCompactionCostKey, files [3]os.FileInfo, cost historyCompactionInputCost) {
+func (c *historyCompactionCostCache) remember(key historyCompactionCostKey, cost historyCompactionInputCost) {
 	c.remove(key)
-	charge, ok := historyCompactionCostCacheCharge(c.dir, key)
-	if !ok {
+	if c.maxEntries <= 0 || len(c.entries) >= c.maxEntries || historyCostCacheEntryCharge > c.maxBytes || c.bytes > c.maxBytes-historyCostCacheEntryCharge {
+		c.stats.CapacityRejects++
 		return
-	}
-	// Keep the stable historical prefix at capacity instead of flushing it on
-	// each full catalog scan. The uncached suffix still takes the original path.
-	if c.maxEntries <= 0 || len(c.entries) >= c.maxEntries || charge > c.maxBytes || c.bytes > c.maxBytes-charge {
-		return
-	}
-	for i, ref := range key {
-		ref.Dataset = SegmentDataset(strings.Clone(string(ref.Dataset)))
-		ref.Kind = SegmentKind(strings.Clone(string(ref.Kind)))
-		ref.Path = strings.Clone(ref.Path)
-		ref.Checksum = strings.Clone(ref.Checksum)
-		key[i] = ref
 	}
 	if c.entries == nil {
-		c.entries = make(map[historyCompactionCostKey]historyCompactionCachedCost)
+		c.entries = make(map[historyCompactionCostKey]historyCompactionInputCost)
 	}
-	c.entries[key] = historyCompactionCachedCost{files: files, cost: cost, charge: charge}
-	c.bytes += charge
+	c.entries[key] = cost
+	c.bytes += historyCostCacheEntryCharge
 }
-
-// Fixed charge covers value/map/FileInfo observations. Dynamic ownership has
-// 2x headroom for allocator size classes, including complete Stat path backing.
-// The one cache-bound directory string is separately owned once per Runner;
-// neither this accounting nor the volatile entry cap promises a process RSS cap.
-func historyCompactionCostCacheCharge(dir string, key historyCompactionCostKey) (uint64, bool) {
-	charge := uint64(2048)
-	for _, ref := range key {
-		for _, n := range []int{len(ref.Path), len(ref.Checksum), len(ref.Dataset), len(ref.Kind), len(dir), 1, len(ref.Path)} {
-			if uint64(n) > (^uint64(0)-charge)/2 {
-				return 0, false
-			}
-			charge += 2 * uint64(n)
+func (c *historyCompactionCostCache) forgetRetired(candidates []historyCompactionCandidate) {
+	for _, candidate := range candidates {
+		if key, ok := historyCompactionCacheKey(candidate); ok && c.remove(key) {
+			c.stats.EvictedRetired++
 		}
 	}
-	return charge, true
 }
 
-// Every lookup still Stats each file. Unknown immutable identities take the
-// original reader. A hit skips only the compressed footer/accessor metadata.
+// A hit is only a budget hint and intentionally performs no file observation.
+// Same-ref corruption/deletion of an unselected source may be reported only when
+// it is selected (or after hint reset). Overestimates can defer it indefinitely.
 func (c *historyCompactionCostCache) read(ctx context.Context, candidate historyCompactionCandidate, read func(context.Context, string, historyCompactionCandidate) (historyCompactionInputCost, error)) (historyCompactionInputCost, error) {
 	if err := contextError(ctx); err != nil {
 		return historyCompactionInputCost{}, err
 	}
-	key, cacheable := historyCompactionCacheKey(candidate)
-	if !cacheable {
+	key, ok := historyCompactionCacheKey(candidate)
+	if !ok {
+		c.stats.MetadataReads++
 		return read(ctx, c.dir, candidate)
 	}
-	files, err := statHistoryCompactionInputsWith(ctx, c.dir, key, c.statFile)
-	if err != nil {
-		c.remove(key)
-		return historyCompactionInputCost{}, err
-	}
-	if entry, ok := c.entries[key]; ok && sameHistoryCompactionFiles(entry.files, files) {
-		if err := contextError(ctx); err != nil {
-			return historyCompactionInputCost{}, err
+	if ok {
+		if cost, hit := c.entries[key]; hit {
+			if err := contextError(ctx); err != nil {
+				return historyCompactionInputCost{}, err
+			}
+			c.stats.Hits++
+			return cost, nil
 		}
-		return entry.cost, nil
+		c.stats.Misses++
 	}
-	c.remove(key)
-	return c.readObserved(ctx, candidate, key, files, read)
-}
-
-// Selected inputs always take this path, including cache hits. Only a stable,
-// successful observation may be retained; errors and cancellation are not cached.
-func (c *historyCompactionCostCache) readFresh(ctx context.Context, candidate historyCompactionCandidate, read func(context.Context, string, historyCompactionCandidate) (historyCompactionInputCost, error)) (historyCompactionInputCost, error) {
-	key, cacheable := historyCompactionCacheKey(candidate)
-	if !cacheable {
-		return read(ctx, c.dir, candidate)
-	}
-	c.remove(key)
-	before, err := statHistoryCompactionInputsWith(ctx, c.dir, key, c.statFile)
-	if err != nil {
-		return historyCompactionInputCost{}, err
-	}
-	return c.readObserved(ctx, candidate, key, before, read)
-}
-
-func (c *historyCompactionCostCache) readObserved(ctx context.Context, candidate historyCompactionCandidate, key historyCompactionCostKey, before [3]os.FileInfo, read func(context.Context, string, historyCompactionCandidate) (historyCompactionInputCost, error)) (historyCompactionInputCost, error) {
+	c.stats.MetadataReads++
 	cost, err := read(ctx, c.dir, candidate)
 	if err != nil {
 		return historyCompactionInputCost{}, err
 	}
-	after, err := statHistoryCompactionInputsWith(ctx, c.dir, key, c.statFile)
+	if err := contextError(ctx); err != nil {
+		return historyCompactionInputCost{}, err
+	}
+	if ok {
+		c.remember(key, cost)
+	}
+	return cost, nil
+}
+
+// Selected inputs keep their original before/reader/after identity checks. The
+// mandatory reader's own path Stats, FD Stats and metadata checks are unchanged.
+func (c *historyCompactionCostCache) readFresh(ctx context.Context, candidate historyCompactionCandidate, read func(context.Context, string, historyCompactionCandidate) (historyCompactionInputCost, error)) (historyCompactionInputCost, error) {
+	key, cacheable := historyCompactionCacheKey(candidate)
+	if !cacheable {
+		c.stats.FreshReads++
+		c.stats.MetadataReads++
+		return read(ctx, c.dir, candidate)
+	}
+	c.remove(key)
+	refs, _ := historyCompactionCacheRefs(candidate)
+	before, err := statHistoryCompactionInputsWith(ctx, c.dir, refs, c.statFile)
+	if err != nil {
+		return historyCompactionInputCost{}, err
+	}
+	c.stats.FreshReads++
+	c.stats.MetadataReads++
+	cost, err := read(ctx, c.dir, candidate)
+	if err != nil {
+		return historyCompactionInputCost{}, err
+	}
+	after, err := statHistoryCompactionInputsWith(ctx, c.dir, refs, c.statFile)
 	if err != nil {
 		return historyCompactionInputCost{}, err
 	}
@@ -238,13 +285,11 @@ func (c *historyCompactionCostCache) readObserved(ctx context.Context, candidate
 	if err := contextError(ctx); err != nil {
 		return historyCompactionInputCost{}, err
 	}
-	c.remember(key, after, cost)
+	c.remember(key, cost)
 	return cost, nil
 }
 
-// Re-evaluate the chosen group before claims, payload reads or publication.
-// A changed cost retries selection next pass, with the updated observations;
-// it cannot silently compact a group chosen using obsolete admission costs.
+// Re-evaluate every chosen group before claims, payload reads or publication.
 func revalidateHistoryCompactionCosts(ctx context.Context, cache *historyCompactionCostCache, selection historyCompactionSelection, cfg CompactionConfig, previous map[SegmentRef]historyCompactionInputCost) (bool, error) {
 	var total historyCompactionInputCost
 	changed := false

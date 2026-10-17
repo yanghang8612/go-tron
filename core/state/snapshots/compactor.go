@@ -37,6 +37,7 @@ type CompactionConfig struct {
 	MaxSources           uint64
 	// Runner-owned admission metadata, only used by the busy streaming path.
 	inputCostCache *historyCompactionCostCache
+	outerMetrics   *historyCompactionOuterMetrics
 }
 
 // HistoryCompactionResult describes a registered history-domain compaction pass.
@@ -102,6 +103,8 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	outer := cfg.outerMetrics.begin()
+	defer outer.finish()
 	if err := ctx.Err(); err != nil {
 		return HistoryCompactionResult{}, err
 	}
@@ -130,6 +133,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		minSteps = maxSteps
 	}
 
+	outer.setPhase(historyCompactionOuterManifest)
 	manifest, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -153,10 +157,12 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	// Both probes are immutable per-source observations for this selection.
 	// Group subdivision and final input accounting reuse them rather than
 	// reopening source headers for every attempted combination.
+	outer.setPhase(historyCompactionOuterCandidates)
 	costCache := make(map[SegmentRef]historyCompactionInputCost)
 	var sharedCosts *historyCompactionCostCache
 	if cfg.BusyLeafOnly && !cfg.ReferenceContainer && dataset == SegmentDatasetStateDomainChange && cfg.inputCostCache != nil {
 		sharedCosts = cfg.inputCostCache
+		outer.observeCosts(sharedCosts)
 		if err := sharedCosts.bind(ctx, dir, manifest.HistoryStagingResetEpoch); err != nil {
 			return HistoryCompactionResult{}, err
 		}
@@ -195,6 +201,8 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	if dataset == SegmentDatasetStateDomainChange {
 		candidates = filterHistoryProofProtectedCandidates(dir, candidates)
 	}
+	outer.setCandidates(len(candidates))
+	outer.setPhase(historyCompactionOuterSelect)
 	var selection historyCompactionSelection
 	if cfg.BusyLeafOnly {
 		selection, ok, err = selectBudgetedHistoryCompactionLeaves(ctx, candidates, cfg, readCost, readReference)
@@ -219,6 +227,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		selection.outputMode = historyCompactionOutputReference
 	}
 	if sharedCosts != nil {
+		outer.setPhase(historyCompactionOuterRevalidate)
 		valid, err := revalidateHistoryCompactionCosts(ctx, sharedCosts, selection, cfg, costCache)
 		if err != nil {
 			return HistoryCompactionResult{}, err
@@ -229,6 +238,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	}
 
 	if dataset == SegmentDatasetStateDomainChange {
+		outer.setPhase(historyCompactionOuterClaim)
 		release, admitted, claimErr := claimHistoryProofRange(dir, selection.fromTxNum, selection.toTxNum, true)
 		if claimErr != nil {
 			return HistoryCompactionResult{}, claimErr
@@ -239,6 +249,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		defer release()
 	}
 	if !cfg.BusyLeafOnly && (cfg.MaxInputBytes > 0 || cfg.MaxInputLogicalBytes > 0 || cfg.MaxInputRecords > 0 || cfg.MaxSources > 0) {
+		outer.setPhase(historyCompactionOuterRevalidate)
 		for _, candidate := range selection.candidates {
 			cost, err := readCost(candidate)
 			if err != nil {
@@ -256,6 +267,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		}
 	}
 
+	outer.setPhase(historyCompactionOuterInner)
 	var refs []SegmentRef
 	if historyCfg.CompactHistoryContext != nil {
 		refs, err = historyCfg.CompactHistoryContext(ctx, dir, historyCfg, selection)
@@ -303,6 +315,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		}
 		return HistoryCompactionResult{}, err
 	}
+	outer.setPhase(historyCompactionOuterIntegrate)
 	var stagingBinding *historyStagingRetentionBinding
 	if historyCfg.Dataset == SegmentDatasetStateDomainChange {
 		if bound, present := historyStagingRetentionFor(dir); present {
@@ -324,6 +337,10 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	mergedManifest, err := NewAggregator(dir).Integrate(selection.fromTxNum, selection.toTxNum, refs)
 	if err != nil {
 		return HistoryCompactionResult{}, err
+	}
+	// Drop only performance hints after publication, independently of GC/rebind.
+	if sharedCosts != nil {
+		sharedCosts.forgetRetired(selection.candidates)
 	}
 	if stagingBinding != nil {
 		stagingBinding.ready = false // publication is invisible until durable rebind
@@ -350,6 +367,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		InputRecords:      selection.inputRecords,
 		InputSources:      uint64(len(selection.candidates)),
 	}
+	outer.setPhase(historyCompactionOuterCleanup)
 	if cfg.DeleteObsolete {
 		if err := deleteObsoleteHistoryCompactionFiles(dir, selection.candidates, refs); err != nil {
 			return result, err

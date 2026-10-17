@@ -1,5 +1,9 @@
 # Busy cold-history admission cost reuse
 
+> Historical policy: the per-hit observation, full-reference retention and capacity
+> contract below is superseded by [selection-only cost hints](2026-10-17-premerge-maintenance-cost-hints.md).
+> Selected fresh validation and source authorization remain required.
+
 The busy streaming selector repeatedly scans original leaves whose physical size
 fits 128 MiB but whose record/logical cost cannot fit its merge budget. Reopening
 their history footer and accessor header on every pass adds avoidable metadata IO.
