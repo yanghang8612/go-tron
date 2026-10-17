@@ -612,6 +612,25 @@ func (c *shard) runHandTest() {
 	c.handTest = c.handTest.next()
 }
 
+// ClockMetrics is a snapshot of the existing CLOCK-Pro accounting. Each shard
+// is sampled under its read lock, together with Metrics.Size and Metrics.Count;
+// sampling across shards is not atomic. No cache entries or clock hands are read
+// or modified to collect these values.
+type ClockMetrics struct {
+	Shards                         int64
+	HotCount, ColdCount, TestCount int64
+	HotBytes, ColdBytes            int64
+	// TestBytes is ghost bookkeeping for non-resident test entries, not memory
+	// occupied by cached block payloads.
+	TestBytes int64
+	// ColdTargetBytes is the sum of shard cold targets, not current occupancy.
+	ColdTargetBytes            int64
+	ColdCountMin, ColdCountMax int64
+	// ColdCountBuckets counts shards with cold entry counts of 0, 1, 2..7,
+	// 8..63, 64..511, and 512+, respectively. The buckets are disjoint.
+	ColdCountBuckets [6]int64
+}
+
 // Metrics holds metrics for the cache.
 type Metrics struct {
 	// The number of bytes inuse by the cache.
@@ -622,6 +641,8 @@ type Metrics struct {
 	Hits int64
 	// The number of cache misses.
 	Misses int64
+	// Clock holds snapshot gauges, not cumulative activity counters.
+	Clock ClockMetrics
 }
 
 // Cache implements Pebble's sharded block cache. The Clock-PRO algorithm is
@@ -887,14 +908,44 @@ func (c *Cache) Reserve(n int) func() {
 	}
 }
 
-// Metrics returns the metrics for the cache.
+// Metrics returns the metrics for the cache. Each shard's Size, Count, and
+// Clock accounting are sampled under the same existing read lock; the complete
+// cache sample is not atomic across shards.
 func (c *Cache) Metrics() Metrics {
 	var m Metrics
+	m.Clock.Shards = int64(len(c.shards))
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.RLock()
 		m.Count += int64(s.blocks.Count())
 		m.Size += s.sizeHot + s.sizeCold
+		m.Clock.HotCount += s.countHot
+		m.Clock.ColdCount += s.countCold
+		m.Clock.TestCount += s.countTest
+		m.Clock.HotBytes += s.sizeHot
+		m.Clock.ColdBytes += s.sizeCold
+		m.Clock.TestBytes += s.sizeTest
+		m.Clock.ColdTargetBytes += s.coldTarget
+		if i == 0 || s.countCold < m.Clock.ColdCountMin {
+			m.Clock.ColdCountMin = s.countCold
+		}
+		if s.countCold > m.Clock.ColdCountMax {
+			m.Clock.ColdCountMax = s.countCold
+		}
+		switch {
+		case s.countCold == 0:
+			m.Clock.ColdCountBuckets[0]++
+		case s.countCold == 1:
+			m.Clock.ColdCountBuckets[1]++
+		case s.countCold < 8:
+			m.Clock.ColdCountBuckets[2]++
+		case s.countCold < 64:
+			m.Clock.ColdCountBuckets[3]++
+		case s.countCold < 512:
+			m.Clock.ColdCountBuckets[4]++
+		default:
+			m.Clock.ColdCountBuckets[5]++
+		}
 		s.mu.RUnlock()
 		m.Hits += s.hits.Load()
 		m.Misses += s.misses.Load()

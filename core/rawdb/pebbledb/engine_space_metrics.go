@@ -39,6 +39,7 @@ type engineSpaceMetrics struct {
 	memtableLiveBytes         *metrics.Gauge
 	memtableZombieBytes       *metrics.Gauge
 	blockCacheBytes           *metrics.Gauge
+	blockCacheClock           engineCacheClockMetrics
 	blockCacheCapacityBytes   *metrics.Gauge
 	compactionInProgressBytes *metrics.Gauge
 	optionsManifestBytes      *metrics.Gauge
@@ -71,6 +72,7 @@ func newEngineSpaceMetrics(namespace string) *engineSpaceMetrics {
 		memtableLiveBytes:         gauge("memtable/live/bytes"),
 		memtableZombieBytes:       gauge("memtable/zombie/bytes"),
 		blockCacheBytes:           gauge("block_cache/bytes"),
+		blockCacheClock:           newEngineCacheClockMetrics(gauge),
 		blockCacheCapacityBytes:   gauge("block_cache/configured_capacity_bytes"),
 		compactionInProgressBytes: gauge("compaction/in_progress/bytes"),
 		optionsManifestBytes:      gauge("metadata/options_manifest/bytes"),
@@ -112,6 +114,7 @@ func (m *engineSpaceMetrics) update(stats *pebble.Metrics) {
 	// Size is Pebble's currently cached block payload, not the configured
 	// capacity or the entire native allocation footprint (e.g. cache metadata).
 	m.blockCacheBytes.Update(stats.BlockCache.Size)
+	m.blockCacheClock.update(stats.BlockCache)
 	m.compactionInProgressBytes.Update(stats.Compact.InProgressBytes)
 
 	// Pebble v1.1.5 keeps OPTIONS/MANIFEST sizes private. Its DiskSpaceUsage
@@ -130,4 +133,51 @@ func (m *engineSpaceMetrics) update(stats *pebble.Metrics) {
 	// Mark completion of this publication pass; separate registry gauges are
 	// still not an atomic snapshot for concurrent readers.
 	m.sampledAt.Update(time.Now().Unix())
+}
+
+// engineCacheClockMetrics publishes the CLOCK-Pro snapshot already included in
+// the engine sample. These gauges are non-atomic across cache shards and registry
+// publications. Test bytes describe ghost bookkeeping, not resident payload;
+// cold target bytes describe the replacement target, not occupied bytes.
+type engineCacheClockMetrics struct {
+	shards, hotEntries, coldEntries, testEntries    *metrics.Gauge
+	hotBytes, coldBytes, testBytes, coldTargetBytes *metrics.Gauge
+	coldCountMin, coldCountMax                      *metrics.Gauge
+	coldCountBuckets                                [6]*metrics.Gauge
+}
+
+func newEngineCacheClockMetrics(gauge func(string) *metrics.Gauge) engineCacheClockMetrics {
+	const prefix = "block_cache/clock/"
+	m := engineCacheClockMetrics{
+		shards:          gauge(prefix + "shards"),
+		hotEntries:      gauge(prefix + "hot/entries"),
+		coldEntries:     gauge(prefix + "cold/entries"),
+		testEntries:     gauge(prefix + "test/entries"),
+		hotBytes:        gauge(prefix + "hot/bytes"),
+		coldBytes:       gauge(prefix + "cold/bytes"),
+		testBytes:       gauge(prefix + "test/ghost_bytes"),
+		coldTargetBytes: gauge(prefix + "cold_target_bytes"),
+		coldCountMin:    gauge(prefix + "cold_count/min"),
+		coldCountMax:    gauge(prefix + "cold_count/max"),
+	}
+	for i, name := range [6]string{"0", "1", "2_7", "8_63", "64_511", "512_plus"} {
+		m.coldCountBuckets[i] = gauge(prefix + "cold_count/shards_" + name)
+	}
+	return m
+}
+
+func (m *engineCacheClockMetrics) update(stats pebble.CacheMetrics) {
+	m.shards.Update(stats.Clock.Shards)
+	m.hotEntries.Update(stats.Clock.HotCount)
+	m.coldEntries.Update(stats.Clock.ColdCount)
+	m.testEntries.Update(stats.Clock.TestCount)
+	m.hotBytes.Update(stats.Clock.HotBytes)
+	m.coldBytes.Update(stats.Clock.ColdBytes)
+	m.testBytes.Update(stats.Clock.TestBytes)
+	m.coldTargetBytes.Update(stats.Clock.ColdTargetBytes)
+	m.coldCountMin.Update(stats.Clock.ColdCountMin)
+	m.coldCountMax.Update(stats.Clock.ColdCountMax)
+	for i, value := range stats.Clock.ColdCountBuckets {
+		m.coldCountBuckets[i].Update(value)
+	}
 }
