@@ -26,7 +26,8 @@ var _ objstorage.Writable = (*fileBufferedWritable)(nil)
 func newFileBufferedWritable(file vfs.File) *fileBufferedWritable {
 	return &fileBufferedWritable{
 		file: file,
-		bw:   bufio.NewWriter(file),
+		// Coalesce small SST writes with a fixed bound; Finish still flushes before Sync.
+		bw: bufio.NewWriterSize(file, 64<<10),
 	}
 }
 

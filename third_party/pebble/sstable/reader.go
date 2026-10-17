@@ -613,6 +613,7 @@ func (r *Reader) readBlock(
 		}
 		if _, err := decompressInto(typ, compressed.get()[prefixLen:], decompressed.get()); err != nil {
 			compressed.release()
+			decompressed.release()
 			return bufferHandle{}, err
 		}
 		compressed.release()
