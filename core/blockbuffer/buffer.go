@@ -2534,6 +2534,7 @@ func readBaseIntoCache(base ethdb.KeyValueReader, cache *baseReadCache, key []by
 // cache operations consume the key synchronously; cache admission clones it
 // before this scratch buffer is returned to the pool.
 func readBaseIntoCachePooledKey(base ethdb.KeyValueReader, cache *baseReadCache, key []byte, epoch baseReadCacheEpoch) ([]byte, error) {
+	readMetrics := pooledForegroundBaseMetricsForKey(key)
 	keyBuf := borrowSplitReadKey()
 	pooledKey := keyBuf[:len(key)]
 	copy(pooledKey, key)
@@ -2548,6 +2549,7 @@ func readBaseIntoCachePooledKey(base ethdb.KeyValueReader, cache *baseReadCache,
 		value, err = readBaseIntoCache(base, cache, pooledKey, epoch)
 	}
 	returnSplitReadKey(keyBuf)
+	readMetrics.recordCompleted(err)
 	return value, err
 }
 

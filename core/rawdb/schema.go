@@ -1322,3 +1322,41 @@ func DrAccountIndexLegacyPageAccount(key []byte) ([]byte, bool) {
 	}
 	return key[offset+4 : end], true
 }
+
+// ClassifyStateKVLatestReadDomain identifies the two flat-latest key shapes
+// measured by pooled foreground base-read counters. It does not establish key
+// existence, owner generation, value validity, or a storage-engine read policy.
+func ClassifyStateKVLatestReadDomain(key []byte) (kvdomains.KVDomain, bool) {
+	const headerBytes = common.AccountIDLength + 8 + 2
+	if len(key) < len(stateKVLatestPrefix)+headerBytes || !bytes.HasPrefix(key, stateKVLatestPrefix) {
+		return 0, false
+	}
+	off := len(stateKVLatestPrefix) + common.AccountIDLength + 8
+	domain := kvdomains.KVDomain(binary.BigEndian.Uint16(key[off : off+2]))
+	logical := key[off+2:]
+	switch domain {
+	case kvdomains.ContractStorage:
+		if len(logical) == 32 {
+			return domain, true
+		}
+	case kvdomains.AccountAssetV2:
+		// Only canonical positive decimal int64 asset IDs are measured.
+		if len(logical) == 0 || len(logical) > 19 || logical[0] < '1' || logical[0] > '9' {
+			return 0, false
+		}
+		var id uint64
+		const maxID = uint64(1<<63 - 1)
+		for _, ch := range logical {
+			if ch < '0' || ch > '9' {
+				return 0, false
+			}
+			digit := uint64(ch - '0')
+			if id > (maxID-digit)/10 {
+				return 0, false
+			}
+			id = id*10 + digit
+		}
+		return domain, true
+	}
+	return 0, false
+}
