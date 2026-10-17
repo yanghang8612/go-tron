@@ -35,6 +35,8 @@ type CompactionConfig struct {
 	MaxInputLogicalBytes uint64
 	MaxInputRecords      uint64
 	MaxSources           uint64
+	// Runner-owned admission metadata, only used by the busy streaming path.
+	inputCostCache *historyCompactionCostCache
 }
 
 // HistoryCompactionResult describes a registered history-domain compaction pass.
@@ -128,7 +130,7 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		minSteps = maxSteps
 	}
 
-	manifest, err := LoadProductionManifest(dir)
+	manifest, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return HistoryCompactionResult{}, nil
@@ -152,11 +154,24 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 	// Group subdivision and final input accounting reuse them rather than
 	// reopening source headers for every attempted combination.
 	costCache := make(map[SegmentRef]historyCompactionInputCost)
+	var sharedCosts *historyCompactionCostCache
+	if cfg.BusyLeafOnly && !cfg.ReferenceContainer && dataset == SegmentDatasetStateDomainChange && cfg.inputCostCache != nil {
+		sharedCosts = cfg.inputCostCache
+		if err := sharedCosts.bind(ctx, dir, manifest.HistoryStagingResetEpoch); err != nil {
+			return HistoryCompactionResult{}, err
+		}
+	}
 	readCost := func(candidate historyCompactionCandidate) (historyCompactionInputCost, error) {
 		if cost, ok := costCache[candidate.history]; ok {
 			return cost, nil
 		}
-		cost, err := readHistoryCompactionInputCost(ctx, dir, candidate)
+		var cost historyCompactionInputCost
+		var err error
+		if sharedCosts != nil {
+			cost, err = sharedCosts.read(ctx, candidate, readHistoryCompactionInputCost)
+		} else {
+			cost, err = readHistoryCompactionInputCost(ctx, dir, candidate)
+		}
 		if err == nil {
 			costCache[candidate.history] = cost
 		}
@@ -202,6 +217,15 @@ func CompactHistoryDomainContext(ctx context.Context, dir string, dataset Segmen
 		selection.outputMode = historyCompactionOutputStreaming
 	} else if selection.outputMode == historyCompactionOutputAuto {
 		selection.outputMode = historyCompactionOutputReference
+	}
+	if sharedCosts != nil {
+		valid, err := revalidateHistoryCompactionCosts(ctx, sharedCosts, selection, cfg, costCache)
+		if err != nil {
+			return HistoryCompactionResult{}, err
+		}
+		if !valid {
+			return HistoryCompactionResult{Dataset: historyCfg.Dataset, Deferred: true, DeferReason: "input-cost-changed"}, nil
+		}
 	}
 
 	if dataset == SegmentDatasetStateDomainChange {

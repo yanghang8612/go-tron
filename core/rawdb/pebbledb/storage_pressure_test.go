@@ -85,6 +85,53 @@ func TestMaintenancePressureObservesStallLifecycle(t *testing.T) {
 	}
 }
 
+func TestMaintenancePressureFreshAcrossFlushAndCompaction(t *testing.T) {
+	db, err := New(t.TempDir(), 16, 32, "test/maintenance-pressure/transitions/", false, Options{DisableAutomaticCompactions: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	check := func(stage string) {
+		t.Helper()
+		before := time.Now()
+		got := db.MaintenancePressure()
+		full := db.db.Metrics()
+		if !got.Available || got.SampledAt.Before(before) || got.SampledAt.After(time.Now()) ||
+			got.L0Sublevels != int(full.Levels[0].Sublevels) || got.MemTableCount != full.MemTable.Count || got.CompactionDebt != full.Compact.EstimatedDebt {
+			t.Fatalf("%s: pressure %+v differs from current engine %+v", stage, got, db.db.MaintenanceMetrics())
+		}
+	}
+	check("empty")
+	if err := db.Put([]byte("overlapping"), bytes.Repeat([]byte{1}, 4096)); err != nil {
+		t.Fatal(err)
+	}
+	check("pending memtable")
+	if err := db.db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	check("first flush")
+	if err := db.Compact(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("base compacted")
+	for i := byte(2); i < 5; i++ {
+		if err := db.Put([]byte("overlapping"), bytes.Repeat([]byte{i}, 4096)); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.db.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		check("overlapping flush")
+	}
+	if got := db.MaintenancePressure(); got.L0Sublevels < 3 || got.CompactionDebt == 0 {
+		t.Fatalf("fixture did not exercise real debt: %+v", got)
+	}
+	if err := db.Compact(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("compacted again")
+}
+
 func TestMaintenancePressureConcurrentClose(t *testing.T) {
 	db, err := New(t.TempDir(), 16, 32, "test/maintenance-pressure/close/", false, Options{})
 	if err != nil {

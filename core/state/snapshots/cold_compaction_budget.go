@@ -18,9 +18,10 @@ const (
 // Protected by Runner.passMu. A merge recovery belongs to optional compaction,
 // independently of the deadline for publishing and pruning new cold history.
 type historyCompactionBudgetState struct {
-	notBefore time.Time
-	pending   bool
-	pendingAt time.Time
+	notBefore  time.Time
+	pending    bool
+	pendingAt  time.Time
+	inputCosts *historyCompactionCostCache
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -187,6 +188,12 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		cfg.MaxInputLogicalBytes = busyHistoryCompactionLogicalBytes
 		cfg.MaxInputRecords = busyHistoryCompactionInputRecords
 		cfg.MaxSources = busyHistoryCompactionSources
+		if !cfg.ReferenceContainer {
+			if r.compactionBudget.inputCosts == nil {
+				r.compactionBudget.inputCosts = newHistoryCompactionCostCache()
+			}
+			cfg.inputCostCache = r.compactionBudget.inputCosts
+		}
 		drain = false
 	} else if catchingUp {
 		cfg.MinSteps = r.cfg.CompactMaxSteps
