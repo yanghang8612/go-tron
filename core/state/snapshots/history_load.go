@@ -103,6 +103,8 @@ type historyLoadState struct {
 	eventFailureBlocks   uint64
 	metrics              map[string]*metrics.Gauge
 	reasonEntries        [len(historyLoadReasonMetrics)]*metrics.Counter
+	middleHistoryTargets *metrics.Counter
+	middleEventTargets   *metrics.Counter
 }
 
 func (r *Runner) initHistoryLoadMetrics() {
@@ -111,6 +113,11 @@ func (r *Runner) initHistoryLoadMetrics() {
 		// immediately launch a full-keyspace job on a large existing database.
 		r.historyLoad.syncSeenAt = time.Now()
 	}
+	// Counts range decisions receiving the larger middle target, including work
+	// later rejected by a lease/deadline. These are not completed job counters.
+	namespace := strings.TrimRight(r.cfg.MetricsNamespace, "/") + "/history/budget/"
+	r.historyLoad.middleHistoryTargets = metrics.GetOrRegisterCounter(namespace+"middle/history/selected", nil)
+	r.historyLoad.middleEventTargets = metrics.GetOrRegisterCounter(namespace+"middle/event/selected", nil)
 	r.historyLoad.metrics = make(map[string]*metrics.Gauge)
 	for _, name := range []string{"level", "hard", "deferred", "duty_ppm", "cpu_burst", "block_limit", "txnum_limit", "recovery_cost", "density_work", "density_metadata_work", "density_gc_work", "density_total_work", "density_measurement", "device_known", "device_busy_ppm", "device_queue_milli", "device_await", "compaction_debt", "merge_input_bytes", "merge_input_logical_bytes", "merge_input_records", "merge_sources", "merge_recovery",
 		"reason_bits", "debt_tier", "debt_recovery", "l0_sublevels", "l0_compaction_threshold", "l0_stop_writes_threshold", "debt_rises", "debt_trend_points", "debt_trend_span_ns", "debt_trend_net_bytes", "debt_trend_positive_steps", "debt_trend_growth_points", "debt_trend_growth_span_ns", "debt_trend_growth_net_bytes", "debt_trend_growth_positive_steps", "good", "sample_accepted", "accepted_sequence", "accepted_sample_unix_nano"} {
@@ -481,13 +488,17 @@ func historyScaledLimit(count uint64, ratio float64) uint64 {
 }
 
 func (s *historyLoadState) batchLimit(configured, previous uint64, sample historyWorkSample) uint64 {
+	targetWork, targetBytes := s.targets()
+	return s.batchLimitWithTargets(configured, previous, sample, targetWork, targetBytes)
+}
+
+func (s *historyLoadState) batchLimitWithTargets(configured, previous uint64, sample historyWorkSample, targetWork time.Duration, targetBytes uint64) uint64 {
 	if configured == 0 {
 		return 0
 	}
 	if sample.work <= 0 || previous == 0 {
 		return max(uint64(1), configured/4)
 	}
-	targetWork, targetBytes := s.targets()
 	ratio := float64(targetWork) / float64(sample.work)
 	if sample.bytes > 0 {
 		ratio = min(ratio, float64(targetBytes)/float64(sample.bytes))
@@ -511,13 +522,28 @@ func (s *historyLoadState) batchLimit(configured, previous uint64, sample histor
 	return min(configured, limit)
 }
 
+// Middle debt already permits 60% duty, but a larger single batch additionally
+// needs the node's current independent CPU/runtime/memory admission. Missing or
+// rejected resources retain the original liveness target, rather than rejecting
+// history altogether. This is a scheduling target, not a memory reservation.
+func (r *Runner) historyBatchTargets(now time.Time) (time.Duration, uint64) {
+	if r.cfg.HeavyWorkGate != nil && r.historyLoad.debtModerateReady(now) && r.cfg.BusyHistoryBuildReady != nil && r.cfg.BusyHistoryBuildReady() && r.historyLoad.debtModerateReady(time.Now()) {
+		return 4 * time.Second, 64 << 20
+	}
+	return r.historyLoad.targets()
+}
+
 func (r *Runner) adaptiveHistoryBatchLimits(blocks, txnums uint64) (uint64, uint64) {
 	if !r.throughputCatchup() || !r.historySyncBudgetActive() || r.cfg.HistoryLoadProbe == nil {
 		return blocks, txnums
 	}
 	s := &r.historyLoad
-	blocks = s.batchLimit(blocks, s.history.blocks, s.history)
-	txnums = s.batchLimit(txnums, s.history.txnums, s.history)
+	targetWork, targetBytes := r.historyBatchTargets(time.Now())
+	if s.level == 1 && targetWork == 4*time.Second && targetBytes == 64<<20 && s.middleHistoryTargets != nil {
+		s.middleHistoryTargets.Inc(1)
+	}
+	blocks = s.batchLimitWithTargets(blocks, s.history.blocks, s.history, targetWork, targetBytes)
+	txnums = s.batchLimitWithTargets(txnums, s.history.txnums, s.history, targetWork, targetBytes)
 	if s.historyFailureBlocks > 0 {
 		blocks = min(blocks, s.historyFailureBlocks)
 	}
@@ -536,7 +562,11 @@ func (r *Runner) adaptiveEventBatchLimit(blocks uint64) uint64 {
 	// Do not let an independent freezer-dependent event gap start with a
 	// 65,536-block burst. Its own observed density then controls later ranges.
 	blocks = min(blocks, r.cfg.BatchBlocks)
-	limit := r.historyLoad.batchLimit(blocks, r.historyLoad.event.blocks, r.historyLoad.event)
+	targetWork, targetBytes := r.historyBatchTargets(time.Now())
+	if r.historyLoad.level == 1 && targetWork == 4*time.Second && targetBytes == 64<<20 && r.historyLoad.middleEventTargets != nil {
+		r.historyLoad.middleEventTargets.Inc(1)
+	}
+	limit := r.historyLoad.batchLimitWithTargets(blocks, r.historyLoad.event.blocks, r.historyLoad.event, targetWork, targetBytes)
 	if r.historyLoad.eventFailureBlocks > 0 {
 		limit = min(limit, r.historyLoad.eventFailureBlocks)
 	}
