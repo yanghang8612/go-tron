@@ -18,6 +18,7 @@ import (
 // page cache. These counters deliberately do not claim that every call reached
 // the storage device.
 type physicalReadMetrics struct {
+	caller          *physicalReadCallerMetrics
 	calls           *metrics.Counter
 	bytes           *metrics.Counter
 	nanos           *metrics.Counter
@@ -54,6 +55,7 @@ func newPhysicalReadFDMetrics(prefix string) physicalReadFDMetrics {
 func newPhysicalReadMetrics(namespace string) *physicalReadMetrics {
 	prefix := namespace + "disk/physical/read/sst/"
 	return &physicalReadMetrics{
+		caller:          newPhysicalReadCallerMetrics(namespace),
 		calls:           metrics.GetOrRegisterCounter(prefix+"calls", nil),
 		bytes:           metrics.GetOrRegisterCounter(prefix+"bytes", nil),
 		nanos:           metrics.GetOrRegisterCounter(prefix+"nanos", nil),
@@ -85,11 +87,12 @@ func (fs *physicalReadFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, e
 	if err != nil || !strings.HasSuffix(name, ".sst") {
 		return file, err
 	}
+	fdMetrics := fs.metrics.fdMetrics(opts)
+	seed := physicalReadNameSeed(name)
 	return &physicalReadFile{
-		File:       file,
-		metrics:    fs.metrics,
-		fdMetrics:  fs.metrics.fdMetrics(opts),
-		sampleSeed: physicalReadNameSeed(name),
+		File: file, metrics: fs.metrics, fdMetrics: fdMetrics, sampleSeed: seed,
+		callerSeed:    physicalReadCallerSeed(seed, physicalReadOpenNonce.Add(1)),
+		callerMetrics: fs.metrics.caller.forFD(fs.metrics, fdMetrics),
 	}, nil
 }
 
@@ -135,6 +138,8 @@ type physicalReadFile struct {
 	lastOffsetPlusOne atomic.Int64
 	observationCount  atomic.Uint64
 	sampleSeed        uint64
+	callerSeed        uint64
+	callerMetrics     *physicalReadCallerBuckets
 }
 
 // Locality is diagnostic rather than accounting data. Sampling one in every
@@ -166,7 +171,9 @@ func physicalReadShouldSample(ordinal, seed uint64) bool {
 
 func (f *physicalReadFile) ReadAt(p []byte, offset int64) (int, error) {
 	previous := f.lastOffsetPlusOne.Swap(offset + 1)
-	sampleLocality := physicalReadShouldSample(f.observationCount.Add(1), f.sampleSeed) && previous != 0
+	ordinal := f.observationCount.Add(1)
+	sampleLocality := physicalReadShouldSample(ordinal, f.sampleSeed) && previous != 0
+	sampleCaller := f.callerMetrics != nil && physicalReadCallerShouldSample(ordinal, f.callerSeed)
 	started := time.Now()
 	n, err := f.File.ReadAt(p, offset)
 	elapsed := time.Since(started)
@@ -193,6 +200,9 @@ func (f *physicalReadFile) ReadAt(p []byte, offset int64) (int, error) {
 		if jump == 0 {
 			f.metrics.sameOffset.Inc(1)
 		}
+	}
+	if sampleCaller {
+		f.callerMetrics.observe(n, err, n != len(p), elapsed)
 	}
 	return n, err
 }

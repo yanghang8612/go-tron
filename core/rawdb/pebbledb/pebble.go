@@ -344,6 +344,7 @@ type Database struct {
 	pressureThresholds storagePressureThresholds
 	engineSpace        *engineSpaceMetrics
 	diskSpace          *diskSpaceObserver
+	compactionBounds   *compactionBoundsObserver
 }
 
 // pointReadView holds Database's lifecycle read lock across a short burst of
@@ -726,6 +727,7 @@ func (d *Database) onCompactionEnd(info pebble.CompactionInfo) {
 		panic("should not happen")
 	}
 	d.activeComp--
+	d.compactionBounds.observe(info)
 }
 
 func (d *Database) onWriteStallBegin(b pebble.WriteStallBeginInfo) {
@@ -867,11 +869,12 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		memTableSize = maxMemTableSize - 1
 	}
 	db := &Database{
-		boundedPointGet: pointMode == "get",
-		fn:              file,
-		log:             logger,
-		quitChan:        make(chan chan error),
-		namespace:       namespace,
+		boundedPointGet:  pointMode == "get",
+		fn:               file,
+		log:              logger,
+		quitChan:         make(chan chan error),
+		namespace:        namespace,
+		compactionBounds: newCompactionBoundsObserver(namespace, spaceRanges),
 
 		// Use asynchronous write mode by default. Otherwise, the overhead of frequent fsync
 		// operations can be significant, especially on platforms with slow fsync performance
