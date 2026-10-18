@@ -11,12 +11,15 @@ import (
 )
 
 const fieldBytes = 384
+const fieldBits = fieldBytes * 8
 
 // State is the complete canonical group element, fixed-width little endian.
 // Restoring State resumes an accumulator with denominator one.
 type State [fieldBytes]byte
 
 var modulus = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 3072), big.NewInt(1103717))
+var fieldMask = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), fieldBits), big.NewInt(1))
+var fieldCorrection = big.NewInt(1103717)
 var errState = errors.New("invalid MuHash3072 state")
 var errZeroElement = errors.New("MuHash3072 mapped element is zero")
 var stateMagic = []byte{'G', 'M', 'H', '3', '0', '7', '2', 0}
@@ -25,7 +28,36 @@ const stateVersion uint16 = 1
 
 // Accumulator is exclusively owned; copying this struct is forbidden. Clone
 // deep-copies math/big storage. The zero value is invalid, never the identity.
-type Accumulator struct{ num, den big.Int }
+type Accumulator struct {
+	num, den  big.Int
+	reduction reductionScratch
+}
+
+// reductionScratch is owned by one accumulator or one Finalize call. Globals
+// above are read-only; high/low never borrow the product receiver's storage.
+type reductionScratch struct{ high, low big.Int }
+
+// reduceProduct replaces x by x mod p for 0 <= x < 2^(2*fieldBits).
+// Callers only pass products of two canonical field elements. For B=2^3072,
+// c=1103717 and p=B-c, fold1=low+c*high < (c+1)*B; fold2 < B+c^2 < 2*p.
+// Thus two folds followed by at most one subtraction yield a canonical value.
+// This is not a reduction API for unbounded or negative big.Int inputs.
+func (s *reductionScratch) reduceProduct(x *big.Int) {
+	if x.BitLen() > fieldBits {
+		for range 2 {
+			// Capture both halves before changing x. The distinct receivers
+			// retain owned scratch, including across successive Insert/Remove.
+			s.high.Rsh(x, fieldBits)
+			s.low.And(x, fieldMask)
+			s.high.Mul(&s.high, fieldCorrection)
+			x.Add(&s.low, &s.high)
+		}
+	}
+	if x.Cmp(modulus) >= 0 {
+		x.Sub(x, modulus)
+	}
+}
+
 type Finalized struct {
 	Digest [32]byte
 	State  State
@@ -78,7 +110,11 @@ func mapElement(raw []byte) (*big.Int, error) {
 	var stream [fieldBytes]byte
 	c.XORKeyStream(stream[:], stream[:])
 	n := fromLE(stream[:])
-	n.Mod(n, modulus)
+	// The 384-byte mapping is already below 2^3072, so at most one
+	// subtraction is needed. Do not normalize values read by FromState.
+	if n.Cmp(modulus) >= 0 {
+		n.Sub(n, modulus)
+	}
 	if n.Sign() == 0 {
 		return nil, errZeroElement
 	}
@@ -93,7 +129,7 @@ func (a *Accumulator) Insert(raw []byte) error {
 		return e
 	}
 	a.num.Mul(&a.num, n)
-	a.num.Mod(&a.num, modulus)
+	a.reduction.reduceProduct(&a.num)
 	return nil
 }
 func (a *Accumulator) Remove(raw []byte) error {
@@ -105,7 +141,7 @@ func (a *Accumulator) Remove(raw []byte) error {
 		return e
 	}
 	a.den.Mul(&a.den, n)
-	a.den.Mod(&a.den, modulus)
+	a.reduction.reduceProduct(&a.den)
 	return nil
 }
 
@@ -121,7 +157,10 @@ func (a *Accumulator) Finalize() (Finalized, error) {
 		return out, errState
 	}
 	n := new(big.Int).Mul(&a.num, inverse)
-	n.Mod(n, modulus)
+	// Finalize is observational: never mutate the accumulator's scratch or
+	// field elements, and never share temporary storage with its parent.
+	var scratch reductionScratch
+	scratch.reduceProduct(n)
 	if n.Sign() == 0 {
 		return out, errState
 	}

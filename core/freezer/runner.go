@@ -638,6 +638,8 @@ type Runner struct {
 	v2SourcePrunedDeferred        atomic.Uint64
 	v2SourcePrunedWarned          atomic.Bool
 	v2Errors                      atomic.Uint64
+	directV2RetryAt               atomic.Int64
+	directV2RetryMu               sync.Mutex // hint and its observation gauges only
 	txIndexCatchupDeferred        atomic.Uint64
 	txIndexResourceDeferred       atomic.Uint64
 	txIndexErrorBackoffDeferred   atomic.Uint64
@@ -743,6 +745,7 @@ func (r *Runner) BeginStop() {
 	r.once.Do(func() {
 		close(r.quit)
 		r.pauseCancel()
+		r.clearDirectV2Retry()
 	})
 }
 
@@ -1768,6 +1771,9 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		return 0, nil
 	}
 	defer r.workMu.Unlock()
+	// A fresh plan supersedes the previous rejected-admission hint. All
+	// prerequisite and error exits retain the ordinary maintenance cadence.
+	r.clearDirectV2Retry()
 	if err := r.checkStopping(); err != nil {
 		return 0, err
 	}
@@ -1940,6 +1946,7 @@ func (r *Runner) OnePass() (frozen uint64, err error) {
 		directLease = &directV2Lease{r: r}
 		if !directLease.tryAcquire() {
 			r.recordHeavyMaintenanceDeferred(heavyMaintenanceV2, heavyMaintenanceDeferredResource)
+			r.deferDirectV2Admission()
 			return 0, nil
 		}
 		directLease.jobStart = time.Now()
@@ -2540,6 +2547,7 @@ func (r *Runner) pruneFrozenStateRoots(upTo uint64) error {
 func (r *Runner) loop() {
 	defer close(r.done)
 	defer r.resetTransactionIndexBudget()
+	defer r.clearDirectV2Retry()
 
 	if frozen, err := r.OnePass(); err != nil {
 		if errors.Is(err, errRunnerStopping) {
@@ -2578,6 +2586,24 @@ func (r *Runner) loop() {
 		}
 	}
 	resetIndexRetry()
+	directTimer := time.NewTimer(time.Hour)
+	directTimer.Stop()
+	defer directTimer.Stop()
+	var directRetry <-chan time.Time
+	resetDirectRetry := func() {
+		if !directTimer.Stop() {
+			select {
+			case <-directTimer.C:
+			default:
+			}
+		}
+		directRetry = nil
+		if deadline := r.directV2RetryDeadline(); !deadline.IsZero() {
+			directTimer.Reset(directV2RetryDelay(deadline, time.Now()))
+			directRetry = directTimer.C
+		}
+	}
+	resetDirectRetry()
 	for {
 		// Give shutdown priority over an already-buffered ticker or requested
 		// pass. The second check inside OnePass closes the remaining select race.
@@ -2607,6 +2633,7 @@ func (r *Runner) loop() {
 				log.Warn("Freezer: transaction-index maintenance failed", "err", err)
 			}
 			resetIndexRetry()
+			resetDirectRetry()
 		case <-indexRetry:
 			// Retry only the due index quantum. Re-running the body publisher
 			// first would always give it the lease and renew its recovery window.
@@ -2618,6 +2645,40 @@ func (r *Runner) loop() {
 				r.resetTransactionIndexBudget()
 			}
 			resetIndexRetry()
+			resetDirectRetry()
+		case <-directRetry:
+			directRetry = nil
+			if r.checkStopping() != nil {
+				return
+			}
+			if r.takeDirectV2Retry(time.Now()) {
+				// The independent index timer intentionally does not run the
+				// body publisher first. Preserve that priority when both are due;
+				// rearm/drain its old ready channel before returning to select.
+				if deadline := r.transactionIndexRetryDeadline(); !deadline.IsZero() && !time.Now().Before(deadline) {
+					if r.cfg.SyncActive != nil && r.cfg.SyncActive() {
+						if _, err := r.MaintainTransactionIndexOnce(); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errRunnerStopping) {
+							log.Warn("Freezer: due transaction-index maintenance failed", "err", err)
+						}
+					} else {
+						r.resetTransactionIndexBudget()
+					}
+					resetIndexRetry()
+				}
+				if r.checkStopping() != nil {
+					return
+				}
+				if frozen, err := r.OnePass(); err != nil {
+					if errors.Is(err, errRunnerStopping) {
+						return
+					}
+					log.Warn("Freezer: direct admission retry failed", "err", err)
+				} else if frozen > 0 {
+					log.Info("Freezer: direct admission retry frozen", "blocks", frozen)
+				}
+				resetIndexRetry()
+			}
+			resetDirectRetry()
 		case <-r.wake:
 			if frozen, err := r.OnePass(); err != nil {
 				if errors.Is(err, errRunnerStopping) {
@@ -2636,6 +2697,7 @@ func (r *Runner) loop() {
 				log.Warn("Freezer: requested transaction-index maintenance failed", "err", err)
 			}
 			resetIndexRetry()
+			resetDirectRetry()
 		}
 	}
 }
