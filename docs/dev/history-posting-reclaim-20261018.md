@@ -239,6 +239,18 @@ hot/history write delay 计数均为 0，窗口没有新增；这不是整个 VM
 进程累计 posting 删除 **33,515,189 帧 / 2,285,475,749 B**，错误为 0。
 此处累计量与上述十分钟窗口分别表述，不混合不同采样时间计算速率。
 
+延长的端点观测为 **03:19:03.667629–04:29:52.018223 UTC**，4,248.350594 秒。
+前后及 04:30:06 UTC 的服务器观测均为 PID 23800；这不是另一个连续 61 点窗口。
+期间删除 **19,144,839 帧 / 1,316,310,558 B**，成功索引阶段写入
+**17,239,014 帧**，近似速率分别为 **4,506.417** 与 **4,057.813 帧/s**。
+删除工作量多 **1,905,825 帧**；持锁 **29.319506441 秒，占 0.690138579%**。
+posting / cold 累计错误仍为 0。端点样本不能替代对每个中间状态的连续观察，
+上述写入/删除差也仍不是独立的 distinct-key 净行数 census。
+
+该区间末当前高度 **34,735,746**，冷发布 **34,406,753**；进程累计删除
+**44,149,921 帧 / 3,022,717,910 B**。原始端点 JSON 和计算回执保存在本地
+`online-late-2-observation.json`、`extended-endpoint-observation.json`。
+
 ## 后续优先项
 
 先让已验证的 posting 清理持续运行，观察较长窗口的写入/删除量和 compaction 落盘。
@@ -257,3 +269,22 @@ hot/history write delay 计数均为 0，窗口没有新增；这不是整个 VM
 目录的 2,510,909 次 upsert/十分钟也值得单独衡量重复写放大；它不等于新增同数量
 不同目录键。posting 的短帧与键占比可用于后续编码/索引布局研究，但 SST 已做前缀
 压缩，减少逻辑前缀字节不能直接换算成等额磁盘收益。
+
+## 运行中复核命令
+
+从本机按既定 SOCKS5 路径读取实际 worker 与写入计数：
+
+```bash
+curl -sS --proxy socks5h://127.0.0.1:1088 \
+  'http://3.12.206.71:6060/debug/pprof/metrics?prefix=state/prune/posting/'
+curl -sS --proxy socks5h://127.0.0.1:1088 \
+  'http://3.12.206.71:6060/debug/pprof/metrics?prefix=sync/stage/state_history_index/'
+curl -sS --proxy socks5h://127.0.0.1:1088 \
+  'http://3.12.206.71:6060/gm/wallet/getnodeinfo'
+```
+
+重点看 `deleted/rows`、`deleted/bytes`、`debt_relief/chunks`、`errors` 和
+`posting_frames_written`。连续两点需要同一进程才能作累计计数差；进程身份应从
+服务器 `systemctl show gtron -p MainPID -p ExecMainStartTimestamp --no-pager` 核对。
+`deleted/bytes` 是成功删除的编码 KV 字节；实际磁盘还需观察
+`history/storage/engine/sst/current/bytes`，不能将二者互换。
