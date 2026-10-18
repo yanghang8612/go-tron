@@ -105,7 +105,7 @@ func seedCompactStore(t *testing.T, path string, optionalFields bool) {
 		t.Fatal(err)
 	}
 	if optionalFields {
-		if err := rawdb.WriteCommitmentEngineState(db, []byte("fixture engine")); err != nil {
+		if err := rawdb.WriteStateCommitmentHead(db, rawdb.NewStateCommitmentHead()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -192,7 +192,7 @@ func TestCompactAcceptsAbsentOptionalMetadata(t *testing.T) {
 		t.Fatalf("compact with absent optional fields: %v", err)
 	}
 	report, err := readStatus(path, "", false, false)
-	if err != nil || report.Guard.SolidHash.Present || report.Guard.EngineStateSHA256.Present || !report.Guard.LatestCommitmentRoot.Present {
+	if err != nil || report.Guard.SolidHash.Present || report.Guard.CommitmentHeadSHA256.Present || !report.Guard.LatestCommitmentRoot.Present {
 		t.Fatalf("optional presence after reopen: %+v %v", report.Guard, err)
 	}
 }
@@ -219,8 +219,8 @@ func TestCompactRejectsIncorrectStoredSolidHash(t *testing.T) {
 
 func TestProtectedOptionalPresenceCannotChange(t *testing.T) {
 	before := protectedState{Guard: guard{
-		SolidHash:         field[string]{Present: false},
-		EngineStateSHA256: field[string]{Present: false},
+		SolidHash:            field[string]{Present: false},
+		CommitmentHeadSHA256: field[string]{Present: false},
 	}}
 	if err := verifyProtectedUnchanged(before, before); err != nil {
 		t.Fatal(err)
@@ -230,9 +230,9 @@ func TestProtectedOptionalPresenceCannotChange(t *testing.T) {
 		mutate func(*protectedState)
 	}{
 		{"solid appeared", func(s *protectedState) { s.Guard.SolidHash = field[string]{Present: true, Value: "0x1234"} }},
-		{"engine appeared", func(s *protectedState) { s.Guard.EngineStateSHA256 = field[string]{Present: true, Value: "abcd"} }},
+		{"engine appeared", func(s *protectedState) { s.Guard.CommitmentHeadSHA256 = field[string]{Present: true, Value: "abcd"} }},
 		{"solid disappeared", func(s *protectedState) { s.Guard.SolidHash = field[string]{} }},
-		{"engine disappeared", func(s *protectedState) { s.Guard.EngineStateSHA256 = field[string]{} }},
+		{"engine disappeared", func(s *protectedState) { s.Guard.CommitmentHeadSHA256 = field[string]{} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			start := before
@@ -240,7 +240,7 @@ func TestProtectedOptionalPresenceCannotChange(t *testing.T) {
 				start.Guard.SolidHash = field[string]{Present: true, Value: "0x1234"}
 			}
 			if tc.name == "engine disappeared" {
-				start.Guard.EngineStateSHA256 = field[string]{Present: true, Value: "abcd"}
+				start.Guard.CommitmentHeadSHA256 = field[string]{Present: true, Value: "abcd"}
 			}
 			end := start
 			tc.mutate(&end)

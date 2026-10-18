@@ -413,47 +413,29 @@ func TestStateDBTemporalDomainsReadHistoryCommitmentAndFlush(t *testing.T) {
 	}
 }
 
-func TestStateDBCommitRepairsMissingCommitmentRootFromNodes(t *testing.T) {
+func TestStateDBMissingCommitmentRootFailsClosed(t *testing.T) {
 	sdb := newTestStateDB(t)
 	owner := testAddr(0x7b)
-	domain := kvdomains.SystemReward
-	key := []byte("repair/root")
+	key := []byte("missing/root")
+	if err := sdb.SetAccountKV(owner, kvdomains.SystemReward, key, []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
 	disk := sdb.db.DiskDB()
-
-	if err := sdb.SetAccountKV(owner, domain, key, []byte("v1")); err != nil {
-		t.Fatal(err)
-	}
-	root1, err := sdb.Commit()
-	if err != nil {
-		t.Fatalf("commit v1: %v", err)
-	}
 	if err := rawdb.DeleteStateCommitmentDomain(disk, rawdb.LatestDomainCommitmentRootLogicalKey()); err != nil {
-		t.Fatalf("delete commitment root row: %v", err)
-	}
-	if _, ok, err := rawdb.ReadLatestDomainCommitmentRoot(disk); err != nil || ok {
-		t.Fatalf("root before repair ok=%v err=%v", ok, err)
-	}
-
-	head, err := New(root1, sdb.db)
-	if err != nil {
 		t.Fatal(err)
 	}
-	if err := head.SetAccountKV(owner, domain, key, []byte("v2")); err != nil {
+	if err := sdb.SetAccountKV(owner, kvdomains.SystemReward, key, []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
-	root2, err := head.Commit()
-	if err != nil {
-		t.Fatalf("commit v2: %v", err)
+	if _, err := sdb.Commit(); err == nil {
+		t.Fatal("missing root silently repaired")
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
-	if err != nil {
-		t.Fatalf("rebuild latest commitment: %v", err)
-	}
-	if root2 != rebuilt {
-		t.Fatalf("commitment root after repair/update = %x, rebuilt = %x", root2, rebuilt)
-	}
-	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(disk); err != nil || !ok || stored != root2 {
-		t.Fatalf("stored root after repair = %x ok=%v err=%v, want %x", stored, ok, err, root2)
+	got, ok, err := rawdb.ReadStateKVLatest(disk, owner, 0, kvdomains.SystemReward, key)
+	if err != nil || !ok || string(got) != "v1" {
+		t.Fatal("failed commit published source")
 	}
 }
 
@@ -475,12 +457,15 @@ func TestDomainCommitmentStateRecordsLogicalDomainTouches(t *testing.T) {
 			t.Fatalf("write latest %s: %v", key, err)
 		}
 	}
-	initialRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
+	initialRoot, err := statedomains.RebuildMuHashCommitment(disk)
 	if err != nil {
 		t.Fatalf("initial commitment: %v", err)
 	}
 
 	commitment := NewDomainCommitmentState(sdb)
+	for _, key := range []string{"prefix/1", "prefix/2", "prefix/3"} {
+		capturePhysicalFixture(t, commitment, disk, rawdb.StateKVLatestCommitmentKey(owner, 0, domain, []byte(key)))
+	}
 	flat := statedomains.NewFlatStore(disk, 0)
 	tx := statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
 		Latest:     flat,
@@ -503,11 +488,11 @@ func TestDomainCommitmentStateRecordsLogicalDomainTouches(t *testing.T) {
 	if len(updates) != 3 {
 		t.Fatalf("touch-derived updates = %+v, want deletes for prefix/1,prefix/2 and put for prefix/3", updates)
 	}
-	updatedRoot, err := statedomains.NewStagedCommitmentStore(disk).Update(updates)
+	updatedRoot, err := statedomains.ApplyMuHashCommitment(disk, updates, statedomains.CommitmentIdentity{})
 	if err != nil {
 		t.Fatalf("update commitment from touches: %v", err)
 	}
-	rebuiltRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
+	rebuiltRoot, err := statedomains.RebuildMuHashCommitment(disk)
 	if err != nil {
 		t.Fatalf("rebuild commitment: %v", err)
 	}
@@ -539,12 +524,14 @@ func TestDomainCommitmentStateRecordsAccountAndGenerationTouches(t *testing.T) {
 	if err := rawdb.WriteStateKVGeneration(disk, owner, 1); err != nil {
 		t.Fatal(err)
 	}
-	initialRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
+	initialRoot, err := statedomains.RebuildMuHashCommitment(disk)
 	if err != nil {
 		t.Fatalf("initial commitment: %v", err)
 	}
 
 	commitment := NewDomainCommitmentState(sdb)
+	capturePhysicalFixture(t, commitment, disk, rawdb.StateAccountLatestCommitmentKey(owner))
+	capturePhysicalFixture(t, commitment, disk, rawdb.StateKVGenerationCommitmentKey(owner))
 	if err := rawdb.WriteStateAccountLatest(disk, owner, []byte("account-v2")); err != nil {
 		t.Fatal(err)
 	}
@@ -561,11 +548,11 @@ func TestDomainCommitmentStateRecordsAccountAndGenerationTouches(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("touch-derived updates = %+v, want account latest put and KV generation delete", updates)
 	}
-	updatedRoot, err := statedomains.NewStagedCommitmentStore(disk).Update(updates)
+	updatedRoot, err := statedomains.ApplyMuHashCommitment(disk, updates, statedomains.CommitmentIdentity{})
 	if err != nil {
 		t.Fatalf("update commitment from touches: %v", err)
 	}
-	rebuiltRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
+	rebuiltRoot, err := statedomains.RebuildMuHashCommitment(disk)
 	if err != nil {
 		t.Fatalf("rebuild commitment: %v", err)
 	}
@@ -601,6 +588,11 @@ func TestDomainCommitmentStateUsesStateLatestViewForTouches(t *testing.T) {
 	sdb.setAccountKVLatestView(view, view)
 
 	commitment := NewDomainCommitmentState(sdb)
+	capturePhysicalFixture(t, commitment, disk, rawdb.StateAccountLatestCommitmentKey(owner))
+	capturePhysicalFixture(t, commitment, disk, rawdb.StateKVGenerationCommitmentKey(owner))
+	for _, key := range []string{"prefix/1", "prefix/2", "prefix/3"} {
+		capturePhysicalFixture(t, commitment, disk, rawdb.StateKVLatestCommitmentKey(owner, 7, domain, []byte(key)))
+	}
 	commitment.recordAccountLatestTouch(owner)
 	commitment.recordKVGenerationTouch(owner)
 	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{
@@ -659,6 +651,9 @@ func TestDomainCommitmentStateUsesCapturedFinalKVMutations(t *testing.T) {
 
 	finalValue := []byte("final")
 	commitment := NewDomainCommitmentState(sdb)
+	for _, key := range []string{"prefix/final", "prefix/gone", "empty"} {
+		capturePhysicalFixture(t, commitment, disk, rawdb.StateKVLatestCommitmentKey(owner, 9, domain, []byte(key)))
+	}
 	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{
 		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/final"), Value: []byte("first")},
 		{Kind: statedomains.MutationPut, Owner: owner, Domain: domain, Key: []byte("prefix/gone"), Value: []byte("gone")},
@@ -726,6 +721,10 @@ func TestDomainCommitmentPrefersImmutableAccountBorrow(t *testing.T) {
 	}
 	commitment := NewDomainCommitmentState(&StateDB{})
 	commitment.latestReader = reader
+	// This ownership-only fixture starts from a known empty parent.
+	if err := commitment.recordPhysicalBefore(rawdb.StateAccountLatestCommitmentKey(owner), nil, false); err != nil {
+		t.Fatal(err)
+	}
 	commitment.recordAccountLatestTouch(owner)
 
 	updates, err := commitment.latestUpdatesFromTouches()
@@ -747,6 +746,9 @@ func TestDomainCommitmentRetainsTransferredEncodedKVValue(t *testing.T) {
 	commitment := NewDomainCommitmentStateWithGenerationResolver(&StateDB{}, func(tcommon.Address) (uint64, error) {
 		return 11, nil
 	})
+	if err := commitment.recordPhysicalBefore(rawdb.StateKVLatestCommitmentKey(owner, 11, kvdomains.SystemReward, key), nil, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := commitment.RecordCommitmentMutations(context.Background(), []statedomains.Mutation{{
 		Kind:         statedomains.MutationPut,
 		Owner:        owner,
@@ -921,5 +923,19 @@ func assertCommitmentDelete(t *testing.T, updates map[string]rawdb.StateCommitme
 	}
 	if !update.Delete {
 		t.Fatalf("commitment update %x = %+v, want delete", key, update)
+	}
+}
+
+func capturePhysicalFixture(t *testing.T, d *DomainCommitmentState, db interface {
+	Get([]byte) ([]byte, error)
+	Has([]byte) (bool, error)
+}, key []byte) {
+	t.Helper()
+	before, present, err := rawdb.ReadStateCommitmentSource(db, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.recordPhysicalBefore(key, before, present); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -596,7 +596,7 @@ func TestFreshAccountKVShortcutSurvivesCopyAndDeepAsyncCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(copyState.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(copyState.db.DiskDB())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1215,7 +1215,7 @@ func TestCommitScopeUsesPlanSuppliedLatestDomainFlush(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("latest after plan supplied flush = %q ok=%v err=%v, want v", got, ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1263,7 +1263,7 @@ func TestCommitScopeComputesRootFromUnflushedLatestBatch(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("disk latest after explicit scoped flush = %q ok=%v err=%v, want v", got, ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1314,7 +1314,7 @@ func TestCommitScopeComputesDeleteRootFromUnflushedLatestBatch(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
 		t.Fatalf("disk latest after explicit delete flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1350,7 +1350,7 @@ func TestCommitScopeComputesAccountRootFromUnflushedLatestBatch(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateAccountLatest(sdb.db.DiskDB(), addr); err != nil || !ok {
 		t.Fatalf("disk account latest after explicit scoped flush ok=%v err=%v, want visible", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1392,7 +1392,7 @@ func TestCommitScopeComputesGenerationRootFromUnflushedLatestBatch(t *testing.T)
 	if generation, ok, err := rawdb.ReadStateKVGeneration(sdb.db.DiskDB(), addr); err != nil || !ok || generation != 1 {
 		t.Fatalf("disk generation after explicit scoped flush = %d ok=%v err=%v, want 1", generation, ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1517,7 +1517,7 @@ func TestCommitScopePrefixDeleteRecordsPendingLatestTouches(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
 		t.Fatalf("disk latest after explicit prefix-delete flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1610,7 +1610,7 @@ func TestCommitScopeStateDBPrefixDeleteSeesUnflushedPriorCommit(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
 		t.Fatalf("disk latest after explicit range flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}

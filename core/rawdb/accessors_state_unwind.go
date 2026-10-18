@@ -68,6 +68,10 @@ func CollectStateUnwind(db StateUnwindStore, fromBlock, toBlock uint64) ([]State
 		if err != nil {
 			return nil, err
 		}
+		before, beforeExists, err := ReadStateCommitmentSource(db, key)
+		if err != nil {
+			return nil, err
+		}
 		if c.PrevExists {
 			if err := writeStateDomainLatestRow(db, c); err != nil {
 				return nil, err
@@ -76,12 +80,20 @@ func CollectStateUnwind(db StateUnwindStore, fromBlock, toBlock uint64) ([]State
 			if err != nil {
 				return nil, err
 			}
-			updates = append(updates, NewStateCommitmentPut(key, val))
+			u := NewStateCommitmentPut(key, val)
+			u.BeforeKnown = true
+			u.BeforeExists = beforeExists
+			u.Before = before
+			updates = append(updates, u)
 		} else {
 			if err := deleteStateDomainLatestRow(db, c); err != nil {
 				return nil, err
 			}
-			updates = append(updates, NewStateCommitmentDelete(key))
+			u := NewStateCommitmentDelete(key)
+			u.BeforeKnown = true
+			u.BeforeExists = beforeExists
+			u.Before = before
+			updates = append(updates, u)
 		}
 	}
 	return CoalesceStateCommitmentUpdates(updates), nil

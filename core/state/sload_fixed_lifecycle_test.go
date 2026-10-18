@@ -11,8 +11,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/common/muhash3072"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -43,8 +45,8 @@ func (s *sloadLifecycleReadCounter) View(key []byte, fn func([]byte) error) erro
 // durable post-images must agree even as physical-latest point reads differ.
 // These counts measure calls into the durable store, not SSD cache misses.
 func TestSLOADFixedLifecycleEvidence(t *testing.T) {
-	// Generated with the same trace on isolated c1d68990.
-	const referenceRoots = "fc01d678c8e202f6328e989fd168a80d65c5a90629484f2e767742698d31d589"
+	// Different cache policies must match a full physical-set MuHash oracle.
+	var referenceRoots string
 	for _, cacheBytes := range []int{0, 1 << 20} {
 		t.Run(fmt.Sprintf("cache_%d", cacheBytes), func(t *testing.T) {
 			disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
@@ -82,6 +84,16 @@ func TestSLOADFixedLifecycleEvidence(t *testing.T) {
 			if err := rawdb.WriteStateKVLatest(disk, addr, 0, kvdomains.ContractStorage, row[:], make([]byte, 32)); err != nil {
 				t.Fatal(err)
 			}
+			// The explicit present-zero raw fixture injection changes the physical
+			// set; reseal it with the offline oracle before measuring incremental work.
+			seedRoot, err := domains.RebuildMuHashCommitment(routed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedHead, present, err := rawdb.ReadStateCommitmentHead(routed)
+			if err != nil || !present || seedHead.Root != seedRoot {
+				t.Fatal("fixture seed HEAD mismatch")
+			}
 			buf := blockbuffer.New(counted)
 			buf.SetBaseReadCacheSizeWithTrunk(cacheBytes, 5, rawdb.CommitmentBranchKeyPrefix)
 			s.SetAccountKVIndexStore(buf)
@@ -117,6 +129,7 @@ func TestSLOADFixedLifecycleEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 				roots.Write(root[:])
+
 				if i%7 == 0 {
 					s.stateObjects[addr].releaseStorage()
 					if got, exists := s.GetStateWithExist(addr, slots[0]); !exists || got != (tcommon.Hash{30: byte(i & 1), 31: 1}) {
@@ -127,11 +140,36 @@ func TestSLOADFixedLifecycleEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 				buf.CommitBlock()
+				oracle := muhash3072.NewAccumulator()
+				for _, prefix := range rawdb.StateCommitmentSourcePrefixes() {
+					it := buf.NewIterator(prefix, nil)
+					for it.Next() {
+						element, e := rawdb.EncodeStateCommitmentElement(it.Key(), it.Value())
+						if e != nil {
+							t.Fatal(e)
+						}
+						if e = oracle.Insert(element); e != nil {
+							t.Fatal(e)
+						}
+					}
+					e := it.Error()
+					it.Release()
+					if e != nil {
+						t.Fatal(e)
+					}
+				}
+				expected, e := oracle.Digest()
+				if e != nil || tcommon.Hash(expected) != root {
+					t.Fatalf("block%d physical-set root=%x incremental=%x err=%v", i, expected, root, e)
+				}
 				if err := buf.Flush(counted); err != nil {
 					t.Fatal(err)
 				}
 			}
 			hash := fmt.Sprintf("%x", roots.Sum(nil))
+			if referenceRoots == "" {
+				referenceRoots = hash
+			}
 			if referenceRoots != hash {
 				t.Fatalf("root sequence differs: %s != %s", hash, referenceRoots)
 			}

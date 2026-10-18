@@ -28,7 +28,6 @@ const (
 	latestBinaryAccessorHeaderSize = 8 + 4 + 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + sha256.Size
 	latestBinaryBTreeHeaderSize    = latestBinaryAccessorHeaderSize + 8
 	latestBinaryBTreeBlockSize     = uint64(128)
-	commitmentBranchBTreeBlockSize = uint64(32)
 	latestBinaryCompressedValues   = uint16(1 << 0)
 	latestBinaryVerifyReadWindow   = 256 << 10
 
@@ -42,9 +41,6 @@ const (
 )
 
 func latestBinaryBTreeBlockSizeForDataset(dataset SegmentDataset) uint64 {
-	if dataset == SegmentDatasetCommitmentBranch {
-		return commitmentBranchBTreeBlockSize
-	}
 	return latestBinaryBTreeBlockSize
 }
 
@@ -326,7 +322,7 @@ func writeLatestBinarySegmentWithCompanionsContext(ctx context.Context, dir stri
 	if err := ctx.Err(); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	if ref.normalizedDataset() == SegmentDatasetCommitmentRoot && count != 1 {
+	if (ref.normalizedDataset() == SegmentDatasetCommitmentRoot || ref.normalizedDataset() == SegmentDatasetCommitmentHead || ref.normalizedDataset() == SegmentDatasetExecutionCheckpoint) && count != 1 {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", count)
 	}
 	var countBuf [8]byte
@@ -381,6 +377,7 @@ func writeLatestBinarySegmentWithCompanionsContext(ctx context.Context, dir stri
 	segRef := ref
 	segRef.Path = filepath.ToSlash(rel)
 	segRef.Size = size
+	segRef.Rows = count
 	segRef.Checksum = checksum
 
 	var accessorRef SegmentRef
@@ -479,7 +476,7 @@ func checkLatestBinarySegmentContext(ctx context.Context, dir string, ref Segmen
 	if header.kind != SegmentLatest {
 		return fmt.Errorf("snapshots: latest binary segment %q kind %q, want %q", path, header.kind, SegmentLatest)
 	}
-	if header.dataset == SegmentDatasetCommitmentRoot && header.count != 1 {
+	if (header.dataset == SegmentDatasetCommitmentRoot || header.dataset == SegmentDatasetCommitmentHead || header.dataset == SegmentDatasetExecutionCheckpoint) && header.count != 1 {
 		return fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", header.count)
 	}
 	var prev []byte
@@ -2590,8 +2587,10 @@ func latestBinaryDatasetCode(dataset SegmentDataset) (uint16, error) {
 		return 4, nil
 	case SegmentDatasetCommitmentCheckpoint:
 		return 7, nil
-	case SegmentDatasetCommitmentBranch:
-		return 8, nil
+	case SegmentDatasetCommitmentHead:
+		return 9, nil
+	case SegmentDatasetExecutionCheckpoint:
+		return 10, nil
 	default:
 		return 0, fmt.Errorf("snapshots: unknown latest binary dataset %q", dataset)
 	}
@@ -2611,8 +2610,10 @@ func latestBinaryDataset(code uint16) (SegmentDataset, error) {
 		return SegmentDatasetCommitmentRoot, nil
 	case 7:
 		return SegmentDatasetCommitmentCheckpoint, nil
-	case 8:
-		return SegmentDatasetCommitmentBranch, nil
+	case 9:
+		return SegmentDatasetCommitmentHead, nil
+	case 10:
+		return SegmentDatasetExecutionCheckpoint, nil
 	default:
 		return "", fmt.Errorf("snapshots: unknown latest binary dataset code %d", code)
 	}

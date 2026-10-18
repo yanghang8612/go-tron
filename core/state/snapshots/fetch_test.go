@@ -42,11 +42,19 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 	if result.Catalog == nil || result.Catalog.VisibleTxEnd != 12 {
 		t.Fatalf("catalog = %+v, want visibleTxEnd=12", result.Catalog)
 	}
-	if result.Verification.ActiveSegments != 3 {
-		t.Fatalf("active segments = %d, want 3", result.Verification.ActiveSegments)
+	manifest, err := LoadManifest(source)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if result.FilesDownloaded != 5 {
-		t.Fatalf("files downloaded = %d, want catalog+manifest+3 segments", result.FilesDownloaded)
+	if result.Verification.ActiveSegments != len(manifest.Segments) {
+		t.Fatalf("active segments = %d, want %d", result.Verification.ActiveSegments, len(manifest.Segments))
+	}
+	downloadManifest, err := LoadManifest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesDownloaded != len(downloadManifest.Segments)+2 {
+		t.Fatalf("files downloaded = %d, want catalog+manifest+%d segments", result.FilesDownloaded, len(downloadManifest.Segments))
 	}
 	if result.BytesDownloaded == 0 {
 		t.Fatal("bytes downloaded was zero")
@@ -211,8 +219,12 @@ func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchRemoteSnapshot: %v", err)
 	}
-	if result.FilesDownloaded != 5 {
-		t.Fatalf("files downloaded = %d, want catalog+manifest+3 segments", result.FilesDownloaded)
+	downloadManifest, err := LoadManifest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesDownloaded != len(downloadManifest.Segments)+2 {
+		t.Fatalf("files downloaded = %d, want catalog+manifest+%d segments", result.FilesDownloaded, len(downloadManifest.Segments))
 	}
 	if maxInFlight.Load() < 2 {
 		t.Fatalf("max concurrent segment downloads = %d, want at least 2", maxInFlight.Load())

@@ -13,14 +13,13 @@ import (
 	"strings"
 	"time"
 
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
-	corestate "github.com/tronprotocol/go-tron/core/state"
-	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -698,10 +697,11 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 	}
 	defer closeAncient()
 
-	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
+	wireGenesis, err := core.GenesisWireBlock(genesis)
 	if err != nil {
-		return fmt.Errorf("setup genesis: %w", err)
+		return fmt.Errorf("build wire genesis: %w", err)
 	}
+	chainConfig, genesisHash := genesis.Config, wireGenesis.Hash()
 	if err := ensureSnapshotRestoreBootstrapDatadir(db, genesisHash); err != nil {
 		return err
 	}
@@ -717,25 +717,83 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 	} else if err := statesnapshots.VerifyChainFreezerRestoreTarget(ancientReader, dir, manifest); err != nil {
 		return err
 	}
-	result, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(db, dir, identity, trustedKeys, restoreOpts)
-	if err != nil {
-		return err
-	}
-	freezerResult, err := statesnapshots.RestoreChainFreezerFromVerifiedCatalogWithOptions(ancientStore, dir, identity, trustedKeys, statesnapshots.RestoreChainFreezerOptions{
-		IndexWriter:       db,
-		ProgressWriter:    db,
-		PreferColdIndexes: true,
-		ETL:               etlOpts,
-	})
-	if err != nil {
-		return err
-	}
+	var freezerResult *statesnapshots.RestoreVerifiedChainFreezerResult
 	var canonicalBoundary *statesnapshots.RestoreCanonicalBoundaryResult
-	if freezerResult.HasRange {
-		canonicalBoundary, err = statesnapshots.InstallCanonicalBoundaryFromVerifiedCatalog(db, rawdb.NewChainDB(db, ancientStore), dir, identity, trustedKeys)
+	var genesisStateRoot common.Hash
+	restoreOpts.BeforePublish = func(staged ethdb.KeyValueStore, manifest *statesnapshots.Manifest) error {
+		var err error
+		freezerResult, err = statesnapshots.RestoreChainFreezerFromPinnedManifestWithOptions(ancientStore, dir, manifest, statesnapshots.RestoreChainFreezerOptions{IndexWriter: staged, ProgressWriter: staged, PreferColdIndexes: true, ETL: etlOpts})
 		if err != nil {
 			return err
 		}
+		chain := rawdb.NewChainDB(staged, ancientStore)
+		stored, ok, err := rawdb.ReadBlockStrict(chain, 0)
+		if err != nil {
+			return err
+		}
+		if !ok || stored.Hash() != genesisHash {
+			return errors.New("snapshot restore chain genesis differs from expected wire identity")
+		}
+		canonicalBoundary, err = statesnapshots.VerifyCanonicalBoundaryFromRestoredSnapshot(staged, chain, manifest)
+		if err != nil {
+			return err
+		}
+		cut, cutPresent, err := rawdb.ReadBlockStrict(chain, canonicalBoundary.BlockNum)
+		if err != nil {
+			return err
+		}
+		if !cutPresent {
+			return errors.New("snapshot restore missing cut block")
+		}
+		javaRoot := cut.AccountStateRoot()
+		if javaRoot != (common.Hash{}) && javaRoot != common.Hash(ethtypes.EmptyRootHash) {
+			return errors.New("snapshot restore does not support a nonempty Java account-state trie root")
+		}
+		if err := rebuildSnapshotTAPOS(staged, chain, canonicalBoundary.BlockNum); err != nil {
+			return err
+		}
+		var present bool
+		genesisStateRoot, present, err = rawdb.ReadBlockStateRootStrict(chain, genesisHash)
+		if err != nil {
+			return err
+		}
+		if !present {
+			// The genesis body was verified by number above. Cold-only indexes
+			// deliberately omit its hot hash->number row until publication.
+			value, readErr := ancientReader.Ancient(rawdb.AncientStateRootsTable, 0)
+			if readErr != nil {
+				return readErr
+			}
+			if len(value) != common.HashLength {
+				return errors.New("snapshot restore missing/malformed internal genesis root in chain payload")
+			}
+			genesisStateRoot = common.BytesToHash(value)
+		}
+		return nil
+	}
+	restoreOpts.FinalMetadata = func(writer ethdb.KeyValueWriter, head rawdb.StateCommitmentHead) error {
+		guarded := &snapshotMetadataWriter{KeyValueWriter: writer}
+		if err := rawdb.WriteBlock(guarded, wireGenesis); err != nil {
+			return err
+		}
+		rawdb.WriteGenesisStateRoot(guarded, genesisStateRoot)
+		recipe, err := json.Marshal(genesis)
+		if err != nil {
+			return err
+		}
+		if err := rawdb.WriteStateGenesisRecipe(guarded, genesisHash, recipe); err != nil {
+			return err
+		}
+		witnesses := make([]rawdb.GenesisWitness, 0, len(genesis.Witnesses))
+		for _, w := range genesis.Witnesses {
+			witnesses = append(witnesses, rawdb.GenesisWitness{Address: w.Address, VoteCount: w.VoteCount})
+		}
+		rawdb.WriteGenesisWitnesses(guarded, witnesses)
+		return guarded.err
+	}
+	result, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(db, dir, identity, trustedKeys, restoreOpts)
+	if err != nil {
+		return err
 	}
 	fmt.Printf("Snapshot restored: txNum=%d activeSegments=%d changes=%d txRanges=%d snapshotInstall=%d\n",
 		result.RestoredTxNum,
@@ -1704,19 +1762,30 @@ func snapshotMigrateEventLogsV4Cmd(ctx *cli.Context) error {
 	return encoder.Encode(result)
 }
 
+// Full-source/state/digest/census verification is mandatory in the restore
+// implementation. Do not repeat the same primitive's full scan in a callback.
 func snapshotRestoreVerificationOptions(db ethdb.KeyValueStore) statesnapshots.RestoreVerifiedSnapshotOptions {
-	return statesnapshots.RestoreVerifiedSnapshotOptions{
-		Boundary: statesnapshots.VerifyRestoredSnapshotBoundaryOptions{
-			RequireIndependentCommitmentRoot: true,
-			RebuildCommitmentRoot: func() (common.Hash, error) {
-				commitmentDB, ok := any(db).(statedomains.CommitmentDB)
-				if !ok {
-					return common.Hash{}, errors.New("snapshot restore commitment root rebuild requires reader/writer/iterator database")
-				}
-				return statedomains.NewStagedCommitmentStore(commitmentDB).Rebuild()
-			},
-		},
+	return statesnapshots.RestoreVerifiedSnapshotOptions{}
+}
+
+type snapshotMetadataWriter struct {
+	ethdb.KeyValueWriter
+	err error
+}
+
+func (w *snapshotMetadataWriter) Put(key, value []byte) error {
+	err := w.KeyValueWriter.Put(key, value)
+	if w.err == nil {
+		w.err = err
 	}
+	return err
+}
+func (w *snapshotMetadataWriter) Delete(key []byte) error {
+	err := w.KeyValueWriter.Delete(key)
+	if w.err == nil {
+		w.err = err
+	}
+	return err
 }
 
 func contextOrBackground(ctx *cli.Context) context.Context {
@@ -1990,8 +2059,7 @@ func snapshotExpectedChainIdentityFromGenesis(genesis *params.Genesis, forkConfi
 	if genesis == nil || genesis.Config == nil {
 		return statesnapshots.ChainIdentity{}, errors.New("snapshot chain identity requires genesis config")
 	}
-	db := rawdb.NewMemoryDatabase()
-	block, err := core.GenesisToBlock(genesis, corestate.NewDatabase(rawdb.WrapKeyValueStore(db)))
+	block, err := core.GenesisWireBlock(genesis)
 	if err != nil {
 		return statesnapshots.ChainIdentity{}, fmt.Errorf("build genesis block: %w", err)
 	}
@@ -2077,4 +2145,36 @@ func openSnapshotPruneAncientReader(dataDir string) (rawdb.AncientReader, func()
 		return nil, func() {}, fmt.Errorf("open freezer: %w", err)
 	}
 	return rawdb.NewFreezerReader(fz), func() { _ = fz.Close() }, nil
+}
+
+// Build only the ring visible to the authenticated cut. Blocks after the cut
+// may exist in a history-only extension, but must never enter its TAPOS view.
+func rebuildSnapshotTAPOS(target ethdb.KeyValueStore, chain *rawdb.ChainDB, cut uint64) error {
+	from := uint64(0)
+	if cut >= 65536 {
+		from = cut - 65535
+	}
+	batch := target.NewBatch()
+	defer batch.Close()
+	for n := from; ; n++ {
+		block, present, err := rawdb.ReadBlockStrict(chain, n)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return fmt.Errorf("snapshot restore TAPOS missing block %d", n)
+		}
+		if err := rawdb.WriteTaposRef(batch, n, block.Hash()); err != nil {
+			return err
+		}
+		if batch.ValueSize() >= 1024*1024 || n == cut {
+			if err := batch.Write(); err != nil {
+				return err
+			}
+			batch.Reset()
+		}
+		if n == cut {
+			return nil
+		}
+	}
 }

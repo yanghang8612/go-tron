@@ -148,7 +148,15 @@ func TestStateAccountV5HotColdHistoryAndCodeHashes(t *testing.T) {
 
 func TestStateAccountV5CommitmentReorgRestoresExactEnvelope(t *testing.T) {
 	f, addr, encodings, roots, accounts := accountV5HistoryFixture(t)
-	root, err := domains.UnwindCommitment(f.disk, domains.NewStagedCommitmentStore(f.disk), 3, 1, roots[0])
+	updates, err := rawdb.CollectStateUnwind(f.disk, 3, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deltas, err := rawdb.StateCommitmentDeltasFromUpdates(updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := domains.ApplyMuHashDeltas(f.disk, deltas, domains.CommitmentIdentity{}, roots[0])
 	if err != nil || root != roots[0] {
 		t.Fatalf("V5 commitment unwind: root=%x want=%x err=%v", root, roots[0], err)
 	}

@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -57,6 +58,16 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	if genesis.Config == nil {
 		return nil, tcommon.Hash{}, errGenesisNoConfig
 	}
+	if pending, err := rawdb.StateCommitmentUnwindCleanupPending(db); err != nil {
+		return nil, tcommon.Hash{}, err
+	} else if pending {
+		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+	}
+	if pending, err := rawdb.StateCommitmentRestoreInProgress(db); err != nil {
+		return nil, tcommon.Hash{}, err
+	} else if pending {
+		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+	}
 	if ancient == nil {
 		ancient = rawdb.NoopAncient{}
 	}
@@ -73,36 +84,125 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	if stored {
 		storedHash := storedBlock.Hash()
 
-		// Compute the expected hash on a scratch store. genesisBlockAndStateRoot
-		// commits the genesis state as part of building the block, so running it
-		// against the live DB would mutate latest-domain state during the
-		// idempotent startup validation path.
-		sdb := state.NewDatabase(rawdb.WrapKeyValueStore(rawdb.NewMemoryDatabase()))
-		expectedBlock, _, _, err := genesisBlockAndStateRoot(genesis, sdb)
+		expectedBlock, err := genesisWireBlock(genesis)
 		if err != nil {
-			return genesis.Config, storedHash, nil // Can't verify, trust stored
+			return nil, tcommon.Hash{}, err
 		}
+		if pending, err := rawdb.StateCommitmentRestoreInProgress(db); err != nil {
+			return nil, tcommon.Hash{}, err
+		} else if pending {
+			return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+		}
+		if _, present, err := rawdb.ReadStateCommitmentHead(db); err != nil {
+			return nil, tcommon.Hash{}, err
+		} else if !present {
+			return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+		}
+
 		if storedHash != expectedBlock.Hash() {
 			return genesis.Config, storedHash, errors.New("genesis hash mismatch: database contains incompatible genesis")
 		}
 		return genesis.Config, storedHash, nil
 	}
 
-	// Write genesis
-	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
+	if _, present, err := rawdb.ReadStateCommitmentHead(db); err != nil {
+		return nil, tcommon.Hash{}, err
+	} else if present {
+		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+	}
+	if _, present, err := rawdb.ReadLatestDomainCommitmentRoot(db); err != nil {
+		return nil, tcommon.Hash{}, err
+	} else if present {
+		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+	}
+	if _, present, err := rawdb.ReadHeadBlockHashStrict(db); err != nil {
+		return nil, tcommon.Hash{}, err
+	} else if present {
+		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+	}
+	for _, prefix := range rawdb.StateCommitmentSourcePrefixes() {
+		it := db.NewIterator(prefix, nil)
+		has := it.Next()
+		err := it.Error()
+		it.Release()
+		if err != nil {
+			return nil, tcommon.Hash{}, err
+		}
+		if has {
+			return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+		}
+	}
+	// Construct off-store; publish source, full HEAD and identity in one batch.
+	scratch := rawdb.NewMemoryDatabase()
+	defer scratch.Close()
+	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(scratch))
 	block, stateRoot, dp, err := genesisBlockAndStateRoot(genesis, sdb)
 	if err != nil {
 		return nil, tcommon.Hash{}, err
 	}
 
-	if err := writeGenesisMaterializedState(db, genesis, block, stateRoot, dp); err != nil {
+	if err := writeGenesisMaterializedState(scratch, genesis, block, stateRoot, dp); err != nil {
 		return nil, tcommon.Hash{}, err
 	}
 
+	head, present, err := rawdb.ReadStateCommitmentHead(scratch)
+	if err != nil {
+		return nil, tcommon.Hash{}, err
+	}
+	if !present {
+		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
+	}
+	head.BlockHash = block.Hash()
+	head.ParentHash = block.ParentHash()
+	if err = rawdb.WriteStateCommitmentHead(scratch, head); err != nil {
+		return nil, tcommon.Hash{}, err
+	}
+	if err = rawdb.WriteCanonicalStageProgressWithHash(scratch, 0, block.Hash()); err != nil {
+		return nil, tcommon.Hash{}, err
+	}
+	batch := db.NewBatch()
+	defer batch.Close()
+	it := scratch.NewIterator(nil, nil)
+	for it.Next() {
+		if err = batch.Put(it.Key(), it.Value()); err != nil {
+			it.Release()
+			return nil, tcommon.Hash{}, err
+		}
+	}
+	err = it.Error()
+	it.Release()
+	if err != nil {
+		return nil, tcommon.Hash{}, err
+	}
+	if err = batch.Write(); err != nil {
+		return nil, tcommon.Hash{}, err
+	}
 	return genesis.Config, block.Hash(), nil
 }
 
 func writeGenesisMaterializedState(db ethdb.KeyValueStore, genesis *params.Genesis, block *types.Block, stateRoot tcommon.Hash, dp *state.DynamicProperties) error {
+	head, present, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil {
+		return err
+	}
+	if !present || head.Root != stateRoot {
+		return rawdb.ErrStateCommitmentHead
+	}
+	head.BlockNum = 0
+	head.TxNum = 0
+	head.BlockHash = block.Hash()
+	head.ParentHash = block.ParentHash()
+	if err = rawdb.WriteStateCommitmentHead(db, head); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(genesis)
+	if err != nil {
+		return err
+	}
+	if err = rawdb.WriteStateGenesisRecipe(db, block.Hash(), payload); err != nil {
+		return err
+	}
+
 	if err := rawdb.WriteBlock(db, block); err != nil {
 		return fmt.Errorf("write genesis block: %w", err)
 	}
@@ -316,13 +416,33 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		return nil, tcommon.Hash{}, nil, err
 	}
 
+	block, err := genesisWireBlockFromTransactions(g, txs)
+	return block, stateRoot, dp, err
+}
+
+// genesisWireBlock constructs only java-tron protobuf bytes, without state I/O.
+// GenesisWireBlock creates only consensus wire bytes; it performs no state I/O.
+func GenesisWireBlock(g *params.Genesis) (*types.Block, error) { return genesisWireBlock(g) }
+
+func genesisWireBlock(g *params.Genesis) (*types.Block, error) {
+	txs := make([]*corepb.Transaction, 0, len(g.Accounts))
+	for _, ga := range g.Accounts {
+		tx, err := buildGenesisTransferTx(ga.Address, ga.Balance)
+		if err != nil {
+			return nil, err
+		}
+		txs = append(txs, tx)
+	}
+	return genesisWireBlockFromTransactions(g, txs)
+}
+func genesisWireBlockFromTransactions(g *params.Genesis, txs []*corepb.Transaction) (*types.Block, error) {
 	// Compute tx_trie_root: SHA256 over each tx's full proto bytes, fed
 	// into the java-tron Merkle algorithm.
 	leaves := make([]tcommon.Hash, len(txs))
 	for i, tx := range txs {
 		data, err := proto.Marshal(tx)
 		if err != nil {
-			return nil, tcommon.Hash{}, nil, fmt.Errorf("marshal genesis tx %d: %w", i, err)
+			return nil, fmt.Errorf("marshal genesis tx %d: %w", i, err)
 		}
 		leaves[i] = tcommon.Hash(sha256Sum(data))
 	}
@@ -341,7 +461,7 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		Transactions: txs,
 	})
 
-	return block, stateRoot, dp, nil
+	return block, nil
 }
 
 func buildGenesisTransferTx(toAddr tcommon.Address, amount int64) (*corepb.Transaction, error) {

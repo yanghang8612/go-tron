@@ -55,6 +55,10 @@ type inspectKeyspace struct {
 }
 
 var inspectSingletons = []inspectKeyspace{
+	{name: "state-genesis-recipe", pattern: "=state-muhash3072-genesis-recipe-v1", key: stateGenesisRecipeKey},
+	{name: "state-muhash3072-head", pattern: "=state-muhash3072-head-v1", key: stateMuHashCommitmentHeadKey},
+	{name: "state-muhash3072-restore-in-progress", pattern: "=state-muhash3072-restore-in-progress-v1", key: stateCommitmentRestoreMarkerKey},
+	{name: "state-muhash3072-unwind-cleanup", pattern: "=state-muhash3072-unwind-cleanup-v1", key: stateCommitmentUnwindCleanupKey},
 	{name: "head-block", pattern: "=LastBlock", key: headBlockKey},
 	{name: "head-solid-block", pattern: "=LastSolidBlock", key: headSolidBlockKey},
 	{name: "total-transaction-count", pattern: "=total-tx-count", key: totalTransactionCountKey},

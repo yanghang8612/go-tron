@@ -224,7 +224,7 @@ func TestGtronStoredReplayRejectsUnauthenticatedCheckpointHistoryRange(t *testin
 			auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 			args = append(fixture.args(auditPath, "2"), "--history.enabled")
 			err = gtron(storedReplayTestContext(t, args...))
-			if err == nil || !strings.Contains(err.Error(), "checkpoint history range") {
+			if err == nil || !strings.Contains(err.Error(), "durable commitment HEAD transaction cut") {
 				t.Fatalf("unauthenticated checkpoint range accepted or wrong failure: %v", err)
 			}
 			if _, err := os.Stat(auditPath); !errors.Is(err, os.ErrNotExist) {
@@ -453,7 +453,7 @@ func (f storedReplayTestFixture) args(auditPath, target string) []string {
 	return []string{"--datadir", f.dir, "--genesis", f.genesisPath,
 		"--sync.replay-stored-to", target, "--sync.replay-audit", auditPath,
 		"--freezer.disable", "--db.cache", "32", "--db.memtable", "8",
-		"--state.trie.cache", "0", "--state.code.cache", "0", "--state.commitment.cache", "0"}
+		"--state.trie.cache", "0", "--state.code.cache", "0", "--state.latest.cache", "0"}
 }
 
 func assertStoredReplayNoNodeKey(t *testing.T, dir string) {

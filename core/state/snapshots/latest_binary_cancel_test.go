@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/maintenance"
@@ -32,12 +31,12 @@ func TestLatestBinaryBuildChecksumAndCompanionsCancel(t *testing.T) {
 	})
 	for _, kind := range []string{"accessor", "btree"} {
 		t.Run(kind, func(t *testing.T) {
-			dir, _, _, result := initialBranchFixture(t)
-			var ref SegmentRef
-			for _, r := range result.Manifest.Segments {
-				if r.NormalizedDataset() == SegmentDatasetCommitmentBranch && r.Kind == SegmentLatest {
-					ref = r
-				}
+			dir := t.TempDir()
+			ref, _, _, err := writeLatestBinarySegmentWithCompanionsContext(context.Background(), dir, SegmentRef{Dataset: SegmentDatasetAccountLatest, Kind: SegmentLatest, FromTxNum: 1, ToTxNum: 1, Path: "latest/cancel.seg"}, func(fn func(LatestEntry) error) error {
+				return fn(LatestEntry{Key: AccountSnapshotKey(coldBuilderOwner(1)), Value: []byte("value")})
+			}, false)
+			if err != nil {
+				t.Fatal(err)
 			}
 			checksum, err := latestBinaryChecksumBytes(ref.Checksum)
 			if err != nil {
@@ -63,19 +62,5 @@ func TestLatestBinaryBuildChecksumAndCompanionsCancel(t *testing.T) {
 				t.Fatalf("companion cancellation=%v", err)
 			}
 		})
-	}
-}
-
-func TestInitialCommitmentDurabilityRejectsUnsupportedDirectorySync(t *testing.T) {
-	dir, _, rotation, _ := initialBranchFixture(t)
-	proof, err := VerifyCommitmentBranchBase(context.Background(), dir, rotation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := proof.prepareDurable(context.Background(), func(string) error { return nil }, func(string) error { return syscall.EINVAL }); !errors.Is(err, syscall.EINVAL) {
-		t.Fatal("unsupported directory barrier accepted", err)
-	}
-	if err := proof.Recheck(rotation); err == nil {
-		t.Fatal("failed strict directory barrier granted deletion authority")
 	}
 }

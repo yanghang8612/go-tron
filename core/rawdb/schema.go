@@ -240,6 +240,7 @@ func HotMaintenanceRanges() []PhysicalSpaceRange {
 		{"commitment_branch", stateCommitmentBranchPrefix},
 		{"commitment_branch_delta", stateCommitmentBranchDeltaPrefix},
 		{"commitment_domain", stateCommitmentDomainPrefix},
+		{"commitment_head", stateMuHashCommitmentHeadKey},
 		{"transaction_info", txInfoPrefix},
 		{"transaction_info_block", txInfoBlockPrefix},
 		{"transaction_index", txPrefix},
@@ -285,7 +286,9 @@ func HotMaintenanceCanaryRanges() []PhysicalSpaceRange {
 // without allocating []byte wrappers on the flush path.
 func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 	switch {
-	case strings.HasPrefix(key, CommitmentBranchKeyPrefix),
+	case key == string(stateGenesisRecipeKey), key == string(stateMuHashCommitmentHeadKey),
+		key == string(stateCommitmentRestoreMarkerKey), key == string(stateCommitmentUnwindCleanupKey),
+		strings.HasPrefix(key, CommitmentBranchKeyPrefix),
 		strings.HasPrefix(key, CommitmentBranchDeltaKeyPrefix),
 		key == CommitmentBranchBaseKey,
 		key == CommitmentBranchRotationKey,
@@ -607,6 +610,10 @@ var (
 	// Key:   state-commitment-domain-v1- || logical key
 	// Value: opaque bytes, including empty-but-present values.
 	stateCommitmentDomainPrefix = []byte("state-commitment-domain-v1-")
+
+	// stateMuHashCommitmentHeadKey is the sole current complete accumulator.
+	// Fresh-genesis MuHash databases never recover it from legacy branches.
+	stateMuHashCommitmentHeadKey = []byte("state-muhash3072-head-v1")
 
 	// stateCommitmentBranchPrefix stores prefix-keyed branch node rows for the
 	// Erigon-style staged commitment engine. Each row maps a hex-trie prefix
@@ -1360,3 +1367,16 @@ func ClassifyStateKVLatestReadDomain(key []byte) (kvdomains.KVDomain, bool) {
 	}
 	return 0, false
 }
+
+// StateCommitmentSourcePrefixes returns owned bounds for the entire physical set.
+func StateCommitmentSourcePrefixes() [][]byte {
+	return [][]byte{bytes.Clone(stateAccountLatestPrefix), bytes.Clone(stateKVGenerationPrefix), bytes.Clone(stateKVLatestPrefix)}
+}
+
+// Non-published restore marker is required before any bulk snapshot payload.
+var stateCommitmentRestoreMarkerKey = []byte("state-muhash3072-restore-in-progress-v1")
+
+var stateCommitmentUnwindCleanupKey = []byte("state-muhash3072-unwind-cleanup-v1")
+
+// Immutable fresh-genesis replay recipe; never one accumulator per block.
+var stateGenesisRecipeKey = []byte("state-muhash3072-genesis-recipe-v1")

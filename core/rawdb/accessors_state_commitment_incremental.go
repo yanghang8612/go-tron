@@ -13,6 +13,11 @@ type StateCommitmentUpdate struct {
 	Key    []byte
 	Value  []byte
 	Delete bool
+	// BeforeKnown is mandatory when an after-only update becomes a MuHash delta.
+	// Capture must fill it before the physical source mutation.
+	BeforeKnown  bool
+	BeforeExists bool
+	Before       []byte
 }
 
 func NewStateCommitmentPut(key, value []byte) StateCommitmentUpdate {

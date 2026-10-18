@@ -1156,3 +1156,15 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	w.n += uint64(n)
 	return n, err
 }
+
+// RestoreChainFreezerFromPinnedManifestWithOptions consumes the caller's already
+// authenticated immutable manifest so source and chain payload use one catalog.
+func RestoreChainFreezerFromPinnedManifestWithOptions(store ChainFreezerAncientStore, dir string, manifest *Manifest, opts RestoreChainFreezerOptions) (*RestoreVerifiedChainFreezerResult, error) {
+	if manifest == nil {
+		return nil, errors.New("snapshots: nil pinned manifest")
+	}
+	if err := manifest.Validate(); err != nil {
+		return nil, err
+	}
+	return restoreChainFreezerSegmentsFromManifest(store, dir, manifest, ManifestVerificationReport{}, opts)
+}

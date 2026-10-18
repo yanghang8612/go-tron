@@ -20,6 +20,14 @@ func TestLoadStoredHeadBlockSurfacesColdLookupErrors(t *testing.T) {
 	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 	head := tcommon.Hash{0x42}
 	rawdb.WriteHeadBlockHash(db, head)
+	h := rawdb.NewStateCommitmentHead()
+	h.BlockHash = head
+	if err := rawdb.WriteStateCommitmentHead(db, h); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, h.Root); err != nil {
+		t.Fatal(err)
+	}
 	chain.SetChainIndexReader(blockchainStartupErrChainIndex{err: errors.New("cold chain index corrupt")})
 
 	_, err := loadStoredHeadBlock(chain, blockchainStartupBlock(0))
@@ -42,7 +50,7 @@ func TestLoadStoredHeadBlockSurfacesHeadHashReadErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "head hash presence failed") {
 		t.Fatalf("loadStoredHeadBlock err = %v, want head hash read error", err)
 	}
-	if !strings.Contains(err.Error(), "load stored head hash") {
+	if !strings.Contains(err.Error(), "restore marker") {
 		t.Fatalf("loadStoredHeadBlock err = %v, want startup head-hash context", err)
 	}
 }

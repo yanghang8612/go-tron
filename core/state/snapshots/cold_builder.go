@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/maintenance"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -45,11 +46,9 @@ const (
 	coldSnapshotDutyCyclePPM         = uint64(1_000_000)
 )
 
-var ErrCommitmentBranchRotationNotSolidified = errors.New("snapshots: commitment branch rotation boundary is not solidified")
-
 // DefaultLatestBuildBlocks is the default latest-snapshot build cadence
 // (~33h of TRON blocks). Coarse because latest builds full-scan every latest
-// keyspace; CommitmentBranch shares this cadence too.
+// keyspace.
 const DefaultLatestBuildBlocks = defaultColdSnapshotBatchBlocks * 8 // 40_000
 
 // ChainSource is the narrow chain surface needed by the cold snapshot builder.
@@ -77,23 +76,19 @@ type syncRemainingSource interface {
 	SyncRemainingBlocks() (uint64, bool)
 }
 
-type commitmentBranchRotator interface {
-	BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error)
-	CompleteCommitmentBranchRotation(rawdb.CommitmentBranchRotation, *Manager) error
+// latestSnapshotSource pins source tables and complete HEAD at one drained cut.
+type latestSnapshotSource interface {
+	AcquireStateLatestSnapshot(context.Context) (pointread.KeyValueSnapshot, rawdb.StateCommitmentHead, error)
 }
 
 // Config controls the cold history snapshot builder lifecycle.
 type Config struct {
-	// Initial-only externalizes the legacy branch table once and suppresses
-	// all general latest builds until the policy is explicitly changed.
-	CommitmentBaseMode                CommitmentBaseMode
-	InitialCommitmentBaseReserveBytes uint64
-	Dir                               string
-	Enabled                           bool
-	HistoryDataset                    SegmentDataset
-	Interval                          time.Duration
-	HistoryWindow                     uint64
-	BatchBlocks                       uint64
+	Dir            string
+	Enabled        bool
+	HistoryDataset SegmentDataset
+	Interval       time.Duration
+	HistoryWindow  uint64
+	BatchBlocks    uint64
 	// BatchTxNums bounds one base history step by transaction-number span.
 	// The selected range always includes a complete final block, so a single
 	// dense block may exceed the target. BatchBlocks independently caps sparse
@@ -157,12 +152,6 @@ type Config struct {
 	// scan from competing with an active historical sync session. The regular
 	// lifecycle/sync-complete wake builds it once the importer is idle.
 	DeferLatestBuildWhileSyncing bool
-	// BuildCommitmentBranchBaseWhileSyncing still rotates the mutable commitment
-	// branch table into its immutable root+branch baseline at LatestBuildBlocks
-	// cadence while a full latest scan is deferred. This bounds the dominant
-	// write-amplified hot family without scanning Accounts, KV, Code, or
-	// checkpoints. It requires a chain that implements commitmentBranchRotator.
-	BuildCommitmentBranchBaseWhileSyncing bool
 	// DeferHistoryBuildWhileSyncing prevents state-history compression and its
 	// mandatory history accessors from competing with a node that is farther
 	// behind than HistoryWindow while the cold backlog remains below
@@ -345,24 +334,21 @@ type PassResult struct {
 	historyMaintenanceID       uint64
 	LatestBuilt                bool
 	LatestDeferred             bool
-	// LatestCommitmentBaseBuilt distinguishes the sync-time root/branch-only
-	// rotation from a full latest-dataset build for logs and operators.
-	LatestCommitmentBaseBuilt bool
-	Compaction                HistoryCompactionResult
-	FromTxNum                 uint64
-	ToTxNum                   uint64
-	FromBlock                 uint64
-	ToBlock                   uint64
-	CutoffBlock               uint64
-	EligibleCutoffBlock       uint64
-	PublishedBlock            uint64
-	SolidifiedBlock           uint64
-	PreviousVisibleTx         uint64
-	Segment                   SegmentRef
-	Segments                  []SegmentRef
-	SectionBloomBuilt         bool
-	BalanceTraceBuilt         bool
-	EventLogBuilt             bool
+	Compaction                 HistoryCompactionResult
+	FromTxNum                  uint64
+	ToTxNum                    uint64
+	FromBlock                  uint64
+	ToBlock                    uint64
+	CutoffBlock                uint64
+	EligibleCutoffBlock        uint64
+	PublishedBlock             uint64
+	SolidifiedBlock            uint64
+	PreviousVisibleTx          uint64
+	Segment                    SegmentRef
+	Segments                   []SegmentRef
+	SectionBloomBuilt          bool
+	BalanceTraceBuilt          bool
+	EventLogBuilt              bool
 	// DerivedSidecarCatchup reports that this pass published at least one
 	// sidecar independently of a new state-history segment. Pending requests an
 	// immediate bounded follow-up; Deferred records that sync or resource
@@ -683,23 +669,22 @@ func coldSnapshotUintGauge(value uint64) int64 {
 
 // Runner builds registered history snapshot segments in the background.
 type Runner struct {
-	initialCommitmentNotBefore time.Time // passMu
-	initialCommitmentDone      bool      // passMu
-	chain                      ChainSource
-	cfg                        Config
-	metrics                    coldRunnerMetrics
+	chain   ChainSource
+	cfg     Config
+	metrics coldRunnerMetrics
 
 	quit   chan struct{}
 	done   chan struct{}
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	startOnce   sync.Once
-	stopOnce    sync.Once
-	prepareOnce sync.Once
-	passMu      sync.Mutex
-	startErr    error
-	prepareErr  error
+	startOnce     sync.Once
+	stopOnce      sync.Once
+	prepareOnce   sync.Once
+	passMu        sync.Mutex
+	pendingLatest *preparedLatestCut
+	startErr      error
+	prepareErr    error
 
 	passesCompleted          atomic.Uint64
 	passErrors               atomic.Uint64
@@ -803,9 +788,6 @@ func NewRunner(chain ChainSource, cfg Config) *Runner {
 }
 
 func (c Config) applyDefaults() Config {
-	if mode, err := ParseCommitmentBaseMode(string(c.CommitmentBaseMode)); err == nil {
-		c.CommitmentBaseMode = mode
-	}
 	if c.HistoryCatchupMode == "" {
 		c.HistoryCatchupMode = HistoryCatchupBalanced
 	}
@@ -838,13 +820,6 @@ func (c Config) applyDefaults() Config {
 }
 
 func (c Config) validate() error {
-	mode, err := ParseCommitmentBaseMode(string(c.CommitmentBaseMode))
-	if err != nil {
-		return err
-	}
-	if mode == CommitmentBaseInitialOnly && (!c.Enabled || c.HeavyWorkGate == nil || c.HistoryLoadProbe == nil || c.HistoryReadResourceProbe == nil || c.HistoryPressureProbe == nil || c.MinHistoryBuildFreeBytes == 0) {
-		return errors.New("snapshots: initial commitment base requires enabled cold lifecycle, shared gate and resource/space probes")
-	}
 	if err := (HistoryReadOptions{Workers: c.HistorySharedReadWorkers, ChunkCache: c.HistorySharedChunkCache, ReferenceContainer: c.HistoryReferenceContainer}).Validate(); err != nil {
 		return err
 	}
@@ -1125,21 +1100,6 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		return result, err
 	}
 	spaceDeferred := r.historySpaceDeferred(pressure)
-	if r.initialCommitmentMode() {
-		phaseStart := time.Now()
-		attempted, built, initialErr := r.initialCommitmentPass(ctx)
-		if attempted || initialErr != nil {
-			result.LatestBuilt, result.LatestCommitmentBaseBuilt = built, built
-			result.LatestDeferred = true
-			result.LatestDuration = coldSnapshotPhaseDuration(phaseStart)
-			result.HistoryPressure, result.HistorySpaceDeferred = pressure, spaceDeferred
-			if initialErr == nil && beforeMerge != nil {
-				initialErr = beforeMerge(ctx, result)
-			}
-			r.recordPass(result, start, initialErr)
-			return result, initialErr
-		}
-	}
 	prioritizeMerge := !spaceDeferred && r.shouldPrioritizePendingCompaction(time.Now())
 	// Direct V2 receipt publication is hard-bound to event-log coverage. Give
 	// an existing event-log gap first admission to the shared heavy-work gate;
@@ -1212,12 +1172,10 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 			err = ctx.Err()
 		}
 	}
-	if r.cfg.DeferLatestBuildWhileSyncing && r.throughputCatchup() && r.historySyncBudgetActive() {
+	if r.pendingLatest == nil && r.cfg.DeferLatestBuildWhileSyncing && r.throughputCatchup() && r.historySyncBudgetActive() {
 		result.LatestDeferred = true
 	} else if err == nil && !spaceDeferred && !r.historyLoad.hard {
 		phaseStart := time.Now()
-		latestBlockBefore := r.lastLatestBuildBlock.Load()
-		syncCommitmentCandidate := r.cfg.DeferLatestBuildWhileSyncing && r.cfg.BuildCommitmentBranchBaseWhileSyncing && r.syncActive()
 		built, deferred, perr := r.latestPassWithStatusContext(ctx)
 		result.LatestDuration = coldSnapshotPhaseDuration(phaseStart)
 		result.LatestDeferred = deferred
@@ -1225,7 +1183,6 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 			err = perr
 		} else {
 			result.LatestBuilt = built
-			result.LatestCommitmentBaseBuilt = built && syncCommitmentCandidate && r.lastLatestBuildBlock.Load() == latestBlockBefore
 		}
 	}
 	if !r.throughputCatchup() && err == nil && result.Built && result.HistoryForcedBusy {
@@ -3302,156 +3259,6 @@ func (r *Runner) latestPassWithStatus() (built bool, deferred bool, err error) {
 	return r.latestPassWithStatusContext(context.Background())
 }
 
-func (r *Runner) latestPassWithStatusContext(ctx context.Context) (built bool, deferred bool, err error) {
-	if r.initialCommitmentMode() {
-		return false, true, contextError(ctx)
-	}
-	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
-		return false, false, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return false, false, err
-	}
-	db := r.chain.DB()
-	if db == nil {
-		return false, false, errors.New("snapshots: nil cold builder database")
-	}
-	block, txNum, ok, err := r.latestBuildWatermark()
-	if err != nil || !ok {
-		return false, false, err
-	}
-	prevBlock := r.lastLatestBuildBlock.Load()
-	fullLatestDue := prevBlock == 0 || (block >= prevBlock && block-prevBlock >= r.cfg.LatestBuildBlocks)
-	if r.cfg.DeferLatestBuildWhileSyncing && r.syncActive() {
-		if r.cfg.BuildCommitmentBranchBaseWhileSyncing {
-			baseBuilt, baseDeferred, attempted, baseErr := r.commitmentBranchBasePassContext(ctx, db, block)
-			if baseErr != nil || attempted {
-				return baseBuilt, baseDeferred || fullLatestDue, baseErr
-			}
-		}
-		if fullLatestDue {
-			return false, true, nil
-		}
-		return false, false, nil
-	}
-	if !fullLatestDue {
-		return false, false, nil // not enough blocks elapsed
-	}
-	var (
-		rotation rawdb.CommitmentBranchRotation
-		rotating bool
-		rotator  commitmentBranchRotator
-	)
-	if source, ok := r.chain.(commitmentBranchRotator); ok {
-		rotator = source
-		rotation, rotating, err = rotator.BeginCommitmentBranchRotation()
-		if err != nil {
-			return false, false, err
-		}
-		if rotating {
-			block = rotation.BlockNum
-			txNum = rotation.SnapshotTxNum
-		}
-	}
-	var latestBuildHash common.Hash
-	if rotating {
-		latestBuildHash = rotation.BlockHash
-	} else if _, ok := db.(ethdb.KeyValueWriter); ok {
-		latestBuildHash, err = r.snapshotBuildStageBoundaryHash(db, rawdb.StageSnapshotLatestBuild, block)
-		if err != nil {
-			return false, false, err
-		}
-	}
-	res, err := NewAggregator(r.cfg.Dir).BuildLatestContext(ctx, db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
-	if err != nil {
-		return false, false, err
-	}
-	if rotating {
-		if res == nil || res.Manifest == nil {
-			return false, false, errors.New("snapshots: commitment branch rotation built no manifest")
-		}
-		mgr, openErr := OpenPinnedManager(r.cfg.Dir, res.Manifest)
-		if openErr != nil {
-			return false, false, openErr
-		}
-		if err := rotator.CompleteCommitmentBranchRotation(rotation, mgr); err != nil {
-			if errors.Is(err, ErrCommitmentBranchRotationNotSolidified) {
-				return res != nil && len(res.Segments) > 0, true, nil
-			}
-			return false, false, err
-		}
-	}
-	r.lastLatestBuildBlock.Store(block)
-	if writer, ok := db.(ethdb.KeyValueWriter); ok {
-		if err := writeSnapshotBuildStage(writer, rawdb.StageSnapshotLatestBuild, block, latestBuildHash); err != nil {
-			return false, false, err
-		}
-	}
-	return res != nil && len(res.Segments) > 0, false, nil
-}
-
-// commitmentBranchBasePassContext performs the sync-safe subset of a latest
-// pass. attempted distinguishes "cadence not reached" from a rotation that was
-// started/resumed but produced no files, so the caller never falls through to a
-// full latest scan while sync is active.
-func (r *Runner) commitmentBranchBasePassContext(ctx context.Context, db AggregatorDB, block uint64) (built bool, deferred bool, attempted bool, err error) {
-	rotator, ok := r.chain.(commitmentBranchRotator)
-	if !ok {
-		return false, false, false, nil
-	}
-	_, rotating, err := rawdb.ReadCommitmentBranchRotation(db)
-	if err != nil {
-		return false, false, false, err
-	}
-	if !rotating {
-		base, based, readErr := rawdb.ReadCommitmentBranchBase(db)
-		if readErr != nil {
-			return false, false, false, readErr
-		}
-		if based && base.BlockNum != 0 {
-			if block < base.BlockNum || block-base.BlockNum < r.cfg.LatestBuildBlocks {
-				return false, false, false, nil
-			}
-		}
-	}
-
-	rotation, rotating, err := rotator.BeginCommitmentBranchRotation()
-	if err != nil {
-		return false, false, true, err
-	}
-	if !rotating {
-		return false, false, true, nil
-	}
-	res, err := NewAggregator(r.cfg.Dir).BuildCommitmentBranchBaseContext(ctx, db, AggregatorBuildOptions{
-		FromTxNum: 1,
-		ToTxNum:   rotation.SnapshotTxNum,
-	})
-	if err != nil {
-		return false, false, true, err
-	}
-	built = res != nil && len(res.Segments) > 0
-	if res == nil || res.Manifest == nil {
-		return built, false, true, errors.New("snapshots: commitment branch base rotation built no manifest")
-	}
-	mgr, err := OpenPinnedManager(r.cfg.Dir, res.Manifest)
-	if err != nil {
-		return built, false, true, err
-	}
-	if err := rotator.CompleteCommitmentBranchRotation(rotation, mgr); err != nil {
-		if errors.Is(err, ErrCommitmentBranchRotationNotSolidified) {
-			return built, true, true, nil
-		}
-		return false, false, true, err
-	}
-	coldSnapshotLog.Info("Commitment branch base snapshot built during sync",
-		"generation", rotation.Generation, "block", rotation.BlockNum,
-		"tx", rotation.SnapshotTxNum, "segments", len(res.Segments))
-	return built, false, true, nil
-}
-
 func (r *Runner) loop() {
 	defer close(r.done)
 	catchup := make(chan struct{}, 1)
@@ -3565,7 +3372,7 @@ func (r *Runner) loop() {
 			"compactionDeferReason", result.Compaction.DeferReason,
 			"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
 			"compactionInputSources", result.Compaction.InputSources)
-	} else if result.LatestBuilt && !result.LatestCommitmentBaseBuilt {
+	} else if result.LatestBuilt {
 		coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 	}
 	scheduleCatchup(result, err)
@@ -3638,7 +3445,7 @@ func (r *Runner) loop() {
 				"compactionDeferReason", result.Compaction.DeferReason,
 				"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
 				"compactionInputSources", result.Compaction.InputSources)
-		} else if result.LatestBuilt && !result.LatestCommitmentBaseBuilt {
+		} else if result.LatestBuilt {
 			coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 		}
 		scheduleCatchup(result, err)
@@ -3758,4 +3565,109 @@ func stateDomainChangeHistorySegmentPath(fromTxNum, toTxNum uint64) string {
 		return cfg.HistoryPath(fromTxNum, toTxNum)
 	}
 	return fmt.Sprintf("history/state-domain-change-%d-%d.seg", fromTxNum, toTxNum)
+}
+
+type preparedLatestCut struct {
+	head rawdb.StateCommitmentHead
+	refs []SegmentRef
+}
+
+func (r *Runner) latestPassWithStatusContext(ctx context.Context) (built bool, deferred bool, err error) {
+	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
+		return false, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	if r.pendingLatest != nil {
+		return r.publishPreparedLatest(ctx)
+	}
+	if r.cfg.DeferLatestBuildWhileSyncing && r.syncActive() {
+		return false, true, nil
+	}
+	block, _, ok, err := r.latestBuildWatermark()
+	if err != nil || !ok {
+		return false, false, err
+	}
+	prev := r.lastLatestBuildBlock.Load()
+	if prev != 0 && (block < prev || block-prev < r.cfg.LatestBuildBlocks) {
+		return false, false, nil
+	}
+	source, ok := r.chain.(latestSnapshotSource)
+	if !ok {
+		return false, false, errors.New("snapshots: latest build requires coherent source/HEAD snapshot")
+	}
+	view, head, err := source.AcquireStateLatestSnapshot(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	if view == nil {
+		return false, false, errors.New("snapshots: nil latest snapshot")
+	}
+	defer func() { err = errors.Join(err, view.Close()) }()
+	if err = rawdb.ValidateStateCommitmentHead(head); err != nil {
+		return false, false, err
+	}
+	// The bound is the actual pinned HEAD, never a solid tx label on newer rows.
+	agg := NewAggregator(r.cfg.Dir)
+	refs, err := agg.buildLatestSegmentsContext(ctx, view, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: head.TxNum})
+	if err != nil {
+		return false, false, err
+	}
+	if err = ctx.Err(); err != nil {
+		return false, false, err
+	}
+	r.pendingLatest = &preparedLatestCut{head: head, refs: refs}
+	return r.publishPreparedLatest(ctx)
+}
+
+// Materialized immutable files retain the pinned cut after the source snapshot
+// closes. A waiting cut is rechecked without opening a newer snapshot or scan.
+func (r *Runner) publishPreparedLatest(ctx context.Context) (bool, bool, error) {
+	prepared := r.pendingLatest
+	if prepared == nil {
+		return false, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	head, refs := prepared.head, prepared.refs
+	agg := NewAggregator(r.cfg.Dir)
+	solid := r.chain.LatestSolidifiedBlockNum()
+	if solid < 0 || uint64(solid) < head.BlockNum {
+		return false, true, nil
+	}
+	canonical, ok := r.chain.(canonicalHashLookupSource)
+	if !ok {
+		return false, false, errors.New("snapshots: latest publication requires strict canonical identity")
+	}
+	hash, present, err := canonical.CanonicalBlockHashStrict(head.BlockNum)
+	if err != nil {
+		return false, false, err
+	}
+	if !present || hash != head.BlockHash {
+		r.pendingLatest = nil
+		return false, false, errors.New("snapshots: latest source cut is no longer canonical")
+	}
+	if len(refs) == 0 {
+		return false, false, errors.New("snapshots: latest source cut built no segments")
+	}
+	manifest, err := agg.Integrate(1, head.TxNum, refs)
+	if err != nil {
+		return false, false, err
+	}
+	if writer, ok := r.chain.DB().(ethdb.KeyValueWriter); ok {
+		if err = WriteManifestProgressStages(writer, manifest.Progress); err != nil {
+			return false, false, err
+		}
+		if err = writeSnapshotBuildStage(writer, rawdb.StageSnapshotLatestBuild, head.BlockNum, head.BlockHash); err != nil {
+			return false, false, err
+		}
+	}
+	r.lastLatestBuildBlock.Store(head.BlockNum)
+	r.pendingLatest = nil
+	return true, false, nil
 }

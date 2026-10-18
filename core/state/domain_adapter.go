@@ -11,7 +11,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
-	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
 const (
@@ -153,6 +152,8 @@ func (d *DomainHistoryState) GetAsOf(owner tcommon.Address, domain kvdomains.KVD
 }
 
 type DomainCommitmentState struct {
+	afterCompute      func()
+	before            map[string]rawdb.StateCommitmentDelta
 	state             *StateDB
 	generation        statedomains.GenerationResolver
 	latestReader      domainCommitmentLatestReader
@@ -258,6 +259,7 @@ func (d *DomainCommitmentState) finishCommit() {
 	if d == nil {
 		return
 	}
+	clear(d.before)
 	clear(d.touches)
 	clear(d.touchValues)
 	d.touchValues = d.touchValues[:0]
@@ -454,6 +456,11 @@ func (d *DomainCommitmentState) latestUpdateBatchFromTouches() (*commitmentUpdat
 		}
 		commitmentKey := batch.keyArena[start:len(batch.keyArena):len(batch.keyArena)]
 		update, err := d.latestUpdateFromTouch(reader, touch, d.touchValues[index], commitmentKey)
+		if err != nil {
+			batch.release()
+			return nil, err
+		}
+		update, err = d.attachPhysicalBefore(update)
 		if err != nil {
 			batch.release()
 			return nil, err
@@ -670,9 +677,14 @@ func (d *DomainCommitmentState) SeekCommitment(ctx context.Context) (uint64, uin
 		return 0, 0, nil
 	}
 	index := d.state.accountKVIndex()
-	return statedomains.SeekLatestCommitmentWithStore(statedomains.NewStagedCommitmentStore(index), func(blockNum uint64) (uint64, error) {
-		return snapshots.StateDomainHistoryTxNumAtBlockEnd(index, blockNum)
-	})
+	head, present, err := rawdb.ReadStateCommitmentHead(index)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !present {
+		return 0, 0, rawdb.ErrStateCommitmentHead
+	}
+	return head.TxNum, head.BlockNum, nil
 }
 
 func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum, txNum uint64) (tcommon.Hash, error) {
@@ -694,20 +706,11 @@ func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum,
 		defer batch.release()
 		updates = batch.updates
 	}
-	repair := d.state.commitmentRepair()
-	store, err := statedomains.NewRecoveringStagedCommitmentStoreWithRepair(index, repair, false)
-	if err != nil {
-		return tcommon.Hash{}, err
+	root, err := statedomains.ApplyMuHashCommitment(index, updates, statedomains.CommitmentIdentity{BlockNum: blockNum, TxNum: txNum})
+	if err == nil && d.afterCompute != nil {
+		d.afterCompute()
 	}
-	root, applyErr := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
-	closeErr := statedomains.CloseLatestCommitmentStore(store)
-	if applyErr != nil {
-		return tcommon.Hash{}, applyErr
-	}
-	if closeErr != nil {
-		return tcommon.Hash{}, closeErr
-	}
-	return tcommon.Hash(root), nil
+	return root, err
 }
 
 func contextError(ctx context.Context) error {

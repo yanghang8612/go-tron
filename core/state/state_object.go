@@ -71,6 +71,14 @@ type storageOrigin struct {
 	value  tcommon.Hash
 	exists bool
 	loaded bool
+	// Only semantic-zero rows need a separate physical pre-image. Nonzero
+	// SSTORE reuses its already loaded hash without another source lookup.
+	physical *storagePhysicalBefore
+}
+
+type storagePhysicalBefore struct {
+	value  []byte
+	exists bool
 }
 
 // storageSlot keeps the cached StorageRow value and java-tron row-existence

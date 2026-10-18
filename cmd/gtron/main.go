@@ -281,18 +281,8 @@ var (
 		Usage: "Immutable contract bytecode cache size in MiB (0 disables)",
 		Value: state.DefaultStateCodeCacheSizeBytes / (1024 * 1024),
 	}
-	stateCommitmentCacheFlag = &cli.IntFlag{
-		Name:  "state.commitment.cache",
-		Usage: "Generation-safe commitment/flat-latest base-read cache size in MiB (0 disables)",
-		Value: 512,
-	}
-	stateCommitmentCacheTailFlag = &cli.IntFlag{
-		Name:    "state.commitment.cache.tail",
-		Usage:   "Additional commitment CLOCK tail capacity in MiB, preserving base cache reservations (0 disables)",
-		Value:   0,
-		EnvVars: []string{"GTRON_STATE_COMMITMENT_CACHE_TAIL"},
-	}
-	configFileFlag = &cli.StringFlag{
+	stateLatestCacheFlag = &cli.IntFlag{Name: "state.latest.cache", Usage: "Flat latest state/SLOAD read cache size in MiB (0 disables)", Value: 128}
+	configFileFlag       = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history])",
 	}
@@ -465,7 +455,6 @@ var app = &cli.App{
 		historyCrossBlockDedupFlag,
 		historyCompressionFormatFlag,
 		historyCatchupModeFlag,
-		historyCommitmentBaseModeFlag,
 		historyReferenceContainerFlag,
 		historySharedReadWorkersFlag,
 		historySharedChunkCacheFlag,
@@ -495,8 +484,7 @@ var app = &cli.App{
 		snapshotCatalogGraceFlag,
 		stateTrieCacheFlag,
 		stateCodeCacheFlag,
-		stateCommitmentCacheFlag,
-		stateCommitmentCacheTailFlag,
+		stateLatestCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
 		historyStoreFlag,
@@ -686,11 +674,6 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	commitmentBaseMode, err := statesnapshots.ParseCommitmentBaseMode(ctx.String(historyCommitmentBaseModeFlag.Name))
-	if err != nil {
-		return err
-	}
-	log.Info("Commitment branch base policy configured", "mode", commitmentBaseMode)
 	historyReads, err := runtimeHistorySharedReadOptions(ctx)
 	if err != nil {
 		return err
@@ -741,6 +724,10 @@ func gtron(ctx *cli.Context) error {
 		return errors.New("paged delegation requires sync from genesis; snapshot bootstrap does not authenticate the storage layout")
 	}
 
+	latestCacheBytes, err := stateLatestCacheSizeBytes(ctx.Int(stateLatestCacheFlag.Name))
+	if err != nil {
+		return err
+	}
 	cacheMiB, handles, tune, err := makePebbleConfig(ctx)
 	if err != nil {
 		return err
@@ -925,20 +912,12 @@ func gtron(ctx *cli.Context) error {
 	} else {
 		log.Info("Immutable contract code cache disabled")
 	}
-	commitmentCacheMiB := ctx.Int("state.commitment.cache")
-	commitmentCacheTailMiB := ctx.Int(stateCommitmentCacheTailFlag.Name)
-	commitmentCacheBytes, commitmentCacheTailBytes, err := commitmentCacheSizeBytes(commitmentCacheMiB, commitmentCacheTailMiB)
-	if err != nil {
-		closeStores()
-		return err
-	}
 	sdb := state.NewDatabaseWithConfig(rawdb.WrapKeyValueStore(db), stateDBConfig)
 	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
 	}
-	bc.SetCommitmentBranchCacheSizeWithTail(commitmentCacheBytes, commitmentCacheTailBytes)
 	bc.SetInternalTransactionPersistence(cfg.SaveInternalTx, cfg.SaveFeaturedInternalTx, cfg.SaveCancelAllUnfreezeV2Details)
 	log.Info("VM internal transaction persistence configured",
 		"saveInternalTx", cfg.SaveInternalTx,
@@ -961,11 +940,8 @@ func gtron(ctx *cli.Context) error {
 	parallelVMRequested := ctx.Bool(execParallelVMFlag.Name)
 	parallelVMEnabled := bc.SetParallelVMExecution(parallelVMRequested)
 	log.Info("Speculative VM publication configured", "requested", parallelVMRequested, "enabled", parallelVMEnabled, "workers", 4, "serialOracle", true, "publishAudit", true, "serialRetryCircuit", true)
-	if commitmentCacheMiB > 0 {
-		log.Info("Commitment and flat-latest base-read cache enabled", "cacheMiB", commitmentCacheMiB, "additionalTailMiB", commitmentCacheTailMiB, "totalMiB", commitmentCacheMiB+commitmentCacheTailMiB)
-	} else {
-		log.Info("Commitment branch base-read cache disabled")
-	}
+	bc.SetStateLatestCacheSize(latestCacheBytes)
+	log.Info("Flat latest state read cache configured", "cacheMiB", ctx.Int(stateLatestCacheFlag.Name))
 	// Async/pipelined commit is OFF by default and deliberately not a
 	// chain-config / proposal value (it changes only the internal commit
 	// schedule, never any wire-observable byte). The explicit CLI flag keeps
@@ -1250,10 +1226,6 @@ func gtron(ctx *cli.Context) error {
 			})
 		}
 	}
-	if commitmentBaseMode == statesnapshots.CommitmentBaseInitialOnly && (!shouldEnableDomainStatePruner(chainConfig) || (chainConfig.EffectiveHistoryMode() != params.HistoryModeSnap && chainConfig.EffectiveHistoryMode() != params.HistoryModeArchive)) {
-		closeStores()
-		return errors.New("initial commitment base requires enabled cold state snapshots")
-	}
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		maxDeferredHistoryBlocks := maxDeferredColdHistoryBlocks(prunePolicy.HistoryWindow)
@@ -1322,7 +1294,6 @@ func gtron(ctx *cli.Context) error {
 		var fullIndexPrune statepruning.StateChangeIndexPruneFunc
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
-				CommitmentBaseMode:          commitmentBaseMode,
 				Dir:                         stateSnapshotDir,
 				Enabled:                     coldStateSnapshotsEnabled,
 				HistoryDataset:              historyDataset,
@@ -1361,10 +1332,9 @@ func gtron(ctx *cli.Context) error {
 				// Periodic sync-time rotation is disabled until immutable-base point
 				// reads and full-base rewrite amortization meet the replay release gate.
 				// A 40k-block cadence can otherwise continuously rewrite a large base.
-				BuildCommitmentBranchBaseWhileSyncing: false,
-				DeferHistoryBuildWhileSyncing:         shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
-				MaxDeferredHistoryBlocks:              maxDeferredHistoryBlocks,
-				MaxBusyDeferredHistoryBlocks:          maxBusyDeferredColdHistoryBlocks(maxDeferredHistoryBlocks),
+				DeferHistoryBuildWhileSyncing: shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),
+				MaxDeferredHistoryBlocks:      maxDeferredHistoryBlocks,
+				MaxBusyDeferredHistoryBlocks:  maxBusyDeferredColdHistoryBlocks(maxDeferredHistoryBlocks),
 				SyncBuildReady: func() bool {
 					return syncHistoryBuildAdmission.Ready(syncService.Status(), time.Now())
 				},

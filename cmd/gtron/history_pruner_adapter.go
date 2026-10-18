@@ -9,6 +9,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
@@ -175,20 +176,6 @@ func persistedSyncRemainingBlocksBounded(db ethdb.KeyValueReader, head, maxTarge
 	return target - head, true
 }
 
-func (a *domainPrunerChainSource) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
-	if a == nil || a.chain == nil {
-		return rawdb.CommitmentBranchRotation{}, false, nil
-	}
-	return a.chain.BeginCommitmentBranchRotation()
-}
-
-func (a *domainPrunerChainSource) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *statesnapshots.Manager) error {
-	if a == nil || a.chain == nil {
-		return nil
-	}
-	return a.chain.CompleteCommitmentBranchRotation(rotation, mgr)
-}
-
 func (a *domainPrunerChainSource) TryWithStateDomainChangePruneGuard(ctx context.Context, through, proofHead uint64, proofHash common.Hash, work func() error) (bool, error) {
 	if a == nil || a.prunerChainSource == nil || a.chain == nil {
 		return false, errors.New("state domain change prune: unavailable chain adapter")
@@ -210,21 +197,9 @@ func (a *domainPrunerChainSource) WithStateDomainChangePruneGuard(ctx context.Co
 	return a.chain.WithStateDomainChangePruneGuard(ctx, through, proofHead, proofHash, work)
 }
 
-func (a *domainPrunerChainSource) BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+func (a *stateSnapshotChainSource) AcquireStateLatestSnapshot(ctx context.Context) (pointread.KeyValueSnapshot, rawdb.StateCommitmentHead, error) {
 	if a == nil || a.chain == nil {
-		return rawdb.CommitmentBranchRotation{}, false, errors.New("initial commitment base: unavailable chain")
+		return nil, rawdb.StateCommitmentHead{}, errors.New("latest snapshots: unavailable chain")
 	}
-	return a.chain.BeginInitialCommitmentBranchRotation()
-}
-func (a *domainPrunerChainSource) CompleteInitialCommitmentBranchRotation(ctx context.Context, rotation rawdb.CommitmentBranchRotation, proof *statesnapshots.VerifiedCommitmentBranchBase) error {
-	if a == nil || a.chain == nil {
-		return errors.New("initial commitment base: unavailable chain")
-	}
-	return a.chain.CompleteInitialCommitmentBranchRotation(ctx, rotation, proof)
-}
-func (a *domainPrunerChainSource) CleanupAcceptedInitialCommitmentBranchBase(ctx context.Context, proof *statesnapshots.VerifiedCommitmentBranchBase) (bool, error) {
-	if a == nil || a.chain == nil {
-		return false, errors.New("initial commitment base: unavailable chain")
-	}
-	return a.chain.CleanupAcceptedInitialCommitmentBranchBase(ctx, proof)
+	return a.chain.AcquireStateLatestSnapshot(ctx)
 }

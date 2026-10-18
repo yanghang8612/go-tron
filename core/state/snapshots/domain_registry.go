@@ -379,6 +379,26 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			},
 		},
 		{
+			Name: "CommitmentHead", Dataset: SegmentDatasetCommitmentHead,
+			LatestPathStem: "commitment/head", HasLatest: true,
+			HasLatestAccessor: true, HasLatestBTree: true, TracksCommitmentFlush: true,
+			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, from, to uint64, path string) ([]SegmentRef, error) {
+				return buildCommitmentHeadSegments(context.Background(), db, dir, domain, from, to, path)
+			},
+			BuildLatestContext: buildCommitmentHeadSegments,
+		},
+
+		{
+			Name: "ExecutionCheckpoint", Dataset: SegmentDatasetExecutionCheckpoint,
+			LatestPathStem: "execution/checkpoint", HasLatest: true,
+			HasLatestAccessor: true, HasLatestBTree: true, TracksCommitmentFlush: true,
+			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, from, to uint64, path string) ([]SegmentRef, error) {
+				return buildExecutionCheckpointSegments(context.Background(), db, dir, domain, from, to, path)
+			},
+			BuildLatestContext: buildExecutionCheckpointSegments,
+		},
+
+		{
 			Name:                  "CommitmentCheckpoint",
 			Dataset:               SegmentDatasetCommitmentCheckpoint,
 			LatestPathStem:        "commitment/checkpoints",
@@ -386,37 +406,15 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor:     true,
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, _, btree, err := buildCommitmentCheckpointSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
-				if err != nil {
-					return nil, err
-				}
-				return []SegmentRef{latest, btree}, nil
+			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, from, to uint64, path string) ([]SegmentRef, error) {
+				return buildCutCommitmentCheckpointSegments(context.Background(), db, dir, domain, from, to, path)
 			},
-			BuildLatestContext: func(ctx context.Context, db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
-				latest, _, btree, err := buildCommitmentCheckpointSegmentFilesFromStoreContext(ctx, newRawDBLatestHotBuildStore(db), dir, fromTxNum, toTxNum, relPath, false)
-				if err != nil {
-					return nil, err
-				}
-				return []SegmentRef{latest, btree}, nil
-			},
+			BuildLatestContext: buildCutCommitmentCheckpointSegments,
+
 			WriteHotCommitmentCheckpoint:      rawdb.WriteStateCommitmentCheckpoint,
 			ReadHotLatestCommitmentCheckpoint: rawdb.ReadLatestStateCommitmentCheckpoint,
 			IterateHotCommitmentCheckpoints:   rawdb.IterateStateCommitmentCheckpoints,
 			DeleteHotCommitmentCheckpoint:     rawdb.DeleteStateCommitmentCheckpoint,
-		},
-		{
-			Name:                  "CommitmentBranch",
-			Dataset:               SegmentDatasetCommitmentBranch,
-			LatestPathStem:        "commitment/branch",
-			LatestPathExt:         ".seg",
-			HasLatest:             true,
-			HasLatestAccessor:     true,
-			HasLatestBTree:        true,
-			TracksCommitmentFlush: true,
-			BuildLatest:           buildCommitmentBranchLatest,
-			BuildLatestContext:    buildCommitmentBranchLatestContext,
-			CheckLatest:           checkCommitmentBranchSegment,
 		},
 		{
 			Name:                    "HistoryDomain",

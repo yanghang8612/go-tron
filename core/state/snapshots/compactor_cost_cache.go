@@ -138,10 +138,11 @@ func historyCompactionCacheKey(candidate historyCompactionCandidate) (historyCom
 // The field-inventory test deliberately fails when SegmentRef gains a field.
 func digestHistoryCompactionRefs(refs historyCompactionInputRefs) historyCompactionCostKey {
 	h := sha256.New()
-	_, _ = h.Write([]byte("go-tron/history-compaction-cost-hint/v1\x00"))
+	_, _ = h.Write([]byte("go-tron/history-compaction-cost-hint/v2\x00"))
 	var number [8]byte
 	writeNumber := func(n uint64) { binary.LittleEndian.PutUint64(number[:], n); _, _ = h.Write(number[:]) }
 	for _, ref := range refs {
+		writeNumber(ref.Rows)
 		writeHistoryCostHintString(h, string(ref.Dataset), number[:])
 		writeNumber(uint64(ref.Domain))
 		writeHistoryCostHintString(h, string(ref.Kind), number[:])

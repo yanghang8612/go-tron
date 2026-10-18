@@ -110,6 +110,11 @@ func (p *canonicalBlockExecution) CommitState(block *types.Block, opts state.Com
 		return canonicalCommitResult{}, fmt.Errorf("canonical block execution: nil stage pipeline")
 	}
 	opts.BlockNumber = block.Number()
+	opts.BlockHash = block.Hash()
+	opts.ParentHash = block.ParentHash()
+	if p.txRange != nil {
+		opts.CommitmentTxNum = p.txRange.EndTxNum
+	}
 	if p.commit != nil {
 		opts.FlushLatestDomain = func() error { return nil }
 	}
@@ -151,6 +156,11 @@ func (p *canonicalBlockExecution) CommitStateCapture(block *types.Block, opts st
 	}
 	p.state.SetDeferFold(true)
 	opts.BlockNumber = block.Number()
+	opts.BlockHash = block.Hash()
+	opts.ParentHash = block.ParentHash()
+	if p.txRange != nil {
+		opts.CommitmentTxNum = p.txRange.EndTxNum
+	}
 	if p.commit != nil {
 		opts.FlushLatestDomain = func() error { return nil }
 	}

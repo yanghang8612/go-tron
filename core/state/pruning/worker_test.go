@@ -1492,7 +1492,7 @@ func TestCheckerValidatesSnapshotSegmentsAndCodeHashes(t *testing.T) {
 	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	ref, err := snapshots.BuildLatestDomainSegmentFromDB(db, dir, kvdomains.SystemDynamicProperty, 1, 1, "latest/system-dp.json")
@@ -1568,7 +1568,7 @@ func TestCheckerCountsFlatLatestDatasets(t *testing.T) {
 	if err := rawdb.WriteStateKVLatest(db, owner, 7, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	report, err := Check(db, ArchivePolicy(), 1, "")
@@ -1600,7 +1600,7 @@ func TestCheckerRequiresReferencedCodeHashCoverage(t *testing.T) {
 	code := []byte{0x60, 0x01, 0x60, 0x02}
 	hash := common.Keccak256(code)
 	writeAccountLatestEnvelope(t, db, owner, hash)
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Check(db, ArchivePolicy(), 1, "")
@@ -1628,7 +1628,7 @@ func TestCheckerSurfacesUnreadableHotCodeWithoutSnapshotCoverage(t *testing.T) {
 	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	wrapped := &checkerCodeHidingStore{
@@ -1651,7 +1651,7 @@ func TestCheckerRequiresHistoricalCodeHashCoverage(t *testing.T) {
 	oldHash := common.Keccak256(oldCode)
 	newHash := common.Keccak256(newCode)
 	writeAccountLatestEnvelope(t, db, owner, newHash)
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
@@ -1700,7 +1700,7 @@ func TestCheckerAcceptsReferencedCodeHashFromSnapshot(t *testing.T) {
 	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 1, 1, "latest/code-1-1.seg")
@@ -1736,7 +1736,7 @@ func TestCheckerSurfacesCorruptColdCodeSnapshot(t *testing.T) {
 	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 1, 1, "latest/code-1-1.seg")
@@ -1762,7 +1762,7 @@ func TestCheckerAcceptsHistoricalCodeHashFromColdSnapshots(t *testing.T) {
 	oldHash := common.Keccak256(oldCode)
 	newHash := common.Keccak256(newCode)
 	writeAccountLatestEnvelope(t, db, owner, newHash)
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
@@ -2038,7 +2038,7 @@ func TestWorkerSnapPrunesCurrentLatestStateCodeCoveredByCodeDomain(t *testing.T)
 		t.Fatal(err)
 	}
 	writeAccountLatestEnvelope(t, db, owner, hash)
-	if _, err := statedomains.NewStagedCommitmentStore(db).Rebuild(); err != nil {
+	if _, err := statedomains.RebuildMuHashCommitment(db); err != nil {
 		t.Fatal(err)
 	}
 	codeRef, codeAccessorRef, codeBTreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(db, dir, 5, 5, "latest/code-5-5.seg")

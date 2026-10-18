@@ -35,6 +35,36 @@ func InstallCanonicalBoundaryFromVerifiedCatalog(db canonicalBoundaryDB, chainDB
 }
 
 func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainDB *rawdb.ChainDB, manifest *Manifest) (*RestoreCanonicalBoundaryResult, error) {
+	boundary, err := VerifyCanonicalBoundaryFromRestoredSnapshot(db, chainDB, manifest)
+	if err != nil {
+		return nil, err
+	}
+	batcher, ok := db.(ethdb.Batcher)
+	if !ok {
+		return nil, errors.New("snapshots: canonical publication requires batch-capable target")
+	}
+	batch := batcher.NewBatch()
+	defer batch.Close()
+	if err := rawdb.WriteBlockNumber(batch, boundary.BlockHash, boundary.BlockNum); err != nil {
+		return nil, err
+	}
+	if err := rawdb.WriteCanonicalStageProgressWithHash(batch, boundary.BlockNum, boundary.BlockHash); err != nil {
+		return nil, err
+	}
+	capture := new(keyCapture)
+	rawdb.WriteHeadBlockHash(capture, boundary.BlockHash)
+	if err := batch.Put(capture.key, boundary.BlockHash.Bytes()); err != nil {
+		return nil, err
+	}
+	if err := batch.Write(); err != nil {
+		return nil, err
+	}
+	return boundary, nil
+}
+
+// VerifyCanonicalBoundaryFromRestoredSnapshot never publishes current state.
+// It is used before fresh restore's final HEAD/root/current publication batch.
+func VerifyCanonicalBoundaryFromRestoredSnapshot(db canonicalBoundaryDB, chainDB *rawdb.ChainDB, manifest *Manifest) (*RestoreCanonicalBoundaryResult, error) {
 	if db == nil {
 		return nil, errors.New("snapshots: nil canonical boundary database")
 	}
@@ -44,13 +74,23 @@ func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainD
 	if manifest == nil {
 		return nil, errors.New("snapshots: nil manifest")
 	}
-	txNum := manifest.VisibleTxEnd
-	row, ok, err := stateTxRangeAtTxNum(db, txNum)
+	txNum := manifest.LatestStateTxNum
+	if txNum == 0 {
+		return nil, errors.New("snapshots: no authenticated latest state cut")
+	}
+	head, headPresent, err := rawdb.ReadStateCommitmentHead(db)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, fmt.Errorf("snapshots: no restored state tx range contains snapshot txNum %d", txNum)
+	if !headPresent || head.TxNum != txNum {
+		return nil, errors.New("snapshots: missing same-cut HEAD")
+	}
+	row, ok, err := rawdb.ReadStateTxRange(db, head.BlockNum)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || row.EndTxNum != txNum || row.BlockHash != head.BlockHash {
+		return nil, fmt.Errorf("snapshots: missing or mismatched current allocator range identity/hash for snapshot txNum %d", txNum)
 	}
 	if row.BlockHash == (common.Hash{}) {
 		return nil, fmt.Errorf("snapshots: state tx range for block %d has zero block hash", row.BlockNum)
@@ -65,16 +105,30 @@ func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainD
 	if block.Hash() != row.BlockHash {
 		return nil, fmt.Errorf("snapshots: canonical boundary block %d hash %x, want state tx range hash %x", row.BlockNum, block.Hash(), row.BlockHash)
 	}
-	if err := verifyCanonicalBoundaryCommitmentCheckpoint(db, row.BlockNum, row.BlockHash); err != nil {
+	if err := verifyCanonicalBoundaryCommitmentCheckpoint(db, row.BlockNum, row.BlockHash, row.EndTxNum); err != nil {
 		return nil, err
 	}
-	if err := rawdb.WriteBlockNumber(db, row.BlockHash, row.BlockNum); err != nil {
+	properties, err := rawdb.ReadStateExecutionProperties(db)
+	if err != nil {
 		return nil, err
 	}
-	if err := rawdb.WriteCanonicalStageProgressWithHash(db, row.BlockNum, row.BlockHash); err != nil {
+	if properties.BlockNum != int64(block.Number()) || properties.BlockHash != block.Hash() || properties.Timestamp != block.Timestamp() {
+		return nil, errors.New("snapshots: execution properties differ from cut block")
+	}
+	head, _, err = rawdb.ReadStateCommitmentHead(db)
+	if err != nil {
 		return nil, err
 	}
-	rawdb.WriteHeadBlockHash(db, row.BlockHash)
+	if head.ParentHash != block.ParentHash() {
+		return nil, errors.New("snapshots: canonical boundary parent hash / HEAD mismatch")
+	}
+	chainRoot, present, err := rawdb.ReadBlockStateRootStrict(chainDB, row.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+	if !present || chainRoot != head.Root {
+		return nil, errors.New("snapshots: canonical boundary chain internal root / HEAD mismatch")
+	}
 	return &RestoreCanonicalBoundaryResult{
 		TxNum:     txNum,
 		BlockNum:  row.BlockNum,
@@ -82,13 +136,24 @@ func InstallCanonicalBoundaryFromVerifiedSnapshot(db canonicalBoundaryDB, chainD
 	}, nil
 }
 
-func verifyCanonicalBoundaryCommitmentCheckpoint(db ethdb.KeyValueReader, blockNum uint64, blockHash common.Hash) error {
+func verifyCanonicalBoundaryCommitmentCheckpoint(db ethdb.KeyValueReader, blockNum uint64, blockHash common.Hash, txNum uint64) error {
+	head, present, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return errors.New("snapshots: canonical boundary requires complete MuHash HEAD")
+	}
+	if head.BlockNum != blockNum || head.BlockHash != blockHash || head.TxNum != txNum {
+		return errors.New("snapshots: canonical boundary HEAD identity/source cut mismatch")
+	}
+
 	checkpoint, ok, err := rawdb.ReadLatestStateCommitmentCheckpoint(db)
 	if err != nil {
 		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint unreadable: %w", err)
 	}
 	if !ok {
-		return nil
+		return errors.New("snapshots: canonical boundary missing commitment checkpoint")
 	}
 	if checkpoint.BlockNum != blockNum {
 		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint block %d, want %d", checkpoint.BlockNum, blockNum)
@@ -100,7 +165,7 @@ func verifyCanonicalBoundaryCommitmentCheckpoint(db ethdb.KeyValueReader, blockN
 	if err != nil {
 		return fmt.Errorf("snapshots: canonical boundary restored commitment root unreadable: %w", err)
 	}
-	if ok && checkpoint.Root != restoredRoot {
+	if !ok || checkpoint.Root != restoredRoot || head.Root != restoredRoot {
 		return fmt.Errorf("snapshots: canonical boundary commitment checkpoint root %x, want latest root %x", checkpoint.Root, restoredRoot)
 	}
 	return nil

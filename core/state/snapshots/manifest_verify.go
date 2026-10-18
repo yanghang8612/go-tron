@@ -64,8 +64,12 @@ type VerifyRestoredSnapshotBoundaryOptions struct {
 }
 
 type RestoreVerifiedSnapshotOptions struct {
-	Boundary VerifyRestoredSnapshotBoundaryOptions
-	ETL      RestoreETLOptions
+	// BeforePublish validates/prepares chain payload while HEAD remains unpublished.
+	BeforePublish func(ethdb.KeyValueStore, *Manifest) error
+	// FinalMetadata joins required chain metadata to the final HEAD publication batch.
+	FinalMetadata func(ethdb.KeyValueWriter, rawdb.StateCommitmentHead) error
+	Boundary      VerifyRestoredSnapshotBoundaryOptions
+	ETL           RestoreETLOptions
 }
 
 // VerifyManifestFiles loads the production manifest in dir and verifies every
@@ -131,10 +135,18 @@ func restoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir s
 	}
 	// Catalog identity does not certify the delegation representation. Never
 	// let imported state inherit a fresh target's paged-layout admission bit.
+	if manifest.LatestStateTxNum == 0 {
+		return nil, fmt.Errorf("snapshots: full restore requires authenticated latest source/HEAD cut")
+	}
+	staged, err := newUnpublishedRestore(db)
+	if err != nil {
+		return nil, err
+	}
+	db = staged
 	if err := rawdb.InvalidatePagedDelegationLayout(db); err != nil {
 		return nil, err
 	}
-	if err := mgr.RestoreLatestWithOptions(db, manifest.VisibleTxEnd, opts.ETL); err != nil {
+	if err := mgr.RestoreLatestWithOptions(db, manifest.LatestStateTxNum, opts.ETL); err != nil {
 		return nil, err
 	}
 	reader, ok := db.(ethdb.KeyValueReader)
@@ -144,9 +156,17 @@ func restoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir s
 	if err := VerifyRestoredSnapshotBoundaryWithOptions(reader, mgr, manifest, opts.Boundary); err != nil {
 		return nil, err
 	}
+	if opts.BeforePublish != nil {
+		if err := opts.BeforePublish(staged, manifest); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := staged.publish(manifest, opts.FinalMetadata); err != nil {
+		return nil, err
+	}
 	return &RestoreVerifiedLatestResult{
 		Verification:  report,
-		RestoredTxNum: manifest.VisibleTxEnd,
+		RestoredTxNum: manifest.LatestStateTxNum,
 	}, nil
 }
 
@@ -214,10 +234,18 @@ func restoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
+	if manifest.LatestStateTxNum == 0 {
+		return nil, fmt.Errorf("snapshots: full restore requires authenticated latest source/HEAD cut")
+	}
+	staged, err := newUnpublishedRestore(db)
+	if err != nil {
+		return nil, err
+	}
+	db = staged
 	if err := rawdb.InvalidatePagedDelegationLayout(db); err != nil {
 		return nil, err
 	}
-	if err := mgr.RestoreLatestWithOptions(db, manifest.VisibleTxEnd, opts.ETL); err != nil {
+	if err := mgr.RestoreLatestWithOptions(db, manifest.LatestStateTxNum, opts.ETL); err != nil {
 		return nil, err
 	}
 	reader, ok := db.(ethdb.KeyValueReader)
@@ -231,13 +259,18 @@ func restoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir
 	if err != nil {
 		return nil, err
 	}
-	progress, err := WriteSnapshotInstallProgress(db, manifest)
+	if opts.BeforePublish != nil {
+		if err := opts.BeforePublish(staged, manifest); err != nil {
+			return nil, err
+		}
+	}
+	progress, err := staged.publish(manifest, opts.FinalMetadata)
 	if err != nil {
 		return nil, err
 	}
 	return &RestoreVerifiedSnapshotResult{
 		Verification:     report,
-		RestoredTxNum:    manifest.VisibleTxEnd,
+		RestoredTxNum:    manifest.LatestStateTxNum,
 		ChangesRestored:  restoredHistory.ChangesRestored,
 		TxRangesRestored: restoredHistory.TxRangesRestored,
 		Progress:         progress,
@@ -252,23 +285,28 @@ func VerifyRestoredSnapshotBoundaryWithOptions(db ethdb.KeyValueReader, mgr *Man
 	if db == nil || mgr == nil || manifest == nil {
 		return nil
 	}
+	if manifestHasLatestDataset(manifest, SegmentDatasetCommitmentRoot) || manifestHasLatestDataset(manifest, SegmentDatasetCommitmentHead) {
+		if err := verifyRestoredCommitmentHead(db, mgr, manifest); err != nil {
+			return err
+		}
+	}
 	if manifestHasLatestDataset(manifest, SegmentDatasetCommitmentRoot) {
-		expected, ok, err := mgr.GetCommitmentRoot(manifest.VisibleTxEnd)
+		expected, ok, err := mgr.GetCommitmentRoot(manifest.LatestStateTxNum)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("snapshots: commitment root segment present but no root at txNum %d", manifest.VisibleTxEnd)
+			return fmt.Errorf("snapshots: commitment root segment present but no root at txNum %d", manifest.LatestStateTxNum)
 		}
 		got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("snapshots: restored snapshot missing latest commitment root at txNum %d", manifest.VisibleTxEnd)
+			return fmt.Errorf("snapshots: restored snapshot missing latest commitment root at txNum %d", manifest.LatestStateTxNum)
 		}
 		if got != expected {
-			return fmt.Errorf("snapshots: restored latest commitment root %x, want %x at txNum %d", got, expected, manifest.VisibleTxEnd)
+			return fmt.Errorf("snapshots: restored latest commitment root %x, want %x at txNum %d", got, expected, manifest.LatestStateTxNum)
 		}
 		if opts.RebuildCommitmentRoot == nil {
 			if opts.RequireIndependentCommitmentRoot {
@@ -280,31 +318,31 @@ func VerifyRestoredSnapshotBoundaryWithOptions(db ethdb.KeyValueReader, mgr *Man
 				return err
 			}
 			if rebuilt != expected {
-				return fmt.Errorf("snapshots: rebuilt latest commitment root %x, want snapshot root %x at txNum %d", rebuilt, expected, manifest.VisibleTxEnd)
+				return fmt.Errorf("snapshots: rebuilt latest commitment root %x, want snapshot root %x at txNum %d", rebuilt, expected, manifest.LatestStateTxNum)
 			}
 		}
 	}
 	if manifestHasLatestDataset(manifest, SegmentDatasetCommitmentCheckpoint) {
-		expected, ok, err := mgr.getLatestValue(SegmentDatasetCommitmentCheckpoint, 0, rawdb.LatestStateCommitmentCheckpointLogicalKey(), manifest.VisibleTxEnd)
+		expected, ok, err := mgr.getLatestValue(SegmentDatasetCommitmentCheckpoint, 0, rawdb.LatestStateCommitmentCheckpointLogicalKey(), manifest.LatestStateTxNum)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("snapshots: commitment checkpoint segment present but no latest checkpoint pointer at txNum %d", manifest.VisibleTxEnd)
+			return fmt.Errorf("snapshots: commitment checkpoint segment present but no latest checkpoint pointer at txNum %d", manifest.LatestStateTxNum)
 		}
 		got, ok, err := rawdb.ReadLatestStateCommitmentCheckpoint(db)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("snapshots: restored snapshot missing latest commitment checkpoint at txNum %d", manifest.VisibleTxEnd)
+			return fmt.Errorf("snapshots: restored snapshot missing latest commitment checkpoint at txNum %d", manifest.LatestStateTxNum)
 		}
 		encoded, err := rawdb.EncodeStateCommitmentCheckpointValue(got)
 		if err != nil {
 			return err
 		}
 		if !bytes.Equal(encoded, expected) {
-			return fmt.Errorf("snapshots: restored latest commitment checkpoint does not match snapshot boundary at txNum %d", manifest.VisibleTxEnd)
+			return fmt.Errorf("snapshots: restored latest commitment checkpoint does not match snapshot boundary at txNum %d", manifest.LatestStateTxNum)
 		}
 	}
 	return nil

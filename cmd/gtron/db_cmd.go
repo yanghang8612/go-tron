@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
@@ -2309,61 +2310,71 @@ func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, sour
 	if err != nil {
 		return nil, err
 	}
-	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(replayDB, rawdb.NoopAncient{}, genesis)
+	wireGenesis, err := core.GenesisWireBlock(genesis)
 	if err != nil {
-		return nil, fmt.Errorf("balance trace replay snapshot seed setup genesis: %w", err)
+		return nil, err
 	}
-	genesisRoot, hasGenesisRoot, err := rawdb.ReadGenesisStateRootStrict(replayDB)
+	genesisHash := wireGenesis.Hash()
+	sourceGenesis, present, err := rawdb.ReadBlockStrict(source, 0)
 	if err != nil {
-		return nil, fmt.Errorf("balance trace replay snapshot seed read genesis state root: %w", err)
+		return nil, err
 	}
-	if !hasGenesisRoot || genesisRoot == (common.Hash{}) {
-		return nil, errors.New("balance trace replay snapshot seed: genesis state root missing after genesis setup")
+	if !present || sourceGenesis.Hash() != genesisHash {
+		return nil, errors.New("balance trace replay snapshot seed source genesis identity mismatch")
 	}
-	if err := rawdb.ResetMutableState(replayDB); err != nil {
-		return nil, fmt.Errorf("balance trace replay snapshot seed reset mutable state: %w", err)
+	genesisRoot, present, err := rawdb.ReadGenesisStateRootStrict(source)
+	if err != nil {
+		return nil, err
 	}
-	rawdb.WriteGenesisStateRoot(replayDB, genesisRoot)
-	dbWriteGenesisWitnesses(replayDB, genesis)
-
-	identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, forkConfigHash)
+	if !present {
+		return nil, errors.New("balance trace replay snapshot seed source genesis root missing")
+	}
+	identity := snapshotExpectedChainIdentity(genesis.Config, genesis, genesisHash, forkConfigHash)
 	restoreOpts := snapshotRestoreVerificationOptions(replayDB)
-	restoreOpts.ETL = statesnapshots.RestoreETLOptions{
-		TempDir:     etlOpts.TempDir,
-		BufferLimit: etlOpts.BufferLimit,
-		BatchSize:   etlOpts.BatchSize,
+	restoreOpts.ETL = statesnapshots.RestoreETLOptions{TempDir: etlOpts.TempDir, BufferLimit: etlOpts.BufferLimit, BatchSize: etlOpts.BatchSize}
+	var boundary *statesnapshots.RestoreCanonicalBoundaryResult
+	var copied uint64
+	restoreOpts.BeforePublish = func(staged ethdb.KeyValueStore, manifest *statesnapshots.Manifest) error {
+		var err error
+		boundary, err = statesnapshots.VerifyCanonicalBoundaryFromRestoredSnapshot(staged, source, manifest)
+		if err != nil {
+			return err
+		}
+		if boundary.BlockNum == 0 {
+			return errors.New("balance trace replay snapshot seed: snapshot boundary at genesis cannot seed block trace replay")
+		}
+		block, present, err := rawdb.ReadBlockStrict(source, boundary.BlockNum)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return errors.New("balance trace replay snapshot seed missing cut block")
+		}
+		javaRoot := block.AccountStateRoot()
+		if javaRoot != (common.Hash{}) && javaRoot != common.Hash(ethtypes.EmptyRootHash) {
+			return errors.New("snapshot restore does not support a nonempty Java account-state trie root")
+		}
+		copied, err = dbCopyReplayRecentChainWindow(source, staged, boundary.BlockNum)
+		return err
+	}
+	restoreOpts.FinalMetadata = func(writer ethdb.KeyValueWriter, _ rawdb.StateCommitmentHead) error {
+		guarded := &snapshotMetadataWriter{KeyValueWriter: writer}
+		if err := rawdb.WriteBlock(guarded, wireGenesis); err != nil {
+			return err
+		}
+		rawdb.WriteGenesisStateRoot(guarded, genesisRoot)
+		dbWriteGenesisWitnesses(guarded, genesis)
+		recipe, err := json.Marshal(genesis)
+		if err != nil {
+			return err
+		}
+		if err := rawdb.WriteStateGenesisRecipe(guarded, genesisHash, recipe); err != nil {
+			return err
+		}
+		return guarded.err
 	}
 	if _, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(replayDB, dir, identity, trustedKeys, restoreOpts); err != nil {
 		return nil, fmt.Errorf("balance trace replay snapshot seed restore: %w", err)
-	}
-
-	boundary, err := statesnapshots.InstallCanonicalBoundaryFromVerifiedCatalog(replayDB, source, dir, identity, trustedKeys)
-	if err != nil {
-		return nil, fmt.Errorf("balance trace replay snapshot seed canonical boundary: %w", err)
-	}
-	if boundary.BlockNum == 0 {
-		return nil, errors.New("balance trace replay snapshot seed: snapshot boundary at genesis cannot seed block trace replay")
-	}
-	boundaryRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(replayDB)
-	if err != nil {
-		return nil, err
-	}
-	if !ok || boundaryRoot == (common.Hash{}) {
-		return nil, errors.New("balance trace replay snapshot seed: restored snapshot has no latest commitment root")
-	}
-	sourceRoot, sourceRootOK, err := rawdb.ReadBlockStateRootStrict(source, boundary.BlockHash)
-	if err != nil {
-		return nil, fmt.Errorf("balance trace replay snapshot seed read source boundary state root: %w", err)
-	}
-	if sourceRootOK && sourceRoot != boundaryRoot {
-		return nil, fmt.Errorf("balance trace replay snapshot seed: restored root %x does not match source block %d root %x", boundaryRoot, boundary.BlockNum, sourceRoot)
-	}
-	if err := rawdb.WriteBlockStateRoot(replayDB, boundary.BlockHash, boundaryRoot); err != nil {
-		return nil, fmt.Errorf("balance trace replay snapshot seed write boundary state root: %w", err)
-	}
-	copied, err := dbCopyReplayRecentChainWindow(source, replayDB, boundary.BlockNum)
-	if err != nil {
-		return nil, err
 	}
 	result.Boundary = boundary
 	result.CopiedRecentBlocks = copied

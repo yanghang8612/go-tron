@@ -8,7 +8,6 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
-	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -93,18 +92,18 @@ func buildTransferChain(numAccounts, numBlocks, txPerBlock int) (*params.Genesis
 //
 //	go test ./core -run '^$' -bench BenchmarkInsertBlocksTransfers -benchtime=4x -cpuprofile /tmp/insert.prof
 func BenchmarkInsertBlocksTransfers(b *testing.B) {
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, false, false, false)
+	benchInsertBlocks(b, 0, false, false, false)
 }
 func BenchmarkInsertBlocksTransfersSeqFold(b *testing.B) {
 	benchInsertBlocks(b, 1<<30, false, false, false)
 }
 func BenchmarkInsertBlocksTransfersAsyncSerial(b *testing.B) {
 	b.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, false, false)
+	benchInsertBlocks(b, 0, true, false, false)
 }
 func BenchmarkInsertBlocksTransfersAsyncOrdered(b *testing.B) {
 	b.Setenv("GTRON_ASYNC_COMMIT_DEPTH", "4")
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, true, true, false)
+	benchInsertBlocks(b, 0, true, true, false)
 }
 
 // BenchmarkInsertBlocksTransfersParallel exercises the complete production
@@ -114,13 +113,10 @@ func BenchmarkInsertBlocksTransfersAsyncOrdered(b *testing.B) {
 // correctness hardening cannot silently make the opt-in execution mode
 // operationally unusable.
 func BenchmarkInsertBlocksTransfersParallel(b *testing.B) {
-	benchInsertBlocks(b, statedomains.ParallelFoldMinOps, false, false, true)
+	benchInsertBlocks(b, 0, false, false, true)
 }
 
 func benchInsertBlocks(b *testing.B, foldMinOps int, async, ordered, parallelTransfers bool) {
-	prev := statedomains.ParallelFoldMinOps
-	statedomains.ParallelFoldMinOps = foldMinOps
-	defer func() { statedomains.ParallelFoldMinOps = prev }()
 
 	const numAccounts, numBlocks, txPerBlock = 3000, 150, 80
 	genesis, mk := buildTransferChain(numAccounts, numBlocks, txPerBlock)
@@ -138,7 +134,6 @@ func benchInsertBlocks(b *testing.B, foldMinOps int, async, ordered, parallelTra
 			b.Fatal(err)
 		}
 		bc.SetParallelTransferExecution(parallelTransfers)
-		bc.orderedCommitPipeline = ordered
 		bc.SetAsyncCommit(async)
 		b.StartTimer()
 		if err := bc.InsertBlocks(blocks); err != nil {

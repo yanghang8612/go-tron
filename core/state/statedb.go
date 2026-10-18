@@ -12,9 +12,11 @@ import (
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -392,7 +394,9 @@ type CommitOptions struct {
 	// the commit, so callers pass block.Number() here. Required on the scoped
 	// (CommitWithStatsOptionsInScope) path; ignored on the per-block fresh-writer
 	// path, which fully flushes and clears its overlay every commit.
-	BlockNumber uint64
+	BlockNumber           uint64
+	BlockHash, ParentHash tcommon.Hash
+	CommitmentTxNum       uint64
 	// DeepAsync marks the deep async-commit pipeline (GTRON_ASYNC_COMMIT_DEPTH >
 	// 2). It makes the scoped latest writer's prunePending verify each overlay
 	// entry is actually durable in the underlying store before dropping it, rather
@@ -409,6 +413,10 @@ type CommitOptions struct {
 // through the same SharedDomainTx/latest writer instead of allocating a fresh
 // domain transaction per block.
 type CommitScope struct {
+	atomicBuffer       *blockbuffer.Buffer
+	atomicBase         accountKVIndexStore
+	originalIndex      accountKVIndexStore
+	atomicReady        bool
 	state              *StateDB
 	generationResolver statedomains.GenerationResolver
 	history            *DomainHistoryState
@@ -418,6 +426,7 @@ type CommitScope struct {
 	latestReader       *commitScopeLatestReader
 	tx                 *statedomains.SharedDomainTx
 	commits            uint64
+	flushRequested     bool
 }
 
 type commitScopeCommitment struct {
@@ -436,6 +445,15 @@ func (s *StateDB) NewCommitScope() *CommitScope {
 		return scope.generationResolver(owner)
 	}
 	index := s.accountKVIndex()
+	if _, layered := index.(*blockbuffer.Buffer); !layered {
+		scope.originalIndex = s.accountKVIndexStore
+		scope.atomicBase = index
+		scope.atomicBuffer = blockbuffer.New(index)
+		scope.atomicBuffer.SetBaseReadCacheSize(0)
+		scope.atomicBuffer.BeginBlock(tcommon.Hash{}, 0)
+		index = scope.atomicBuffer
+		s.accountKVIndexStore = index
+	}
 	scope.history = NewDomainHistoryState(s, 0)
 	scope.commitment = &commitScopeCommitment{}
 	scope.commitmentState = NewDomainCommitmentState(s)
@@ -452,7 +470,14 @@ func (s *StateDB) NewCommitScope() *CommitScope {
 		Commitment:      scope.commitment,
 		UnindexedWrites: true,
 	})
-	s.setAccountKVLatestView(scope.latestReader, scope.latestReader)
+	if scope.atomicBuffer == nil {
+		s.setAccountKVLatestView(scope.latestReader, scope.latestReader)
+	} else {
+		// The private atomic writer changes transport only, not this StateDB's
+		// logical parent cut. Retain its owned decoded working-set cache.
+		s.accountKVLatestReader = scope.latestReader
+		s.accountKVLatestIterator = scope.latestReader
+	}
 	s.flatLatestReader = scope.latestReader
 	return scope
 }
@@ -479,7 +504,24 @@ func (scope *CommitScope) FlushLatest() error {
 	if scope == nil || scope.latestWriter == nil {
 		return nil
 	}
-	return scope.latestWriter.flush()
+	scope.flushRequested = true
+	if err := scope.latestWriter.flush(); err != nil {
+		return err
+	}
+	if scope.atomicBuffer != nil && scope.atomicReady {
+		scope.atomicBuffer.CommitBlock()
+		writer, ok := scope.atomicBase.(ethdb.KeyValueStore)
+		if !ok {
+			return errors.New("standalone scope requires atomic backend batch")
+		}
+		if err := scope.atomicBuffer.Flush(writer); err != nil {
+			return err
+		}
+		scope.atomicBuffer.BeginBlock(tcommon.Hash{}, 0)
+		scope.atomicReady = false
+		scope.flushRequested = false
+	}
+	return nil
 }
 
 func (scope *CommitScope) FlushLatestUpTo(cutoff uint64) error {
@@ -540,12 +582,21 @@ func (scope *CommitScope) discard() {
 		scope.latestReader.generation = nil
 	}
 	scope.detachLatestView()
+	if scope.atomicBuffer != nil {
+		scope.atomicBuffer.Discard()
+		scope.state.accountKVIndexStore = scope.originalIndex
+	}
+
 	scope.generationResolver = nil
 }
 
 func (scope *CommitScope) prepare(generation statedomains.GenerationResolver, commitment *DomainCommitmentState, txNum uint64) error {
 	if scope == nil || scope.tx == nil || scope.latestWriter == nil || scope.latestReader == nil || scope.history == nil || scope.commitment == nil {
 		return errors.New("state commit scope: incomplete scope")
+	}
+	scope.latestWriter.commitment = commitment
+	if commitment != nil && scope.atomicBuffer != nil {
+		commitment.afterCompute = func() { scope.atomicReady = true }
 	}
 	scope.generationResolver = generation
 	scope.latestReader.generation = generation
@@ -660,7 +711,9 @@ func (scope *CommitScope) detachLatestView() {
 		return
 	}
 	if scope.state.accountKVLatestReader == scope.latestReader {
-		scope.state.clearLegacyDelegationCache()
+		if scope.atomicBuffer == nil {
+			scope.state.clearLegacyDelegationCache()
+		}
 		scope.state.accountKVLatestReader = nil
 	}
 	if scope.state.accountKVLatestIterator == scope.latestReader {
@@ -760,6 +813,11 @@ type AccountSnapshot struct {
 
 // New creates a flat-domain StateDB from the given CommitmentDomain root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
+	if root == tcommon.Hash(ethtypes.EmptyRootHash) || root == (tcommon.Hash{}) {
+		if err := rawdb.InitializeStateCommitment(db.DiskDB()); err != nil {
+			return nil, err
+		}
+	}
 	return &StateDB{
 		db:              db,
 		stateObjects:    make(map[tcommon.Address]*stateObject),
@@ -3094,7 +3152,21 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 		// SetState has already paid for the durable read needed by SSTORE. Keep
 		// that pre-image with the dirty slot so commit planning does not issue the
 		// same account-KV/Pebble lookup a second time.
-		obj.recordDirtyStorageOrigin(key, storageOrigin{value: prev, exists: prevExists, loaded: true})
+		origin := storageOrigin{value: prev, exists: prevExists, loaded: true}
+		// Java storage existence treats durable empty/encoded-zero as absent,
+		// whereas the commitment covers physical presence and exact bytes.
+		// Resolve that ambiguity before changing the row. Normal nonzero reads
+		// retain their already paid pre-image without this additional lookup.
+		if !prevExists && !hasFreshAccountKVGeneration(obj) {
+			row := s.storageRowKeyForObject(obj, key)
+			raw, exists, err := s.readAccountKVLatest(addr, obj.accountKVGeneration, kvdomains.ContractStorage, row[:])
+			if err != nil {
+				s.recordStateError("capture physical zero storage before-image", err)
+				return
+			}
+			origin.physical = &storagePhysicalBefore{value: bytes.Clone(raw), exists: exists}
+		}
+		obj.recordDirtyStorageOrigin(key, origin)
 	}
 	s.journal.append(acquireStorageChange(addr, key, prev, prevExists, prevDirty))
 	obj.setStorageValue(key, value, true)
@@ -4056,7 +4128,7 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, commit
 		if len(physicalKey) == 0 {
 			physicalKey = rawdb.StateAccountLatestCommitmentKey(addr)
 		}
-		if err := s.writeAccountLatestChange(addr, false, nil); err != nil {
+		if err := s.writeAccountLatestChange(addr, false, nil, commitment); err != nil {
 			return err
 		}
 		if latestWriter == nil {
@@ -4090,7 +4162,7 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, commit
 	if len(physicalKey) == 0 {
 		physicalKey = rawdb.StateAccountLatestCommitmentKey(addr)
 	}
-	if err := s.writeAccountLatestChange(addr, true, accountLatestData); err != nil {
+	if err := s.writeAccountLatestChange(addr, true, accountLatestData, commitment); err != nil {
 		return err
 	}
 	if latestWriter == nil {
@@ -4103,12 +4175,15 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, commit
 	return nil
 }
 
-func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool, next []byte) error {
+func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool, next []byte, commitment *DomainCommitmentState) error {
 	if s == nil || !s.changeSet.enabled || !s.changeSet.captureAtCommit {
 		return nil
 	}
 	prev, prevExists, err := s.readStateAccountLatest(addr)
 	if err != nil {
+		return err
+	}
+	if err := commitment.recordPhysicalBefore(rawdb.StateAccountLatestCommitmentKey(addr), prev, prevExists); err != nil {
 		return err
 	}
 	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
@@ -4236,6 +4311,21 @@ func (s *StateDB) CommitWithStatsOptions(opts CommitOptions) (tcommon.Hash, Comm
 }
 
 func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope) (tcommon.Hash, CommitStats, error) {
+	if scope == nil {
+		if _, layered := s.accountKVIndex().(*blockbuffer.Buffer); !layered {
+			owned := s.NewCommitScope()
+			root, stats, err := s.commitWithStatsOptions(opts, owned)
+			if err != nil {
+				owned.Discard()
+				return root, stats, err
+			}
+			if err = owned.Close(); err != nil {
+				return tcommon.Hash{}, stats, err
+			}
+			return root, stats, nil
+		}
+	}
+
 	var stats CommitStats
 	if err := s.Error(); err != nil {
 		return tcommon.Hash{}, stats, fmt.Errorf("state commit blocked by prior read failure: %w", err)
@@ -4339,8 +4429,25 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	// prune the entries whose puts become durable, instead of accumulating the
 	// whole staged range (the deep async-commit overlay leak). On the fresh-writer
 	// path this is harmless: that writer is fully flushed (overlay cleared) below.
+	accountKVLatestWriter.commitment = commitmentState
+	defer func() { accountKVLatestWriter.commitment = nil }()
 	accountKVLatestWriter.commitBlock = opts.BlockNumber
 	accountKVLatestWriter.deepAsync = opts.DeepAsync
+	for _, plan := range plans {
+		if plan.kvPlan != nil {
+			for _, item := range plan.kvPlan.items {
+				if item.entry.prevLoaded {
+					var before []byte
+					if item.entry.prevExists {
+						before = rawdb.EncodeStateKVLatestValue(item.entry.prev)
+					}
+					if err := commitmentState.recordPhysicalBefore(rawdb.StateKVLatestCommitmentKey(plan.addr, plan.obj.accountKVGeneration, item.domain, item.logicalKey), before, item.entry.prevExists); err != nil {
+						return tcommon.Hash{}, stats, err
+					}
+				}
+			}
+		}
+	}
 	for _, plan := range plans {
 		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVTemporalTx); err != nil {
 			if scope != nil {
@@ -4418,7 +4525,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		// deferFold would otherwise make it return a zero root instead of
 		// folding. Re-arming per block keeps the async path correct while making
 		// any accidental sync commit fold normally.
-		s.capturedFold = &CapturedCommit{batch: touchBatch, repair: s.commitmentRepair()}
+		s.capturedFold = &CapturedCommit{batch: touchBatch, identity: statedomains.CommitmentIdentity{BlockNum: opts.BlockNumber, BlockHash: opts.BlockHash, ParentHash: opts.ParentHash, TxNum: opts.CommitmentTxNum}}
 		s.deferFold = false
 		s.resetJournal()
 		s.releaseUnusedLoadedAccountProtos()
@@ -4432,13 +4539,22 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	if touchBatch != nil {
 		touchUpdates = touchBatch.updates
 	}
-	root, err := s.applyLatestDomainCommitment(touchUpdates)
+	root, err := statedomains.ApplyMuHashCommitment(s.accountKVIndex(), touchUpdates, statedomains.CommitmentIdentity{BlockNum: opts.BlockNumber, BlockHash: opts.BlockHash, ParentHash: opts.ParentHash, TxNum: opts.CommitmentTxNum})
 	touchBatch.release()
 	if err != nil {
 		if scope != nil {
 			scope.discard()
 		}
 		return tcommon.Hash{}, stats, err
+	}
+	if scope != nil && scope.atomicBuffer != nil {
+		scope.atomicReady = true
+		if opts.FlushLatestDomain == nil || scope.flushRequested {
+			if err = scope.FlushLatest(); err != nil {
+				scope.discard()
+				return tcommon.Hash{}, stats, err
+			}
+		}
 	}
 	s.originRoot = ethcommon.Hash(root)
 	s.resetJournal()
@@ -4458,42 +4574,9 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 // exact root the synchronous path would have computed — so the async commit
 // worker can fold it against a buffer LayerView while the foreground proceeds.
 type CapturedCommit struct {
-	batch  *commitmentUpdateBatch
-	repair statedomains.CommitmentSnapshotRepair
-}
-
-type OrderedCommitmentPipeline = statedomains.OrderedCommitmentPipeline
-type OrderedCommitmentResult = statedomains.OrderedCommitmentResult
-
-func NewOrderedCommitmentPipeline(index statedomains.CommitmentDB) (*OrderedCommitmentPipeline, error) {
-	return statedomains.NewOrderedCommitmentPipeline(index)
-}
-
-func NewOrderedCommitmentPipelineWithRepair(index statedomains.CommitmentDB, repair statedomains.CommitmentSnapshotRepair) (*OrderedCommitmentPipeline, error) {
-	return statedomains.NewOrderedCommitmentPipelineWithRepair(index, repair)
-}
-
-// SubmitOrdered hands this captured block to the persistent 16-lane ordered
-// commitment scheduler. The CapturedCommit retains its update backing until the
-// caller receives the result and calls Release (the core commit worker does so
-// as part of the ordered publish tail).
-func (c *CapturedCommit) SubmitOrdered(pipeline *OrderedCommitmentPipeline, index statedomains.CommitmentDB) <-chan OrderedCommitmentResult {
-	if c == nil || c.batch == nil {
-		result := make(chan OrderedCommitmentResult, 1)
-		result <- OrderedCommitmentResult{Err: errors.New("state: captured commitment already consumed")}
-		close(result)
-		return result
-	}
-	return pipeline.Submit(index, c.batch.updates)
-}
-
-// Repair returns the immutable snapshot binding captured with this block. The
-// commit worker uses it when opening or reseeding a persistent ordered pipeline.
-func (c *CapturedCommit) Repair() statedomains.CommitmentSnapshotRepair {
-	if c == nil {
-		return statedomains.CommitmentSnapshotRepair{}
-	}
-	return c.repair
+	identity statedomains.CommitmentIdentity
+	batch    *commitmentUpdateBatch
+	repair   statedomains.CommitmentSnapshotRepair
 }
 
 // Fold runs the captured commitment fold against index and returns the root.
@@ -4504,19 +4587,7 @@ func (c *CapturedCommit) Fold(index statedomains.CommitmentDB) (tcommon.Hash, er
 		return tcommon.Hash{}, errors.New("state: captured commitment already consumed")
 	}
 	defer c.Release()
-	store, err := statedomains.NewRecoveringStagedCommitmentStoreWithRepair(index, c.repair, true)
-	if err != nil {
-		return tcommon.Hash{}, err
-	}
-	root, applyErr := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, c.batch.updates, c.repair)
-	closeErr := statedomains.CloseLatestCommitmentStore(store)
-	if applyErr != nil {
-		return tcommon.Hash{}, applyErr
-	}
-	if closeErr != nil {
-		return tcommon.Hash{}, closeErr
-	}
-	return tcommon.Hash(root), nil
+	return statedomains.ApplyMuHashCommitment(index, c.batch.updates, c.identity)
 }
 
 // Release drops a captured fold without running it. It is idempotent so the
@@ -4573,19 +4644,7 @@ func (s *StateDB) commitmentRepair() statedomains.CommitmentSnapshotRepair {
 // to the committing block's in-flight layer, so the fold writes that block's
 // commitment-branch rows while the foreground writes the next block's layer.
 func FoldLatestCommitment(index statedomains.CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair statedomains.CommitmentSnapshotRepair) (tcommon.Hash, error) {
-	store, err := statedomains.NewRecoveringStagedCommitmentStoreWithRepair(index, repair, false)
-	if err != nil {
-		return tcommon.Hash{}, err
-	}
-	root, applyErr := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
-	closeErr := statedomains.CloseLatestCommitmentStore(store)
-	if applyErr != nil {
-		return tcommon.Hash{}, applyErr
-	}
-	if closeErr != nil {
-		return tcommon.Hash{}, closeErr
-	}
-	return tcommon.Hash(root), nil
+	return statedomains.ApplyMuHashCommitment(index, updates, statedomains.CommitmentIdentity{})
 }
 
 // SetAccountName sets the account name.

@@ -210,7 +210,7 @@ func TestFlatStoreWithCommitmentTracksPutDeletePrefix(t *testing.T) {
 	if err != nil || !ok || root == (common.Hash{}) {
 		t.Fatalf("commitment root after puts = %x ok=%v err=%v", root, ok, err)
 	}
-	want, err := NewStagedCommitmentStore(db).Rebuild()
+	want, err := RebuildMuHashCommitment(db)
 	if err != nil {
 		t.Fatalf("rebuild after puts: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestFlatStoreWithCommitmentTracksPutDeletePrefix(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("commitment root after delete prefix ok=%v err=%v", ok, err)
 	}
-	want, err = NewStagedCommitmentStore(db).Rebuild()
+	want, err = RebuildMuHashCommitment(db)
 	if err != nil {
 		t.Fatalf("rebuild after delete prefix: %v", err)
 	}
@@ -234,31 +234,19 @@ func TestFlatStoreWithCommitmentTracksPutDeletePrefix(t *testing.T) {
 	}
 }
 
-func TestApplyLatestCommitmentRestoresMissingRootFromNodes(t *testing.T) {
+func TestMuHashMissingRootFailsClosed(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
-	owner := testAddress(0x39)
 	store := NewFlatStoreWithCommitment(db, 1)
+	owner := testAddress(0x39)
 	mustFlatPut(t, store, owner, kvdomains.SystemReward, "cycle", "value")
-	root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
-	if err != nil || !ok {
-		t.Fatalf("commitment root after put ok=%v err=%v", ok, err)
-	}
 	if err := rawdb.DeleteStateCommitmentDomain(db, rawdb.LatestDomainCommitmentRootLogicalKey()); err != nil {
-		t.Fatalf("delete root row: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := ApplyMuHashCommitment(db, nil, CommitmentIdentity{}); err == nil {
+		t.Fatal("missing root accepted")
 	}
 	if _, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db); err != nil || ok {
-		t.Fatalf("root before restore ok=%v err=%v", ok, err)
-	}
-
-	restored, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), nil)
-	if err != nil {
-		t.Fatalf("restore via commitment helper: %v", err)
-	}
-	if restored != root {
-		t.Fatalf("restored root = %x, want %x", restored, root)
-	}
-	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db); err != nil || !ok || stored != root {
-		t.Fatalf("stored restored root = %x ok=%v err=%v, want %x", stored, ok, err, root)
+		t.Fatal("failed call repaired root")
 	}
 }
 

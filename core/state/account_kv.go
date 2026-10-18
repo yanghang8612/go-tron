@@ -157,6 +157,7 @@ func compareKVCommitItem(a, b kvCommitItem) int {
 }
 
 type accountKVLatestBatch struct {
+	commitment        *DomainCommitmentState
 	index             accountKVIndexStore
 	writer            ethdb.KeyValueWriter
 	latestStore       accountKVPhysicalLatestStore
@@ -350,6 +351,9 @@ func (w *accountKVLatestBatch) DomainApplyEncodedOwnedMutations(mutations []stat
 				start := len(keyArena)
 				keyArena = rawdb.AppendStateKVLatestCommitmentKey(keyArena, mutation.Owner, generation, mutation.Domain, mutation.Key)
 				physicalKey := keyArena[start:len(keyArena):len(keyArena)]
+				if err := w.captureKVBefore(mutation.Owner, generation, mutation.Domain, mutation.Key); err != nil {
+					return err
+				}
 				if err := keyStore.WriteKVLatestEncodedOwnedByKey(physicalKey, mutation.EncodedValue); err != nil {
 					return err
 				}
@@ -485,6 +489,15 @@ func (w *accountKVLatestBatch) writeDomainChange(owner tcommon.Address, generati
 	if err != nil {
 		return err
 	}
+	if w.commitment != nil {
+		var encoded []byte
+		if prevExists {
+			encoded = rawdb.EncodeStateKVLatestValue(prev)
+		}
+		if err := w.commitment.recordPhysicalBefore(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey), encoded, prevExists); err != nil {
+			return err
+		}
+	}
 	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, nextValue)) {
 		return nil
 	}
@@ -502,6 +515,9 @@ func (w *accountKVLatestBatch) writeDomainChange(owner tcommon.Address, generati
 }
 
 func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, encodedValue []byte) error {
+	if err := w.captureKVBefore(owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -523,6 +539,9 @@ func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, dom
 }
 
 func (w *accountKVLatestBatch) putOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value, encodedValue []byte) error {
+	if err := w.captureKVBefore(owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -544,6 +563,9 @@ func (w *accountKVLatestBatch) putOwned(owner tcommon.Address, generation uint64
 }
 
 func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
+	if err := w.captureKVBefore(owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -558,6 +580,9 @@ func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, 
 }
 
 func (w *accountKVLatestBatch) deleteOwned(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
+	if err := w.captureKVBefore(owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -799,6 +824,9 @@ func (w *accountKVLatestBatch) clearPending() {
 }
 
 func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value []byte) error {
+	if err := w.captureAccountBefore(owner); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -813,6 +841,9 @@ func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value [
 // commit-wide key arena and takes ownership of the freshly encoded value.
 // Both the layer batch and pending read overlay retain it as immutable data.
 func (w *accountKVLatestBatch) writeAccountLatestOwnedByKey(owner tcommon.Address, physicalKey, value []byte) error {
+	if err := w.captureAccountBefore(owner); err != nil {
+		return err
+	}
 	if w == nil || w.writer == nil {
 		return fmt.Errorf("account kv latest domain writer: nil writer")
 	}
@@ -824,6 +855,9 @@ func (w *accountKVLatestBatch) writeAccountLatestOwnedByKey(owner tcommon.Addres
 }
 
 func (w *accountKVLatestBatch) deleteAccountLatest(owner tcommon.Address) error {
+	if err := w.captureAccountBefore(owner); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -835,6 +869,9 @@ func (w *accountKVLatestBatch) deleteAccountLatest(owner tcommon.Address) error 
 }
 
 func (w *accountKVLatestBatch) deleteAccountLatestByKey(owner tcommon.Address, physicalKey []byte) error {
+	if err := w.captureAccountBefore(owner); err != nil {
+		return err
+	}
 	if w == nil || w.writer == nil {
 		return fmt.Errorf("account kv latest domain writer: nil writer")
 	}
@@ -903,6 +940,9 @@ func (w *accountKVLatestBatch) readAccountLatestForHydration(owner tcommon.Addre
 }
 
 func (w *accountKVLatestBatch) writeKVGeneration(owner tcommon.Address, generation uint64) error {
+	if err := w.captureGenerationBefore(owner); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -914,6 +954,9 @@ func (w *accountKVLatestBatch) writeKVGeneration(owner tcommon.Address, generati
 }
 
 func (w *accountKVLatestBatch) deleteKVGeneration(owner tcommon.Address) error {
+	if err := w.captureGenerationBefore(owner); err != nil {
+		return err
+	}
 	if w == nil || w.latestStore == nil {
 		return fmt.Errorf("account kv latest domain writer: nil latest store")
 	}
@@ -1866,8 +1909,12 @@ func (s *StateDB) stageStorageCommitWithPrevArena(obj *stateObject, rowKey, valu
 	binary.BigEndian.PutUint16(lookup[:2], uint16(kvdomains.ContractStorage))
 	copy(lookup[2:], rowKey[:])
 	prevDirty, dirty := obj.kvDirty[string(lookup[:])]
+	physicalExists := origin.exists
+	if origin.physical != nil {
+		physicalExists = origin.physical.exists
+	}
 	if !dirty && deleted {
-		if !origin.exists {
+		if !physicalExists {
 			return false
 		}
 	} else if !dirty && origin.exists && origin.value == value {
@@ -1884,7 +1931,11 @@ func (s *StateDB) stageStorageCommitWithPrevArena(obj *stateObject, rowKey, valu
 	if dirty {
 		entry.inheritPrev(prevDirty)
 	} else {
-		s.setKVEntryPrev(&entry, origin.value[:], origin.exists)
+		if origin.physical != nil {
+			s.setKVEntryPrev(&entry, origin.physical.value, origin.physical.exists)
+		} else {
+			s.setKVEntryPrev(&entry, origin.value[:], origin.exists)
+		}
 	}
 	obj.setKVDirty(mk, entry)
 	return true
@@ -2189,6 +2240,13 @@ func (s *StateDB) writeAccountKVGeneration(obj *stateObject, commitment *DomainC
 	if s.changeSet.enabled && s.changeSet.captureAtCommit {
 		prev, prevExists, err := s.readStateKVGeneration(obj.address)
 		if err != nil {
+			return err
+		}
+		var before []byte
+		if prevExists {
+			before = rawdb.EncodeStateKVGenerationValue(prev)
+		}
+		if err := commitment.recordPhysicalBefore(rawdb.StateKVGenerationCommitmentKey(obj.address), before, prevExists); err != nil {
 			return err
 		}
 		if !prevExists || prev != obj.accountKVGeneration {

@@ -15,19 +15,19 @@ import (
 )
 
 type CheckReport struct {
-	LatestRows                   int
-	AccountLatestRows            int
-	KVLatestRows                 int
-	KVGenerationRows             int
-	CommitmentDomainRows         int
-	CommitmentRootPresent        bool
-	ReferencedCodeHashes         int
-	RetainedTxRanges             int
-	RetainedDomainChanges        int
-	CommitmentCheckpoints        int
-	SnapshotSegments             int
-	CommitmentBranchSnapshotRows uint64
-	Warnings                     []string
+	LatestRows            int
+	AccountLatestRows     int
+	KVLatestRows          int
+	KVGenerationRows      int
+	CommitmentDomainRows  int
+	CommitmentRootPresent bool
+	ReferencedCodeHashes  int
+	RetainedTxRanges      int
+	RetainedDomainChanges int
+	CommitmentCheckpoints int
+	SnapshotSegments      int
+	MuHashSnapshotPresent bool
+	Warnings              []string
 }
 
 type Checker struct {
@@ -462,45 +462,7 @@ func (c Checker) checkSnapshots(report *CheckReport) error {
 			return err
 		}
 	}
-	return c.checkCommitmentBranchSnapshot(report, manifest)
-}
-
-func (c Checker) checkCommitmentBranchSnapshot(report *CheckReport, manifest *snapshots.Manifest) error {
-	// Find the newest CommitmentBranch/latest ref by highest ToTxNum.
-	var branchRef snapshots.SegmentRef
-	found := false
-	for _, ref := range manifest.Segments {
-		if ref.NormalizedDataset() != snapshots.SegmentDatasetCommitmentBranch || ref.Kind != snapshots.SegmentLatest {
-			continue
-		}
-		if !found || ref.ToTxNum > branchRef.ToTxNum {
-			branchRef = ref
-			found = true
-		}
-	}
-	if !found {
-		// No branch snapshot yet is normal — not an error, not a warning.
-		return nil
-	}
-	// Open and count rows; a checksum/metadata error is fatal corruption.
-	seg, err := snapshots.OpenCommitmentBranchSegment(c.SnapshotDir, branchRef)
-	if err != nil {
-		return err
-	}
-	if err := seg.Iterate(func(_, _ []byte) (bool, error) {
-		report.CommitmentBranchSnapshotRows++
-		return true, nil
-	}); err != nil {
-		return err
-	}
-	// Staleness warning (non-fatal): branch snapshot lags committed commitment progress.
-	if manifest.Progress != nil && branchRef.ToTxNum < manifest.Progress.CommitmentFlushTxNum {
-		report.Warnings = append(report.Warnings, fmt.Sprintf(
-			"commitment branch snapshot toTx %d lags commitment flush progress %d",
-			branchRef.ToTxNum, manifest.Progress.CommitmentFlushTxNum,
-		))
-	}
-	return nil
+	return c.checkMuHashSnapshot(report, manifest)
 }
 
 func (c Checker) checkSnapshotFile(ref snapshots.SegmentRef) error {
@@ -514,5 +476,31 @@ func (c Checker) checkSnapshotFile(ref snapshots.SegmentRef) error {
 	if ref.Size != 0 && uint64(st.Size()) != ref.Size {
 		return fmt.Errorf("pruning: snapshot segment %q size %d, want %d", ref.Path, st.Size(), ref.Size)
 	}
+	return nil
+}
+
+func (c Checker) checkMuHashSnapshot(report *CheckReport, manifest *snapshots.Manifest) error {
+	if manifest.LatestStateTxNum == 0 {
+		return nil
+	}
+	mgr, err := snapshots.OpenPinnedManager(c.SnapshotDir, manifest)
+	if err != nil {
+		return err
+	}
+	head, ok, err := mgr.GetCommitmentHead(manifest.LatestStateTxNum)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("pruning: snapshot lacks complete MuHash HEAD")
+	}
+	root, ok, err := mgr.GetCommitmentRoot(manifest.LatestStateTxNum)
+	if err != nil {
+		return err
+	}
+	if !ok || root != head.Root {
+		return errors.New("pruning: snapshot HEAD/root cut mismatch")
+	}
+	report.MuHashSnapshotPresent = true
 	return nil
 }

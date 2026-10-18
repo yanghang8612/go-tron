@@ -12,11 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 const (
-	CurrentManifestVersion = 1
+	CurrentManifestVersion = 2
 	ManifestVersion        = CurrentManifestVersion
 	ManifestFile           = "manifest.json"
 )
@@ -62,6 +63,8 @@ const (
 	SegmentDatasetKVLatest             SegmentDataset = "kv-latest"
 	SegmentDatasetKVGeneration         SegmentDataset = "kv-generation"
 	SegmentDatasetCode                 SegmentDataset = "code"
+	SegmentDatasetCommitmentHead       SegmentDataset = "commitment-head"
+	SegmentDatasetExecutionCheckpoint  SegmentDataset = "execution-checkpoint"
 	SegmentDatasetCommitmentRoot       SegmentDataset = "commitment-root"
 	SegmentDatasetCommitmentCheckpoint SegmentDataset = "commitment-checkpoint"
 	SegmentDatasetStateDomainChange    SegmentDataset = "state-domain-change"
@@ -72,8 +75,13 @@ const (
 )
 
 type Manifest struct {
-	Version    uint32 `json:"version"`
-	Generation uint64 `json:"generation,omitempty"`
+	// LatestStateTxNum binds source tables and HEAD independently of history coverage.
+	LatestStateTxNum uint64    `json:"latestStateTxNum,omitempty"`
+	SourceRows       [3]uint64 `json:"sourceRows"`
+	CommitmentScheme string    `json:"commitmentScheme"`
+	ElementVersion   uint16    `json:"elementVersion"`
+	Version          uint32    `json:"version"`
+	Generation       uint64    `json:"generation,omitempty"`
 	// HistoryStagingResetEpoch records a durable cold-history isolation after
 	// a complete genesis replay. Subsequent cold publications must retain it.
 	HistoryStagingResetEpoch uint64         `json:"historyStagingResetEpoch,omitempty"`
@@ -106,6 +114,7 @@ type Progress struct {
 }
 
 type SegmentRef struct {
+	Rows             uint64             `json:"rows,omitempty"`
 	Dataset          SegmentDataset     `json:"dataset,omitempty"`
 	Domain           kvdomains.KVDomain `json:"domain,omitempty"`
 	Kind             SegmentKind        `json:"kind"`
@@ -129,13 +138,21 @@ func (seg SegmentRef) effectiveAggregationSteps() uint64 {
 
 func NewManifest(visibleTxStart, visibleTxEnd uint64, segments []SegmentRef) *Manifest {
 	out := &Manifest{
-		Version:        CurrentManifestVersion,
-		Generation:     1,
-		PublishedUnix:  time.Now().Unix(),
-		VisibleTxStart: visibleTxStart,
-		VisibleTxEnd:   visibleTxEnd,
-		Segments:       append([]SegmentRef(nil), segments...),
+		Version:          CurrentManifestVersion,
+		CommitmentScheme: rawdb.LatestDomainCommitmentScheme,
+		ElementVersion:   rawdb.StateCommitmentElementVersion,
+		Generation:       1,
+		PublishedUnix:    time.Now().Unix(),
+		VisibleTxStart:   visibleTxStart,
+		VisibleTxEnd:     visibleTxEnd,
+		Segments:         append([]SegmentRef(nil), segments...),
 	}
+	for _, ref := range segments {
+		if ref.Dataset == SegmentDatasetCommitmentHead && ref.Kind == SegmentLatest {
+			out.LatestStateTxNum = ref.ToTxNum
+		}
+	}
+	out.SourceRows = latestSourceRowCounts(out.Segments, out.LatestStateTxNum)
 	sortSegments(out.Segments)
 	return out
 }
@@ -155,6 +172,9 @@ func decodeManifest(data []byte) (*Manifest, error) {
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, err
+	}
+	if manifest.Version != CurrentManifestVersion || manifest.CommitmentScheme != rawdb.LatestDomainCommitmentScheme || manifest.ElementVersion != rawdb.StateCommitmentElementVersion {
+		return nil, errors.New("snapshots: unsupported commitment schema; fresh-genesis resync required")
 	}
 	normalizeManifest(&manifest)
 	if err := manifest.Validate(); err != nil {
@@ -198,6 +218,7 @@ func publishManifestLockedWithSync(dir string, manifest *Manifest, syncDir func(
 	if manifest == nil {
 		return errors.New("snapshots: nil manifest")
 	}
+	normalizeManifest(manifest)
 	if manifest.Version == 0 {
 		manifest.Version = CurrentManifestVersion
 	}
@@ -286,10 +307,16 @@ func (m *Manifest) validate(ordered bool) error {
 	if m.Version != CurrentManifestVersion {
 		return fmt.Errorf("snapshots: unsupported manifest version %d", m.Version)
 	}
+	if m.CommitmentScheme != rawdb.LatestDomainCommitmentScheme || m.ElementVersion != rawdb.StateCommitmentElementVersion {
+		return errors.New("snapshots: unsupported commitment schema; fresh-genesis resync required")
+	}
 	if m.VisibleTxEnd < m.VisibleTxStart {
 		return fmt.Errorf("snapshots: visible range [%d,%d] is inverted", m.VisibleTxStart, m.VisibleTxEnd)
 	}
 	if err := validateChainIdentity(m.Chain); err != nil {
+		return err
+	}
+	if err := validateMuHashLatestCut(m); err != nil {
 		return err
 	}
 	// Reuse the duplicate-path index for companion validation. Scanning the
@@ -306,7 +333,12 @@ func (m *Manifest) validate(ordered bool) error {
 	}
 	for i := range m.Segments {
 		seg := &m.Segments[i]
-		if err := validateActiveSegment(*seg, m.VisibleTxStart, m.VisibleTxEnd); err != nil {
+		visibleStart, visibleEnd := m.VisibleTxStart, m.VisibleTxEnd
+		if cfg, ok := DefaultDomainRegistry().ConfigForRef(*seg); ok && cfg.HasLatest && m.LatestStateTxNum > 0 && (seg.Kind == SegmentLatest || seg.Kind == SegmentAccessor || seg.Kind == SegmentBTree) {
+			visibleStart = 0
+			visibleEnd = m.LatestStateTxNum
+		}
+		if err := validateActiveSegment(*seg, visibleStart, visibleEnd); err != nil {
 			return err
 		}
 		if _, dup := seenPath[seg.Path]; dup {
@@ -447,6 +479,14 @@ func cloneManifest(in *Manifest) *Manifest {
 }
 
 func normalizeManifest(manifest *Manifest) {
+	if manifest != nil {
+		if manifest.CommitmentScheme == "" {
+			manifest.CommitmentScheme = rawdb.LatestDomainCommitmentScheme
+		}
+		if manifest.ElementVersion == 0 {
+			manifest.ElementVersion = rawdb.StateCommitmentElementVersion
+		}
+	}
 	if manifest.Generation == 0 {
 		manifest.Generation = 1
 	}

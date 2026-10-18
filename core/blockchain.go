@@ -394,14 +394,9 @@ type BlockChain struct {
 	commitWorkerWg             sync.WaitGroup
 	commitClosed               bool
 	commitErr                  atomic.Pointer[error]
-	// commitPipelineEpoch changes whenever canonical commitment state is
-	// rewound. The scheduler observes it before accepting the first new-branch
-	// job and re-seeds its persistent lane roots from the rewound store.
-	commitPipelineEpoch atomic.Uint64
-	// orderedCommitPipeline is initialized on for production. Tests and
-	// benchmarks may clear it before insertion to retain the former one-fold-at-
-	// a-time worker as an exact performance/correctness reference.
-	orderedCommitPipeline bool
+	commitTailTestHook         func(string, *commitJob) error
+	suppressReplayHooks        bool
+	unwindCleanupTestHook      func() error
 	// txInfoBatches survives individual InsertBlocks/range executors. Receipt
 	// slots own reusable VM result arenas and log shells, so scoping this pool
 	// to a short sync batch would discard their warmed high-water storage at
@@ -623,26 +618,25 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	// a second buffered queue would exceed the blockbuffer's D in-flight bound.
 	commitDepth := resolveCommitPipelineDepth()
 	bc := &BlockChain{
-		db:                    db,
-		chaindb:               chaindb,
-		stateDB:               stateDB,
-		config:                config,
-		fc:                    forks.NewForkController(buffer),
-		buffer:                buffer,
-		flushQueue:            make(chan uint64, flushQueueCap),
-		flushPending:          newFlushBarrier(),
-		commitDepth:           commitDepth,
-		commitQueue:           make(chan *commitJob),
-		commitPending:         newFlushBarrier(),
-		orderedCommitPipeline: true,
-		txInfoBatches:         newTransactionInfoBatchPool(commitDepth),
-		rewardAcctCache:       make(map[tcommon.Address]*state.AccountSnapshot),
-		rewardAcctSeen:        make(map[tcommon.Address]struct{}),
-		rewardAcctAddrs:       make([]tcommon.Address, 0, 128),
-		witnessBlockCache:     make(map[tcommon.Address]int64),
-		forkStatsCache:        make(map[int32][]byte, len(forks.KnownVersions)),
-		proposalCache:         newProposalScanCache(),
-		versionPassCache:      forks.NewVersionPassCache(),
+		db:                db,
+		chaindb:           chaindb,
+		stateDB:           stateDB,
+		config:            config,
+		fc:                forks.NewForkController(buffer),
+		buffer:            buffer,
+		flushQueue:        make(chan uint64, flushQueueCap),
+		flushPending:      newFlushBarrier(),
+		commitDepth:       commitDepth,
+		commitQueue:       make(chan *commitJob, max(0, commitDepth-2)),
+		commitPending:     newFlushBarrier(),
+		txInfoBatches:     newTransactionInfoBatchPool(commitDepth),
+		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
+		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
+		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
+		witnessBlockCache: make(map[tcommon.Address]int64),
+		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
+		proposalCache:     newProposalScanCache(),
+		versionPassCache:  forks.NewVersionPassCache(),
 	}
 	persistedSafetyIncident, hasPersistedSafetyIncident, err := rawdb.ReadExecutionSafetyIncident(db)
 	if err != nil {
@@ -808,13 +802,31 @@ func (bc *BlockChain) ensureCanonicalStageHead(head *types.Block) error {
 }
 
 func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) (*types.Block, error) {
-	headHash, ok, err := rawdb.ReadHeadBlockHashStrict(chaindb)
+	if pending, err := rawdb.StateCommitmentUnwindCleanupPending(chaindb); err != nil {
+		return nil, err
+	} else if pending {
+		return nil, fmt.Errorf("%w: interrupted unwind cleanup; fresh-genesis resync required", rawdb.ErrStateCommitmentHead)
+	}
+	if pending, err := rawdb.StateCommitmentRestoreInProgress(chaindb); err != nil {
+		return nil, err
+	} else if pending {
+		return nil, rawdb.ErrStateCommitmentHead
+	}
+	head, present, err := rawdb.ReadStateCommitmentHead(chaindb)
 	if err != nil {
-		return nil, fmt.Errorf("load stored head hash: %w", err)
+		return nil, fmt.Errorf("load durable commitment HEAD: %w", err)
 	}
-	if !ok || headHash == (tcommon.Hash{}) {
-		return genesis, nil
+	if !present || head.BlockHash == (tcommon.Hash{}) {
+		return nil, rawdb.ErrStateCommitmentHead
 	}
+	root, present, err := rawdb.ReadLatestDomainCommitmentRoot(chaindb)
+	if err != nil {
+		return nil, err
+	}
+	if !present || root != head.Root {
+		return nil, fmt.Errorf("%w: latest root mismatch", rawdb.ErrStateCommitmentHead)
+	}
+	headHash := head.BlockHash
 	num, ok, err := rawdb.ReadBlockNumberStrict(chaindb, headHash)
 	if err != nil {
 		return nil, fmt.Errorf("load stored head %x block number: %w", headHash, err)
@@ -828,6 +840,32 @@ func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) (*types.B
 	}
 	if !ok {
 		return nil, fmt.Errorf("stored head block %d (%x) not found", num, headHash)
+	}
+	if num != head.BlockNum {
+		return nil, fmt.Errorf("durable commitment HEAD number mismatch")
+	}
+	anchor, ok, err := rawdb.ReadBlockStateRootStrict(chaindb, headHash)
+	if num == 0 {
+		anchor, ok, err = rawdb.ReadGenesisStateRootStrict(chaindb)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !ok || anchor != head.Root {
+		return nil, fmt.Errorf("durable commitment HEAD block root mismatch")
+	}
+	if block.ParentHash() != head.ParentHash {
+		return nil, fmt.Errorf("durable commitment HEAD parent mismatch")
+	}
+	tr, hasRange, err := rawdb.ReadStateTxRange(chaindb, num)
+	if err != nil {
+		return nil, err
+	}
+	if hasRange && (tr.BlockHash != head.BlockHash || tr.EndTxNum != head.TxNum) {
+		return nil, fmt.Errorf("durable commitment HEAD transaction cut mismatch")
+	}
+	if !hasRange && head.TxNum != 0 {
+		return nil, fmt.Errorf("durable commitment HEAD transaction cut missing")
 	}
 	if block.Hash() != headHash {
 		return nil, fmt.Errorf("stored head block %d hash mismatch: have %x want %x", num, block.Hash(), headHash)
@@ -921,23 +959,13 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 	return bc.config
 }
 
-// SetCommitmentBranchCacheSize configures the bounded durable-base cache used
-// by commitment branch and flat-latest reads. It must be called before block
-// insertion or any other concurrent use of the chain; gtron wires it
-// immediately after construction. The cache lives below rewindable buffer
-// layers, invalidates flushed mutations, and is cleared by buffer reset/unwind.
-func (bc *BlockChain) SetCommitmentBranchCacheSize(sizeBytes int) {
-	bc.SetCommitmentBranchCacheSizeWithTail(sizeBytes, 0)
-}
-
-// SetCommitmentBranchCacheSizeWithTail preserves the base cache's namespace
-// reservations while adding bounded capacity for the commitment CLOCK tail.
-// Configure it before block insertion or other concurrent use of the chain.
-func (bc *BlockChain) SetCommitmentBranchCacheSizeWithTail(sizeBytes, tailBytes int) {
-	if bc == nil || bc.buffer == nil {
-		return
+// SetStateLatestCacheSize configures only the generic durable state cache.
+// Configure before concurrent insertion; overlays and flushed writes preserve
+// the existing generic cache invalidation semantics.
+func (bc *BlockChain) SetStateLatestCacheSize(sizeBytes int) {
+	if bc != nil && bc.buffer != nil {
+		bc.buffer.SetBaseReadCacheSize(sizeBytes)
 	}
-	bc.buffer.SetBaseReadCacheSizeWithTrunkAndTail(sizeBytes, tailBytes, 4, rawdb.CommitmentBranchKeyPrefix)
 }
 
 func (bc *BlockChain) stateCommitOptions(_ *types.Block, _ bool) state.CommitOptions {
@@ -1158,8 +1186,8 @@ func (bc *BlockChain) insertBlocksLockedModeWithOptionsPrewarmed(blocks []*types
 		// to one range and guarantees the next range reads a fresh dynPropsCache.
 		defer func() {
 			bc.WaitForCommitSettled()
-			if errPtr := bc.commitErr.Load(); errPtr != nil && err == nil {
-				err = fmt.Errorf("async commit failed: %w", *errPtr)
+			if errPtr := bc.commitErr.Load(); errPtr != nil {
+				err = errors.Join(err, fmt.Errorf("async commit failed: %w", *errPtr))
 			}
 			if closeErr := executor.Close(); closeErr != nil && err == nil {
 				err = closeErr
@@ -1206,6 +1234,12 @@ func (bc *BlockChain) insertBlockLocked(block *types.Block) error {
 // owns reusable StateDB, CommitScope, and StateTxRange allocation. Callers must
 // hold bc.chainmu.
 func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor *canonicalRangeExecutor) error {
+	if p := bc.commitErr.Load(); p != nil {
+		return fmt.Errorf("canonical commit previously failed: %w", *p)
+	}
+	if p := bc.flushErr.Load(); p != nil {
+		return fmt.Errorf("canonical flush previously failed: %w", *p)
+	}
 	if block == nil {
 		return errors.New("block is nil")
 	}
@@ -1644,6 +1678,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// rawdb-shaped mirror writes so that switchFork can drop orphan-branch
 	// layers via DiscardBlock. On any error path the active layer is discarded;
 	// on success it is promoted via CommitBlock.
+	published := false
 	bc.buffer.BeginBlock(block.Hash(), block.Number())
 	if bc.cycleRewards == nil {
 		bc.cycleRewards = newEmptyCycleRewardAccumulator()
@@ -1652,7 +1687,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	statedb.SetCycleRewardSink(bc.cycleRewards)
 	defer func() {
 		statedb.SetCycleRewardSink(nil)
-		if retErr != nil {
+		if retErr != nil && !published {
 			statedb.ClearBalanceTrace()
 			// Async commit: a foreground failure (e.g. exec of a speculative
 			// block) can race in-flight commits of earlier blocks. Quiesce the
@@ -2139,36 +2174,6 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
 
-	// Publish the new head only after all metadata needed by readers
-	// (block body, out-of-band state root, TAPOS, and per-block tx infos) has
-	// landed in one durable batch.
-	bc.currentBlock.Store(block)
-	bc.lastInsertNano.Store(time.Now().UnixNano())
-
-	bc.storeDynPropsCache(dynProps)
-	stats.mark(&stats.Persist)
-
-	// Fire maintenance hooks first so the SRL PBFT message goes out before
-	// the block PREPREPARE — matches java-tron MaintenanceManager.applyBlock
-	// ordering (srPrePrepare at line 72, blockPrePrepare at line 81). Block
-	// #1 advances the grid but doesn't run doMaintenance, so java skips
-	// srPrePrepare too (line 70 guard `if (blockNum != 1)`).
-	if wasMaintenanceBlock && block.Number() != 1 {
-		bc.maintHookMu.Lock()
-		mhooks := bc.maintHooks
-		bc.maintHookMu.Unlock()
-		for _, h := range mhooks {
-			h(block, maintNewWitnesses)
-		}
-	}
-
-	bc.blockHookMu.Lock()
-	hooks := bc.blockHooks
-	bc.blockHookMu.Unlock()
-	for _, h := range hooks {
-		h(block)
-	}
-	stats.mark(&stats.Hooks)
 	if err := stagePipeline.Advance(rawdb.StageFinish); err != nil {
 		return err
 	}
@@ -2184,6 +2189,39 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// Promote the buffer layer to the layered stack. Slice 1 introduced the
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
 	bc.buffer.CommitBlock()
+	published = true
+	// Publish the new head only after all metadata needed by readers
+	// (block body, out-of-band state root, TAPOS, and per-block tx infos) has
+	// landed in one durable batch.
+	bc.currentBlock.Store(block)
+	bc.lastInsertNano.Store(time.Now().UnixNano())
+
+	bc.storeDynPropsCache(dynProps)
+	stats.mark(&stats.Persist)
+
+	// Fire maintenance hooks first so the SRL PBFT message goes out before
+	// the block PREPREPARE — matches java-tron MaintenanceManager.applyBlock
+	// ordering (srPrePrepare at line 72, blockPrePrepare at line 81). Block
+	// #1 advances the grid but doesn't run doMaintenance, so java skips
+	// srPrePrepare too (line 70 guard `if (blockNum != 1)`).
+	if wasMaintenanceBlock && block.Number() != 1 && !bc.suppressReplayHooks {
+		bc.maintHookMu.Lock()
+		mhooks := bc.maintHooks
+		bc.maintHookMu.Unlock()
+		for _, h := range mhooks {
+			h(block, maintNewWitnesses)
+		}
+	}
+
+	if !bc.suppressReplayHooks {
+		bc.blockHookMu.Lock()
+		hooks := bc.blockHooks
+		bc.blockHookMu.Unlock()
+		for _, h := range hooks {
+			h(block)
+		}
+	}
+	stats.mark(&stats.Hooks)
 	bc.archiveHead.Store(block)
 
 	// Hand every layer at or below the new solidified-block number to the
@@ -2206,10 +2244,14 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		cutoff = int64(nc)
 	}
 	if err := plan.FlushLatestUpTo(cutoff); err != nil {
-		return err
+		failure := fmt.Errorf("committed block %d storage flush failed: %w", block.Number(), err)
+		bc.flushErr.CompareAndSwap(nil, &failure)
+		return failure
 	}
 	if err := bc.postFlush(cutoff); err != nil {
-		return err
+		failure := fmt.Errorf("committed block %d flush scheduling failed: %w", block.Number(), err)
+		bc.flushErr.CompareAndSwap(nil, &failure)
+		return failure
 	}
 	stats.mark(&stats.Persist)
 	return nil
@@ -2273,10 +2315,10 @@ func blockMetadataBatchSizeHint(block *types.Block, blockData []byte, txInfos []
 	if bodySize == 0 {
 		bodySize = proto.Size(block.Proto())
 	}
-	// State root, block body plus its two indexes, TAPOS, and per-block
+	// State root, block body plus its two indexes, and per-block
 	// TransactionRet are always present.
-	records := 6
-	values := 32 + bodySize + 8 + 32 + 8
+	records := 5
+	values := 32 + bodySize + 8 + 32
 	blockTimestamp := int64(0)
 	if len(txInfos) != 0 && txInfos[0] != nil {
 		blockTimestamp = txInfos[0].BlockTimeStamp
@@ -2312,8 +2354,8 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []by
 	batch := bc.db.NewBatchWithSize(blockMetadataBatchSizeHint(block, blockData, txInfos, balanceTrace, writeTransactionLookup))
 	defer batch.Close()
 	// The always-present batch shape is one state-root row, three block rows
-	// (body plus two indexes), one TAPOS row, and one per-block receipt row.
-	stats := PersistStats{MetadataRecords: 6}
+	// (body plus two indexes), and one per-block receipt row.
+	stats := PersistStats{MetadataRecords: 5}
 	// The root stays out-of-band so the wire block remains byte-identical to the
 	// java-tron payload.
 	if err := rawdb.WriteBlockStateRoot(batch, block.Hash(), stateRoot); err != nil {
@@ -2326,9 +2368,7 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, blockData []by
 	} else if err := rawdb.WriteBlock(batch, block); err != nil {
 		return PersistStats{}, fmt.Errorf("write block: %w", err)
 	}
-	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
-		return PersistStats{}, fmt.Errorf("write tapos ref: %w", err)
-	}
+
 	if err := rawdb.WriteCompactTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
 		return PersistStats{}, fmt.Errorf("write block tx infos: %w", err)
 	}
@@ -2379,7 +2419,6 @@ func blockMetadataOverlayKeys(block *types.Block) [][]byte {
 	}
 	return [][]byte{
 		rawdb.BlockStorageKey(block.Number()),
-		rawdb.TaposRefStorageKey(block.Number()),
 	}
 }
 
@@ -2711,6 +2750,13 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	if err != nil {
 		return fmt.Errorf("plan orphaned block metadata cleanup: %w", err)
 	}
+	lcaTarget, _, err := loadForkLCABlockAndRoot(bc.chaindb, bc.db, lcaHash)
+	if err != nil {
+		return err
+	}
+	if err = bc.materializeForkLCA(lcaTarget); err != nil {
+		return fmt.Errorf("materialize fork LCA: %w", err)
+	}
 	if err := bc.deleteOrphanedBlockMetadata(orphaned); err != nil {
 		return fmt.Errorf("delete orphaned block metadata: %w", err)
 	}
@@ -2770,7 +2816,6 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	if err := bc.rewindStateHistoryIndexStageLocked(lcaBlock.Number(), lcaBlock.Hash()); err != nil {
 		return fmt.Errorf("rewind state history index stage progress to LCA %d: %w", lcaBlock.Number(), err)
 	}
-	bc.invalidateOrderedCommitPipeline()
 
 	// Apply new branch blocks in order LCA+1 → newHead.
 	reversed := make([]*types.Block, len(newBranch))
@@ -2991,7 +3036,7 @@ func loadForkLCABlockAndRoot(chain *rawdb.ChainDB, db ethdb.KeyValueReader, lcaH
 		}
 		return block, root, nil
 	}
-	return block, block.AccountStateRoot(), nil
+	return nil, tcommon.Hash{}, errors.New("LCA internal state root missing; fresh-genesis resync required")
 }
 
 // LastInsertTime returns when the last block was successfully inserted.
@@ -3059,13 +3104,7 @@ func (bc *BlockChain) stateRootForKnownBlockStrict(block *types.Block) (tcommon.
 		}
 		return root, true, nil
 	}
-	// Backwards-compat fallback for chain databases written before
-	// blockStateRootPrefix existed; matches HeadStateRoot's behaviour.
-	root = block.AccountStateRoot()
-	if root == (tcommon.Hash{}) {
-		return tcommon.Hash{}, false, nil
-	}
-	return root, true, nil
+	return tcommon.Hash{}, false, nil
 }
 
 // HeadStateRoot returns the post-apply state root of the canonical head
@@ -3080,9 +3119,7 @@ func (bc *BlockChain) HeadStateRoot() tcommon.Hash {
 	if head.Number() == 0 {
 		return rawdb.ReadGenesisStateRoot(bc.db)
 	}
-	// Backwards-compat fallback for chain databases written before
-	// blockStateRootPrefix existed.
-	return head.AccountStateRoot()
+	return tcommon.Hash{}
 }
 
 // DB returns the underlying key-value store.

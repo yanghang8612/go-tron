@@ -397,5 +397,67 @@ class MainnetReleaseTests(unittest.TestCase):
         write.assert_not_called()
 
 
+
+class FreshStateReleaseTests(unittest.TestCase):
+    def test_fresh_state_health_failure_keeps_new_config_and_never_restores_old(self):
+        old = old_state()
+        old['active'] = False
+        old['active_state'], old['main_pid'] = 'inactive', 0
+        attempts = []
+        writes = []
+        buildinfo = ('\tvcs.revision=' + SOURCE + '\n\t-tags=sapling\n\tCGO_ENABLED=1\n'
+                     '\tGOOS=linux\n\tGOARCH=amd64\n')
+        def command(argv, timeout=60):
+            attempts.append(argv)
+            if argv[0] == '/usr/bin/git':
+                return SOURCE + '\n'
+            if argv[0] == '/data/go/bin/go':
+                return buildinfo
+            return ''
+        with mock.patch.object(release, 'command', side_effect=command), \
+                mock.patch.object(release, 'inspect', return_value=old), \
+                mock.patch.object(release, 'candidate_bytes', return_value=b'candidate'), \
+                mock.patch.object(release, 'install_release', return_value=NEW_BINARY), \
+                mock.patch.object(release, 'atomic_root', side_effect=lambda *args: writes.append(args)), \
+                mock.patch.object(release, 'restore') as restore, \
+                mock.patch.object(release, 'show', return_value={
+                    'ExecStart': '{ path=' + NEW_BINARY + ' ; argv[]=' + NEW_BINARY +
+                                 ' --history.shared-chunk-cache=true --p2p.port=18890 ; ignore_errors=no }',
+                    'ExecStartPre': release.SPACE_GUARD + ' ' + NEW_BINARY + ' ' + SHA + ' ' + SOURCE}), \
+                mock.patch.object(release, 'guard_commands', return_value=[]), \
+                mock.patch.object(release, 'wait_healthy', side_effect=RuntimeError('MuHash startup failed')):
+            with self.assertRaisesRegex(RuntimeError, 'service stopped; new configuration retained; old binary was not restored'):
+                release.deploy(SOURCE, '/candidate', SHA, fresh_state_no_rollback=True)
+        restore.assert_not_called()
+        self.assertEqual(attempts[-1], ['/bin/systemctl', 'stop', release.SERVICE])
+        self.assertTrue(writes)
+        self.assertFalse(any(OLD_BINARY.encode() in data for _, data, _ in writes))
+
+    def test_fresh_state_mode_requires_pre_stopped_service(self):
+        buildinfo = ('\tvcs.revision=' + SOURCE + '\n\t-tags=sapling\n\tCGO_ENABLED=1\n'
+                     '\tGOOS=linux\n\tGOARCH=amd64\n')
+        with mock.patch.object(release, 'command', side_effect=[SOURCE + '\n', buildinfo]), \
+                mock.patch.object(release, 'inspect', return_value=old_state()), \
+                mock.patch.object(release, 'install_release') as install:
+            with self.assertRaisesRegex(RuntimeError, 'already stopped'):
+                release.deploy(SOURCE, '/candidate', SHA, fresh_state_no_rollback=True)
+        install.assert_not_called()
+
+    def test_fresh_state_rejects_transitional_state_and_remaining_pid(self):
+        buildinfo = ('\tvcs.revision=' + SOURCE + '\n\t-tags=sapling\n\tCGO_ENABLED=1\n'
+                     '\tGOOS=linux\n\tGOARCH=amd64\n')
+        for state, pid in (('activating', 0), ('activating', 41), ('deactivating', 41), ('inactive', 41), ('failed', 41)):
+            with self.subTest(state=state, pid=pid):
+                old = old_state()
+                old['active'] = False
+                old['active_state'], old['main_pid'] = state, pid
+                with mock.patch.object(release, 'command', side_effect=[SOURCE + '\n', buildinfo]), \
+                        mock.patch.object(release, 'inspect', return_value=old), \
+                        mock.patch.object(release, 'install_release') as install:
+                    with self.assertRaisesRegex(RuntimeError, 'already stopped'):
+                        release.deploy(SOURCE, '/candidate', SHA, fresh_state_no_rollback=True)
+                install.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
