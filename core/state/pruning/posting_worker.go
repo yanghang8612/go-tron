@@ -35,6 +35,7 @@ type PostingPruneChunkOutcome struct {
 	BoundaryChanged  bool
 	PressureDeferred bool
 	GateDeferred     bool
+	DebtRelief       bool // actual admission after acquiring writer locks
 	Timings          PostingPruneTimings
 }
 
@@ -88,7 +89,7 @@ func NewPostingPruneWorker(cfg PostingPruneWorkerConfig) *PostingPruneWorker {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &PostingPruneWorker{cfg: cfg, ctx: ctx, cancel: cancel, done: make(chan struct{}), gauges: make(map[string]*metrics.Gauge), counts: make(map[string]uint64)}
-	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes", "callbacks"} {
+	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes", "callbacks", "debt_relief/callbacks", "debt_relief/chunks", "debt_relief/deleted_bytes"} {
 		w.gauges[name] = metrics.GetOrRegisterGauge(normalizePrunerMetricNamespace(cfg.MetricsNamespace)+name, nil)
 		w.gauges[name].Update(0)
 	}
@@ -162,13 +163,29 @@ func (w *PostingPruneWorker) add(name string, n uint64) {
 // PostingPrunePressureReady is shared by the scheduling precheck and the
 // locked admission callback. Both apply exactly the same thresholds.
 func PostingPrunePressureReady(p maintenance.StoragePressure, now time.Time) bool {
+	ready, _ := PostingPrunePressureAdmission(p, now)
+	return ready
+}
+
+// PostingPrunePressureAdmission distinguishes ordinary admission from bounded
+// debt relief. A large absolute debt is not proof of saturated foreground I/O:
+// retaining obsolete postings forever also sustains compaction work. Require
+// stricter device health for relief, without bypassing any hard engine limit,
+// the actual maintenance lease, chunk budget or canonical deletion proof.
+func PostingPrunePressureAdmission(p maintenance.StoragePressure, now time.Time) (ready, debtRelief bool) {
 	fresh := func(t time.Time) bool {
 		age := now.Sub(t)
 		return !t.IsZero() && age >= -time.Second && age <= 15*time.Second
 	}
-	return p.Available && fresh(p.SampledAt) && p.DeviceAvailable && fresh(p.DeviceSampledAt) &&
-		!p.HardLimitReached(now) && p.L0Sublevels < 8 && p.CompactionDebt < 32<<30 &&
-		p.DeviceAwait <= 5*time.Millisecond && p.DeviceQueueMilli <= 32_000
+	if !p.Available || !fresh(p.SampledAt) || !p.DeviceAvailable || !fresh(p.DeviceSampledAt) ||
+		p.HardLimitReached(now) || p.L0Sublevels >= 8 || p.DeviceAwait < 0 {
+		return false, false
+	}
+	if p.CompactionDebt >= 32<<30 {
+		ready = p.DeviceAwait <= 2*time.Millisecond && p.DeviceQueueMilli <= 8_000
+		return ready, ready
+	}
+	return p.DeviceAwait <= 5*time.Millisecond && p.DeviceQueueMilli <= 32_000, false
 }
 
 func (w *PostingPruneWorker) clearSweep() {
@@ -223,6 +240,9 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 	out, err := w.cfg.Chunk(ctx, w.target, w.anchor, w.cursor, w.cfg.Limits)
 	elapsed := time.Since(started)
 	w.add("callbacks", 1)
+	if out.DebtRelief {
+		w.add("debt_relief/callbacks", 1)
+	}
 	w.recordPhases(out)
 	w.gauges["last/duration_ns"].Update(int64(elapsed))
 	if uint64(elapsed) > w.counts["max/duration_ns"] {
@@ -264,6 +284,10 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 	w.add("chunks", 1)
 	w.add("deleted/rows", out.Result.RowsDeleted)
 	w.add("deleted/bytes", out.Result.BytesDeleted)
+	if out.DebtRelief {
+		w.add("debt_relief/chunks", 1)
+		w.add("debt_relief/deleted_bytes", out.Result.BytesDeleted)
+	}
 	w.gauges["last/deleted_bytes"].Update(prunerUintGauge(out.Result.BytesDeleted))
 	if out.Result.Complete {
 		w.completed = w.target.PrunedThrough

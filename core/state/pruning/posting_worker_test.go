@@ -319,7 +319,19 @@ func TestPostingPruneWorkerPressureAdmission(t *testing.T) {
 		{"future-device", func(p *maintenance.StoragePressure) { p.DeviceSampledAt = p.DeviceSampledAt.Add(2 * time.Second) }, false},
 		{"write-stalled", func(p *maintenance.StoragePressure) { p.WriteStalled = true }, false},
 		{"L0-limit", func(p *maintenance.StoragePressure) { p.L0Sublevels = 8 }, false},
-		{"debt-limit", func(p *maintenance.StoragePressure) { p.CompactionDebt = 32 << 30 }, false},
+		{"debt-limit-healthy-device", func(p *maintenance.StoragePressure) { p.CompactionDebt = 32 << 30 }, true},
+		{"large-debt-healthy-device", func(p *maintenance.StoragePressure) { p.CompactionDebt = ^uint64(0) }, true},
+		{"debt-relief-await-limit", func(p *maintenance.StoragePressure) {
+			p.CompactionDebt = 40 << 30
+			p.DeviceAwait = 2 * time.Millisecond
+		}, true},
+		{"debt-relief-await-over", func(p *maintenance.StoragePressure) {
+			p.CompactionDebt = 40 << 30
+			p.DeviceAwait = 2*time.Millisecond + 1
+		}, false},
+		{"debt-relief-queue-limit", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 8_000 }, true},
+		{"debt-relief-queue-over", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 8_001 }, false},
+		{"negative-latency", func(p *maintenance.StoragePressure) { p.DeviceAwait = -1 }, false},
 		{"queue-limit", func(p *maintenance.StoragePressure) { p.DeviceQueueMilli = 32_001 }, false},
 		{"memtable-near-stop", func(p *maintenance.StoragePressure) { p.MemTableCount = 7 }, false},
 		{"engine-specific-L0-stop", func(p *maintenance.StoragePressure) { p.L0Sublevels = 3; p.L0StopWritesThreshold = 4 }, false},
@@ -343,6 +355,71 @@ func TestPostingPruneWorkerPressureAdmission(t *testing.T) {
 				t.Fatalf("pressure admission calls=%d deferred=%d, want ready=%v", calls, w.counts["deferred/pressure"], tc.ready)
 			}
 		})
+	}
+}
+
+func TestPostingDebtReliefMakesBoundedProgress(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	defer db.Close()
+	for h := uint64(1); h <= 20; h++ {
+		if err := rawdb.WriteStateDomainChangePostingIndex(db, &rawdb.StateDomainChange{
+			BlockNum: h, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: common.Address{0x41, 1},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pressure := postingWorkerTestPressure(time.Now())
+	pressure.CompactionDebt = 40 << 30 // never crosses below the former veto
+	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(10, 1) },
+		func(ctx context.Context, b PostingPruneBoundary, _ common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			if limits.MaxScannedRows != 2 {
+				t.Fatal("changed bounded budget")
+			}
+			r, err := rawdb.PruneStaleStateChangePostingChunkContext(ctx, db, b.PrunedThrough, cursor, limits)
+			return PostingPruneChunkOutcome{Result: r, Anchor: common.Hash{2}, DebtRelief: true}, err
+		})
+	cfg.Limits = rawdb.StateChangePostingPruneLimits{MaxScannedRows: 2, MaxScannedBytes: 1 << 20, MaxDeleteBytes: 256 << 10, MaxDuration: 10 * time.Millisecond}
+	cfg.LoadProbe = func() maintenance.StoragePressure {
+		pressure.SampledAt = time.Now()
+		pressure.DeviceSampledAt = time.Now()
+		return pressure
+	}
+	w := NewPostingPruneWorker(cfg)
+	defer w.Stop()
+	for i := 0; i < 4; i++ {
+		runPostingWorkerTestChunk(t, w)
+	}
+	cursor := bytes.Clone(w.cursor)
+	pressure.DeviceAwait = 3 * time.Millisecond
+	runPostingWorkerTestChunk(t, w)
+	if !bytes.Equal(cursor, w.cursor) || w.counts["deferred/pressure"] != 1 || w.counts["callbacks"] != 4 {
+		t.Fatal("pressure must preserve traversal")
+	}
+	pressure.DeviceAwait = time.Millisecond
+	for i := 0; i < 20 && w.completed == 0; i++ {
+		runPostingWorkerTestChunk(t, w)
+	}
+	if w.completed != 10 || w.counts["deleted/rows"] != 10 || w.counts["scanned/rows"] != 20 || w.counts["debt_relief/chunks"] != w.counts["chunks"] || w.counts["debt_relief/deleted_bytes"] != w.counts["deleted/bytes"] {
+		t.Fatalf("no bounded relief progress: %+v", w.counts)
+	}
+	var frames, directories int
+	if err := rawdb.ScanStateChangePostingFrames(context.Background(), db, func(row rawdb.StateChangePostingFrameCursor) error {
+		frames++
+		if row.FirstBlock <= 10 {
+			t.Error("retained stale posting")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.ScanStateChangeKeyDirectory(context.Background(), db, func(rawdb.StateChangeDirectoryCursor) error {
+		directories++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 10 || directories != 1 {
+		t.Fatalf("retained index changed: frames=%d directories=%d", frames, directories)
 	}
 }
 
