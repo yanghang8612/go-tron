@@ -40,7 +40,7 @@ func seedGenesisWitnessCapsule(tb testing.TB, bc *BlockChain, w *types.Witness) 
 	if err := statedb.SetWitnessCapsule(w); err != nil {
 		tb.Fatalf("seed genesis witness capsule: %v", err)
 	}
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(tb, bc.db, statedb)
 	if err != nil {
 		tb.Fatalf("commit seeded witness capsule: %v", err)
 	}

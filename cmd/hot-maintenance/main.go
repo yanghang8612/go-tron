@@ -27,17 +27,15 @@ type field[T any] struct {
 }
 
 type guard struct {
-	HeadHash             field[string]                         `json:"head_hash"`
-	SolidHash            field[string]                         `json:"solid_hash"`
-	Execution            field[rawdb.StageProgress]            `json:"execution"`
-	Finish               field[rawdb.StageProgress]            `json:"finish"`
-	HistoryIndex         field[rawdb.StageProgress]            `json:"history_index"`
-	Commitment           field[rawdb.StageProgress]            `json:"commitment_stage"`
-	LatestCommitmentRoot field[string]                         `json:"latest_commitment_root"`
-	CommitmentBase       field[rawdb.CommitmentBranchBase]     `json:"commitment_base"`
-	CommitmentRotation   field[rawdb.CommitmentBranchRotation] `json:"commitment_rotation"`
-	EngineStateSHA256    field[string]                         `json:"engine_state_sha256"`
-	StagingIdentity      field[rawdb.HistoryStagingIdentity]   `json:"staging_identity"`
+	HeadHash             field[string]                       `json:"head_hash"`
+	SolidHash            field[string]                       `json:"solid_hash"`
+	Execution            field[rawdb.StageProgress]          `json:"execution"`
+	Finish               field[rawdb.StageProgress]          `json:"finish"`
+	HistoryIndex         field[rawdb.StageProgress]          `json:"history_index"`
+	Commitment           field[rawdb.StageProgress]          `json:"commitment_stage"`
+	LatestCommitmentRoot field[string]                       `json:"latest_commitment_root"`
+	CommitmentHeadSHA256 field[string]                       `json:"commitment_head_sha256"`
+	StagingIdentity      field[rawdb.HistoryStagingIdentity] `json:"staging_identity"`
 }
 
 type routeCensus struct {
@@ -206,23 +204,17 @@ func readGuard(db ethdb.KeyValueReader) (g guard, err error) {
 		return g, err
 	}
 	g.LatestCommitmentRoot = field[string]{present, root.Hex()}
-	base, present, err := rawdb.ReadCommitmentBranchBase(db)
-	if err != nil {
-		return g, err
-	}
-	g.CommitmentBase = field[rawdb.CommitmentBranchBase]{present, base}
-	rotation, present, err := rawdb.ReadCommitmentBranchRotation(db)
-	if err != nil {
-		return g, err
-	}
-	g.CommitmentRotation = field[rawdb.CommitmentBranchRotation]{present, rotation}
-	engine, present, err := rawdb.ReadCommitmentEngineState(db)
+	head, present, err := rawdb.ReadStateCommitmentHead(db)
 	if err != nil {
 		return g, err
 	}
 	if present {
-		sum := sha256.Sum256(engine)
-		g.EngineStateSHA256 = field[string]{true, hex.EncodeToString(sum[:])}
+		encoded, err := rawdb.EncodeStateCommitmentHead(head)
+		if err != nil {
+			return g, err
+		}
+		sum := sha256.Sum256(encoded)
+		g.CommitmentHeadSHA256 = field[string]{true, hex.EncodeToString(sum[:])}
 	}
 	identity, present, err := rawdb.ReadHistoryStagingIdentity(db)
 	if err != nil {

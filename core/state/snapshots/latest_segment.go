@@ -18,7 +18,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -149,7 +148,6 @@ func buildLatestDomainSegmentFromStore(store latestHotStore, dir string, domain 
 	if store == nil {
 		return SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	currentGeneration := latestKVGenerationFilter(store)
 	return writeLatestSegmentFromIterator(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVLatest,
 		Domain:    domain,
@@ -159,13 +157,6 @@ func buildLatestDomainSegmentFromStore(store latestHotStore, dir string, domain 
 		Path:      relPath,
 	}, func(yield func(LatestEntry) error) error {
 		return store.IterateKVLatestDomain(domain, func(owner common.Address, generation uint64, key, value []byte) (bool, error) {
-			current, err := currentGeneration(owner, generation)
-			if err != nil {
-				return false, err
-			}
-			if !current {
-				return true, nil
-			}
 			if err := yield(LatestEntry{Key: AccountKVSnapshotKey(owner, generation, key), Value: value}); err != nil {
 				return false, err
 			}
@@ -193,7 +184,6 @@ func buildLatestDomainSegmentFilesFromStoreContext(ctx context.Context, store la
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
-	currentGeneration := latestKVGenerationFilter(store)
 	return writeLatestBinarySegmentWithCompanionsContext(ctx, dir, SegmentRef{
 		Dataset:   SegmentDatasetKVLatest,
 		Domain:    domain,
@@ -203,13 +193,6 @@ func buildLatestDomainSegmentFilesFromStoreContext(ctx context.Context, store la
 		Path:      relPath,
 	}, func(yield func(LatestEntry) error) error {
 		return iterateKVLatestDomainContext(ctx, store, domain, func(owner common.Address, generation uint64, key, value []byte) (bool, error) {
-			current, err := currentGeneration(owner, generation)
-			if err != nil {
-				return false, err
-			}
-			if !current {
-				return true, nil
-			}
 			if err := yield(LatestEntry{Key: AccountKVSnapshotKey(owner, generation, key), Value: value}); err != nil {
 				return false, err
 			}
@@ -302,24 +285,30 @@ func buildLatestDomainSegmentFilesFromStoreMultiContext(ctx context.Context, sto
 		selected[domain] = struct{}{}
 		startJob(domain) // Configured domains must emit an empty segment if absent.
 	}
-	discover := len(normalized) == 0
-	currentGeneration := latestKVGenerationFilter(store)
+	discover := len(normalized) == 0 // Rebuild an empty segment for vanished previously published domains;
+	// otherwise integration would retain stale source rows from the old cut.
+	if discover {
+		old, err := LoadProductionManifest(dir)
+		if err != nil && !os.IsNotExist(err) {
+			cancel()
+			return nil, err
+		}
+		if old != nil {
+			for _, ref := range old.Segments {
+				if ref.Dataset == SegmentDatasetKVLatest && ref.Kind == SegmentLatest {
+					startJob(ref.Domain)
+				}
+			}
+		}
+	}
+
 	scanErr := iterateKVLatestRowsContext(buildCtx, store, func(row rawdb.StateKVLatestRow) (bool, error) {
 		if !discover {
 			if _, ok := selected[row.Domain]; !ok {
 				return true, nil
 			}
 		}
-		// Start before generation filtering so a domain containing only stale
-		// rows still emits the same empty segment as the former two-pass build.
 		job := startJob(row.Domain)
-		current, err := currentGeneration(row.Owner, row.Generation)
-		if err != nil {
-			return false, err
-		}
-		if !current {
-			return true, nil
-		}
 		entry := LatestEntry{
 			Key:   AccountKVSnapshotKey(row.Owner, row.Generation, row.Key),
 			Value: row.Value,
@@ -375,31 +364,6 @@ func buildLatestDomainSegmentFilesFromStoreMultiContext(ctx context.Context, sto
 		return nil, contextBuildErr
 	}
 	return refs, nil
-}
-
-func latestKVGenerationFilter(store latestHotStore) func(owner common.Address, generation uint64) (bool, error) {
-	var (
-		cachedOwner      common.Address
-		cachedGeneration uint64
-		cachedExists     bool
-		cached           bool
-	)
-	return func(owner common.Address, generation uint64) (bool, error) {
-		if !cached || cachedOwner != owner {
-			current, ok, err := store.ReadKVGeneration(owner)
-			if err != nil {
-				return false, err
-			}
-			cachedOwner = owner
-			cachedGeneration = current
-			cachedExists = ok
-			cached = true
-		}
-		if !cachedExists {
-			return generation == 0, nil
-		}
-		return generation == cachedGeneration, nil
-	}
 }
 
 func BuildKVGenerationSegmentFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
@@ -907,7 +871,7 @@ func validateLatestStreamRef(ref SegmentRef) error {
 		if !kvdomains.IsRegistered(ref.Domain) {
 			return fmt.Errorf("snapshots: unregistered latest segment domain %#04x", uint16(ref.Domain))
 		}
-	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentBranch:
+	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentHead, SegmentDatasetExecutionCheckpoint:
 		if ref.Domain != 0 {
 			return fmt.Errorf("snapshots: %s latest segment must not set kv domain %#04x", dataset, uint16(ref.Domain))
 		}
@@ -972,7 +936,7 @@ func writeLatestJSONSegmentFromIterator(dir string, ref SegmentRef, iter latestE
 		_ = tmp.Close()
 		return SegmentRef{}, err
 	}
-	if ref.normalizedDataset() == SegmentDatasetCommitmentRoot && count != 1 {
+	if (ref.normalizedDataset() == SegmentDatasetCommitmentRoot || ref.normalizedDataset() == SegmentDatasetCommitmentHead || ref.normalizedDataset() == SegmentDatasetExecutionCheckpoint) && count != 1 {
 		_ = tmp.Close()
 		return SegmentRef{}, fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", count)
 	}
@@ -992,6 +956,7 @@ func writeLatestJSONSegmentFromIterator(dir string, ref SegmentRef, iter latestE
 		return SegmentRef{}, err
 	}
 	ref.Size = size
+	ref.Rows = uint64(count)
 	ref.Checksum = checksum
 	if err := os.Rename(tmpName, abs); err != nil {
 		return SegmentRef{}, err
@@ -1265,6 +1230,9 @@ func (m *Manager) LatestStateTxNum() (uint64, bool, error) {
 	if err != nil || manifest == nil {
 		return 0, false, err
 	}
+	if manifest.LatestStateTxNum > 0 {
+		return manifest.LatestStateTxNum, true, nil
+	}
 	hasLatest := false
 	for _, ref := range manifest.Segments {
 		if ref.Kind != SegmentLatest {
@@ -1347,133 +1315,6 @@ func (m *Manager) GetCommitmentRoot(txNum uint64) (common.Hash, bool, error) {
 	return common.BytesToHash(value), true, nil
 }
 
-// coveringCommitmentBranchRef returns the newest published CommitmentBranch
-// latest segment whose visible tx range covers txNum.
-func coveringCommitmentBranchRef(manifest *Manifest, txNum uint64) (SegmentRef, bool) {
-	if manifest == nil {
-		return SegmentRef{}, false
-	}
-	var best SegmentRef
-	found := false
-	for _, ref := range manifest.Segments {
-		if ref.NormalizedDataset() != SegmentDatasetCommitmentBranch || ref.Kind != SegmentLatest {
-			continue
-		}
-		if txNum < ref.FromTxNum || txNum > ref.ToTxNum {
-			continue
-		}
-		if !found || ref.ToTxNum > best.ToTxNum {
-			best = ref
-			found = true
-		}
-	}
-	return best, found
-}
-
-func commitmentBranchRefAtOrBefore(manifest *Manifest, txNum uint64) (SegmentRef, bool) {
-	if manifest == nil {
-		return SegmentRef{}, false
-	}
-	var best SegmentRef
-	found := false
-	for _, ref := range manifest.Segments {
-		if ref.NormalizedDataset() != SegmentDatasetCommitmentBranch || ref.Kind != SegmentLatest || ref.ToTxNum > txNum {
-			continue
-		}
-		if !found || ref.ToTxNum > best.ToTxNum {
-			best = ref
-			found = true
-		}
-	}
-	return best, found
-}
-
-// IterateCommitmentBranches serves snapshotted staged branch rows for txNum from
-// the current manifest's covering CommitmentBranch segment, or yields nothing
-// (declining cleanly to Rebuild) when none covers txNum. Resolving against
-// m.Manifest() — which re-reads the on-disk manifest per call — means a snapshot
-// published after process start is visible immediately. This makes *Manager
-// satisfy domains.CommitmentBranchSnapshotSource structurally, so the bare
-// Manager already wired into the chain drives staged cold-restore.
-func (m *Manager) IterateCommitmentBranches(txNum uint64, fn func(prefix, encoded []byte) (bool, error)) error {
-	if m == nil {
-		return nil
-	}
-	ref, ok := coveringCommitmentBranchRef(m.Manifest(), txNum)
-	if !ok {
-		return nil
-	}
-	seg, err := OpenCommitmentBranchSegment(m.dir, ref)
-	if err != nil {
-		return err
-	}
-	return seg.Iterate(fn)
-}
-
-// GetCommitmentBranch resolves one staged-trie branch from the immutable
-// baseline. Binary production segments use their sparse B-tree, bounding the
-// search to one block at the index's stride instead of materializing the full
-// branch snapshot. This is the point-read half of the future hot-delta + cold-
-// baseline view; IterateCommitmentBranches remains the bootstrap/repair path.
-func (m *Manager) GetCommitmentBranch(prefix []byte, txNum uint64) ([]byte, bool, error) {
-	if m == nil {
-		return nil, false, nil
-	}
-	ref, ok := coveringCommitmentBranchRef(m.Manifest(), txNum)
-	if !ok {
-		return nil, false, nil
-	}
-	return m.getLatestValueFromRef(ref, encodeCommitmentBranchSnapshotKey(prefix))
-}
-
-// OpenCommitmentBranchSnapshot opens the newest immutable branch baseline at
-// or before txNum and retains its segment/B-tree descriptors for concurrent
-// commitment-lane reads. JSON/manual snapshots intentionally decline this hot
-// capability; they remain available only through streaming repair.
-func (m *Manager) OpenCommitmentBranchSnapshot(txNum uint64) (pointread.CommitmentBranchSnapshotView, bool, error) {
-	if m == nil {
-		return nil, false, nil
-	}
-	manifest, err := m.currentManifest()
-	if err != nil || manifest == nil {
-		return nil, false, err
-	}
-	ref, ok := commitmentBranchRefAtOrBefore(manifest, txNum)
-	if !ok || !isLatestBinarySegmentPath(ref.Path) {
-		return nil, false, nil
-	}
-	btreeRef, ok := latestBinaryBTreeRef(manifest, ref)
-	if !ok {
-		return nil, false, fmt.Errorf("snapshots: commitment branch %q missing B-tree", ref.Path)
-	}
-	path := filepath.Join(m.dir, ref.Path)
-	segment, segmentHeader, err := openLatestBinaryReader(path, ref)
-	if err != nil {
-		return nil, false, err
-	}
-	btree, btreeHeader, err := openLatestBinaryBTreeReader(m.dir, btreeRef)
-	if err != nil {
-		_ = segment.Close()
-		return nil, false, err
-	}
-	if err := validateLatestBinaryCompanionMatchesSegment(path, ref, segmentHeader, btreeHeader.latestBinaryAccessorHeader, SegmentBTree); err != nil {
-		_ = segment.Close()
-		_ = btree.Close()
-		return nil, false, err
-	}
-	view, err := newCommitmentBranchPointView(ref.ToTxNum, segment, segmentHeader, btree, btreeHeader)
-	closeBTreeErr := btree.Close()
-	if err != nil {
-		_ = segment.Close()
-		return nil, false, err
-	}
-	if closeBTreeErr != nil {
-		_ = segment.Close()
-		return nil, false, closeBTreeErr
-	}
-	return view, true, nil
-}
-
 func (m *Manager) GetCode(hash common.Hash, txNum uint64) ([]byte, bool, error) {
 	if hash == (common.Hash{}) {
 		return nil, false, nil
@@ -1551,16 +1392,6 @@ func (m *Manager) RestoreLatestWithOptions(db ethdb.KeyValueWriter, txNum uint64
 			continue
 		}
 		matched = true
-		if ref.NormalizedDataset() == SegmentDatasetCommitmentBranch {
-			seg, err := OpenCommitmentBranchSegment(m.dir, ref)
-			if err != nil {
-				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
-			}
-			if err := seg.Restore(restoreWriter); err != nil {
-				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
-			}
-			continue
-		}
 		if isLatestBinarySegmentPath(ref.Path) {
 			if err := restoreLatestBinarySegmentToStore(m.dir, ref, newRawDBLatestHotRestoreStore(restoreWriter)); err != nil {
 				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
@@ -1877,7 +1708,7 @@ func (s *LatestSegment) Validate() error {
 		if !kvdomains.IsRegistered(s.Domain) {
 			return fmt.Errorf("snapshots: unregistered latest segment domain %#04x", uint16(s.Domain))
 		}
-	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentBranch:
+	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentHead, SegmentDatasetExecutionCheckpoint:
 		if s.Domain != 0 {
 			return fmt.Errorf("snapshots: %s latest segment must not set kv domain %#04x", dataset, uint16(s.Domain))
 		}
@@ -1887,7 +1718,7 @@ func (s *LatestSegment) Validate() error {
 	if s.ToTxNum < s.FromTxNum {
 		return fmt.Errorf("snapshots: latest segment range [%d,%d] is inverted", s.FromTxNum, s.ToTxNum)
 	}
-	if dataset == SegmentDatasetCommitmentRoot && len(s.Entries) != 1 {
+	if (dataset == SegmentDatasetCommitmentRoot || dataset == SegmentDatasetCommitmentHead || dataset == SegmentDatasetExecutionCheckpoint) && len(s.Entries) != 1 {
 		return fmt.Errorf("snapshots: commitment root segment entries = %d, want 1", len(s.Entries))
 	}
 	for i := range s.Entries {
@@ -1979,7 +1810,7 @@ func (s *LatestSegment) restoreToStore(store latestHotStore) error {
 				return err
 			}
 		}
-	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint, SegmentDatasetCommitmentHead, SegmentDatasetExecutionCheckpoint:
 		for _, entry := range s.Entries {
 			if err := restoreLatestEntryToStore(s.normalizedDataset(), s.Domain, store, entry); err != nil {
 				return err
@@ -2027,6 +1858,18 @@ func restoreLatestEntryToStore(dataset SegmentDataset, domain kvdomains.KVDomain
 			return err
 		}
 		return store.WriteCode(hash, entry.Value)
+	case SegmentDatasetExecutionCheckpoint:
+		writer, ok := store.(interface{ WriteExecutionCheckpoint([]byte) error })
+		if !ok {
+			return errors.New("snapshots: missing execution checkpoint restore capability")
+		}
+		return writer.WriteExecutionCheckpoint(entry.Value)
+	case SegmentDatasetCommitmentHead:
+		writer, ok := store.(interface{ WriteCommitmentHead([]byte) error })
+		if !ok {
+			return errors.New("snapshots: missing HEAD restore capability")
+		}
+		return writer.WriteCommitmentHead(entry.Value)
 	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
 		return store.WriteCommitmentDomain(entry.Key, entry.Value)
 	default:
@@ -2083,6 +1926,20 @@ func validateLatestEntry(dataset SegmentDataset, entry LatestEntry) error {
 		if common.Keccak256(entry.Value) != hash {
 			return fmt.Errorf("snapshots: code segment hash mismatch for %x", hash)
 		}
+	case SegmentDatasetExecutionCheckpoint:
+		if !bytes.Equal(entry.Key, rawdb.CycleRewardPendingKey()) {
+			return errors.New("snapshots: invalid execution checkpoint key")
+		}
+		if _, err := decodeExecutionCheckpoint(entry.Value); err != nil {
+			return err
+		}
+	case SegmentDatasetCommitmentHead:
+		if !rawdb.IsStateCommitmentHeadKey(entry.Key) {
+			return errors.New("snapshots: invalid HEAD snapshot key")
+		}
+		if _, err := rawdb.DecodeStateCommitmentHead(entry.Value); err != nil {
+			return err
+		}
 	case SegmentDatasetCommitmentRoot:
 		if !rawdb.IsLatestDomainCommitmentRootLogicalKey(entry.Key) {
 			return fmt.Errorf("snapshots: commitment root segment has key %q", entry.Key)
@@ -2099,13 +1956,6 @@ func validateLatestEntry(dataset SegmentDataset, entry LatestEntry) error {
 		}
 		if _, err := rawdb.DecodeStateCommitmentCheckpointValue(entry.Value); err != nil {
 			return fmt.Errorf("snapshots: decode commitment checkpoint %q: %w", entry.Key, err)
-		}
-	case SegmentDatasetCommitmentBranch:
-		if _, err := decodeCommitmentBranchSnapshotKey(entry.Key); err != nil {
-			return err
-		}
-		if len(entry.Value) == 0 {
-			return errors.New("snapshots: commitment branch has empty value")
 		}
 	default:
 		return fmt.Errorf("snapshots: unknown latest dataset %q", dataset)

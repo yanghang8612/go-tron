@@ -1,7 +1,10 @@
 package net
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"path/filepath"
 	"testing"
 	"time"
@@ -99,8 +102,10 @@ func TestTwoNodeSyncFromSnapshotFreezerBoundary(t *testing.T) {
 }
 
 func newNetSyncSnapshotGenesis() *params.Genesis {
+	cfg := *params.MainnetChainConfig
+	cfg.HistoryEnabled = true
 	return &params.Genesis{
-		Config:    params.MainnetChainConfig,
+		Config:    &cfg,
 		Timestamp: 0,
 		Accounts: []params.GenesisAccount{
 			{Address: tcommon.Address{0x41, 1}, Balance: 1_000_000},
@@ -114,7 +119,7 @@ func newNetSyncSnapshotExecutedChain(t *testing.T, blocks uint64) *core.BlockCha
 	if _, _, err := core.SetupGenesisBlock(db, newNetSyncSnapshotGenesis()); err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)
 	}
-	bc, err := core.NewBlockChain(db, state.NewDatabase(rawdb.WrapKeyValueStore(db)), params.MainnetChainConfig)
+	bc, err := core.NewBlockChain(db, state.NewDatabase(rawdb.WrapKeyValueStore(db)), newNetSyncSnapshotGenesis().Config)
 	if err != nil {
 		t.Fatalf("NewBlockChain: %v", err)
 	}
@@ -130,11 +135,15 @@ func newNetSyncSnapshotExecutedChain(t *testing.T, blocks uint64) *core.BlockCha
 
 func newNetSyncSnapshotRestoredBoundary(t *testing.T, boundary uint64) (*core.BlockChain, *rawdbfreezer.Freezer, *types.Block) {
 	t.Helper()
-	db := rawdb.NewMemoryDatabase()
+	db, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 	if _, _, err := core.SetupGenesisBlock(db, newNetSyncSnapshotGenesis()); err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)
 	}
-	source, err := core.NewBlockChain(db, state.NewDatabase(rawdb.WrapKeyValueStore(db)), params.MainnetChainConfig)
+	source, err := core.NewBlockChain(db, state.NewDatabase(rawdb.WrapKeyValueStore(db)), newNetSyncSnapshotGenesis().Config)
 	if err != nil {
 		t.Fatalf("NewBlockChain(source): %v", err)
 	}
@@ -144,9 +153,28 @@ func newNetSyncSnapshotRestoredBoundary(t *testing.T, boundary uint64) (*core.Bl
 			t.Fatalf("InsertBlock(%d source): %v", n, err)
 		}
 	}
+	// Use the same production read lease as the cold builder, including committed
+	// immutable layers. Do not fabricate a TxRange or a manifest cut.
+	pin, head, err := source.AcquireStateLatestSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotDir := t.TempDir()
+	refs, err := statesnapshots.NewAggregator(snapshotDir).BuildSegments(pin, statesnapshots.AggregatorBuildOptions{FromTxNum: 1, ToTxNum: head.TxNum})
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesisBlock := source.GetBlockByNumber(0)
+	identity := statesnapshots.ChainIdentity{ChainID: 1, NetworkID: params.MainnetNetworkID, GenesisHash: fmt.Sprintf("%x", genesisBlock.Hash().Bytes())}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, head.TxNum, refs, identity)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pin.Close(); err != nil {
+		t.Fatal(err)
+	}
 	source.WaitForFlushSettled()
 	if err := source.Close(); err != nil {
-		t.Fatalf("close source chain: %v", err)
+		t.Fatal(err)
 	}
 
 	hotOnly := rawdb.NewChainDB(db, rawdb.NoopAncient{})
@@ -170,13 +198,38 @@ func newNetSyncSnapshotRestoredBoundary(t *testing.T, boundary uint64) (*core.Bl
 	fz := openNetSyncSnapshotFreezer(t, filepath.Join(t.TempDir(), "freezer"))
 	appendNetSyncSnapshotFreezerRows(t, fz, rows)
 	boundaryBlock := rows[len(rows)-1].block
-	if err := rawdb.WriteStateTxRange(db, boundaryBlock.Number(), boundaryBlock.Hash(), boundary, boundary); err != nil {
-		t.Fatalf("WriteStateTxRange: %v", err)
+	target := rawdb.NewMemoryDatabase()
+	// Chain/freezer transport is independently installed and verified before the
+	// restore publication batch exposes any current HEAD.
+	opts := statesnapshots.RestoreVerifiedSnapshotOptions{
+		BeforePublish: func(staged ethdb.KeyValueStore, manifest *statesnapshots.Manifest) error {
+			for _, row := range rows {
+				if err := rawdb.WriteTaposRef(staged, row.block.Number(), row.block.Hash()); err != nil {
+					return err
+				}
+			}
+			_, err := statesnapshots.VerifyCanonicalBoundaryFromRestoredSnapshot(staged, rawdb.NewChainDB(staged, rawdb.NewFreezerReader(fz)), manifest)
+			return err
+		},
+		FinalMetadata: func(writer ethdb.KeyValueWriter, restoredHead rawdb.StateCommitmentHead) error {
+			if restoredHead != head {
+				return fmt.Errorf("restored HEAD differs from pinned source")
+			}
+			rawdb.WriteGenesisStateRoot(writer, rawdb.ReadGenesisStateRoot(db))
+			if err := rawdb.WriteBlock(writer, genesisBlock); err != nil {
+				return err
+			}
+			recipe, err := json.Marshal(newNetSyncSnapshotGenesis())
+			if err != nil {
+				return err
+			}
+			return rawdb.WriteStateGenesisRecipe(writer, genesisBlock.Hash(), recipe)
+		},
 	}
-	if _, err := statesnapshots.InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), statesnapshots.NewManifest(boundary, boundary, nil)); err != nil {
-		t.Fatalf("InstallCanonicalBoundaryFromVerifiedSnapshot: %v", err)
+	if _, err := statesnapshots.RestoreSnapshotFromVerifiedManifestWithOptions(target, snapshotDir, identity, opts); err != nil {
+		t.Fatalf("fresh restore: %v", err)
 	}
-	restored, err := core.NewBlockChainWithAncient(db, state.NewDatabase(rawdb.WrapKeyValueStore(db)), params.MainnetChainConfig, rawdb.NewFreezerReader(fz))
+	restored, err := core.NewBlockChainWithAncient(target, state.NewDatabase(rawdb.WrapKeyValueStore(target)), newNetSyncSnapshotGenesis().Config, rawdb.NewFreezerReader(fz))
 	if err != nil {
 		t.Fatalf("NewBlockChain(restored): %v", err)
 	}

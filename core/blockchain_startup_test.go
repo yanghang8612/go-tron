@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -20,6 +21,14 @@ func TestLoadStoredHeadBlockSurfacesColdLookupErrors(t *testing.T) {
 	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 	head := tcommon.Hash{0x42}
 	rawdb.WriteHeadBlockHash(db, head)
+	h := rawdb.NewStateCommitmentHead()
+	h.BlockHash = head
+	if err := rawdb.WriteStateCommitmentHead(db, h); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, h.Root); err != nil {
+		t.Fatal(err)
+	}
 	chain.SetChainIndexReader(blockchainStartupErrChainIndex{err: errors.New("cold chain index corrupt")})
 
 	_, err := loadStoredHeadBlock(chain, blockchainStartupBlock(0))
@@ -31,19 +40,19 @@ func TestLoadStoredHeadBlockSurfacesColdLookupErrors(t *testing.T) {
 	}
 }
 
-func TestLoadStoredHeadBlockSurfacesHeadHashReadErrors(t *testing.T) {
+func TestLoadStoredHeadBlockSurfacesMarkerReadErrors(t *testing.T) {
 	db := blockchainStartupStrictReadFailingStore{
 		KeyValueStore: ethrawdb.NewMemoryDatabase(),
-		hasErr:        errors.New("head hash presence failed"),
+		hasErr:        errors.New("marker presence failed"),
 	}
 	chain := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 
 	_, err := loadStoredHeadBlock(chain, blockchainStartupBlock(0))
-	if err == nil || !strings.Contains(err.Error(), "head hash presence failed") {
-		t.Fatalf("loadStoredHeadBlock err = %v, want head hash read error", err)
+	if err == nil || !strings.Contains(err.Error(), "marker presence failed") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want marker read error", err)
 	}
-	if !strings.Contains(err.Error(), "load stored head hash") {
-		t.Fatalf("loadStoredHeadBlock err = %v, want startup head-hash context", err)
+	if !strings.Contains(err.Error(), "unwind cleanup presence") {
+		t.Fatalf("loadStoredHeadBlock err = %v, want startup marker context", err)
 	}
 }
 
@@ -193,18 +202,27 @@ type blockchainStartupStrictReadFailingStore struct {
 	ethdb.KeyValueStore
 	hasErr error
 	getErr error
+	key    []byte
 }
 
 func (s blockchainStartupStrictReadFailingStore) Has(key []byte) (bool, error) {
-	if s.hasErr != nil {
+	if s.hasErr != nil && (s.key == nil || bytes.Equal(key, s.key)) {
 		return false, s.hasErr
 	}
 	return s.KeyValueStore.Has(key)
 }
 
 func (s blockchainStartupStrictReadFailingStore) Get(key []byte) ([]byte, error) {
-	if s.getErr != nil {
+	if s.getErr != nil && (s.key == nil || bytes.Equal(key, s.key)) {
 		return nil, s.getErr
 	}
 	return s.KeyValueStore.Get(key)
+}
+
+func TestLoadStoredHeadBlockSurfacesCommitmentHeadReadErrors(t *testing.T) {
+	db := blockchainStartupStrictReadFailingStore{KeyValueStore: ethrawdb.NewMemoryDatabase(), key: rawdb.StateCommitmentHeadKey(), hasErr: errors.New("HEAD source presence failed")}
+	_, err := loadStoredHeadBlock(rawdb.NewChainDB(db, rawdb.NoopAncient{}), blockchainStartupBlock(0))
+	if err == nil || !strings.Contains(err.Error(), "HEAD source presence failed") || !strings.Contains(err.Error(), "load durable commitment HEAD") {
+		t.Fatalf("HEAD failure lost strict context: %v", err)
+	}
 }

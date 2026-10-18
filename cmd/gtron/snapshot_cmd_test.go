@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"math/big"
 	"net"
 	"net/http"
@@ -479,20 +480,6 @@ func TestRuntimeSnapshotBootstrapFetchesAndRestoresCanonicalBoundary(t *testing.
 	}
 	block1 := snapshotCmdBlock(1)
 	stateRoot1 := common.HexToHash("4141414141414141414141414141414141414141414141414141414141414141")
-	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
-	defer src.Close()
-	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
-		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock)},
-		{block: block1, stateRoot: stateRoot1.Bytes()},
-	})
-	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(src), sourceDir, "", 0, 1)
-	if err != nil {
-		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
-	}
-	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(sourceDir, freezerRef, "")
-	if err != nil {
-		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
-	}
 
 	stateSnapshotDB := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x25}, common.AccountIDLength)...))
@@ -511,6 +498,29 @@ func TestRuntimeSnapshotBootstrapFetchesAndRestoresCanonicalBoundary(t *testing.
 	}); err != nil {
 		t.Fatalf("WriteStateDomainChange: %v", err)
 	}
+	if err := rawdb.WriteStateAccountLatest(stateSnapshotDB, owner, snapshotCmdAccountEnvelope(t, owner, 33, corepb.AccountType_Normal, common.Hash{})); err != nil {
+		t.Fatal(err)
+	}
+	head := snapshotCmdSeedMuHashHead(t, stateSnapshotDB, block1, 1)
+	stateRoot1 = head.Root
+	latest, err := statesnapshots.NewAggregator(sourceDir).BuildLatest(stateSnapshotDB, statesnapshots.AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
+	defer src.Close()
+	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
+		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock), stateRoot: rawdb.NewStateCommitmentHead().Root.Bytes()},
+		{block: block1, stateRoot: stateRoot1.Bytes()},
+	})
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(src), sourceDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(sourceDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
 	historyRefs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(stateSnapshotDB, sourceDir, 1, 1, "history/state-domain-change-1-1.seg")
 	if err != nil {
 		t.Fatalf("BuildStateDomainChangeHistorySegmentsFromDB: %v", err)
@@ -519,7 +529,7 @@ func TestRuntimeSnapshotBootstrapFetchesAndRestoresCanonicalBoundary(t *testing.
 	if err != nil {
 		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
 	}
-	segments := append([]statesnapshots.SegmentRef{}, historyRefs...)
+	segments := append(append([]statesnapshots.SegmentRef{}, latest.Segments...), historyRefs...)
 	segments = append(segments, freezerRef, indexRef)
 	if err := statesnapshots.PublishManifest(sourceDir, statesnapshots.NewManifestForChain(1, 1, segments, identity)); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
@@ -2011,26 +2021,10 @@ func TestSnapshotPruneRetiredCmdDeletesRetiredSegmentFiles(t *testing.T) {
 	}
 }
 
-func TestSnapshotRestoreVerificationOptionsRebuildsCommitmentRoot(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))
-	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account")); err != nil {
-		t.Fatalf("WriteStateAccountLatest: %v", err)
-	}
-	opts := snapshotRestoreVerificationOptions(db)
-	if opts.Boundary.RebuildCommitmentRoot == nil || !opts.Boundary.RequireIndependentCommitmentRoot {
-		t.Fatalf("strict boundary options not configured: %+v", opts.Boundary)
-	}
-	root, err := opts.Boundary.RebuildCommitmentRoot()
-	if err != nil {
-		t.Fatalf("RebuildCommitmentRoot: %v", err)
-	}
-	if root == (common.Hash{}) {
-		t.Fatal("rebuilt root is zero")
-	}
-	stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
-	if err != nil || !ok || stored != root {
-		t.Fatalf("stored root = %x ok=%v err=%v, want %x", stored, ok, err, root)
+func TestSnapshotRestoreVerificationOptionsAvoidsDuplicateFullScan(t *testing.T) {
+	opts := snapshotRestoreVerificationOptions(rawdb.NewMemoryDatabase())
+	if opts.Boundary.RebuildCommitmentRoot != nil || opts.Boundary.RequireIndependentCommitmentRoot {
+		t.Fatal("mandatory restore verification must not be duplicated by same primitive callback")
 	}
 }
 
@@ -2302,32 +2296,12 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	delegationEnergy := int64(7_000)
 	delegationEnergyExpire := int64(70_000)
 
-	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
-	defer src.Close()
-	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
-		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock)},
-		{block: block1, txInfosRaw: txInfoRaw, stateRoot: stateRoot1.Bytes()},
-		{block: block2, stateRoot: stateRoot2.Bytes()},
-	})
-	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(src), snapshotDir, "", 0, 2)
-	if err != nil {
-		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
-	}
-	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
-	if err != nil {
-		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
-	}
-	sourceChain := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), rawdb.NewFreezerReader(src))
-	eventLogRef, err := statesnapshots.BuildEventLogSegmentFromChain(sourceChain, snapshotDir, "log/event-log-1-1.seg", 1, 1)
-	if err != nil {
-		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
-	}
-	eventLogIndexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []statesnapshots.SegmentRef{eventLogRef}, "")
-	if err != nil {
-		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	stateSnapshotDB := rawdb.NewMemoryDatabase()
+	// System KV is visible through StateDB only when its owner exists.
+	if err := rawdb.WriteStateAccountLatest(stateSnapshotDB, common.SystemAccountAddress, snapshotCmdAccountEnvelope(t, common.SystemAccountAddress, 0, corepb.AccountType_Normal, common.Hash{})); err != nil {
+		t.Fatal(err)
 	}
 
-	stateSnapshotDB := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStateAccountLatest(stateSnapshotDB, archiveAddr, archiveAccount2); err != nil {
 		t.Fatalf("WriteStateAccountLatest: %v", err)
 	}
@@ -2539,26 +2513,37 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteStateDomainChange recreated new metadata: %v", err)
 	}
-	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(stateSnapshotDB, snapshotDir, 1, 2, "latest/accounts-1-2.seg")
+	head := snapshotCmdSeedMuHashHead(t, stateSnapshotDB, block2, 2)
+	stateRoot2 = head.Root
+	latest, err := statesnapshots.NewAggregator(snapshotDir).BuildLatest(stateSnapshotDB, statesnapshots.AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 2})
 	if err != nil {
-		t.Fatalf("BuildAccountLatestSegmentFilesFromDB: %v", err)
+		t.Fatal(err)
 	}
-	codeRef, codeAccessorRef, codeBTreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(stateSnapshotDB, snapshotDir, 1, 2, "latest/code-1-2.seg")
+	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
+	defer src.Close()
+	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
+		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock), stateRoot: rawdb.NewStateCommitmentHead().Root.Bytes()},
+		{block: block1, txInfosRaw: txInfoRaw, stateRoot: stateRoot1.Bytes()},
+		{block: block2, stateRoot: stateRoot2.Bytes()},
+	})
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(src), snapshotDir, "", 0, 2)
 	if err != nil {
-		t.Fatalf("BuildCodeSegmentFilesFromDB: %v", err)
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
 	}
-	storageRef, storageAccessorRef, storageBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.ContractStorage, 1, 2, "latest/contract-storage-1-2.seg")
+	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
 	if err != nil {
-		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(contract storage): %v", err)
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
 	}
-	metadataRef, metadataAccessorRef, metadataBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.ContractMetadata, 1, 2, "latest/contract-metadata-1-2.seg")
+	sourceChain := rawdb.NewChainDB(rawdb.NewMemoryDatabase(), rawdb.NewFreezerReader(src))
+	eventLogRef, err := statesnapshots.BuildEventLogSegmentFromChain(sourceChain, snapshotDir, "log/event-log-1-1.seg", 1, 1)
 	if err != nil {
-		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(contract metadata): %v", err)
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
 	}
-	delegationRef, delegationAccessorRef, delegationBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.SystemDelegation, 1, 2, "latest/system-delegation-1-2.seg")
+	eventLogIndexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []statesnapshots.SegmentRef{eventLogRef}, "")
 	if err != nil {
-		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(system delegation): %v", err)
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
 	}
+
 	historyRefs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(stateSnapshotDB, snapshotDir, 1, 2, "history/state-domain-change-1-2.seg")
 	if err != nil {
 		t.Fatalf("BuildStateDomainChangeHistorySegmentsFromDB: %v", err)
@@ -2568,13 +2553,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
 	}
-	segments := []statesnapshots.SegmentRef{
-		accountRef, accountAccessorRef, accountBTreeRef,
-		codeRef, codeAccessorRef, codeBTreeRef,
-		storageRef, storageAccessorRef, storageBTreeRef,
-		metadataRef, metadataAccessorRef, metadataBTreeRef,
-		delegationRef, delegationAccessorRef, delegationBTreeRef,
-	}
+	segments := append([]statesnapshots.SegmentRef(nil), latest.Segments...)
 	segments = append(segments, historyRefs...)
 	segments = append(segments, freezerRef, indexRef, eventLogRef, eventLogIndexRef)
 	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, 2, segments, identity)); err != nil {
@@ -2661,7 +2640,6 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	defer bc.Close()
 	bc.SetStateCodeColdHistory(mgr)
-	bc.SetStateCommitmentColdHistory(mgr)
 	bc.ChainDB().SetChainIndexReader(mgr)
 	bc.ChainDB().SetEventLogReader(mgr)
 	backend := corepkg.NewTronBackend(bc, txpool.New())
@@ -3649,4 +3627,39 @@ func snapshotCmdSectionBloomSetBit(bitset []byte, bit uint64) []byte {
 	}
 	bitset[byteIndex] |= 1 << (bit % 8)
 	return bitset
+}
+
+func snapshotCmdSeedMuHashHead(t *testing.T, db ethdb.KeyValueStore, block *coretypes.Block, tx uint64) rawdb.StateCommitmentHead {
+	t.Helper()
+	value, err := statesnapshots.RebuildLatestMuHash(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := rawdb.NewStateCommitmentHead()
+	head.BlockNum = block.Number()
+	head.BlockHash = block.Hash()
+	head.ParentHash = block.ParentHash()
+	head.TxNum = tx
+	head.Root = common.Hash(value.Digest)
+	head.State = value.State
+	if _, present, err := rawdb.ReadStateTxRange(db, block.Number()); err != nil {
+		t.Fatal(err)
+	} else if !present && tx > 0 {
+		if err := rawdb.WriteStateTxRange(db, block.Number(), block.Hash(), tx, tx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rawdb.WriteStateExecutionProperties(db, rawdb.StateExecutionProperties{BlockNum: int64(block.Number()), Timestamp: block.Timestamp(), BlockHash: block.Hash()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCommitmentHead(db, head); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, head.Root); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{BlockNum: head.BlockNum, BlockHash: head.BlockHash, Root: head.Root, Scheme: head.Scheme}); err != nil {
+		t.Fatal(err)
+	}
+	return head
 }

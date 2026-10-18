@@ -71,6 +71,14 @@ type storageOrigin struct {
 	value  tcommon.Hash
 	exists bool
 	loaded bool
+	// Only semantic-zero rows need a separate physical pre-image. Nonzero
+	// SSTORE reuses its already loaded hash without another source lookup.
+	physical *storagePhysicalBefore
+}
+
+type storagePhysicalBefore struct {
+	value  []byte
+	exists bool
 }
 
 // storageSlot keeps the cached StorageRow value and java-tron row-existence
@@ -81,6 +89,10 @@ type storageOrigin struct {
 type storageSlot struct {
 	value  tcommon.Hash
 	exists bool
+	// Cold semantic-zero provenance: 0 unknown, 1 physically absent,
+	// 2 present-empty, 3..34 present zero with length marker-2. This costs
+	// one byte per cached slot and avoids a second read for a known miss.
+	physicalZero uint8
 }
 
 // stateObject represents an in-memory account with dirty tracking.

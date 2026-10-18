@@ -57,19 +57,19 @@ func TestVerifyLoadedManifestFilesDelegatesStateHistoryWithCallerContext(t *test
 }
 
 func TestVerifyRemoteManifestFiles(t *testing.T) {
-	dir, identity := writeVerifiableBranchManifest(t)
+	dir, identity := writeVerifiableHeadManifest(t)
 
 	report, err := VerifyRemoteManifestFiles(dir, identity)
 	if err != nil {
 		t.Fatalf("VerifyRemoteManifestFiles: %v", err)
 	}
-	if report.ActiveSegments != 1 || report.RetiredSegments != 0 {
+	if report.ActiveSegments == 0 || report.RetiredSegments != 0 {
 		t.Fatalf("report = %+v, want 1 active / 0 retired", report)
 	}
 }
 
 func TestVerifyRemoteManifestFilesRejectsWrongChain(t *testing.T) {
-	dir, identity := writeVerifiableBranchManifest(t)
+	dir, identity := writeVerifiableHeadManifest(t)
 	identity.NetworkID++
 
 	if _, err := VerifyRemoteManifestFiles(dir, identity); err == nil {
@@ -78,12 +78,12 @@ func TestVerifyRemoteManifestFilesRejectsWrongChain(t *testing.T) {
 }
 
 func TestVerifyRemoteManifestFilesRejectsCorruptSegment(t *testing.T) {
-	dir, identity := writeVerifiableBranchManifest(t)
+	dir, identity := writeVerifiableHeadManifest(t)
 	manifest, err := LoadManifest(dir)
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)
 	}
-	if len(manifest.Segments) != 1 {
+	if len(manifest.Segments) == 0 {
 		t.Fatalf("segments = %d, want 1", len(manifest.Segments))
 	}
 	if err := os.WriteFile(filepath.Join(dir, manifest.Segments[0].Path), []byte(`{"corrupt":true}`), 0o644); err != nil {
@@ -96,7 +96,7 @@ func TestVerifyRemoteManifestFilesRejectsCorruptSegment(t *testing.T) {
 }
 
 func TestVerifyRemoteManifestFilesRequiresChecksums(t *testing.T) {
-	dir, identity := writeVerifiableBranchManifest(t)
+	dir, identity := writeVerifiableHeadManifest(t)
 	manifest, err := LoadManifest(dir)
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)
@@ -112,29 +112,6 @@ func TestVerifyRemoteManifestFilesRequiresChecksums(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing required checksum") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestRestoreLatestFromVerifiedManifestRestoresCommitmentBranches(t *testing.T) {
-	dir, identity := writeVerifiableBranchManifest(t)
-	restored := rawdb.NewMemoryDatabase()
-
-	result, err := RestoreLatestFromVerifiedManifest(restored, dir, identity)
-	if err != nil {
-		t.Fatalf("RestoreLatestFromVerifiedManifest: %v", err)
-	}
-	if result.RestoredTxNum != 10 || result.Verification.ActiveSegments != 1 {
-		t.Fatalf("result = %+v, want txNum=10 active=1", result)
-	}
-	rows := 0
-	if err := rawdb.IterateCommitmentBranches(restored, func(_, _ []byte) (bool, error) {
-		rows++
-		return true, nil
-	}); err != nil {
-		t.Fatalf("iterate restored branches: %v", err)
-	}
-	if rows == 0 {
-		t.Fatal("no commitment branches restored")
 	}
 }
 
@@ -652,8 +629,8 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 			t.Fatalf("%s progress = %d ok=%v err=%v, want %d", tc.stage, got, ok, err, tc.want)
 		}
 	}
-	if _, ok, err := rawdb.ReadStageProgress(restored, rawdb.StageHeaders); err != nil || ok {
-		t.Fatalf("canonical Headers stage should not be advanced by snapshot install: ok=%v err=%v", ok, err)
+	if got, ok, err := rawdb.ReadStageProgress(restored, rawdb.StageHeaders); err != nil || !ok || got != 2 {
+		t.Fatalf("canonical Headers stage must bind published HEAD: block=%d ok=%v err=%v", got, ok, err)
 	}
 }
 
@@ -899,7 +876,7 @@ func TestVerifyRestoredSnapshotBoundaryRejectsMismatchedCommitmentMetadata(t *te
 	if err := rawdb.WriteStateAccountLatest(restored, owner, []byte("tampered-account")); err != nil {
 		t.Fatalf("tamper latest account: %v", err)
 	}
-	if err := VerifyRestoredSnapshotBoundaryWithOptions(restored, mgr, manifest, strictBoundaryOptions(t, restored).Boundary); err == nil || !strings.Contains(err.Error(), "rebuilt latest commitment root") {
+	if err := VerifyRestoredSnapshotBoundaryWithOptions(restored, mgr, manifest, strictBoundaryOptions(t, restored).Boundary); err == nil || !strings.Contains(err.Error(), "source collection differs") {
 		t.Fatalf("latest-row tamper error = %v, want rebuilt commitment root mismatch", err)
 	}
 	if err := mgr.RestoreLatest(restored, manifest.VisibleTxEnd); err != nil {
@@ -919,28 +896,6 @@ func TestVerifyRestoredSnapshotBoundaryRejectsMismatchedCommitmentMetadata(t *te
 	if err := VerifyRestoredSnapshotBoundary(restored, mgr, manifest); err == nil || !strings.Contains(err.Error(), "commitment checkpoint") {
 		t.Fatalf("checkpoint mismatch error = %v, want checkpoint mismatch", err)
 	}
-}
-
-func writeVerifiableBranchManifest(t *testing.T) (string, ChainIdentity) {
-	t.Helper()
-	db := rawdb.NewMemoryDatabase()
-	seedStagedBranchRows(t, db)
-
-	dir := t.TempDir()
-	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-10-10.json", 10, 10)
-	if err != nil {
-		t.Fatalf("build branch segment: %v", err)
-	}
-	identity := ChainIdentity{
-		ChainID:        1,
-		NetworkID:      11111,
-		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
-		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}
-	if err := PublishManifest(dir, NewManifestForChain(10, 10, []SegmentRef{ref}, identity)); err != nil {
-		t.Fatalf("PublishManifest: %v", err)
-	}
-	return dir, identity
 }
 
 func writeVerifiableHistoryManifest(t *testing.T) (string, ChainIdentity, common.Address) {
@@ -999,6 +954,12 @@ func writeVerifiableHistoryManifest(t *testing.T) (string, ChainIdentity, common
 		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
 		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
+	seedTestMuHashHead(t, db, 2, 12, common.Hash{2})
+	latest, err := NewAggregator(dir).buildLatestSegments(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, latest...)
 	if err := PublishManifest(dir, NewManifestForChain(10, 12, refs, identity)); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
@@ -1012,10 +973,8 @@ func writeVerifiableCommitmentManifest(t *testing.T) (string, ChainIdentity, com
 	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-latest")); err != nil {
 		t.Fatalf("write account latest: %v", err)
 	}
-	root, err := statedomains.NewStagedCommitmentStore(db).Rebuild()
-	if err != nil {
-		t.Fatalf("rebuild commitment root: %v", err)
-	}
+	head := seedTestMuHashHead(t, db, 7, 10, common.Hash{7})
+	root := head.Root
 	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
 		BlockNum:  7,
 		BlockHash: common.Hash{0x07},
@@ -1044,6 +1003,22 @@ func writeVerifiableCommitmentManifest(t *testing.T) (string, ChainIdentity, com
 		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 	refs := []SegmentRef{accountRef, accountAccessorRef, accountBTreeRef, rootRef, rootAccessorRef, rootBTreeRef, checkpointRef, checkpointAccessorRef, checkpointBTreeRef}
+	heads, err := buildCommitmentHeadSegments(context.Background(), db, dir, 0, 10, 10, "commitment/head.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, _, generationBTree, err := BuildKVGenerationSegmentFilesFromDB(db, dir, 10, 10, "latest/generation.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := buildExecutionCheckpointSegments(context.Background(), db, dir, 0, 10, 10, "execution/checkpoint.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, execution...)
+	refs = append(refs, heads...)
+	refs = append(refs, generation, generationBTree)
+
 	if err := PublishManifest(dir, NewManifestForChain(10, 10, refs, identity)); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
@@ -1056,8 +1031,27 @@ func strictBoundaryOptions(t *testing.T, db statedomains.CommitmentDB) RestoreVe
 		Boundary: VerifyRestoredSnapshotBoundaryOptions{
 			RequireIndependentCommitmentRoot: true,
 			RebuildCommitmentRoot: func() (common.Hash, error) {
-				return statedomains.NewStagedCommitmentStore(db).Rebuild()
+				value, err := RebuildLatestMuHash(db)
+				return common.Hash(value.Digest), err
 			},
 		},
 	}
+}
+
+// A complete MuHash HEAD replaces the obsolete branch-only verification fixture.
+func writeVerifiableHeadManifest(t *testing.T) (string, ChainIdentity) {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	seedTestMuHashHead(t, db, 1, 10, common.Hash{1})
+	dir := t.TempDir()
+	result, err := NewAggregator(dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := ChainIdentity{ChainID: 1, NetworkID: 11111, GenesisHash: "0000000000000000000000000000000000000000000000000000000000000001", ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	result.Manifest.Chain = &identity
+	if err := PublishManifest(dir, result.Manifest); err != nil {
+		t.Fatal(err)
+	}
+	return dir, identity
 }

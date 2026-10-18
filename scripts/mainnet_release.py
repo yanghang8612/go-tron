@@ -905,7 +905,7 @@ def inspect():
         require(exe == binary and process_args == argv and proc_sha(pid) == digest,
                 'running process differs from guarded service')
     return {'binary': binary, 'sha': digest, 'source': source, 'argv': argv,
-            'active': active, 'memory': (memory, memory_mode),
+            'active': active, 'active_state': props.get('ActiveState'), 'main_pid': pid, 'memory': (memory, memory_mode),
             'shared': (shared, shared_mode), 'marker': (marker_raw, marker_mode),
             'guards': guards, 'reference': reference, 'staging': staging,
             'space_pre': props.get('ExecStartPre', '')}
@@ -1026,7 +1026,7 @@ def restore(old, health_timeout=None):
     wait_healthy(old['binary'], old['sha'], old['argv'], timeout=health_timeout)
 
 
-def deploy(source, candidate, digest, health_timeout=None):
+def deploy(source, candidate, digest, health_timeout=None, fresh_state_no_rollback=False):
     require_ordinary_deploy_allowed()
     require(re.fullmatch(r'[0-9a-f]{40}', source or ''), 'invalid source commit')
     head = command(['/usr/bin/git', '--git-dir=' + str(REPO / '.git'),
@@ -1037,6 +1037,9 @@ def deploy(source, candidate, digest, health_timeout=None):
                   '\tCGO_ENABLED=1', '\tGOOS=linux', '\tGOARCH=amd64'):
         require(token in buildinfo, 'candidate build info differs: ' + token.strip())
     old = inspect()
+    if fresh_state_no_rollback:
+        require(old.get('active_state') in ('inactive', 'failed') and old.get('main_pid') == 0,
+                'fresh-state deployment requires the mainnet service already stopped (inactive/failed and MainPID=0)')
     if old.get('staging') is not None:
         require(not json.loads(old['staging'][0]).get('stop_intent', False),
                 'persistent inactive intent blocks ordinary deployment')
@@ -1083,6 +1086,16 @@ def deploy(source, candidate, digest, health_timeout=None):
         atomic_root(Path(new_binary).parent / 'DEPLOYED.json', json_bytes(result), 0o644)
         return result
     except Exception as error:
+        if switched and fresh_state_no_rollback:
+            # A previous-scheme binary must never be started against a fresh
+            # MuHash database. Retain the new config/markers for repair.
+            try:
+                command(['/bin/systemctl', 'stop', SERVICE], 120)
+            except Exception as stop_error:
+                raise RuntimeError('fresh-state deployment failed: %s; stop failed: %s; '
+                                   'old binary was not restored' % (error, stop_error))
+            raise RuntimeError('fresh-state deployment failed: %s; service stopped; '
+                               'new configuration retained; old binary was not restored' % error)
         if switched:
             try:
                 try:
@@ -1277,6 +1290,8 @@ def main():
     publish.add_argument('--candidate', required=True)
     publish.add_argument('--sha256', required=True)
     publish.add_argument('--staging-health-timeout-sec')
+    publish.add_argument('--fresh-state-no-rollback', action='store_true',
+                         help='One-time fresh-state activation: require stopped mainnet; on failure stop and retain new release')
     activate = sub.add_parser('activate-staging')
     activate.add_argument('--source', required=True)
     activate.add_argument('--candidate', required=True)
@@ -1301,7 +1316,8 @@ def main():
     if args.action == 'verify':
         result = verify(args.source)
     elif args.action == 'deploy':
-        result = deploy(args.source, args.candidate, args.sha256, health_timeout=health_timeout)
+        result = deploy(args.source, args.candidate, args.sha256, health_timeout=health_timeout,
+                        fresh_state_no_rollback=args.fresh_state_no_rollback)
     else:
         result = activate_staging(args.source, args.candidate, args.sha256,
                                   health_timeout=health_timeout)

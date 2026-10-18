@@ -507,33 +507,6 @@ func TestCommitmentCheckpointSegmentSynthesizesLatestPointer(t *testing.T) {
 	}
 }
 
-func TestCommitmentRootSnapshotUsesFrozenRotationBoundary(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-	liveRoot := common.Hash{0xaa}
-	frozenRoot := common.Hash{0xbb}
-	if err := rawdb.WriteLatestDomainCommitmentRoot(db, liveRoot); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteCommitmentBranchRotation(db, rawdb.CommitmentBranchRotation{
-		Generation: 1, SnapshotTxNum: 77, Root: frozenRoot, BlockNum: 7, BlockHash: common.Hash{0x07},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	ref, err := BuildCommitmentRootSegmentFromDB(db, dir, 1, 77, "commitment/root.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	seg, err := OpenLatestSegment(dir, ref)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, ok, err := seg.Get(rawdb.LatestDomainCommitmentRootLogicalKey())
-	if err != nil || !ok || !bytes.Equal(got, frozenRoot.Bytes()) {
-		t.Fatalf("rotation root = %x ok=%v err=%v, want %x", got, ok, err, frozenRoot)
-	}
-}
-
 func TestLatestSegmentRestoreUsesHotStore(t *testing.T) {
 	owner := latestStoreTestAddress(0x35)
 	store := &recordingLatestHotStore{}
@@ -828,7 +801,7 @@ func byteSlicesEqual(a, b [][]byte) bool {
 	return true
 }
 
-func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
+func TestLatestBinaryBuildPreservesOldKVGenerations(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5f}, common.AccountIDLength)...))
@@ -852,8 +825,8 @@ func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	if _, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale"), 5); err != nil || ok {
-		t.Fatalf("stale generation hit ok:%v err:%v", ok, err)
+	if _, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale"), 5); err != nil || !ok {
+		t.Fatalf("old physical generation missing ok:%v err:%v", ok, err)
 	}
 	got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 2, []byte("live"), 5)
 	if err != nil || !ok || string(got) != "new" {
@@ -861,7 +834,7 @@ func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
 	}
 }
 
-func TestLatestBinaryBuildTreatsMissingKVGenerationAsZero(t *testing.T) {
+func TestLatestBinaryBuildPreservesPhysicalGenerationsWithoutGenerationRow(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x60}, common.AccountIDLength)...))
@@ -886,12 +859,12 @@ func TestLatestBinaryBuildTreatsMissingKVGenerationAsZero(t *testing.T) {
 	if err != nil || !ok || string(got) != "zero" {
 		t.Fatalf("implicit generation-zero value = %q ok:%v err:%v", got, ok, err)
 	}
-	if got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale-one"), 5); err != nil || ok || got != nil {
-		t.Fatalf("nonzero generation without generation row = %q ok:%v err:%v, want miss", got, ok, err)
+	if got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale-one"), 5); err != nil || !ok || string(got) != "one" {
+		t.Fatalf("nonzero physical generation without generation row = %q ok:%v err:%v, want miss", got, ok, err)
 	}
 }
 
-func TestLatestBinaryBuildRequiresKVGenerationReader(t *testing.T) {
+func TestLatestBinaryBuildNeedsNoGenerationFilterReader(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x61}, common.AccountIDLength)...))
@@ -899,8 +872,8 @@ func TestLatestBinaryBuildRequiresKVGenerationReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, _, err := BuildLatestDomainSegmentFilesFromDB(iteratorOnlyLatestDB{Iteratee: db}, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
-	if err == nil || !strings.Contains(err.Error(), "nil reader while reading KV generation") {
-		t.Fatalf("build error = %v, want missing reader error", err)
+	if err != nil {
+		t.Fatalf("physical snapshot should not require generation filter: %v", err)
 	}
 }
 

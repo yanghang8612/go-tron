@@ -25,7 +25,6 @@ Environment=ZCASH_PARAMS_DIR=/data/gtron/params
 EnvironmentFile=-/etc/gtron/snapshot.env
 
 # Go runtime
-Environment=GTRON_STATE_COMMITMENT_CACHE_TAIL=1024
 Environment=GOMEMLIMIT=8GiB
 Environment=GOGC=100
 

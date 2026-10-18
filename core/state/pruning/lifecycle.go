@@ -8,6 +8,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
@@ -726,32 +727,6 @@ func (s snapshotChainSource) SyncRemainingBlocks() (uint64, bool) {
 	return source.SyncRemainingBlocks()
 }
 
-func (s snapshotChainSource) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
-	if s.chain == nil {
-		return rawdb.CommitmentBranchRotation{}, false, nil
-	}
-	source, ok := s.chain.(interface {
-		BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error)
-	})
-	if !ok {
-		return rawdb.CommitmentBranchRotation{}, false, nil
-	}
-	return source.BeginCommitmentBranchRotation()
-}
-
-func (s snapshotChainSource) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *snapshots.Manager) error {
-	if s.chain == nil {
-		return nil
-	}
-	source, ok := s.chain.(interface {
-		CompleteCommitmentBranchRotation(rawdb.CommitmentBranchRotation, *snapshots.Manager) error
-	})
-	if !ok {
-		return nil
-	}
-	return source.CompleteCommitmentBranchRotation(rotation, mgr)
-}
-
 func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
 	return canonicalBlockHashFromChainSource(s.chain, blockNum)
 }
@@ -762,30 +737,12 @@ func (s snapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.H
 
 var _ snapshots.ChainSource = snapshotChainSource{}
 
-func (s snapshotChainSource) BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
+func (s snapshotChainSource) AcquireStateLatestSnapshot(ctx context.Context) (pointread.KeyValueSnapshot, rawdb.StateCommitmentHead, error) {
 	source, ok := s.chain.(interface {
-		BeginInitialCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error)
+		AcquireStateLatestSnapshot(context.Context) (pointread.KeyValueSnapshot, rawdb.StateCommitmentHead, error)
 	})
 	if !ok {
-		return rawdb.CommitmentBranchRotation{}, false, errors.New("initial commitment base: unavailable chain rotation")
+		return nil, rawdb.StateCommitmentHead{}, errors.New("snapshots: coherent latest source/HEAD pin unavailable")
 	}
-	return source.BeginInitialCommitmentBranchRotation()
-}
-func (s snapshotChainSource) CompleteInitialCommitmentBranchRotation(ctx context.Context, rotation rawdb.CommitmentBranchRotation, proof *snapshots.VerifiedCommitmentBranchBase) error {
-	source, ok := s.chain.(interface {
-		CompleteInitialCommitmentBranchRotation(context.Context, rawdb.CommitmentBranchRotation, *snapshots.VerifiedCommitmentBranchBase) error
-	})
-	if !ok {
-		return errors.New("initial commitment base: unavailable chain rotation")
-	}
-	return source.CompleteInitialCommitmentBranchRotation(ctx, rotation, proof)
-}
-func (s snapshotChainSource) CleanupAcceptedInitialCommitmentBranchBase(ctx context.Context, proof *snapshots.VerifiedCommitmentBranchBase) (bool, error) {
-	source, ok := s.chain.(interface {
-		CleanupAcceptedInitialCommitmentBranchBase(context.Context, *snapshots.VerifiedCommitmentBranchBase) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("initial commitment base: unavailable chain rotation")
-	}
-	return source.CleanupAcceptedInitialCommitmentBranchBase(ctx, proof)
+	return source.AcquireStateLatestSnapshot(ctx)
 }

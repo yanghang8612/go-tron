@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -552,51 +553,72 @@ func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 	// per-block completeness receipt and verifies every source row in this
 	// bounded window. Older heights without receipts take reset+replay.
 	if manager := bc.historyStaging.Load(); manager != nil {
-		if !bc.canIncrementalUnwindCycleRewards(height, currentHead) {
-			return false
-		}
 		covered, err := manager.IsSourceOwnedUnpruned(height+1, currentHead)
-		return err == nil && covered
-	}
-	if !bc.canIncrementalUnwindCycleRewards(height, currentHead) {
-		return false
+		return err == nil && covered && bc.canIncrementalUnwindCycleRewards(height, currentHead)
 	}
 	// Use height+1's StateTxRange as a coverage proxy. Pruning deletes both the
 	// tx-range and its corresponding changeset rows together, so if the tx-range
 	// for height+1 is present the changeset window is intact.
 	_, ok, err := rawdb.ReadStateTxRange(bc.db, height+1)
-	return err == nil && ok
+	return err == nil && ok && bc.canIncrementalUnwindCycleRewards(height, currentHead)
 }
 
 // canIncrementalUnwindCycleRewards reports whether the non-rooted pending
 // reward accumulator can be reversed alongside the rooted commitment. A
 // maintenance boundary flushes and resets the accumulator, so only a range
 // wholly contained in one cycle is safe to unwind arithmetically.
+// walkUnwindStates builds historical latest views by applying owned before-images
+// to one disposable overlay. A root alone is not an historical state reader.
+func (bc *BlockChain) walkUnwindStates(height, currentHead uint64, visit func(uint64, *types.Block, *state.StateDB, *blockbuffer.Buffer) error) error {
+	view := blockbuffer.New(bc.buffer)
+	view.SetBaseReadCacheSize(0)
+	view.BeginBlock(tcommon.Hash{}, currentHead)
+	defer view.Discard()
+	for n := currentHead; ; n-- {
+		block, err := readRestartSyncBlock(bc.chaindb, n, fmt.Sprintf("unwind state block %d missing", n))
+		if err != nil {
+			return err
+		}
+		root, err := readRestartSyncStateRoot(bc.chaindb, block)
+		if err != nil {
+			return err
+		}
+		db, err := state.New(root, bc.stateDB)
+		if err != nil {
+			return err
+		}
+		db.SetAccountKVIndexStore(view)
+		db.SetStateCodeReader(view)
+		if err = visit(n, block, db, view); err != nil {
+			return err
+		}
+		if err = db.Error(); err != nil {
+			return fmt.Errorf("read historical source at block %d: %w", n, err)
+		}
+		if n == height {
+			return nil
+		}
+		if _, err = rawdb.CollectStateUnwind(view, n, n-1); err != nil {
+			return err
+		}
+	}
+}
+
 func (bc *BlockChain) canIncrementalUnwindCycleRewards(height, currentHead uint64) bool {
-	if bc.cycleRewards == nil || len(bc.cycleRewards.rewards) == 0 {
-		return true
-	}
-	target := rawdb.ReadBlock(bc.chaindb, height)
-	current := rawdb.ReadBlock(bc.chaindb, currentHead)
-	if target == nil || current == nil {
-		return false
-	}
-	targetRoot := rawdb.ReadBlockStateRoot(bc.chaindb, target.Hash())
-	currentRoot := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
-	if targetRoot == (tcommon.Hash{}) || currentRoot == (tcommon.Hash{}) {
-		return false
-	}
-	targetState, err := bc.openState(targetRoot)
-	if err != nil {
-		return false
-	}
-	currentState, err := bc.openState(currentRoot)
-	if err != nil {
-		return false
-	}
-	targetCycle := state.LoadDynamicProperties(bc.db, targetState).CurrentCycleNumber()
-	currentCycle := state.LoadDynamicProperties(bc.db, currentState).CurrentCycleNumber()
-	return targetCycle == currentCycle && currentCycle == bc.cycleRewards.cycle
+	var cycle int64
+	return bc.walkUnwindStates(height, currentHead, func(n uint64, _ *types.Block, db *state.StateDB, view *blockbuffer.Buffer) error {
+		observed := state.LoadDynamicProperties(view, db).CurrentCycleNumber()
+		if n == currentHead {
+			cycle = observed
+		}
+		if observed != cycle {
+			return errors.New("unwind crosses a maintenance cycle")
+		}
+		if bc.cycleRewards != nil && len(bc.cycleRewards.rewards) != 0 && cycle != bc.cycleRewards.cycle {
+			return errors.New("pending reward cycle differs from current state")
+		}
+		return nil
+	}) == nil
 }
 
 // cycleRewardsAfterIncrementalUnwind reconstructs the pending accumulator at
@@ -615,45 +637,36 @@ func (bc *BlockChain) cycleRewardsAfterIncrementalUnwind(height, currentHead uin
 		cycle:   bc.cycleRewards.cycle,
 		rewards: copyCycleRewardMap(bc.cycleRewards.rewards),
 	}
-	for n := currentHead; n > height; n-- {
-		block := rawdb.ReadBlock(bc.chaindb, n)
-		if block == nil {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d missing", n)
+	err := bc.walkUnwindStates(height, currentHead, func(n uint64, block *types.Block, statedb *state.StateDB, view *blockbuffer.Buffer) error {
+		if n == height {
+			return nil
 		}
-		root := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash())
-		if root == (tcommon.Hash{}) {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d state root missing", n)
-		}
-		statedb, err := bc.openState(root)
-		if err != nil {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: open block %d state: %w", n, err)
-		}
-		dp := state.LoadDynamicProperties(bc.db, statedb)
+		dp := state.LoadDynamicProperties(view, statedb)
 		cycle := dp.CurrentCycleNumber()
 		if cycle != acc.cycle {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d cycle %d differs from pending cycle %d", n, cycle, acc.cycle)
+			return fmt.Errorf("cycle reward unwind: block %d cycle %d differs from pending cycle %d", n, cycle, acc.cycle)
 		}
 		if !dp.ChangeDelegation() {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d has pending rewards with change_delegation disabled", n)
+			return fmt.Errorf("cycle reward unwind: block %d has pending rewards with change_delegation disabled", n)
 		}
 
 		witness := block.WitnessAddress()
 		if witness == (tcommon.Address{}) {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d has no witness", n)
+			return fmt.Errorf("cycle reward unwind: block %d has no witness", n)
 		}
 		if err := subtractPendingVoterReward(acc, statedb, cycle, witness, dp.WitnessPayPerBlock()); err != nil {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d producer reward: %w", n, err)
+			return fmt.Errorf("cycle reward unwind: block %d producer reward: %w", n, err)
 		}
 
-		set := buildStandbyWitnessPaySet(bc.buffer, statedb, cycle, dp.ConsensusLogicOptimization())
+		set := buildStandbyWitnessPaySet(view, statedb, cycle, dp.ConsensusLogicOptimization())
 		if err := subtractPendingStandbyRewards(acc, set, dp.Witness127PayPerBlock()); err != nil {
-			return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d standby reward: %w", n, err)
+			return fmt.Errorf("cycle reward unwind: block %d standby reward: %w", n, err)
 		}
 
 		if dp.AllowTransactionFeePool() {
 			infos := rawdb.ReadTransactionInfosByBlock(bc.chaindb, n)
 			if len(infos) != len(block.Transactions()) {
-				return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d transaction infos=%d transactions=%d", n, len(infos), len(block.Transactions()))
+				return fmt.Errorf("cycle reward unwind: block %d transaction infos=%d transactions=%d", n, len(infos), len(block.Transactions()))
 			}
 			var packingFee int64
 			for _, info := range infos {
@@ -662,9 +675,13 @@ func (bc *BlockChain) cycleRewardsAfterIncrementalUnwind(height, currentHead uin
 				}
 			}
 			if err := subtractPendingVoterReward(acc, statedb, cycle, witness, packingFee); err != nil {
-				return cycleRewardAccumulatorSnapshot{}, fmt.Errorf("cycle reward unwind: block %d fee reward: %w", n, err)
+				return fmt.Errorf("cycle reward unwind: block %d fee reward: %w", n, err)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return cycleRewardAccumulatorSnapshot{}, err
 	}
 	return acc.Snapshot(), nil
 }
@@ -717,7 +734,14 @@ func subtractPendingCycleReward(acc *cycleRewardAccumulator, addr tcommon.Addres
 // returned true and leaves the chain in byte-equivalent end state to the
 // reset+replay path for all namespaces EXCEPT the TAPOS ring (see function
 // comment on RestartSyncFromHeight).
-func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint64, ancient rawdb.AncientWriter, emit func(string, uint64)) error {
+func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint64, ancient rawdb.AncientWriter, emit func(string, uint64)) (retErr error) {
+	published := false
+	defer func() {
+		if published && retErr != nil {
+			failure := retErr
+			bc.commitErr.CompareAndSwap(nil, &failure)
+		}
+	}()
 	height := target.Number()
 	rewoundCycleRewards, err := bc.cycleRewardsAfterIncrementalUnwind(height, currentHead)
 	if err != nil {
@@ -732,16 +756,6 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 		return fmt.Errorf("flush buffer before unwind: %w", err)
 	}
 	bc.buffer.Discard()
-
-	// 2. Truncate ancient store if present (same as reset+replay path).
-	if ancient != nil {
-		if _, err := ancient.TruncateHead(height + 1); err != nil {
-			return fmt.Errorf("truncate ancient head to %d: %w", height+1, err)
-		}
-		if err := ancient.Sync(); err != nil {
-			return fmt.Errorf("sync ancient truncate: %w", err)
-		}
-	}
 
 	// 3. Collect the orphaned blocks (height, currentHead] — needed for flat
 	//    delete and total-tx-count subtraction. Iterate descending for safety.
@@ -760,23 +774,131 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 	if err != nil {
 		return err
 	}
-	store, err := domains.NewStagedCommitmentStoreWithRepair(bc.db, domains.CommitmentSnapshotRepair{
-		Source: bc.stateCommitmentColdHistory,
-	}, false)
+	head, present, err := rawdb.ReadStateCommitmentHead(bc.db)
 	if err != nil {
-		return fmt.Errorf("open commitment store for unwind %d->%d: %w", currentHead, height, err)
+		return err
 	}
-	defer func() { _ = domains.CloseLatestCommitmentStore(store) }()
-	if _, err := domains.UnwindCommitment(bc.db, store, currentHead, height, expectedRoot); err != nil {
+	if !present || head.BlockNum != currentHead {
+		return rawdb.ErrStateCommitmentHead
+	}
+	targetTx := uint64(0)
+	if tr, present, err := rawdb.ReadStateTxRange(bc.db, height); err != nil {
+		return err
+	} else if present {
+		targetTx = tr.EndTxNum
+	}
+	transition := blockbuffer.New(bc.db)
+	transition.SetBaseReadCacheSize(0)
+	transition.BeginBlock(target.Hash(), height)
+	if _, err = domains.UnwindMuHashCommitment(transition, domains.CommitmentIdentity{BlockNum: head.BlockNum, BlockHash: head.BlockHash, ParentHash: head.ParentHash, TxNum: head.TxNum}, domains.CommitmentIdentity{BlockNum: height, BlockHash: target.Hash(), ParentHash: target.ParentHash(), TxNum: targetTx}, expectedRoot); err != nil {
 		return fmt.Errorf("commitment unwind %d->%d: %w", currentHead, height, err)
+	}
+	rawdb.WriteHeadBlockHash(transition, target.Hash())
+	if err = rawdb.WriteCanonicalStageProgressWithHash(transition, height, target.Hash()); err != nil {
+		return err
+	}
+	// Consensus-relevant current mirrors and rewards share the exact source cut.
+	if err = rewoundCycleRewards.Write(transition); err != nil {
+		return err
+	}
+	var totalRemoved int64
+	for _, orphan := range orphans {
+		totalRemoved += int64(len(orphan.Transactions()))
+	}
+	total, _, err := rawdb.ReadTotalTransactionCountStrict(bc.db)
+	if err != nil {
+		return err
+	}
+	rawdb.WriteTotalTransactionCount(transition, total-totalRemoved)
+	if err = rawdb.DeleteLatestPbftBlockNum(transition); err != nil {
+		return err
+	}
+	rewoundState, err := state.New(expectedRoot, bc.stateDB)
+	if err != nil {
+		return err
+	}
+	rewoundState.SetAccountKVIndexStore(transition)
+	rewoundDP := state.LoadDynamicProperties(transition, rewoundState)
+	rewoundDP.SetLatestBlockHeaderNumber(int64(height))
+	rewoundDP.SetLatestBlockHeaderTimestamp(target.Timestamp())
+	rewoundDP.SetLatestBlockHeaderHash(target.Hash())
+	rewoundDP.SetLatestSolidifiedBlockNum(solidifiedBlockFromRootedWitnessState(rewoundState))
+	rewoundDP.Flush(transition)
+	if err = rewoundState.Error(); err != nil {
+		return err
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageTxLookup, rawdb.StageStateHistoryIndex} {
+		row, present, err := rawdb.ReadStageProgressRow(bc.db, stage)
+		if err != nil {
+			return err
+		}
+		if present && row.BlockNum >= height {
+			if err = rawdb.WriteStageProgressWithHash(transition, stage, height, target.Hash()); err != nil {
+				return err
+			}
+		}
+	}
+	// Restore each orphan-overwritten TAPOS ring slot to its last canonical
+	// value at the target, including wrap-around, before publishing the cut.
+	seenSlots := make(map[uint64]struct{}, len(orphans))
+	for _, orphan := range orphans {
+		slot := orphan.Number() & 0xffff
+		if _, seen := seenSlots[slot]; seen {
+			continue
+		}
+		seenSlots[slot] = struct{}{}
+		if height < slot {
+			if err = transition.Delete(rawdb.TaposRefStorageKey(slot)); err != nil {
+				return err
+			}
+			continue
+		}
+		n := height - ((height - slot) & 0xffff)
+		hash, present, err := rawdb.ReadBlockHashByNumberStrict(bc.chaindb, n)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return fmt.Errorf("TAPOS predecessor block %d missing", n)
+		}
+		if err = rawdb.WriteTaposRef(transition, n, hash); err != nil {
+			return err
+		}
+	}
+	if err = rawdb.WriteStateCommitmentUnwindCleanup(transition, currentHead, height); err != nil {
+		return err
+	}
+	transition.CommitBlock()
+	// A backend may commit then lose the acknowledgement; never resume live
+	// execution after an attempted publication reports an error.
+	published = true
+	if err = transition.Flush(bc.db); err != nil {
+		return fmt.Errorf("atomic inverse source/HEAD publication: %w", err)
+	}
+
+	published = true
+	if bc.unwindCleanupTestHook != nil {
+		if err = bc.unwindCleanupTestHook(); err != nil {
+			return err
+		}
+	}
+
+	// Source HEAD is now durable at target; later maintenance failure is fatal,
+	// and restart selects this target cut rather than orphaned body metadata.
+	// 2. Truncate ancient store if present (same as reset+replay path).
+	if ancient != nil {
+		if _, err := ancient.TruncateHead(height + 1); err != nil {
+			return fmt.Errorf("truncate ancient head to %d: %w", height+1, err)
+		}
+		if err := ancient.Sync(); err != nil {
+			return fmt.Errorf("sync ancient truncate: %w", err)
+		}
 	}
 
 	// 5. Delete flat block-keyed data + changesets for orphan blocks, and
 	//    accumulate the tx count that will be subtracted from the global counter.
-	var removedTxs int64
 	batch := bc.db.NewBatch()
 	for _, b := range orphans {
-		removedTxs += int64(len(b.Transactions()))
 
 		// Out-of-band state root (bsr-)
 		rawdb.DeleteBlockStateRoot(batch, b.Hash())
@@ -829,36 +951,14 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 		}
 	}
 
-	// 7. Accumulators: subtract removed tx count (NOT zero — the reset+replay
-	//    path re-accumulates to height's true value; we must match it).
-	if removedTxs > 0 {
-		cur := rawdb.ReadTotalTransactionCount(bc.db)
-		rawdb.WriteTotalTransactionCount(bc.db, cur-removedTxs)
-	}
-
-	// 8. latestPbftBlockNum: delete singleton (matches resetMutableSingletons
-	//    handling in ResetMutableState / reset+replay path).
-	if err := rawdb.DeleteLatestPbftBlockNum(bc.db); err != nil {
-		return fmt.Errorf("delete latest pbft block num: %w", err)
-	}
-
-	// 9. Head pointer + derived DP mirror + canonical stage rewind + runtime
-	//    cache reload.
-	//    rewindCanonicalStagePipeline and resetRuntimeStateLocked are the same
-	//    final-sequence calls used by the reset+replay path.
+	// Current rewards, counters, DP mirrors and stage cut were published above.
+	// Remaining orphan history/body cleanup is restart-safe at the target HEAD.
 	emit("flush", height)
-	rawdb.WriteHeadBlockHash(bc.db, target.Hash())
-	if err := bc.rewriteDerivedDynPropsAtHead(target, expectedRoot); err != nil {
-		return fmt.Errorf("rewrite derived dynamic properties: %w", err)
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return err
 	}
-	if err := rewindCanonicalStagePipeline(bc.db, height, target.Hash()); err != nil {
-		return fmt.Errorf("rewind canonical stage progress: %w", err)
-	}
-	if err := bc.rewindTransactionLookupStageLocked(height, target.Hash()); err != nil {
-		return fmt.Errorf("rewind tx lookup stage progress: %w", err)
-	}
-	if err := bc.rewindStateHistoryIndexStageLocked(height, target.Hash()); err != nil {
-		return fmt.Errorf("rewind state history index stage progress: %w", err)
+	if err := rawdb.DeleteStateCommitmentUnwindCleanup(bc.db); err != nil {
+		return err
 	}
 	if err := bc.resetRuntimeStateLocked(target, expectedRoot); err != nil {
 		return err
@@ -878,9 +978,18 @@ func readRestartSyncBlock(chain *rawdb.ChainDB, number uint64, missing string) (
 }
 
 func readRestartSyncStateRoot(chain *rawdb.ChainDB, block *types.Block) (tcommon.Hash, error) {
-	root, _, err := rawdb.ReadBlockStateRootStrict(chain, block.Hash())
+	root, present, err := rawdb.ReadBlockStateRootStrict(chain, block.Hash())
 	if err != nil {
 		return tcommon.Hash{}, fmt.Errorf("read state root for block %d (%x): %w", block.Number(), block.Hash(), err)
+	}
+	if !present && block.Number() == 0 {
+		root, present, err = rawdb.ReadGenesisStateRootStrict(chain)
+		if err != nil {
+			return tcommon.Hash{}, err
+		}
+	}
+	if !present {
+		return tcommon.Hash{}, fmt.Errorf("state root missing for block %d", block.Number())
 	}
 	return root, nil
 }
@@ -930,7 +1039,6 @@ func solidifiedBlockFromRootedWitnessState(statedb *state.StateDB) int64 {
 }
 
 func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Hash) error {
-	bc.invalidateOrderedCommitPipeline()
 	bc.genesisWitnesses = bc.genesisWitnesses[:0]
 	for _, gw := range rawdb.ReadGenesisWitnesses(bc.db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{

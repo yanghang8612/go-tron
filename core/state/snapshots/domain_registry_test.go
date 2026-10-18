@@ -18,8 +18,8 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 	registry := DefaultDomainRegistry()
 
 	latest := registry.LatestConfigs()
-	if len(latest) != 7 {
-		t.Fatalf("latest configs = %d, want 7", len(latest))
+	if len(latest) != 8 {
+		t.Fatalf("latest configs = %d, want 8", len(latest))
 	}
 	for _, cfg := range latest {
 		if cfg.LatestPathStem == "" {

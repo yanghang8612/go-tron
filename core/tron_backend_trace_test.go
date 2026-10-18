@@ -51,7 +51,7 @@ func newTraceBackend(t *testing.T) (*TronBackend, tcommon.Address, tcommon.Addre
 	// PUSH1 09 PUSH1 00 SSTORE  PUSH1 00 SLOAD POP  PUSH1 00 PUSH1 00 REVERT
 	code := []byte{0x60, 0x09, 0x60, 0x00, 0x55, 0x60, 0x00, 0x54, 0x50, 0x60, 0x00, 0x60, 0x00, 0xfd}
 	statedb.SetCode(contractAddr, code)
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(t, diskdb, statedb)
 	if err != nil {
 		t.Fatalf("commit seeded contract: %v", err)
 	}
@@ -171,7 +171,7 @@ func newTraceTxBackend(t *testing.T) (*TronBackend, tcommon.Hash) {
 	})
 	// PUSH1 09 PUSH1 00 SSTORE STOP — a clean successful write.
 	statedb.SetCode(contractAddr, []byte{0x60, 0x09, 0x60, 0x00, 0x55, 0x00})
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(t, diskdb, statedb)
 	if err != nil {
 		t.Fatalf("commit seeded contract: %v", err)
 	}

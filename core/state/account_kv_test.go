@@ -596,7 +596,12 @@ func TestFreshAccountKVShortcutSurvivesCopyAndDeepAsyncCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(copyState.db.DiskDB()).Rebuild()
+	// The captured fold is in the private atomic layer until its successful
+	// scope publication, just as the canonical worker promotes its layer.
+	if err = scope.FlushLatest(); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := statedomains.RebuildMuHashCommitment(copyState.db.DiskDB())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +674,12 @@ func TestKVEntryArenaResetsAfterSuccessfulCommit(t *testing.T) {
 				t.Fatal("dirty KV write did not allocate from arena")
 			}
 			sdb.SetDeferFold(deferred)
-			if _, _, err := sdb.CommitWithStats(); err != nil {
+			var scope *CommitScope
+			if deferred {
+				scope = sdb.NewCommitScope()
+				defer scope.Discard()
+			}
+			if _, _, err := sdb.commitWithStatsOptions(CommitOptions{}, scope); err != nil {
 				t.Fatal(err)
 			}
 			if sdb.kvEntryArena.chunk != nil {
@@ -681,6 +691,9 @@ func TestKVEntryArenaResetsAfterSuccessfulCommit(t *testing.T) {
 					t.Fatal("deferred commit did not capture fold")
 				}
 				if _, err := captured.Fold(sdb.accountKVIndex()); err != nil {
+					t.Fatal(err)
+				}
+				if err := scope.FlushLatest(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1215,7 +1228,7 @@ func TestCommitScopeUsesPlanSuppliedLatestDomainFlush(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("latest after plan supplied flush = %q ok=%v err=%v, want v", got, ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1263,7 +1276,7 @@ func TestCommitScopeComputesRootFromUnflushedLatestBatch(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("disk latest after explicit scoped flush = %q ok=%v err=%v, want v", got, ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1314,7 +1327,7 @@ func TestCommitScopeComputesDeleteRootFromUnflushedLatestBatch(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
 		t.Fatalf("disk latest after explicit delete flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1350,7 +1363,7 @@ func TestCommitScopeComputesAccountRootFromUnflushedLatestBatch(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateAccountLatest(sdb.db.DiskDB(), addr); err != nil || !ok {
 		t.Fatalf("disk account latest after explicit scoped flush ok=%v err=%v, want visible", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1392,7 +1405,7 @@ func TestCommitScopeComputesGenerationRootFromUnflushedLatestBatch(t *testing.T)
 	if generation, ok, err := rawdb.ReadStateKVGeneration(sdb.db.DiskDB(), addr); err != nil || !ok || generation != 1 {
 		t.Fatalf("disk generation after explicit scoped flush = %d ok=%v err=%v, want 1", generation, ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1517,7 +1530,7 @@ func TestCommitScopePrefixDeleteRecordsPendingLatestTouches(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
 		t.Fatalf("disk latest after explicit prefix-delete flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1610,7 +1623,7 @@ func TestCommitScopeStateDBPrefixDeleteSeesUnflushedPriorCommit(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
 		t.Fatalf("disk latest after explicit range flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
+	rebuilt, err := statedomains.RebuildMuHashCommitment(sdb.db.DiskDB())
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -1636,7 +1649,6 @@ func TestAccountKVNoopLatestWritesDoNotDirtyState(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	reopened.SetAccountKVIndexStore(reopened.db.DiskDB())
-	reopened.SetAccountKVIndexReads(true)
 	if err := reopened.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
 		t.Fatalf("set same: %v", err)
 	}
@@ -1674,7 +1686,6 @@ func TestAccountKVNetZeroDirtyWriteSkipsCommitWork(t *testing.T) {
 	}
 	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(index)
-	reopened.SetAccountKVIndexReads(true)
 	if err := reopened.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("temp")); err != nil {
 		t.Fatalf("set temp: %v", err)
 	}
@@ -1719,7 +1730,6 @@ func TestAccountKVNetZeroWriteSkipsDomainChangeSet(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	reopened.SetAccountKVIndexStore(reopened.db.DiskDB())
-	reopened.SetAccountKVIndexReads(true)
 	if err := reopened.SetAccountKV(addr, kvdomains.SystemReward, []byte("cycle"), []byte("next")); err != nil {
 		t.Fatalf("set next: %v", err)
 	}
@@ -1766,7 +1776,6 @@ func TestReadCachedStorageDoesNotCommitAsDirty(t *testing.T) {
 	}
 	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(index)
-	reopened.SetAccountKVIndexReads(true)
 	if got := reopened.GetState(addr, slot); got != value {
 		t.Fatalf("cached storage read = %x, want %x", got, value)
 	}
@@ -1798,7 +1807,6 @@ func TestSetStateSameValueDoesNotDirtyStorage(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	reopened.SetAccountKVIndexStore(reopened.db.DiskDB())
-	reopened.SetAccountKVIndexReads(true)
 	reopened.SetState(addr, slot, value)
 	obj := reopened.getStateObject(addr)
 	if obj == nil {
@@ -1828,7 +1836,6 @@ func TestStorageCommitReusesSetStatePreimage(t *testing.T) {
 	}
 	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(index)
-	reopened.SetAccountKVIndexReads(true)
 	index.resetCounts()
 	reopened.SetState(addr, slot, next)
 	if got := index.getsByDomain[kvdomains.ContractStorage]; got != 1 {
@@ -1849,7 +1856,6 @@ func TestStorageCommitReusesSetStatePreimage(t *testing.T) {
 		t.Fatalf("reopen updated root: %v", err)
 	}
 	check.SetAccountKVIndexStore(check.db.DiskDB())
-	check.SetAccountKVIndexReads(true)
 	if got := check.GetState(addr, slot); got != next {
 		t.Fatalf("updated storage = %x, want %x", got, next)
 	}
@@ -1895,7 +1901,6 @@ func TestStorageCommitLazilyRecreatesDirtyOrigins(t *testing.T) {
 		t.Fatalf("reopen updated root: %v", err)
 	}
 	check.SetAccountKVIndexStore(check.db.DiskDB())
-	check.SetAccountKVIndexReads(true)
 	if got := check.GetState(addr, slot); got != next {
 		t.Fatalf("updated storage = %x, want %x", got, next)
 	}
@@ -1921,7 +1926,6 @@ func TestStoragePreimageSurvivesSnapshotAndStateCopy(t *testing.T) {
 	}
 	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(index)
-	reopened.SetAccountKVIndexReads(true)
 
 	// Reverting the first write must discard its captured origin. The next
 	// first write then captures the same durable pre-image afresh.
@@ -1969,7 +1973,6 @@ func TestStoragePreimageSurvivesSnapshotAndStateCopy(t *testing.T) {
 		t.Fatalf("reopen copied root: %v", err)
 	}
 	check.SetAccountKVIndexStore(check.db.DiskDB())
-	check.SetAccountKVIndexReads(true)
 	if got := check.GetState(addr, slot); got != first {
 		t.Fatalf("copied storage = %x, want %x", got, first)
 	}
@@ -1994,7 +1997,6 @@ func TestStorageNetZeroWriteSkipsAccountKVCommit(t *testing.T) {
 	}
 	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(index)
-	reopened.SetAccountKVIndexReads(true)
 	reopened.SetState(addr, slot, next)
 	reopened.SetState(addr, slot, original)
 
@@ -2650,7 +2652,6 @@ func TestAccountKVFlatCommitStableWhenNoDirtyAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	live.SetAccountKVIndexStore(sdb.db.DiskDB())
-	live.SetAccountKVIndexReads(true)
 	if err := live.SetAccountKV(addr, kvdomains.SystemReward, key, []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
@@ -2667,7 +2668,6 @@ func TestAccountKVFlatCommitStableWhenNoDirtyAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpoint.SetAccountKVIndexStore(sdb.db.DiskDB())
-	checkpoint.SetAccountKVIndexReads(true)
 	root3, stats, err := checkpoint.CommitWithStats()
 	if err != nil {
 		t.Fatal(err)

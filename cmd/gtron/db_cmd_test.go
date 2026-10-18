@@ -388,7 +388,7 @@ func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 
 func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
 	dataDir := t.TempDir()
-	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir)
+	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir, true)
 	snapshotDir := filepath.Join(t.TempDir(), "snapshot")
 	replayDir := filepath.Join(t.TempDir(), "replay")
 
@@ -396,15 +396,14 @@ func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source pebble: %v", err)
 	}
-	if err := rawdb.WriteStateTxRange(sourceDB, block1.Number(), block1.Hash(), 1, 1); err != nil {
-		t.Fatalf("WriteStateTxRange block1: %v", err)
-	}
+
 	trustedKey := writeDBBackfillReplaySeedSnapshot(t, sourceDB, genesisPath, snapshotDir, block1)
 
 	genesis, err := loadGenesisFile(genesisPath)
 	if err != nil {
 		t.Fatalf("loadGenesisFile: %v", err)
 	}
+	genesis.Config.HistoryEnabled = true
 	bc, err := corepkg.NewBlockChain(sourceDB, corestate.NewDatabase(rawdb.WrapKeyValueStore(sourceDB)), genesis.Config)
 	if err != nil {
 		t.Fatalf("NewBlockChain source: %v", err)
@@ -447,6 +446,17 @@ func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
 	})
 	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
 		t.Fatalf("dbBackfillBalanceTracesCmd snapshot seed: %v", err)
+	}
+
+	restoredReplay, err := openPebbleDB(ctx, replayDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, previousOK, previousErr := rawdb.ReadStateTxRange(restoredReplay, 1)
+	next, nextOK, nextErr := rawdb.ReadStateTxRange(restoredReplay, 2)
+	closeErr := restoredReplay.Close()
+	if previousErr != nil || nextErr != nil || closeErr != nil || !previousOK || !nextOK || next.BeginTxNum != previous.EndTxNum+1 {
+		t.Fatalf("snapshot allocator continuity previous=%+v next=%+v errors=%v/%v/%v", previous, next, previousErr, nextErr, closeErr)
 	}
 
 	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -2828,19 +2838,13 @@ func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStor
 	if err != nil {
 		t.Fatalf("loadGenesisFile: %v", err)
 	}
-	if root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(sourceDB); err != nil || !ok || root == (common.Hash{}) {
-		t.Fatalf("ReadLatestDomainCommitmentRoot = %x/%v/%v, want restored latest root", root, ok, err)
-	} else if err := rawdb.WriteStateCommitmentCheckpoint(sourceDB, &rawdb.StateCommitmentCheckpoint{
-		BlockNum:  boundary.Number(),
-		BlockHash: boundary.Hash(),
-		Root:      root,
-		Scheme:    rawdb.LatestDomainCommitmentScheme,
-	}); err != nil {
-		t.Fatalf("WriteStateCommitmentCheckpoint: %v", err)
+	head, present, err := rawdb.ReadStateCommitmentHead(sourceDB)
+	if err != nil || !present || head.BlockNum != boundary.Number() || head.BlockHash != boundary.Hash() || head.TxNum == 0 {
+		t.Fatalf("real history snapshot HEAD=%+v %v %v", head, present, err)
 	}
 	refs, err := statesnapshots.NewAggregator(snapshotDir).BuildSegments(sourceDB, statesnapshots.AggregatorBuildOptions{
 		FromTxNum: 1,
-		ToTxNum:   1,
+		ToTxNum:   head.TxNum,
 	})
 	if err != nil {
 		t.Fatalf("BuildSegments: %v", err)
@@ -2849,7 +2853,7 @@ func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStor
 	if err != nil {
 		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
 	}
-	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, 1, refs, identity)); err != nil {
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, head.TxNum, refs, identity)); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -2895,7 +2899,7 @@ func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (
 	return db, append(infos1, infos2...)
 }
 
-func seedDBBackfillBalanceTraceDatadir(t *testing.T, dataDir string) (string, common.Address, common.Address, *coretypes.Block) {
+func seedDBBackfillBalanceTraceDatadir(t *testing.T, dataDir string, history ...bool) (string, common.Address, common.Address, *coretypes.Block) {
 	t.Helper()
 	sender := dbRebuildTraceAddressT(0xd0)
 	receiver := dbRebuildTraceAddressT(0xe0)
@@ -2926,6 +2930,7 @@ func seedDBBackfillBalanceTraceDatadir(t *testing.T, dataDir string) (string, co
 		t.Fatalf("open pebble: %v", err)
 	}
 	defer db.Close()
+	genesis.Config.HistoryEnabled = len(history) > 0 && history[0]
 	_, genesisHash, err := corepkg.SetupGenesisBlock(db, genesis)
 	if err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)

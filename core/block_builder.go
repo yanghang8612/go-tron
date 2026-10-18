@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -69,8 +70,22 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// values and add again — doubling cycleReward[N][witness] and allowance.
 	buildBuf := blockbuffer.New(bc.buffer)
 	buildBuf.BeginBlock(tcommon.Hash{}, 0) // sentinel hash; this layer is never committed
+	// Trial execution owns this disposable overlay. Remove only its copied
+	// canonical identity; never relax the canonical accumulator parent checks.
+	trialHead, present, err := rawdb.ReadStateCommitmentHead(buildBuf)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, rawdb.ErrStateCommitmentHead
+	}
+	trialHead.BlockHash = tcommon.Hash{}
+	trialHead.ParentHash = tcommon.Hash{}
+	if err = rawdb.WriteStateCommitmentHead(buildBuf, trialHead); err != nil {
+		return nil, err
+	}
+
 	statedb.SetAccountKVIndexStore(buildBuf)
-	statedb.SetAccountKVIndexReads(true)
 
 	// statedb is already opened at parentRoot; reuse it as the system-KV reader
 	// so rooted dynprops load from the parent state the built block extends.

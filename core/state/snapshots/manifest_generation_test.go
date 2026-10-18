@@ -1,7 +1,6 @@
 package snapshots
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,7 +78,7 @@ func TestManifestDefaultsAndNormalizesGeneration(t *testing.T) {
 	}
 }
 
-func TestLegacyManifestJSONMissingGenerationAndRetiredLoads(t *testing.T) {
+func TestLegacyManifestJSONRejectedForFreshMuHash(t *testing.T) {
 	dir := t.TempDir()
 	legacy := `{
   "version": 1,
@@ -99,24 +98,10 @@ func TestLegacyManifestJSONMissingGenerationAndRetiredLoads(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(legacy), 0o644); err != nil {
 		t.Fatalf("write legacy manifest: %v", err)
 	}
-	loaded, err := LoadManifest(dir)
-	if err != nil {
-		t.Fatalf("load legacy manifest: %v", err)
-	}
-	if loaded.Generation != 1 {
-		t.Fatalf("generation = %d, want 1", loaded.Generation)
-	}
-	if len(loaded.Retired) != 0 {
-		t.Fatalf("retired segments = %d, want 0", len(loaded.Retired))
+	if _, err := LoadManifest(dir); err == nil {
+		t.Fatal("legacy branch manifest accepted")
 	}
 
-	var decoded Manifest
-	if err := json.Unmarshal([]byte(legacy), &decoded); err != nil {
-		t.Fatalf("unmarshal legacy manifest: %v", err)
-	}
-	if err := decoded.Validate(); err != nil {
-		t.Fatalf("validate legacy manifest: %v", err)
-	}
 }
 
 func TestManifestRejectsInvalidRetiredSegments(t *testing.T) {

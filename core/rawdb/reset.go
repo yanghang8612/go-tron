@@ -13,7 +13,14 @@ const resetScanBatch = 10000
 // preserving immutable chain data (blocks and block-hash indexes). It is used
 // by historical sync restart: after the reset, genesis side stores are seeded
 // again and canonical blocks are replayed up to the requested height.
-func ResetMutableState(db ethdb.KeyValueStore) error {
+func ResetMutableState(db ethdb.KeyValueStore) error { return resetMutableState(db, false) }
+
+// ResetMutableStateKeepingRestoreMarker is the explicitly unpublished live-fork
+// replay transport. Its already-synced guard must survive every delete batch.
+func ResetMutableStateKeepingRestoreMarker(db ethdb.KeyValueStore) error {
+	return resetMutableState(db, true)
+}
+func resetMutableState(db ethdb.KeyValueStore, keepMarker bool) error {
 	if db == nil {
 		return errors.New("reset mutable state: nil database")
 	}
@@ -30,6 +37,9 @@ func ResetMutableState(db ethdb.KeyValueStore) error {
 		}
 	}
 	for _, key := range resetMutableSingletons {
+		if keepMarker && string(key) == string(stateCommitmentRestoreMarkerKey) {
+			continue
+		}
 		if err := db.Delete(key); err != nil {
 			return fmt.Errorf("delete key %q: %w", key, err)
 		}
@@ -107,6 +117,9 @@ func resetMutableHistoryReferences(db ethdb.KeyValueStore) error {
 }
 
 var resetMutableSingletons = [][]byte{
+	stateMuHashCommitmentHeadKey,
+	stateCommitmentRestoreMarkerKey,
+	stateCommitmentUnwindCleanupKey,
 	headBlockKey,
 	headSolidBlockKey,
 	totalTransactionCountKey,

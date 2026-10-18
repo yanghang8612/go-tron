@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/common/muhash3072"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -20,10 +21,11 @@ func TestInstallCanonicalBoundaryFromVerifiedSnapshotUsesAncientBlock(t *testing
 	appendCanonicalBoundaryBlock(t, fz, block)
 
 	db := rawdb.NewMemoryDatabase()
+	seedTestMuHashHead(t, db, block.Number(), 12, block.Hash())
 	if err := rawdb.WriteStateTxRange(db, block.Number(), block.Hash(), 10, 12); err != nil {
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
-	manifest := NewManifest(10, 12, nil)
+	manifest := boundaryTestManifest(10, 12)
 	result, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), manifest)
 	if err != nil {
 		t.Fatalf("InstallCanonicalBoundaryFromVerifiedSnapshot: %v", err)
@@ -62,11 +64,17 @@ func TestInstallCanonicalBoundaryFromVerifiedCatalogRequiresTrustedCatalog(t *te
 	if err != nil {
 		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
 	}
+	db := rawdb.NewMemoryDatabase()
+	seedTestMuHashHead(t, db, block.Number(), 12, block.Hash())
+	latest, err := NewAggregator(snapshotDir).buildLatestSegments(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest = append(latest, ref)
 	identity := chainFreezerTestIdentity()
-	if err := PublishManifest(snapshotDir, NewManifestForChain(10, 12, []SegmentRef{ref}, identity)); err != nil {
+	if err := PublishManifest(snapshotDir, NewManifestForChain(10, 12, latest, identity)); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
-	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStateTxRange(db, block.Number(), block.Hash(), 10, 12); err != nil {
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
@@ -105,11 +113,12 @@ func TestInstallCanonicalBoundaryRejectsHashMismatch(t *testing.T) {
 	appendCanonicalBoundaryBlock(t, fz, block)
 
 	db := rawdb.NewMemoryDatabase()
+	seedTestMuHashHead(t, db, block.Number(), 20, block.Hash())
 	if err := rawdb.WriteStateTxRange(db, block.Number(), common.Hash{0xee}, 20, 20); err != nil {
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
 	err := func() error {
-		_, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), NewManifest(20, 20, nil))
+		_, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), boundaryTestManifest(20, 20))
 		return err
 	}()
 	if err == nil || !strings.Contains(err.Error(), "hash") {
@@ -128,7 +137,8 @@ func TestInstallCanonicalBoundaryRejectsCommitmentCheckpointMismatch(t *testing.
 	appendCanonicalBoundaryBlock(t, fz, block)
 
 	db := rawdb.NewMemoryDatabase()
-	restoredRoot := common.HexToHash("1111111111111111111111111111111111111111111111111111111111111111")
+	seedTestMuHashHead(t, db, block.Number(), 30, block.Hash())
+	restoredRoot := common.Hash(muhash3072.EmptyDigest())
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, restoredRoot); err != nil {
 		t.Fatalf("WriteLatestDomainCommitmentRoot: %v", err)
 	}
@@ -144,7 +154,7 @@ func TestInstallCanonicalBoundaryRejectsCommitmentCheckpointMismatch(t *testing.
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
 	err := func() error {
-		_, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), NewManifest(30, 30, nil))
+		_, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), boundaryTestManifest(30, 30))
 		return err
 	}()
 	if err == nil || !strings.Contains(err.Error(), "commitment checkpoint") {
@@ -168,7 +178,8 @@ func TestInstallCanonicalBoundaryRejectsCommitmentRootMismatch(t *testing.T) {
 	appendCanonicalBoundaryBlock(t, fz, block)
 
 	db := rawdb.NewMemoryDatabase()
-	restoredRoot := common.HexToHash("2222222222222222222222222222222222222222222222222222222222222222")
+	seedTestMuHashHead(t, db, block.Number(), 35, block.Hash())
+	restoredRoot := common.Hash(muhash3072.EmptyDigest())
 	checkpointRoot := common.HexToHash("3333333333333333333333333333333333333333333333333333333333333333")
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, restoredRoot); err != nil {
 		t.Fatalf("WriteLatestDomainCommitmentRoot: %v", err)
@@ -185,7 +196,7 @@ func TestInstallCanonicalBoundaryRejectsCommitmentRootMismatch(t *testing.T) {
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
 	err := func() error {
-		_, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), NewManifest(35, 35, nil))
+		_, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), boundaryTestManifest(35, 35))
 		return err
 	}()
 	if err == nil || !strings.Contains(err.Error(), "commitment checkpoint root") {
@@ -204,7 +215,8 @@ func TestInstallCanonicalBoundaryAcceptsMatchingCommitmentCheckpoint(t *testing.
 	appendCanonicalBoundaryBlock(t, fz, block)
 
 	db := rawdb.NewMemoryDatabase()
-	restoredRoot := common.HexToHash("2222222222222222222222222222222222222222222222222222222222222222")
+	seedTestMuHashHead(t, db, block.Number(), 40, block.Hash())
+	restoredRoot := common.Hash(muhash3072.EmptyDigest())
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, restoredRoot); err != nil {
 		t.Fatalf("WriteLatestDomainCommitmentRoot: %v", err)
 	}
@@ -219,7 +231,7 @@ func TestInstallCanonicalBoundaryAcceptsMatchingCommitmentCheckpoint(t *testing.
 	if err := rawdb.WriteStateTxRange(db, block.Number(), block.Hash(), 40, 40); err != nil {
 		t.Fatalf("WriteStateTxRange: %v", err)
 	}
-	result, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), NewManifest(40, 40, nil))
+	result, err := InstallCanonicalBoundaryFromVerifiedSnapshot(db, rawdb.NewChainDB(db, rawdb.NewFreezerReader(fz)), boundaryTestManifest(40, 40))
 	if err != nil {
 		t.Fatalf("InstallCanonicalBoundaryFromVerifiedSnapshot: %v", err)
 	}
@@ -261,7 +273,7 @@ func appendCanonicalBoundaryBlock(t *testing.T, fz rawdb.AncientWriter, block *t
 			if err := op.AppendRaw(rawdb.AncientTxInfosTable, n, nil); err != nil {
 				return err
 			}
-			if err := op.AppendRaw(rawdb.AncientStateRootsTable, n, nil); err != nil {
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, n, rawdb.NewStateCommitmentHead().Root.Bytes()); err != nil {
 				return err
 			}
 			if n == block.Number() {
@@ -275,4 +287,10 @@ func appendCanonicalBoundaryBlock(t *testing.T, fz rawdb.AncientWriter, block *t
 	if err := fz.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
+}
+
+func boundaryTestManifest(from, to uint64) *Manifest {
+	m := NewManifest(from, to, nil)
+	m.LatestStateTxNum = to
+	return m
 }

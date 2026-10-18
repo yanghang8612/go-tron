@@ -42,7 +42,6 @@ func TestRecreatedAccountDoesNotLeakOldGenerationSlots(t *testing.T) {
 	// generation-prefixed rows are the ones under test (not the KV trie).
 	enableFlat := func(s *StateDB) {
 		s.SetAccountKVIndexStore(disk)
-		s.SetAccountKVIndexReads(true)
 	}
 	enableFlat(sdb)
 

@@ -129,6 +129,7 @@ func TestIsProtectedStateMutationKeyIncludesTypedAndDerivedMirrors(t *testing.T)
 		0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54,
 	})
 	for _, key := range [][]byte{
+		stateMuHashCommitmentHeadKey, stateCommitmentRestoreMarkerKey, stateCommitmentUnwindCleanupKey,
 		dynPropKey("latest_block_header_number"),
 		codeKey(owner.Bytes()),
 		accountKey(owner.Bytes()),

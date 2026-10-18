@@ -254,7 +254,7 @@ func TestHistoryCostCacheRejectsMutationDuringObservation(t *testing.T) {
 
 func TestHistoryCostHintsRawFieldEncodingAndOwnership(t *testing.T) {
 	// An explicit schema inventory fails if production adds an unencoded field.
-	expected := []string{"Dataset", "Domain", "Kind", "FromTxNum", "ToTxNum", "AggregationSteps", "Path", "Size", "Checksum"}
+	expected := []string{"Rows", "Dataset", "Domain", "Kind", "FromTxNum", "ToTxNum", "AggregationSteps", "Path", "Size", "Checksum"}
 	typ := reflect.TypeOf(SegmentRef{})
 	if typ.NumField() != len(expected) {
 		t.Fatal("SegmentRef schema changed; update canonical hint encoding")

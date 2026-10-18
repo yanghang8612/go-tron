@@ -93,3 +93,6 @@ func WriteCycleRewardPendingEntries(db ethdb.KeyValueWriter, cycle int64, entrie
 func DeleteCycleRewardPending(db ethdb.KeyValueWriter) error {
 	return db.Delete(cycleRewardPendingKey)
 }
+
+// CycleRewardPendingKey returns an owned schema key for same-cut snapshot transport.
+func CycleRewardPendingKey() []byte { return bytes.Clone(cycleRewardPendingKey) }

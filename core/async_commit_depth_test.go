@@ -58,9 +58,9 @@ func TestSetAsyncCommitDepthSizing(t *testing.T) {
 		wantCap      int
 	}{
 		{2, 2, 0},
-		{3, 3, 0},
-		{4, 4, 0},
-		{6, 6, 0},
+		{3, 3, 1},
+		{4, 4, 2},
+		{6, 6, 4},
 	} {
 		t.Setenv("GTRON_ASYNC_COMMIT_DEPTH", fmt.Sprint(tc.depth))
 		diskdb := ethrawdb.NewMemoryDatabase()

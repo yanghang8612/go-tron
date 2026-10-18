@@ -469,6 +469,12 @@ func TestAsyncCommit_ReorgMatchesSync(t *testing.T) {
 	if err := syncBC.InsertBlocks(chainA); err != nil {
 		t.Fatalf("sync chain A: %v", err)
 	}
+	syncBC.WaitForFlushSettled()
+	if err := syncBC.buffer.Flush(syncBC.db); err != nil {
+		t.Fatal(err)
+	}
+	cut, present, readErr := rawdb.ReadStateCommitmentHead(syncBC.db)
+	t.Logf("pre-fork durable cut=%d present=%v err=%v solid=%d lca=0", cut.BlockNum, present, readErr, syncBC.cachedDynProps().LatestSolidifiedBlockNum())
 	if err := syncBC.InsertBlocks(chainB); err != nil {
 		t.Fatalf("sync chain B: %v", err)
 	}

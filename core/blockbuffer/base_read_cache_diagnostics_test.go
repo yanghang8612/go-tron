@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -277,58 +276,5 @@ func TestBaseReadCacheDiagnosticPublicationSkipsBusyPublisher(t *testing.T) {
 	c.maybePublishMetrics()
 	if got := baseReadCacheDiagnosticReasonGauges[0][baseReadCacheDiagnosticEpochRejected].Snapshot().Value(); got != 2 {
 		t.Fatalf("next close did not publish updated totals: %d", got)
-	}
-}
-
-func TestCommitmentParentDeepNoResidentDiagnostics(t *testing.T) {
-	for _, delta := range []bool{false, true} {
-		for _, depth := range []int{6, 7} {
-			for _, prefetch := range []bool{false, true} {
-				t.Run(fmt.Sprintf("depth_%d/delta_%v/prefetch_%v", depth, delta, prefetch), func(t *testing.T) {
-					cache := newBaseReadCache(1<<20, rawdb.CommitmentBranchKeyPrefix)
-					session := &commitmentParentReadSession{
-						cache: cache, snapshot: benchmarkCommitmentSnapshot{},
-						cursors:    []pointread.Cursor{cacheMetricsCursor{value: []byte("value")}},
-						keyScratch: borrowCommitmentParentKeyScratch(1),
-					}
-					session.readContexts = borrowCommitmentParentReadContexts(session, 1)
-					ctx := session.readContexts[0]
-					prefix, path, _ := cacheDiagnosticKey(depth, delta)
-					source, want := 0, int64(2)
-					if prefetch {
-						source, want = 1, 1
-					}
-					counter := commitmentParentDeepNoResidentCounters[depth-6][source]
-					before := counter.Snapshot().Count()
-					for range 3 {
-						var found bool
-						var err error
-						if prefetch {
-							found, err = session.PrefetchKeyParts(0, prefix, path)
-						} else {
-							found, err = session.ViewKeyParts(0, prefix, path, func([]byte, bool) error { return nil })
-						}
-						if !found || err != nil {
-							t.Fatalf("view found=%v err=%v", found, err)
-						}
-					}
-					if counter.Snapshot().Count() != before {
-						t.Fatal("per-read publication bypassed session batching")
-					}
-					if err := session.Close(); err != nil {
-						t.Fatal(err)
-					}
-					if got := counter.Snapshot().Count() - before; got != want {
-						t.Fatalf("depth/source no_resident=%d, want %d", got, want)
-					}
-					if ctx.cacheDeepNoResident != ([baseReadCacheDiagnosticDepths][2]uint64{}) {
-						t.Fatal("pooled context retained counters")
-					}
-					if err := session.Close(); err != nil || counter.Snapshot().Count()-before != want {
-						t.Fatal("second Close repeated counters")
-					}
-				})
-			}
-		}
 	}
 }

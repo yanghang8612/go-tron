@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -26,7 +27,7 @@ func testRangeBlock(number uint64, parent tcommon.Hash) *types.Block {
 	})
 }
 
-func testRangeState(t *testing.T) (*state.StateDB, *state.CommitScope, *blockbuffer.Buffer, tcommon.Address) {
+func testRangeState(t *testing.T) (*state.StateDB, *state.CommitScope, *blockbuffer.Buffer, tcommon.Address, ethdb.KeyValueStore) {
 	t.Helper()
 	disk := ethrawdb.NewMemoryDatabase()
 	buf := blockbuffer.New(disk)
@@ -37,7 +38,7 @@ func testRangeState(t *testing.T) (*state.StateDB, *state.CommitScope, *blockbuf
 	sdb.SetAccountKVIndexStore(buf)
 	addr := testInsertAddr(0xee)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
-	return sdb, sdb.NewCommitScope(), buf, addr
+	return sdb, sdb.NewCommitScope(), buf, addr, disk
 }
 
 func advanceToExecution(t *testing.T, pipeline *canonicalStagePipeline) {
@@ -66,8 +67,8 @@ func TestCanonicalRangeExecutorsReuseTransactionInfoBatches(t *testing.T) {
 	}
 }
 
-func TestCanonicalCommitStateDefersScopedLatestFlushUntilClose(t *testing.T) {
-	sdb, scope, buf, addr := testRangeState(t)
+func TestCanonicalCommitStateKeepsSourceAndHeadInBoundLayer(t *testing.T) {
+	sdb, scope, buf, addr, disk := testRangeState(t)
 	block := testRangeBlock(1, tcommon.Hash{})
 	buf.BeginBlock(block.Hash(), block.Number())
 	pipeline := newCanonicalStagePipeline(buf, block.Number(), block.Hash())
@@ -84,11 +85,18 @@ func TestCanonicalCommitStateDefersScopedLatestFlushUntilClose(t *testing.T) {
 	if _, err := plan.CommitState(block, state.CommitOptions{}); err != nil {
 		t.Fatalf("commit state: %v", err)
 	}
-	if _, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
-		t.Fatalf("buffer latest before range close ok=%v err=%v, want not visible", ok, err)
+	if got, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("bound layer source missing: %q %v %v", got, ok, err)
 	}
-	if _, ok, err := rawdb.ReadStateAccountLatest(buf, addr); err != nil || ok {
-		t.Fatalf("buffer account latest before range close ok=%v err=%v, want not visible", ok, err)
+	if _, ok, err := rawdb.ReadStateAccountLatest(buf, addr); err != nil || !ok {
+		t.Fatal("bound layer account missing")
+	}
+	if _, ok, err := rawdb.ReadStateAccountLatest(disk, addr); err != nil || ok {
+		t.Fatal("source escaped to durable base before layer flush")
+	}
+	durable, _, err := rawdb.ReadStateCommitmentHead(disk)
+	if err != nil || durable.BlockNum != 0 {
+		t.Fatal("durable HEAD advanced before source flush")
 	}
 	buf.CommitBlock()
 
@@ -101,14 +109,27 @@ func TestCanonicalCommitStateDefersScopedLatestFlushUntilClose(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateAccountLatest(buf, addr); err != nil || !ok {
 		t.Fatalf("buffer account latest after range close ok=%v err=%v, want visible", ok, err)
 	}
+	head, present, err := rawdb.ReadStateCommitmentHead(buf)
+	if err != nil || !present || head.BlockHash != block.Hash() || physicalMuHashRoot(t, buf) != head.Root {
+		t.Fatal("committed bound layer source/HEAD mismatch")
+	}
+	if err = buf.Flush(disk); err != nil {
+		t.Fatal(err)
+	}
+	persisted, present, err := rawdb.ReadStateCommitmentHead(disk)
+	if err != nil || !present || persisted != head || physicalMuHashRoot(t, disk) != head.Root {
+		t.Fatal("durable source/HEAD mismatch")
+	}
+
 }
 
 func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T) {
-	sdb, scope, buf, addr := testRangeState(t)
+	sdb, scope, buf, addr, disk := testRangeState(t)
 	parent := tcommon.Hash{}
 	blocks := []*types.Block{testRangeBlock(1, parent)}
 	blocks = append(blocks, testRangeBlock(2, blocks[0].Hash()))
 	var lastPlan *canonicalBlockExecution
+	heads := make([]rawdb.StateCommitmentHead, 0, 2)
 
 	for i, block := range blocks {
 		buf.BeginBlock(block.Hash(), block.Number())
@@ -128,6 +149,11 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 			t.Fatalf("commit state block %d: %v", block.Number(), err)
 		}
 		buf.CommitBlock()
+		head, present, err := rawdb.ReadStateCommitmentHead(buf)
+		if err != nil || !present || physicalMuHashRoot(t, buf) != head.Root {
+			t.Fatal("per-block committed source/HEAD mismatch")
+		}
+		heads = append(heads, head)
 	}
 
 	if err := lastPlan.FlushLatestUpTo(1); err != nil {
@@ -139,8 +165,21 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 	if _, ok, err := rawdb.ReadStateAccountLatest(buf, addr); err != nil || !ok {
 		t.Fatalf("block 1 account latest after cutoff flush ok=%v err=%v, want visible", ok, err)
 	}
-	if _, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("b")); err != nil || ok {
-		t.Fatalf("block 2 latest after cutoff flush ok=%v err=%v, want not visible", ok, err)
+	if got, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("b")); err != nil || !ok || !bytes.Equal(got, []byte("2")) {
+		t.Fatal("second committed overlay source missing")
+	}
+	if err := buf.FlushUpTo(1, disk); err != nil {
+		t.Fatal(err)
+	}
+	persisted, present, err := rawdb.ReadStateCommitmentHead(disk)
+	if err != nil || !present || persisted != heads[0] || physicalMuHashRoot(t, disk) != persisted.Root {
+		t.Fatal("partial flush source/HEAD cut mismatch")
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(disk, addr, 0, kvdomains.SystemDynamicProperty, []byte("b")); err != nil || ok {
+		t.Fatal("second block escaped partial durable cut")
+	}
+	if physicalMuHashRoot(t, buf) != heads[1].Root {
+		t.Fatal("dropping flushed prefix changed remaining overlay root")
 	}
 	if err := scope.Close(); err != nil {
 		t.Fatalf("close scope: %v", err)
@@ -148,10 +187,18 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 	if got, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("b")); err != nil || !ok || !bytes.Equal(got, []byte("2")) {
 		t.Fatalf("block 2 latest after close = %q ok=%v err=%v, want 2", got, ok, err)
 	}
+	if err = buf.Flush(disk); err != nil {
+		t.Fatal(err)
+	}
+	persisted, present, err = rawdb.ReadStateCommitmentHead(disk)
+	if err != nil || !present || persisted != heads[1] || physicalMuHashRoot(t, disk) != persisted.Root {
+		t.Fatal("final durable cut mismatch")
+	}
+
 }
 
 func TestCanonicalRangeAbortFlushesCommittedLatestAndDropsFailedActiveLayer(t *testing.T) {
-	sdb, scope, buf, addr := testRangeState(t)
+	sdb, scope, buf, addr, _ := testRangeState(t)
 	block1 := testRangeBlock(1, tcommon.Hash{})
 	buf.BeginBlock(block1.Hash(), block1.Number())
 	pipeline1 := newCanonicalStagePipeline(buf, block1.Number(), block1.Hash())

@@ -94,7 +94,6 @@ func TestStateDBCopyTopLevelFieldPolicy(t *testing.T) {
 		"accountKVLatestIterator": "share-immutable-reader", "flatLatestReader": "share-immutable-reader",
 		"changeSet": "reset-temporal-capture", "codeStore": "share-code-store",
 		"codeColdHistory": "share-immutable-reader", "codeColdTxNum": "copy",
-		"commitmentColdHistory": "share-immutable-reader", "commitmentColdTxNum": "copy",
 		"cycleRewardSink": "reset-external-mutable-sink",
 	}
 	typ := reflect.TypeOf(StateDB{})

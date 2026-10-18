@@ -34,7 +34,7 @@ func seedPendingVotesAtGenesis(t *testing.T, bc *BlockChain, records map[tcommon
 			t.Fatalf("seed pending votes for %s: %v", voter.Hex(), err)
 		}
 	}
-	newRoot, err := sdb.Commit()
+	newRoot, err := commitGenesisFixture(t, bc.db, sdb)
 	if err != nil {
 		t.Fatalf("commit seeded votes: %v", err)
 	}

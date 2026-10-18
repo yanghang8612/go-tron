@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -479,8 +480,10 @@ func TestDirtyObjects_DeferFoldMatchesSyncRoot(t *testing.T) {
 
 	asyncSDB := newTestStateDB(t)
 	mutate(asyncSDB)
+	scope := asyncSDB.NewCommitScope()
+	defer scope.Discard()
 	asyncSDB.SetDeferFold(true)
-	zeroRoot, _, err := asyncSDB.CommitWithStats()
+	zeroRoot, _, err := asyncSDB.CommitWithStatsOptionsInScope(scope, CommitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,6 +507,9 @@ func TestDirtyObjects_DeferFoldMatchesSyncRoot(t *testing.T) {
 	if _, err := captured.Fold(asyncSDB.accountKVIndex()); err == nil {
 		t.Fatal("captured fold was reusable after consumption")
 	}
+	if err = scope.FlushLatest(); err != nil {
+		t.Fatal(err)
+	}
 	if syncRoot != asyncRoot {
 		t.Fatalf("async/sync root mismatch: sync=%x async=%x", syncRoot, asyncRoot)
 	}
@@ -522,6 +528,10 @@ func TestDirtyObjects_DeferFoldWorkerNoRaceWithExecMutation(t *testing.T) {
 	sdb.CreateAccount(execB, corepb.AccountType_Normal)
 	sdb.CreateAccount(testAddr(1), corepb.AccountType_Normal)
 	sdb.AddBalance(testAddr(1), 100)
+	buf := blockbuffer.New(sdb.accountKVIndex())
+	buf.SetMaxInflight(2)
+	buf.BeginBlock(tcommon.Hash{1}, 1)
+	sdb.SetAccountKVIndexStore(buf)
 	sdb.SetDeferFold(true)
 	if _, _, err := sdb.CommitWithStats(); err != nil {
 		t.Fatal(err)
@@ -530,7 +540,9 @@ func TestDirtyObjects_DeferFoldWorkerNoRaceWithExecMutation(t *testing.T) {
 	if captured == nil {
 		t.Fatal("expected a captured fold")
 	}
-	idx := sdb.accountKVIndex()
+	handle, _ := buf.NewestInflight()
+	idx := buf.ViewLayer(handle)
+	buf.BeginBlock(tcommon.Hash{2}, 2)
 
 	var (
 		wg      sync.WaitGroup

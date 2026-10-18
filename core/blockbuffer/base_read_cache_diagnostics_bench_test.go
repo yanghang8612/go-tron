@@ -2,7 +2,6 @@ package blockbuffer
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -60,35 +59,6 @@ func BenchmarkCommitmentDeepCacheDiagnostics(b *testing.B) {
 					cache.storeIfEpoch(key, value, currentEpoch)
 				case "epoch_rejected":
 					cache.storeIfEpoch(key, value, epoch)
-				}
-			}
-		})
-	}
-}
-
-// Exercise real pooled contexts and Close aggregation, including the existing
-// first/every-64-close occupancy+diagnostic publication. No publisher or shard
-// lock is contended in this fixture; other tests cover the skip/retry path.
-func BenchmarkCommitmentCacheSessionCloseDiagnostics(b *testing.B) {
-	for _, readers := range []int{1, 65} {
-		b.Run(fmt.Sprintf("readers_%d", readers), func(b *testing.B) {
-			cache := newBaseReadCacheWithTrunk(1<<20, 4, rawdb.CommitmentBranchKeyPrefix)
-			key := append([]byte(rawdb.CommitmentBranchKeyPrefix), bytes.Repeat([]byte{3}, 6)...)
-			for i := range 16 {
-				key[len(key)-1] = byte(i)
-				testBaseReadCacheSet(cache, key, []byte("immutable benchmark branch"))
-				cache.getWithEpoch(key)
-			}
-			session := new(commitmentParentReadSession)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				session.cache = cache
-				session.snapshot = benchmarkCommitmentSnapshot{}
-				session.readContexts = borrowCommitmentParentReadContexts(session, readers)
-				session.keyScratch = borrowCommitmentParentKeyScratch(readers)
-				if err := session.Close(); err != nil {
-					b.Fatal(err)
 				}
 			}
 		})

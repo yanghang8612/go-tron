@@ -13,7 +13,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/types"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
@@ -553,12 +552,10 @@ func (ss *SyncService) RecoverStalledFetch() {
 	ss.logStalledFetchRecovery(before, after, ss.IsSyncing(), time.Now())
 }
 
-// StallRecoveryBlocked lets the watchdog distinguish a known long-running
-// commitment rebuild from an unresponsive fetch scheduler. The rebuild owns
-// its own start/progress/completion logs, so polling it every 30 seconds would
-// add noise and resource contention without advancing sync.
+// StallRecoveryBlocked suppresses fetch recovery while history backlog applies
+// explicit import backpressure. Latest-state commitment never rebuilds on sync.
 func (ss *SyncService) StallRecoveryBlocked() bool {
-	blocked := statedomains.CommitmentRebuildActive() || ss.historyBacklogHolding()
+	blocked := ss.historyBacklogHolding()
 	if blocked {
 		ss.stalledFetchLogMu.Lock()
 		ss.stalledFetchLog = stalledFetchRecoveryLogState{}

@@ -799,7 +799,7 @@ func rebuildLatestCommitmentRootFromVisibleLatestStaged(t *testing.T, src latest
 	}); err != nil {
 		t.Fatalf("copy kv latest rows: %v", err)
 	}
-	root, err := statedomains.NewStagedCommitmentStore(scratch).Rebuild()
+	root, err := statedomains.RebuildMuHashCommitment(scratch)
 	if err != nil {
 		t.Fatalf("staged rebuild latest commitment from visible latest rows: %v", err)
 	}

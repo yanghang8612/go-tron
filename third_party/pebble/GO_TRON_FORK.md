@@ -6,8 +6,8 @@ Upstream go.mod checksum: `h1:17wO9el1YEigxkP/YtV8NtCivQDgoCyBg5c4VR/eOWo=`.
 Original license is retained in LICENSE. Upstream has no separate NOTICE file.
 
 UPSTREAM_FILES.json lists original source paths and SHA256 values, not patched
-file hashes. All copied runtime files remain unchanged except get_iter.go,
-whose October 16 patch is described below. The copy contains the runtime
+file hashes. Copied runtime modifications are get_iter.go (October16) and
+iterator.go (October18), described below. The copy contains the runtime
 dependency closure for the root
 Pebble package plus go-tron's bloom use; all source/build-tag/platform variants
 within those directories are retained. Broad upstream tests, fixtures, command
@@ -60,3 +60,20 @@ the existing compatible Bloom writer policy only in normal hot defaults. Legacy
 SSTs without filters remain readable; no table version or provenance SHA in
 UPSTREAM_FILES.json is replaced. See the root repository spec
 `docs/superpowers/specs/2026-10-16-prefetch-l6-bloom.md` for costs and limits.
+
+
+## October18: terminate private Get at visible point deletion
+
+iterator.go findNextEntry returns exhausted for a visible Delete, SingleDelete
+or DeleteSized only when getIterAlloc is nonnil, identifying the existing
+private DB/Snapshot/IndexedBatch/GetCursor point-lookup adapter. This avoids
+nextUserKey walking older versions after absence is already known. It leaves
+the active iterator and key intact for normal Close and cleanup-error handling.
+Ordinary forward/reverse iteration, getIter snapshot/range filtering and
+mergeNext/base handling are unchanged; no format, option or cache is added.
+The upstream iterator.go SHA in UPSTREAM_FILES.json remains unchanged.
+
+See parent spec2026-10-18-sync-stage-point-read.md and get_point_delete_test.go
+for version-growth evidence, Next-step/cleanup oracle, and view/merge/range
+regressions. The later3.4M production baseline no longer has the early275k
+stage-read CPU hotspot; the microbenchmark does not predict online TPS.

@@ -273,7 +273,7 @@ func TestCanonicalBlockExecutionCommitStateWritesRootAndStage(t *testing.T) {
 
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
-			RawData: &corepb.BlockHeaderRaw{Number: 9},
+			RawData: &corepb.BlockHeaderRaw{Number: 1},
 		},
 	})
 	pipeline := newCanonicalStagePipeline(db, block.Number(), block.Hash())
@@ -294,7 +294,7 @@ func TestCanonicalBlockExecutionCommitStateWritesRootAndStage(t *testing.T) {
 	}
 	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageCommitment)
 	if err != nil || !ok || row.BlockNum != block.Number() || !row.HasBlockHash || row.BlockHash != block.Hash() {
-		t.Fatalf("commitment stage row = %+v ok=%v err=%v, want block 9 hash-bound", row, ok, err)
+		t.Fatalf("commitment stage row = %+v ok=%v err=%v, want block 1 hash-bound", row, ok, err)
 	}
 	if _, ok, err := rawdb.ReadStateCommitmentCheckpoint(db, block.Number()); err != nil || ok {
 		t.Fatalf("per-block checkpoint unexpectedly written: ok=%v err=%v", ok, err)

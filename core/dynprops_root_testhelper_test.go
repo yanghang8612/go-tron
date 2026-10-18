@@ -28,7 +28,6 @@ func loadDPAtRoot(tb testing.TB, db ethdb.KeyValueReader, sdb *state.Database, r
 			ethdb.Iteratee
 		}); ok {
 			sysKV.SetAccountKVIndexStore(index)
-			sysKV.SetAccountKVIndexReads(true)
 		}
 	}
 	return state.LoadDynamicProperties(db, sysKV)
@@ -65,7 +64,7 @@ func seedRootedProposal(tb testing.TB, diskdb ethdb.KeyValueStore, sdb *state.Da
 	if err := statedb.WriteProposalIndex(ids); err != nil {
 		tb.Fatalf("seed proposal index: %v", err)
 	}
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(tb, diskdb, statedb)
 	if err != nil {
 		tb.Fatalf("commit seeded proposals: %v", err)
 	}

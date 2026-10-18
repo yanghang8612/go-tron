@@ -225,17 +225,6 @@ func (s rawDBLatestHotStore) ReadCommitmentRoot() (common.Hash, bool, error) {
 	if s.reader == nil {
 		return common.Hash{}, false, fmt.Errorf("snapshots latest hot store: nil reader")
 	}
-	// During a branch rotation the live root advances with the delta while the
-	// frozen legacy table is streamed. Bind the root segment to the persisted
-	// rotation boundary instead, so the immutable root and branch families
-	// always describe the same trie even though block import continues.
-	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(s.reader)
-	if err != nil {
-		return common.Hash{}, false, err
-	}
-	if rotating {
-		return rotation.Root, true, nil
-	}
 	return rawdb.ReadLatestDomainCommitmentRoot(s.reader)
 }
 
@@ -249,6 +238,13 @@ func (s rawDBLatestHotStore) IterateCommitmentDomain(logicalPrefix []byte, fn fu
 func (s rawDBLatestHotStore) WriteCommitmentDomain(logicalKey, value []byte) error {
 	if s.writer == nil {
 		return fmt.Errorf("snapshots latest hot store: nil writer")
+	}
+	if rawdb.IsLatestStateCommitmentCheckpointLogicalKey(logicalKey) {
+		checkpoint, err := rawdb.DecodeStateCommitmentCheckpointValue(value)
+		if err != nil {
+			return err
+		}
+		return rawdb.WriteStateCommitmentCheckpoint(s.writer, checkpoint)
 	}
 	return rawdb.WriteStateCommitmentDomain(s.writer, logicalKey, value)
 }

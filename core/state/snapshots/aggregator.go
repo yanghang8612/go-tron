@@ -47,9 +47,8 @@ type EventLogBuildOptions struct {
 }
 
 type AggregatorBuildResult struct {
-	commitmentBaseProof *VerifiedCommitmentBranchBase
-	Manifest            *Manifest
-	Segments            []SegmentRef
+	Manifest *Manifest
+	Segments []SegmentRef
 }
 
 func NewAggregator(dir string) *Aggregator {
@@ -199,80 +198,6 @@ func (a *Aggregator) BuildLatestContext(ctx context.Context, db AggregatorDB, op
 		return nil, err
 	}
 	manifest, err := a.Integrate(opts.FromTxNum, opts.ToTxNum, refs)
-	if err != nil {
-		return nil, err
-	}
-	if writer, ok := db.(ethdb.KeyValueWriter); ok {
-		if err := WriteManifestProgressStages(writer, manifest.Progress); err != nil {
-			return nil, err
-		}
-	}
-	return &AggregatorBuildResult{Manifest: manifest, Segments: append([]SegmentRef(nil), refs...)}, nil
-}
-
-// BuildCommitmentBranchBaseContext builds only the immutable commitment root
-// and branch families. It is intentionally separate from BuildLatestContext:
-// deep sync can bound the mutable branch delta without scanning Accounts, KV,
-// Code, or checkpoints and without falsely advancing their shared latest or
-// accessor progress.
-func (a *Aggregator) BuildCommitmentBranchBaseContext(ctx context.Context, db AggregatorDB, opts AggregatorBuildOptions) (*AggregatorBuildResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if a == nil || a.dir == "" {
-		return nil, errors.New("snapshots: nil aggregator or empty directory")
-	}
-	if db == nil {
-		return nil, errors.New("snapshots: nil database")
-	}
-	if opts.ToTxNum < opts.FromTxNum {
-		return nil, fmt.Errorf("snapshots: aggregate range [%d,%d] is inverted", opts.FromTxNum, opts.ToTxNum)
-	}
-	rotation, rotating, err := rawdb.ReadCommitmentBranchRotation(db)
-	if err != nil {
-		return nil, err
-	}
-	if rotating {
-		if opts.ToTxNum != rotation.SnapshotTxNum {
-			return nil, errors.New("snapshots: commitment base build range differs from rotation")
-		}
-		if result, published, err := loadPublishedCommitmentBranchBase(ctx, a.dir, rotation); err != nil || published {
-			return result, err
-		}
-	}
-
-	registry := DefaultDomainRegistry()
-	datasets := [...]SegmentDataset{SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentBranch}
-	var refs []SegmentRef
-	for _, dataset := range datasets {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		cfg, ok := registry.Dataset(dataset)
-		if !ok || !cfg.HasLatest || cfg.DomainSpecific {
-			return nil, fmt.Errorf("snapshots: commitment base dataset %s is not a scalar latest domain", dataset)
-		}
-		if cfg.BuildLatest == nil && cfg.BuildLatestContext == nil {
-			return nil, fmt.Errorf("snapshots: latest domain %s has no builder", dataset)
-		}
-		built, err := cfg.buildLatestContext(ctx, db, a.dir, 0, opts.FromTxNum, opts.ToTxNum,
-			aggregateLatestPath(cfg.LatestPathBase(0), opts, cfg.latestPathExt()))
-		if err != nil {
-			return nil, err
-		}
-		refs = append(refs, built...)
-	}
-	if len(refs) == 0 {
-		return &AggregatorBuildResult{}, nil
-	}
-	sortSegments(refs)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	manifest, err := a.integrateCommitmentBranchBase(opts.FromTxNum, opts.ToTxNum, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -629,34 +554,48 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 	return a.integrateWithManifest(visibleStart, visibleEnd, refs, old)
 }
 
-func (a *Aggregator) integrateCommitmentBranchBase(visibleStart, visibleEnd uint64, refs []SegmentRef) (*Manifest, error) {
-	var old *Manifest
-	if manifest, err := loadProductionManifestReadOnly(a.dir); err == nil {
-		old = manifest
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	return a.integrateWithManifestMode(visibleStart, visibleEnd, refs, old, true)
-}
-
 // integrateWithManifest publishes refs on top of an already authenticated
 // production manifest. The cold lifecycle loads the manifest once per pass and
 // reuses it for visible-history, section-bloom, and integration decisions;
 // generic callers should continue to use Integrate so they observe the latest
 // on-disk generation themselves.
 func (a *Aggregator) integrateWithManifest(visibleStart, visibleEnd uint64, refs []SegmentRef, old *Manifest) (*Manifest, error) {
-	return a.integrateWithManifestMode(visibleStart, visibleEnd, refs, old, false)
+	return a.integrateWithManifestMode(visibleStart, visibleEnd, refs, old)
 }
 
-func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, refs []SegmentRef, old *Manifest, preserveGeneralLatestProgress bool) (*Manifest, error) {
+func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, refs []SegmentRef, old *Manifest) (*Manifest, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
 	if visibleEnd < visibleStart {
 		return nil, fmt.Errorf("snapshots: aggregate range [%d,%d] is inverted", visibleStart, visibleEnd)
 	}
+	latestCut := uint64(0)
+	if old != nil {
+		latestCut = old.LatestStateTxNum
+	}
+	newLatest, hasHistory := false, false
 	for _, ref := range refs {
-		if err := validateSegment(ref, visibleStart, visibleEnd); err != nil {
+		if ref.Kind == SegmentLatest && ref.Dataset == SegmentDatasetCommitmentHead {
+			newLatest = true
+			latestCut = ref.ToTxNum
+		}
+		if cfg, ok := DefaultDomainRegistry().ConfigForRef(ref); ok && cfg.HasHistory && ref.Kind == SegmentHistory {
+			hasHistory = true
+		}
+	}
+	if newLatest && !hasHistory {
+		visibleStart, visibleEnd = 0, 0
+		if old != nil {
+			visibleStart, visibleEnd = old.VisibleTxStart, old.VisibleTxEnd
+		}
+	}
+	for _, ref := range refs {
+		from, to := visibleStart, visibleEnd
+		if cfg, ok := DefaultDomainRegistry().ConfigForRef(ref); ok && cfg.HasLatest && latestCut > 0 && (ref.Kind == SegmentLatest || ref.Kind == SegmentAccessor || ref.Kind == SegmentBTree) {
+			from, to = 0, latestCut
+		}
+		if err := validateSegment(ref, from, to); err != nil {
 			return nil, err
 		}
 	}
@@ -678,7 +617,13 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 	var progress *Progress
 	var chain *ChainIdentity
 	if old != nil {
-		visibleStart = min(visibleStart, old.VisibleTxStart)
+		if old.VisibleTxEnd > 0 {
+			if visibleEnd == 0 {
+				visibleStart = old.VisibleTxStart
+			} else {
+				visibleStart = min(visibleStart, old.VisibleTxStart)
+			}
+		}
 		visibleEnd = max(visibleEnd, old.VisibleTxEnd)
 		generation = old.Generation + 1
 		progress = cloneProgress(old.Progress)
@@ -695,34 +640,26 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 	// These slices are already private to this integration. PublishManifest
 	// performs the one required sort and validation before durable publication.
 	manifest := &Manifest{
-		Version: CurrentManifestVersion, Generation: generation, PublishedUnix: time.Now().Unix(),
+		Version: CurrentManifestVersion, CommitmentScheme: rawdb.LatestDomainCommitmentScheme, ElementVersion: rawdb.StateCommitmentElementVersion, Generation: generation, PublishedUnix: time.Now().Unix(),
 		VisibleTxStart: visibleStart, VisibleTxEnd: visibleEnd, Segments: segments,
+	}
+	if old != nil {
+		manifest.LatestStateTxNum = old.LatestStateTxNum
+		manifest.SourceRows = old.SourceRows
+	}
+	for _, ref := range refs {
+		if ref.Dataset == SegmentDatasetCommitmentHead && ref.Kind == SegmentLatest {
+			manifest.LatestStateTxNum = ref.ToTxNum
+			manifest.SourceRows = latestSourceRowCounts(refs, ref.ToTxNum)
+		}
 	}
 	if old != nil {
 		manifest.HistoryStagingResetEpoch = old.HistoryStagingResetEpoch
 	}
 	manifest.Chain = chain
 	manifest.Progress = mergeProgress(progress, progressFromRefs(refs, visibleEnd))
-	if preserveGeneralLatestProgress {
-		// Commitment root/branch refs are current at visibleEnd, but the account,
-		// KV, generation and code baselines may still be older. Keep the two
-		// cross-family progress cursors at their prior values. CommitmentFlush is
-		// also a shared root/checkpoint/branch restore boundary, so the branch-only
-		// build must not advance it past the older checkpoint snapshot.
-		var latestBuildTxNum, accessorBuildTxNum, commitmentFlushTxNum uint64
-		if old != nil && old.Progress != nil {
-			latestBuildTxNum = old.Progress.LatestBuildTxNum
-			accessorBuildTxNum = old.Progress.AccessorBuildTxNum
-			commitmentFlushTxNum = old.Progress.CommitmentFlushTxNum
-		}
-		if manifest.Progress == nil {
-			manifest.Progress = new(Progress)
-		}
-		manifest.Progress.LatestBuildTxNum = latestBuildTxNum
-		manifest.Progress.AccessorBuildTxNum = accessorBuildTxNum
-		manifest.Progress.CommitmentFlushTxNum = commitmentFlushTxNum
-	}
 	manifest.Retired = dedupeSegmentRefsInPlace(retired)
+
 	if err := PublishManifest(a.dir, manifest); err != nil {
 		return nil, err
 	}

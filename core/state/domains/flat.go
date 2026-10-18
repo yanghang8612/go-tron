@@ -85,6 +85,9 @@ func (s *FlatStore) GetLatest(owner common.Address, domain kvdomains.KVDomain, k
 }
 
 func (s *FlatStore) DomainPut(owner common.Address, domain kvdomains.KVDomain, key, value []byte) error {
+	if s != nil && s.commitment {
+		return s.mutateMuHash(owner, domain, key, value, MutationPut)
+	}
 	if err := validateDomain(domain); err != nil {
 		return err
 	}
@@ -101,6 +104,9 @@ func (s *FlatStore) DomainPut(owner common.Address, domain kvdomains.KVDomain, k
 }
 
 func (s *FlatStore) DomainDel(owner common.Address, domain kvdomains.KVDomain, key []byte) error {
+	if s != nil && s.commitment {
+		return s.mutateMuHash(owner, domain, key, nil, MutationDel)
+	}
 	if err := validateDomain(domain); err != nil {
 		return err
 	}
@@ -117,6 +123,9 @@ func (s *FlatStore) DomainDel(owner common.Address, domain kvdomains.KVDomain, k
 }
 
 func (s *FlatStore) DomainDelPrefix(owner common.Address, domain kvdomains.KVDomain, prefix []byte) error {
+	if s != nil && s.commitment {
+		return s.mutateMuHash(owner, domain, prefix, nil, MutationDelPrefix)
+	}
 	if err := validateDomain(domain); err != nil {
 		return err
 	}
@@ -171,6 +180,6 @@ func (s *FlatStore) updateCommitment(db latestStateDB, updates []rawdb.StateComm
 	if s == nil || !s.commitment {
 		return nil
 	}
-	_, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), updates)
+	_, err := ApplyMuHashCommitment(db, updates, CommitmentIdentity{})
 	return err
 }

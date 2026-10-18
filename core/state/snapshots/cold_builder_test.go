@@ -32,7 +32,6 @@ import (
 // to produce at least one segment ref per registered latest dataset.
 func seedLatestRows(t *testing.T, db ethdb.KeyValueWriter, owner common.Address, blockNum, txNum uint64) {
 	t.Helper()
-	root := common.BytesToHash(bytes.Repeat([]byte{0xab}, common.HashLength))
 	code := []byte{0x60, 0x00, 0x60, 0x01}
 	codeHash := common.Keccak256(code)
 
@@ -48,19 +47,29 @@ func seedLatestRows(t *testing.T, db ethdb.KeyValueWriter, owner common.Address,
 	if err := rawdb.WriteStateCode(db, codeHash, code); err != nil {
 		t.Fatalf("seed code: %v", err)
 	}
+	blockHash := writeColdBuilderCanonicalBlock(t, db, blockNum)
+	source, ok := db.(interface {
+		AggregatorDB
+		ethdb.KeyValueWriter
+	})
+	if !ok {
+		t.Fatal("fixture needs source iteration")
+	}
+	head := seedTestMuHashHead(t, source, blockNum, txNum, blockHash)
+	root := head.Root
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
 		t.Fatalf("seed commitment root: %v", err)
 	}
 	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
 		BlockNum:  blockNum,
-		BlockHash: common.Hash{byte(blockNum)},
+		BlockHash: blockHash,
 		Root:      root,
 		Scheme:    rawdb.LatestDomainCommitmentScheme,
 	}); err != nil {
 		t.Fatalf("seed commitment checkpoint: %v", err)
 	}
 	// Seed a StateTxRange so latestBuildWatermark returns txNum > 0.
-	if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, txNum, txNum); err != nil {
+	if err := rawdb.WriteStateTxRange(db, blockNum, blockHash, txNum, txNum); err != nil {
 		t.Fatalf("seed tx range block %d: %v", blockNum, err)
 	}
 	writeColdBuilderCanonicalBlock(t, db, blockNum)
@@ -562,82 +571,6 @@ func TestColdBuilderDefersFullLatestBuildDuringActiveSync(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || got != 50 {
 		t.Fatalf("latest build stage = %d ok=%v err=%v, want 50", got, ok, err)
-	}
-}
-
-func TestColdBuilderBuildsOnlyCommitmentBranchBaseDuringActiveSync(t *testing.T) {
-	dir := t.TempDir()
-	db := rawdb.NewMemoryDatabase()
-	owner := coldBuilderOwner(0x77)
-	seedLatestRows(t, db, owner, 50, 50)
-	root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
-	if err != nil || !ok {
-		t.Fatalf("read root ok=%v err=%v", ok, err)
-	}
-	if err := rawdb.WriteCommitmentBranch(db, nil, []byte("root-branch")); err != nil {
-		t.Fatal(err)
-	}
-	rotation := rawdb.CommitmentBranchRotation{
-		Generation: 1, SnapshotTxNum: 50, Root: root, BlockNum: 50, BlockHash: common.Hash{50},
-	}
-	if err := rawdb.WriteCommitmentBranchRotation(db, rotation); err != nil {
-		t.Fatal(err)
-	}
-	chain := &coldBuilderChain{
-		db: db, solidified: 50, syncRemaining: 1_000, syncRemainingOK: true,
-		rotation: &rotation, persistRotationBase: true,
-	}
-	runner := NewRunner(chain, Config{
-		Dir: dir, Enabled: true, Interval: time.Hour, HistoryWindow: 100,
-		LatestBuildBlocks: 10, DeferLatestBuildWhileSyncing: true,
-		BuildCommitmentBranchBaseWhileSyncing: true,
-	})
-	// Model a recent full latest build: an already-started branch rotation must
-	// resume independently of the coarse full-latest cadence.
-	runner.lastLatestBuildBlock.Store(50)
-
-	built, deferred, err := runner.latestPassWithStatus()
-	if err != nil || !built || deferred {
-		t.Fatalf("sync commitment pass built=%v deferred=%v err=%v", built, deferred, err)
-	}
-	if chain.rotationBegin != 1 || chain.rotationComplete != 1 {
-		t.Fatalf("rotation calls begin=%d complete=%d", chain.rotationBegin, chain.rotationComplete)
-	}
-	manifest, err := LoadProductionManifest(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, ref := range manifest.Segments {
-		if ref.Dataset != SegmentDatasetCommitmentRoot && ref.Dataset != SegmentDatasetCommitmentBranch {
-			t.Fatalf("sync commitment pass published unrelated ref %+v", ref)
-		}
-	}
-	if manifest.Progress == nil || manifest.Progress.LatestBuildTxNum != 0 || manifest.Progress.AccessorBuildTxNum != 0 || manifest.Progress.CommitmentFlushTxNum != 0 {
-		t.Fatalf("sync commitment progress = %+v", manifest.Progress)
-	}
-	mgr, err := OpenManager(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if txNum, ok, err := mgr.LatestStateTxNum(); err != nil || ok {
-		t.Fatalf("commitment-only manifest advertised general latest state tx=%d ok=%v err=%v", txNum, ok, err)
-	}
-	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || ok {
-		t.Fatalf("full latest build stage exists ok=%v err=%v", ok, err)
-	}
-	base, ok, err := rawdb.ReadCommitmentBranchBase(db)
-	if err != nil || !ok || base.BlockNum != rotation.BlockNum || base.BlockHash != rotation.BlockHash {
-		t.Fatalf("persisted base = %+v ok=%v err=%v", base, ok, err)
-	}
-
-	// The baseline block, rather than the deferred full-latest watermark, owns
-	// the sync-time cadence. A second pass at the same boundary must not rotate.
-	built, deferred, err = runner.latestPassWithStatus()
-	if err != nil || built || deferred {
-		t.Fatalf("cadence pass built=%v deferred=%v err=%v", built, deferred, err)
-	}
-	if chain.rotationBegin != 1 {
-		t.Fatalf("rotation began again inside cadence: %d", chain.rotationBegin)
 	}
 }
 
@@ -1162,52 +1095,6 @@ func TestColdBuilderStandaloneSchedulesFailedForcedBusyRetry(t *testing.T) {
 	}
 	if stats := runner.Snapshot(); stats.SegmentsBuilt == 0 || stats.ForcedBusyAttempts < 2 {
 		t.Fatalf("standalone runner did not honor failed-attempt retry deadline: %+v", stats)
-	}
-}
-
-func TestColdBuilderRetryDeadlineDeductsPostHistoryWork(t *testing.T) {
-	dir := t.TempDir()
-	db := rawdb.NewMemoryDatabase()
-	owner := coldBuilderOwner(0x80)
-	for blockNum := uint64(1); blockNum <= 6; blockNum++ {
-		writeColdBuilderChange(t, db, owner, blockNum, blockNum, "previous")
-		writeColdBuilderCanonicalBlock(t, db, blockNum)
-	}
-	baseChain := &coldBuilderChain{
-		db: db, solidified: 7, syncRemaining: 1_000, syncRemainingOK: true,
-	}
-	chain := &coldBuilderSlowRotationChain{coldBuilderChain: baseChain}
-	runner := NewRunner(chain, Config{
-		Dir:                                   dir,
-		Enabled:                               true,
-		HistoryWindow:                         1,
-		BatchBlocks:                           2,
-		BatchTxNums:                           2,
-		CatchupBuildMinInterval:               40 * time.Millisecond,
-		LatestBuildBlocks:                     1,
-		DeferLatestBuildWhileSyncing:          true,
-		BuildCommitmentBranchBaseWhileSyncing: true,
-	})
-
-	first, err := runner.OnePass()
-	if err != nil || !first.Built {
-		t.Fatalf("initial history pass = %+v err=%v, want build", first, err)
-	}
-	chain.delay = 70 * time.Millisecond
-	started := time.Now()
-	limited, err := runner.OnePass()
-	elapsed := time.Since(started)
-	if err != nil {
-		t.Fatalf("rate-limited pass with slow latest stage: %v", err)
-	}
-	if !limited.HistoryDeferred || !limited.HistoryRateLimited || limited.HistoryRetryDeadline.IsZero() {
-		t.Fatalf("rate-limited result = %+v, want absolute retry deadline", limited)
-	}
-	if elapsed < chain.delay {
-		t.Fatalf("pass elapsed = %s, want at least post-history delay %s", elapsed, chain.delay)
-	}
-	if limited.HistoryRetryAfter != time.Nanosecond || limited.HistoryRetryRemaining(time.Now()) != time.Nanosecond {
-		t.Fatalf("expired retry = after %s remaining %s, want immediate timer sentinel", limited.HistoryRetryAfter, limited.HistoryRetryRemaining(time.Now()))
 	}
 }
 
@@ -2461,7 +2348,7 @@ func TestRunnerLatestPassIntervalGate(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, 65, common.Hash{65}, 65, 65); err != nil {
 		t.Fatalf("seed tx range block 65: %v", err)
 	}
-	writeColdBuilderCanonicalBlock(t, db, 65)
+	seedTestMuHashHead(t, db, 65, 65, writeColdBuilderCanonicalBlock(t, db, 65))
 	built3, err := runner.latestPass()
 	if err != nil {
 		t.Fatalf("latestPass call 3: %v", err)
@@ -2520,64 +2407,6 @@ func TestRunnerLatestPassCapsWatermarkAtVerifiedFinishStage(t *testing.T) {
 	}
 	if manifest.Progress == nil || manifest.Progress.LatestBuildTxNum != 40 {
 		t.Fatalf("manifest progress = %+v, want LatestBuildTxNum 40", manifest.Progress)
-	}
-}
-
-func TestRunnerLatestPassCoordinatesCommitmentBranchRotation(t *testing.T) {
-	dir := t.TempDir()
-	db := rawdb.NewMemoryDatabase()
-	owner := coldBuilderOwner(0x88)
-	seedLatestRows(t, db, owner, 10, 10)
-	frozenRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
-	if err != nil || !ok {
-		t.Fatalf("read frozen root ok=%v err=%v", ok, err)
-	}
-	rotation := rawdb.CommitmentBranchRotation{
-		Generation: 1, SnapshotTxNum: 10, Root: frozenRoot, BlockNum: 10, BlockHash: common.Hash{10},
-	}
-	if err := rawdb.WriteCommitmentBranchRotation(db, rotation); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteCommitmentBranch(db, nil, []byte("frozen-root-branch")); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteLatestDomainCommitmentRoot(db, common.Hash{0xcc}); err != nil {
-		t.Fatal(err)
-	}
-	chain := &coldBuilderChain{
-		db: db, solidified: 20, rotation: &rotation,
-		rotationCompleteErr: ErrCommitmentBranchRotationNotSolidified,
-	}
-	runner := NewRunner(chain, Config{
-		Dir: dir, Enabled: true, Interval: time.Hour, HistoryWindow: 1, LatestBuildBlocks: 10,
-	})
-	built, deferred, err := runner.latestPassWithStatus()
-	if err != nil || !built || !deferred {
-		t.Fatalf("deferred rotation pass built=%v deferred=%v err=%v", built, deferred, err)
-	}
-	if chain.rotationBegin != 1 || chain.rotationComplete != 1 {
-		t.Fatalf("rotation calls begin=%d complete=%d", chain.rotationBegin, chain.rotationComplete)
-	}
-	if chain.rotationSnapshotRoot != frozenRoot {
-		t.Fatalf("snapshot root = %x, want frozen %x", chain.rotationSnapshotRoot, frozenRoot)
-	}
-	if got := runner.lastLatestBuildBlock.Load(); got != 0 {
-		t.Fatalf("deferred rotation advanced latest watermark to %d", got)
-	}
-	if _, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || ok {
-		t.Fatalf("deferred rotation wrote latest stage ok=%v err=%v", ok, err)
-	}
-
-	chain.rotationCompleteErr = nil
-	built, deferred, err = runner.latestPassWithStatus()
-	if err != nil || !built || deferred {
-		t.Fatalf("completed rotation pass built=%v deferred=%v err=%v", built, deferred, err)
-	}
-	if got := runner.lastLatestBuildBlock.Load(); got != rotation.BlockNum {
-		t.Fatalf("completed rotation watermark = %d, want %d", got, rotation.BlockNum)
-	}
-	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || row.BlockHash != rotation.BlockHash {
-		t.Fatalf("completed rotation stage = %+v ok=%v err=%v", row, ok, err)
 	}
 }
 
@@ -2699,7 +2528,7 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 	if err := rawdb.WriteStateTxRange(db, 65, common.Hash{65}, 65, 65); err != nil {
 		t.Fatalf("seed tx range block 65: %v", err)
 	}
-	writeColdBuilderCanonicalBlock(t, db, 65)
+	seedTestMuHashHead(t, db, 65, 65, writeColdBuilderCanonicalBlock(t, db, 65))
 
 	result2b, err := runner2.OnePass()
 	if err != nil {
@@ -3540,18 +3369,12 @@ func BenchmarkSectionBloomFullSectionCoverage(b *testing.B) {
 }
 
 type coldBuilderChain struct {
-	db                   AggregatorDB
-	solidified           int64
-	syncRemaining        uint64
-	syncRemainingOK      bool
-	canonicalHashes      map[uint64]common.Hash
-	canonicalErrs        map[uint64]error
-	rotation             *rawdb.CommitmentBranchRotation
-	rotationBegin        int
-	rotationComplete     int
-	rotationCompleteErr  error
-	rotationSnapshotRoot common.Hash
-	persistRotationBase  bool
+	db              AggregatorDB
+	solidified      int64
+	syncRemaining   uint64
+	syncRemainingOK bool
+	canonicalHashes map[uint64]common.Hash
+	canonicalErrs   map[uint64]error
 }
 
 type coldBuilderSeekRecordingDB struct {
@@ -3597,11 +3420,6 @@ type coldBuilderSlowRotationChain struct {
 	delay time.Duration
 }
 
-func (c *coldBuilderSlowRotationChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
-	time.Sleep(c.delay)
-	return c.coldBuilderChain.BeginCommitmentBranchRotation()
-}
-
 func (db *coldBuilderSeekRecordingDB) NewIterator(prefix, start []byte) ethdb.Iterator {
 	if bytes.Equal(prefix, []byte("state-tx-range-v1-")) {
 		db.stateTxRangeStarts = append(db.stateTxRangeStarts, append([]byte(nil), start...))
@@ -3615,46 +3433,6 @@ func (c *coldBuilderChain) LatestSolidifiedBlockNum() int64 { return c.solidifie
 
 func (c *coldBuilderChain) SyncRemainingBlocks() (uint64, bool) {
 	return c.syncRemaining, c.syncRemainingOK
-}
-
-func (c *coldBuilderChain) BeginCommitmentBranchRotation() (rawdb.CommitmentBranchRotation, bool, error) {
-	c.rotationBegin++
-	if c.rotation == nil {
-		return rawdb.CommitmentBranchRotation{}, false, nil
-	}
-	return *c.rotation, true, nil
-}
-
-func (c *coldBuilderChain) CompleteCommitmentBranchRotation(rotation rawdb.CommitmentBranchRotation, mgr *Manager) error {
-	c.rotationComplete++
-	root, ok, err := mgr.GetCommitmentRoot(rotation.SnapshotTxNum)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return errors.New("test rotation snapshot root missing")
-	}
-	c.rotationSnapshotRoot = root
-	if c.rotationCompleteErr != nil {
-		return c.rotationCompleteErr
-	}
-	if c.persistRotationBase {
-		writer, ok := c.db.(ethdb.KeyValueWriter)
-		if !ok {
-			return errors.New("test rotation database is not writable")
-		}
-		if err := rawdb.WriteCommitmentBranchBase(writer, rawdb.CommitmentBranchBase{
-			Generation: rotation.Generation, SnapshotTxNum: rotation.SnapshotTxNum, Root: rotation.Root,
-			BlockNum: rotation.BlockNum, BlockHash: rotation.BlockHash,
-		}); err != nil {
-			return err
-		}
-		if err := rawdb.DeleteCommitmentBranchRotation(writer); err != nil {
-			return err
-		}
-		c.rotation = nil
-	}
-	return nil
 }
 
 func (c *coldBuilderChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {

@@ -38,8 +38,12 @@ func TestPublishVerifySignedSnapshotCatalog(t *testing.T) {
 	if loaded.Signer != catalog.Signer || loaded.ManifestChecksum != catalog.ManifestChecksum {
 		t.Fatalf("loaded catalog = %+v, want signer/checksum from %+v", loaded, catalog)
 	}
-	if report.ActiveSegments != 3 {
-		t.Fatalf("active segments = %d, want 3", report.ActiveSegments)
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ActiveSegments != len(manifest.Segments) {
+		t.Fatalf("active segments = %d, want %d", report.ActiveSegments, len(manifest.Segments))
 	}
 }
 

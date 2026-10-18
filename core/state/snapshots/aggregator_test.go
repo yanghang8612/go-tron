@@ -2,7 +2,6 @@ package snapshots
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,11 +87,12 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 
 	agg := NewAggregator(dir)
+	root = seedTestMuHashHead(t, db, 3, 20, common.Hash{3}).Root
 	result, err := agg.Build(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 20})
 	if err != nil {
 		t.Fatalf("build aggregate snapshot: %v", err)
 	}
-	if result.Manifest == nil || len(result.Segments) != 15 {
+	if result.Manifest == nil || len(result.Segments) != 19 {
 		t.Fatalf("aggregate result = %+v", result)
 	}
 	loaded, err := LoadManifest(dir)
@@ -214,6 +214,7 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, newRoot); err != nil {
 		t.Fatal(err)
 	}
+	newRoot = seedTestMuHashHead(t, db, 3, 20, common.Hash{3}).Root
 	updated, err := agg.Build(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 20})
 	if err != nil {
 		t.Fatalf("update aggregate snapshot: %v", err)
@@ -457,6 +458,7 @@ func TestAggregatorBuildLatestOnly(t *testing.T) {
 	}
 
 	agg := NewAggregator(dir)
+	seedTestMuHashHead(t, db, 4, 20, common.Hash{4})
 	result, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 20})
 	if err != nil {
 		t.Fatalf("BuildLatest: %v", err)
@@ -523,6 +525,7 @@ func TestAggregatorBuildLatestPreservesPrunedCodeDomain(t *testing.T) {
 	}
 
 	agg := NewAggregator(dir)
+	seedTestMuHashHead(t, db, 1, 10, common.Hash{1})
 	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 10}); err != nil {
 		t.Fatalf("first BuildLatest: %v", err)
 	}
@@ -536,6 +539,7 @@ func TestAggregatorBuildLatestPreservesPrunedCodeDomain(t *testing.T) {
 	if err := rawdb.WriteStateCode(db, newHash, newCode); err != nil {
 		t.Fatal(err)
 	}
+	seedTestMuHashHead(t, db, 2, 20, common.Hash{2})
 	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 20}); err != nil {
 		t.Fatalf("second BuildLatest: %v", err)
 	}
@@ -559,52 +563,6 @@ func TestAggregatorBuildLatestPreservesPrunedCodeDomain(t *testing.T) {
 	}
 }
 
-func TestAggregatorBuildCommitmentBranchBasePreservesGeneralLatestProgress(t *testing.T) {
-	dir := t.TempDir()
-	db := rawdb.NewMemoryDatabase()
-	owner := coldBuilderOwner(0x5b)
-	seedLatestRows(t, db, owner, 10, 10)
-	seedStagedBranchRows(t, db)
-
-	agg := NewAggregator(dir)
-	initial, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 10})
-	if err != nil {
-		t.Fatalf("initial BuildLatest: %v", err)
-	}
-	if initial.Manifest == nil || initial.Manifest.Progress == nil {
-		t.Fatal("initial BuildLatest returned no manifest progress")
-	}
-
-	result, err := agg.BuildCommitmentBranchBaseContext(context.Background(), db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 20})
-	if err != nil {
-		t.Fatalf("BuildCommitmentBranchBaseContext: %v", err)
-	}
-	if result.Manifest == nil || result.Manifest.Progress == nil {
-		t.Fatal("commitment base build returned no manifest progress")
-	}
-	for _, ref := range result.Segments {
-		if ref.Dataset != SegmentDatasetCommitmentRoot && ref.Dataset != SegmentDatasetCommitmentBranch {
-			t.Fatalf("commitment base build returned unrelated ref %+v", ref)
-		}
-	}
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentBranch, 0, SegmentLatest)
-	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentLatest)
-	progress := result.Manifest.Progress
-	if progress.LatestBuildTxNum != 10 || progress.AccessorBuildTxNum != 10 {
-		t.Fatalf("general latest progress advanced: %+v", progress)
-	}
-	if progress.CommitmentFlushTxNum != 10 {
-		t.Fatalf("shared commitment progress = %d, want preserved 10", progress.CommitmentFlushTxNum)
-	}
-	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatest); err != nil || !ok || got != 10 {
-		t.Fatalf("latest stage = %d ok=%v err=%v, want 10", got, ok, err)
-	}
-	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotCommitmentFlush); err != nil || !ok || got != 10 {
-		t.Fatalf("commitment stage = %d ok=%v err=%v, want preserved 10", got, ok, err)
-	}
-}
-
 func TestProgressFromRefsUsesEachSegmentBoundary(t *testing.T) {
 	refs := []SegmentRef{
 		{Dataset: SegmentDatasetAccountLatest, Kind: SegmentLatest, FromTxNum: 1, ToTxNum: 30},
@@ -620,7 +578,7 @@ func TestProgressFromRefsUsesEachSegmentBoundary(t *testing.T) {
 	}
 }
 
-func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
+func TestAggregatorBuildLatestPreservesOldGenerationPhysicalRows(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	contract := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))
@@ -659,6 +617,7 @@ func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedTestMuHashHead(t, db, 8, 90, common.Hash{8})
 	result, err := NewAggregator(dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 80, ToTxNum: 90})
 	if err != nil {
 		t.Fatalf("BuildLatest: %v", err)
@@ -682,7 +641,7 @@ func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
 		{domain: kvdomains.ContractMetadata, key: []byte("meta"), want: "recreated-contract-meta"},
 		{domain: kvdomains.ContractStorage, key: []byte("slot/reused"), want: "recreated-storage"},
 	} {
-		if old, ok, err := mgr.GetKVLatest(tc.domain, contract, 7, tc.key, 85); err != nil || ok {
+		if old, ok, err := mgr.GetKVLatest(tc.domain, contract, 7, tc.key, 85); err != nil || !ok {
 			t.Fatalf("old generation %s value = %q ok=%v err=%v, want absent", kvdomains.Name(tc.domain), old, ok, err)
 		}
 		got, ok, err := mgr.GetKVLatest(tc.domain, contract, 8, tc.key, 85)
@@ -706,7 +665,7 @@ func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
 		{domain: kvdomains.ContractMetadata, key: []byte("meta"), want: "recreated-contract-meta"},
 		{domain: kvdomains.ContractStorage, key: []byte("slot/reused"), want: "recreated-storage"},
 	} {
-		if old, ok, err := rawdb.ReadStateKVLatest(restored, contract, 7, tc.domain, tc.key); err != nil || ok {
+		if old, ok, err := rawdb.ReadStateKVLatest(restored, contract, 7, tc.domain, tc.key); err != nil || !ok {
 			t.Fatalf("restored old generation %s value = %q ok=%v err=%v, want absent", kvdomains.Name(tc.domain), old, ok, err)
 		}
 		got, ok, err := rawdb.ReadStateKVLatest(restored, contract, 8, tc.domain, tc.key)
@@ -741,6 +700,7 @@ func TestAggregatorBuildLatestScansSharedKVDomainTableOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			seedTestMuHashHead(t, base, 1, 10, common.Hash{1})
 			result, err := NewAggregator(t.TempDir()).BuildLatest(db, AggregatorBuildOptions{
 				FromTxNum: 1,
 				ToTxNum:   10,
