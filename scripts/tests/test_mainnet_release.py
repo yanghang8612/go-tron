@@ -34,7 +34,17 @@ def old_state():
             'space_pre': release.SPACE_GUARD}
 
 
-class MainnetReleaseTests(unittest.TestCase):
+class IsolatedReleaseTestCase(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Host migration/reader markers are not part of a test's filesystem.
+        # Cases that exercise them install their own inner lexists fixture.
+        markers = mock.patch.object(release.os.path, 'lexists', return_value=False)
+        markers.start()
+        self.addCleanup(markers.stop)
+
+
+class MainnetReleaseTests(IsolatedReleaseTestCase):
     def test_staging_wait_is_bounded_and_deploy_unit_covers_rollback(self):
         self.assertEqual(release.staging_health_timeout(), 43200)
         self.assertEqual(release.staging_health_timeout('86400'), 86400)
@@ -398,7 +408,7 @@ class MainnetReleaseTests(unittest.TestCase):
 
 
 
-class FreshStateReleaseTests(unittest.TestCase):
+class FreshStateReleaseTests(IsolatedReleaseTestCase):
     def test_fresh_state_health_failure_keeps_new_config_and_never_restores_old(self):
         old = old_state()
         old['active'] = False
