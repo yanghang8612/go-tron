@@ -89,13 +89,16 @@ visibleTxEnd **2,460,017,153**。配对元数据验证 `pair_equal=true`：
 初始证据归档 `/tmp/gtron-posting-evidence-initial-20261018.tar.gz`：
 **13,328,951 B**，SHA-256：
 `a1b822fc0f25855166f187515ddc2113ed5381fc361ef6f897ce075359cf9754`。
-census JSON 的 SHA-256：
+原始归档已通过 JumpServer SFTP 下载到本地并匹配上述 SHA-256；
+已安全解包至本地证据目录 `original-evidence/`。原始 census JSON 的 SHA-256：
 `fadbef8e1934592384cd804b26045743b31ea4b2bdeecfd7180659ee61cf6fd5`。
 本地结构化记录 `build/benchmarks/20261018-posting-liveness/observed-summary.json`
 明确标为终端转录，并已通过服务端代码逐字段比对原 JSON；本地与服务端规范化 JSON
 均为 **1759 B**，SHA-256
 `afd12d19d869b9b00fd1b4531c9c371504c6194b9f494452662e78ffe6158bb4`。
 校验捕获并纠正了补集字节数及 census SHA 的转录差异；过期帧计数与字节数始终一致。
+取得原始文件后，另在本地复核全部转录 census 字段、三类标量守恒、每种帧长度
+的分类守恒，以及帧长度分布与总帧/引用数的守恒，均通过。
 
 ## 饥饿原因与实现
 
@@ -128,7 +131,9 @@ debt 是待压实工作量估计，既不是可删字节，也不能单独证明
 ## 私有副本物理回收实验
 
 实验位于 `/data/gtron/posting-census-20261018-0016/private-reclaim-985605299`。
-03:10:06 UTC：control 已完成压实与全量核验；pruned 仍在删除，尚未得出最终物理差值。
+03:44:24 UTC 已观测到 pruned 删除完成，进入压实；删除 **1,925,758,076 帧 /
+133,489,815,146 B**，与全量 census 精确相符。control 已压实且全量核验通过；
+pruned 的最终压实及数据一致性核验仍待完成，尚未得出最终物理差值。
 input history 始终只读，创建 control 与 pruned 两个独立可写副本：
 
 - control：只做全范围压实，核验全部 posting、目录和非 posting 补集摘要。
@@ -146,6 +151,9 @@ control 压实后 SST 为 **64,129,461,623 B**，分配 **64,141,963,264 B**。
 运行约束：CPUQuota=100%、MemoryLimit=2 GiB、低 CPU/I/O 优先级、单 compaction，
 保留 500 GiB 可用空间；不对生产强制 compact。完成后保留回执并释放本次复制的 DB，
 否则审计硬链接会继续固定旧 SST，影响真实主机空间回收。
+两组均使用 128 MiB memtable、64 MiB cache、关闭自动 compaction，随后调用同一
+全范围 manual compact。L6 filter 关闭，与当前 direct-history 策略一致；线上 history
+仍使用原 512 MiB cache、最多两个 compaction worker，未替换为实验预算。
 
 ## 验证与发布状态
 
@@ -226,6 +234,10 @@ hot/history write delay 计数均为 0，窗口没有新增；这不是整个 VM
 
 原版本与新版本窗口覆盖不同区块，交易密度和后台任务也不同，因此不把观测到的
 同步/冷发布速率差值表述为同输入的加速百分比。
+
+03:47:20 UTC 的补充在线观测仍为 active、未暂停；当前高度 **34,641,307**。
+进程累计 posting 删除 **33,515,189 帧 / 2,285,475,749 B**，错误为 0。
+此处累计量与上述十分钟窗口分别表述，不混合不同采样时间计算速率。
 
 ## 后续优先项
 
