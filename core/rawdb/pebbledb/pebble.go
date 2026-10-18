@@ -491,7 +491,7 @@ func (s *keyValueSnapshot) Has(key []byte) (bool, error) {
 		return false, pebble.ErrClosed
 	}
 	_, closer, err := s.snapshot.Get(key)
-	if errors.Is(err, pebble.ErrNotFound) {
+	if err == pebble.ErrNotFound {
 		return false, nil
 	}
 	if err != nil {
@@ -1102,7 +1102,7 @@ func (d *Database) GetWithPresence(key []byte) ([]byte, bool, error) {
 		return nil, false, pebble.ErrClosed
 	}
 	dat, closer, err := d.db.Get(key)
-	if errors.Is(err, pebble.ErrNotFound) {
+	if err == pebble.ErrNotFound {
 		return nil, false, nil
 	}
 	if err != nil {

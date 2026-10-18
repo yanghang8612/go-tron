@@ -606,6 +606,12 @@ func (i *Iterator) findNextEntry(limit []byte) {
 			// NB: treating InternalKeyKindSingleDelete as equivalent to DEL is not
 			// only simpler, but is also necessary for correctness due to
 			// InternalKeyKindSSTableInternalObsoleteBit.
+			if i.getIterAlloc != nil {
+				// A private Get iterator only visits one user key. This visible
+				// deletion settles its result; advancing nextUserKey would scan
+				// obsolete versions unnecessarily. Keep the iterator for Close.
+				return
+			}
 			i.nextUserKey()
 			continue
 
