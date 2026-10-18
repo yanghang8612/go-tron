@@ -5,6 +5,9 @@
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
 GOFLAGS =
+# Core integration tests include asynchronous flush/drain windows; the full
+# package legitimately exceeds five minutes even when individual cases are quick.
+TEST_TIMEOUT ?= 900s
 # Non-Sapling utility targets default to pure Go. The production gtron target
 # uses gtron-sapling below, which explicitly enables cgo for librustzcash and
 # accelerated secp256k1 recovery.
@@ -32,10 +35,10 @@ db-compare:
 all: gtron
 
 test:
-	CGO_ENABLED=$(CGO_ENABLED) $(GO) test ./... -count=1 -timeout 300s
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) test ./... -count=1 -timeout $(TEST_TIMEOUT)
 
 test-sapling:
-	CGO_ENABLED=1 $(GO) test -tags='$(SAPLING_TAGS)' ./... -count=1 -timeout 300s
+	CGO_ENABLED=1 $(GO) test -tags='$(SAPLING_TAGS)' ./... -count=1 -timeout $(TEST_TIMEOUT)
 
 lint:
 	golangci-lint run ./...

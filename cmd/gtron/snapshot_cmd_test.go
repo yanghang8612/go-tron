@@ -2640,7 +2640,6 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	defer bc.Close()
 	bc.SetStateCodeColdHistory(mgr)
-	bc.SetStateCommitmentColdHistory(mgr)
 	bc.ChainDB().SetChainIndexReader(mgr)
 	bc.ChainDB().SetEventLogReader(mgr)
 	backend := corepkg.NewTronBackend(bc, txpool.New())

@@ -217,7 +217,6 @@ type BlockChain struct {
 	config  *params.ChainConfig
 
 	stateCodeColdHistory        state.StateCodeColdHistoryAtOrBefore
-	stateCommitmentColdHistory  state.StateCommitmentColdHistory
 	stateOpenHook               func(tcommon.Hash)
 	stateCommitScopeHook        func()
 	stateTxRangeSeedHook        func(uint64)
@@ -495,12 +494,6 @@ func (bc *BlockChain) AddBlockHook(fn func(*types.Block)) {
 // live StateDB code reads after hot state-code rows have been pruned.
 func (bc *BlockChain) SetStateCodeColdHistory(source state.StateCodeColdHistoryAtOrBefore) {
 	bc.stateCodeColdHistory = source
-}
-
-// SetStateCommitmentColdHistory wires CommitmentDomain snapshots into commit
-// repair so pruned hot branch nodes can be restored before incremental updates.
-func (bc *BlockChain) SetStateCommitmentColdHistory(source state.StateCommitmentColdHistory) {
-	bc.stateCommitmentColdHistory = source
 }
 
 // AddApplyStatsHook registers a callback invoked after each successful
@@ -3274,12 +3267,11 @@ func (bc *BlockChain) prepareOpenState(statedb *state.StateDB) error {
 	// writes on StateDB's existing durable writer.
 	statedb.SetStateCodeReader(bc.buffer)
 	statedb.SetAccountKVIndexStore(bc.buffer)
-	statedb.SetAccountKVIndexReads(true)
 	return nil
 }
 
 func (bc *BlockChain) configureStateCodeColdHistory(statedb *state.StateDB) error {
-	if statedb == nil || (bc.stateCodeColdHistory == nil && bc.stateCommitmentColdHistory == nil) {
+	if statedb == nil || bc.stateCodeColdHistory == nil {
 		return nil
 	}
 	head := bc.CurrentBlock()
@@ -3292,9 +3284,6 @@ func (bc *BlockChain) configureStateCodeColdHistory(statedb *state.StateDB) erro
 	}
 	if bc.stateCodeColdHistory != nil {
 		statedb.SetCodeColdHistory(bc.stateCodeColdHistory, txNum)
-	}
-	if bc.stateCommitmentColdHistory != nil {
-		statedb.SetCommitmentColdHistory(bc.stateCommitmentColdHistory, txNum)
 	}
 	return nil
 }

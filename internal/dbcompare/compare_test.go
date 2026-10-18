@@ -14,6 +14,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -395,6 +396,11 @@ func TestCompareAccountsDetectsValueAndReverseSetDifferences(t *testing.T) {
 	writeGtronAccount(t, gtron, matching)
 	writeGtronAccount(t, gtron, differentGtron)
 	writeGtronAccount(t, gtron, extraGtron)
+	// This fixture writes physical source rows directly, so explicitly seal its
+	// standalone state before opening the strict MuHash-backed reader.
+	if _, err := domains.RebuildMuHashCommitment(gtron); err != nil {
+		t.Fatal(err)
+	}
 	writeJavaProto(t, java, matching.Address, matching)
 	writeJavaProto(t, java, differentJava.Address, differentJava)
 

@@ -31,7 +31,7 @@ func (c *postingPruneAdmissionTestChain) PruneStateChangePostingChunkWithAdmissi
 }
 
 func TestRuntimePostingPruneRechecksAfterCoreWait(t *testing.T) {
-	for _, mode := range []string{"ready", "new-pressure", "stale-device", "unavailable", "gate-lost", "gate-hard-pressure"} {
+	for _, mode := range []string{"ready", "debt-relief", "debt-relief-late-latency", "debt-relief-late-queue", "debt-relief-gate-lost", "new-pressure", "stale-device", "unavailable", "gate-lost", "gate-hard-pressure"} {
 		t.Run(mode, func(t *testing.T) {
 			gate := maintenance.NewHeavyWorkGate()
 			pressure := maintenance.StoragePressure{Available: true, SampledAt: time.Now(), DeviceAvailable: true, DeviceSampledAt: time.Now(), DeviceAwait: time.Millisecond}
@@ -48,11 +48,22 @@ func TestRuntimePostingPruneRechecksAfterCoreWait(t *testing.T) {
 				switch mode {
 				case "new-pressure":
 					pressure.WriteStalled = true
+				case "debt-relief":
+					pressure.CompactionDebt = 40 << 30
+				case "debt-relief-late-latency":
+					pressure.CompactionDebt = 40 << 30
+					pressure.DeviceAwait = 3 * time.Millisecond
+				case "debt-relief-late-queue":
+					pressure.CompactionDebt = 40 << 30
+					pressure.DeviceQueueMilli = 8_001
 				case "stale-device":
 					pressure.DeviceSampledAt = time.Now().Add(-16 * time.Second)
 				case "unavailable":
 					pressure = maintenance.StoragePressure{}
-				case "gate-lost":
+				case "gate-lost", "debt-relief-gate-lost":
+					if mode == "debt-relief-gate-lost" {
+						pressure.CompactionDebt = 40 << 30
+					}
 					var ok bool
 					otherRelease, ok = gate.TryAcquire()
 					if !ok {
@@ -66,10 +77,13 @@ func TestRuntimePostingPruneRechecksAfterCoreWait(t *testing.T) {
 			if err != nil || out.Timings.ChainWait != 20 || out.Timings.Admission != 3 {
 				t.Fatalf("adapter dropped timings or leaked deferred error: %+v %v", out, err)
 			}
-			wantReady := mode == "ready"
-			wantGate := mode == "gate-lost" || mode == "gate-hard-pressure"
+			wantReady := mode == "ready" || mode == "debt-relief"
+			wantGate := mode == "gate-lost" || mode == "gate-hard-pressure" || mode == "debt-relief-gate-lost"
 			if chain.admitted != wantReady || out.GateDeferred != wantGate || out.PressureDeferred != (!wantReady && !wantGate) || out.Deferred == wantReady {
 				t.Fatalf("late admission=%+v admitted=%v", out, chain.admitted)
+			}
+			if out.DebtRelief != (mode == "debt-relief") {
+				t.Fatalf("wrong locked-admission debt tier: %+v", out)
 			}
 			if wantReady && (out.Timings.Proof != 1 || out.Timings.GateHeld != 8 || out.Result.ScanDuration != 5 || out.Result.WriteDuration != 2 || !gate.CanTryAcquire()) {
 				t.Fatal("adapter lost phase values or lease release")

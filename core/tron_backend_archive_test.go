@@ -400,7 +400,7 @@ func TestArchiveQuery_DynamicPropertiesAtUsesHistory(t *testing.T) {
 		if err := dynProps.FlushRooted(statedb); err != nil {
 			t.Fatalf("flush dynamic properties block %d: %v", n, err)
 		}
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit dynamic properties block %d: %v", n, err)
 		}
@@ -544,7 +544,7 @@ func TestArchiveQuery_BrokerageInfoAtUsesCycleHistory(t *testing.T) {
 			t.Fatalf("write cycle brokerage block %d: %v", blk.Number(), err)
 		}
 
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit brokerage block %d: %v", blk.Number(), err)
 		}
@@ -611,7 +611,7 @@ func TestArchiveQuery_GetContractAtUsesMetadataHistory(t *testing.T) {
 			Name:            name,
 			Bytecode:        code,
 		})
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit contract metadata block %d: %v", blk.Number(), err)
 		}
@@ -682,7 +682,7 @@ func TestArchiveQuery_TriggerConstantContractAtUsesBlockStateRoot(t *testing.T) 
 			Name:            "runtime",
 			Bytecode:        code,
 		})
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit contract runtime block %d: %v", blk.Number(), err)
 		}
@@ -817,7 +817,7 @@ func TestArchiveQuery_ProposalsAtUsesSystemProposalHistory(t *testing.T) {
 			}
 		}
 
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit proposal state block %d: %v", n, err)
 		}
@@ -974,7 +974,7 @@ func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
 			}
 		}
 
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit witness state block %d: %v", n, err)
 		}
@@ -1066,7 +1066,7 @@ func TestArchiveQuery_AccountByIdAtUsesSystemAccountIndexHistory(t *testing.T) {
 		if err := statedb.WriteAccountIdIndex(accountID, addr); err != nil {
 			t.Fatalf("write account id index block %d: %v", n, err)
 		}
-		root, err := statedb.Commit()
+		root, err := commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit account id block %d: %v", n, err)
 		}
@@ -1169,7 +1169,7 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 				t.Fatalf("write legacy delegation index second receiver block %d: %v", n, err)
 			}
 		}
-		root, err := statedb.Commit()
+		root, err := commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit delegation block %d: %v", n, err)
 		}
@@ -1335,7 +1335,7 @@ func TestArchiveQuery_StakeResourceAtUsesHistory(t *testing.T) {
 		if err := statedb.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
 			t.Fatalf("write delegation index block %d: %v", n, err)
 		}
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit stake block %d: %v", n, err)
 		}
@@ -1485,7 +1485,7 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("write market order book block %d: %v", n, err)
 		}
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit market block %d: %v", n, err)
 		}
@@ -1665,7 +1665,7 @@ func TestArchiveQuery_ListExchangesAtUsesSystemExchangeHistory(t *testing.T) {
 			}
 		}
 
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit exchanges block %d: %v", n, err)
 		}
@@ -1815,7 +1815,7 @@ func TestArchiveQuery_AssetIssueAtUsesSystemAssetHistory(t *testing.T) {
 			}
 		}
 
-		root, err = statedb.Commit()
+		root, err = commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit assets block %d: %v", n, err)
 		}
@@ -2524,7 +2524,7 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 		if err := statedb.FlushDomainChangesSince(mark, txRange.EndTxNum); err != nil {
 			t.Fatalf("flush domain changes block %d: %v", blockNum, err)
 		}
-		nextRoot, err := statedb.Commit()
+		nextRoot, err := commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit manual domain state block %d: %v", blockNum, err)
 		}
@@ -2765,7 +2765,7 @@ func TestArchiveQuery_ContractRecreateStorageGenerationUsesColdStateDomainChange
 		if err := statedb.FlushDomainChangesSince(mark, txRange.EndTxNum); err != nil {
 			t.Fatalf("flush domain changes block %d: %v", blockNum, err)
 		}
-		nextRoot, err := statedb.Commit()
+		nextRoot, err := commitArchiveFixture(t, bc, statedb)
 		if err != nil {
 			t.Fatalf("commit manual domain state block %d: %v", blockNum, err)
 		}

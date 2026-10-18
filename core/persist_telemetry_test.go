@@ -64,10 +64,11 @@ func TestWriteBlockMetadataBatchReportsStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Six fixed records + two transaction lookups + one block trace + two
+	// Five fixed records (local root, body + two indexes, receipt) plus
+	// two transaction lookups + one block trace + two
 	// account traces.
-	if stats.MetadataRecords != 11 {
-		t.Fatalf("metadata records = %d, want 11", stats.MetadataRecords)
+	if stats.MetadataRecords != 10 {
+		t.Fatalf("metadata records = %d, want 10", stats.MetadataRecords)
 	}
 	if stats.TransactionLookupRows != 2 {
 		t.Fatalf("transaction lookup rows = %d, want 2", stats.TransactionLookupRows)

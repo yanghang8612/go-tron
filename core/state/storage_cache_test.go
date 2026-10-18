@@ -122,7 +122,6 @@ func TestReadCachedMissingStorageDoesNotCommitAsDirty(t *testing.T) {
 	}
 	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
 	reopened.SetAccountKVIndexStore(index)
-	reopened.SetAccountKVIndexReads(true)
 	if got, exists := reopened.GetStateWithExist(addr, tcommon.Hash{0x05}); got != (tcommon.Hash{}) || exists {
 		t.Fatalf("missing storage = (%x,%v), want zero,false", got, exists)
 	}

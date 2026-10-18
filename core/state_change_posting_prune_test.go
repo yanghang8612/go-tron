@@ -500,7 +500,12 @@ func TestStateChangePostingPruneGuardObservedFailureReleasesLease(t *testing.T) 
 			case "proof-read":
 				f.db.readErr = boom
 			case "write":
-				f.db.beforeWrite = func() error { return boom }
+				f.db.beforeWrite = func() error {
+					// Exercise a measurable failed write phase even on clocks
+					// whose resolution exceeds this in-memory error callback.
+					time.Sleep(100 * time.Microsecond)
+					return boom
+				}
 			case "missing-admission":
 				admit = nil
 			case "missing-lease":

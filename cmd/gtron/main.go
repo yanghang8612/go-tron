@@ -990,7 +990,6 @@ func gtron(ctx *cli.Context) error {
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
 	bc.SetStateCodeColdHistory(stateSnapshotManager)
-	bc.SetStateCommitmentColdHistory(stateSnapshotManager)
 	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
 	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
 	bc.ChainDB().SetSectionBloomReader(stateSnapshotManager)

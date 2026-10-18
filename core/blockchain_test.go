@@ -434,6 +434,16 @@ func TestBlockChainHistoricalDatadirRequiresExecutionSafetyQualification(t *test
 			t.Fatal(err)
 		}
 		rawdb.WriteHeadBlockHash(diskdb, head.Hash())
+		cut, present, err := rawdb.ReadStateCommitmentHead(diskdb)
+		if err != nil || !present {
+			t.Fatal("historical fixture HEAD missing")
+		}
+		cut.BlockNum = head.Number()
+		cut.BlockHash = head.Hash()
+		cut.ParentHash = head.ParentHash()
+		if err = rawdb.WriteStateCommitmentHead(diskdb, cut); err != nil {
+			t.Fatal(err)
+		}
 		if qualified {
 			if err := rawdb.WriteExecutionSafetyQualification(diskdb); err != nil {
 				t.Fatal(err)
@@ -1078,7 +1088,7 @@ func TestBlockChainActiveWitnesses(t *testing.T) {
 
 	// Committing roots the new list. Reloading from the new root keeps it;
 	// reloading from the genesis root rewinds the atomic to the seeded set.
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(t, diskdb, statedb)
 	if err != nil {
 		t.Fatal(err)
 	}

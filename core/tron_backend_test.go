@@ -606,7 +606,7 @@ func commitHeadStateForBackendTest(t *testing.T, bc *BlockChain, mutate func(*st
 		t.Fatal(err)
 	}
 	mutate(statedb)
-	root, err := statedb.Commit()
+	root, err := commitGenesisFixture(t, bc.db, statedb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3639,7 +3639,7 @@ func TestTronBackend_GetDelegatedResourceV2ReturnsSeparateBuckets(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(t, bc.db, statedb)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -471,67 +471,6 @@ func TestCommitmentSplitViewReportsScopedBaseCacheAndStableOverlay(t *testing.T)
 	}
 }
 
-func TestLayerViewCommitmentParentViewSkipsOwnLayer(t *testing.T) {
-	disk := rawdb.NewMemoryDatabase()
-	prefix := bytes.Repeat([]byte{0x0c}, 32)
-	basePrefix := bytes.Repeat([]byte{0x0d}, 32)
-	if err := rawdb.WriteCommitmentBranch(disk, basePrefix, []byte("base")); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := New(disk)
-	buf.BeginBlock(bufHash(1), 1)
-	parentHandle, _ := buf.NewestInflight()
-	parent := buf.ViewLayer(parentHandle)
-	if err := rawdb.WriteCommitmentBranch(parent, prefix, []byte("parent")); err != nil {
-		t.Fatal(err)
-	}
-	if err := buf.CommitInflight(parentHandle); err != nil {
-		t.Fatal(err)
-	}
-
-	buf.BeginBlock(bufHash(2), 2)
-	childHandle, _ := buf.NewestInflight()
-	child := buf.ViewLayer(childHandle)
-	if err := rawdb.WriteCommitmentBranch(child, prefix, []byte("child")); err != nil {
-		t.Fatal(err)
-	}
-
-	read := func(p []byte) []byte {
-		t.Helper()
-		var got []byte
-		found, err := rawdb.ViewCommitmentParentBranchNoCopy(child, p, func(value []byte, stable bool) error {
-			if !stable {
-				t.Fatal("memory/overlay parent value reported transient")
-			}
-			got = append(got, value...)
-			return nil
-		})
-		if err != nil || !found {
-			t.Fatalf("parent read %x = found %v err %v", p, found, err)
-		}
-		return got
-	}
-
-	if got := read(prefix); !bytes.Equal(got, []byte("parent")) {
-		t.Fatalf("parent branch = %q, want parent", got)
-	}
-	if got := read(basePrefix); !bytes.Equal(got, []byte("base")) {
-		t.Fatalf("durable parent branch = %q, want base", got)
-	}
-	ordinary, found, err := rawdb.ReadCommitmentBranchNoCopy(child, prefix)
-	if err != nil || !found || !bytes.Equal(ordinary, []byte("child")) {
-		t.Fatalf("ordinary child read = (%q,%v,%v), want child/true/nil", ordinary, found, err)
-	}
-
-	if err := rawdb.DeleteCommitmentBranch(child, prefix); err != nil {
-		t.Fatal(err)
-	}
-	if got := read(prefix); !bytes.Equal(got, []byte("parent")) {
-		t.Fatalf("parent branch through child tombstone = %q, want parent", got)
-	}
-}
-
 func BenchmarkLayerViewCommitmentBranchRead(b *testing.B) {
 	disk := rawdb.NewMemoryDatabase()
 	buf := New(disk)

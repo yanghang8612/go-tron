@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -319,7 +320,19 @@ func TestPostingPruneWorkerPressureAdmission(t *testing.T) {
 		{"future-device", func(p *maintenance.StoragePressure) { p.DeviceSampledAt = p.DeviceSampledAt.Add(2 * time.Second) }, false},
 		{"write-stalled", func(p *maintenance.StoragePressure) { p.WriteStalled = true }, false},
 		{"L0-limit", func(p *maintenance.StoragePressure) { p.L0Sublevels = 8 }, false},
-		{"debt-limit", func(p *maintenance.StoragePressure) { p.CompactionDebt = 32 << 30 }, false},
+		{"debt-limit-healthy-device", func(p *maintenance.StoragePressure) { p.CompactionDebt = 32 << 30 }, true},
+		{"large-debt-healthy-device", func(p *maintenance.StoragePressure) { p.CompactionDebt = ^uint64(0) }, true},
+		{"debt-relief-await-limit", func(p *maintenance.StoragePressure) {
+			p.CompactionDebt = 40 << 30
+			p.DeviceAwait = 2 * time.Millisecond
+		}, true},
+		{"debt-relief-await-over", func(p *maintenance.StoragePressure) {
+			p.CompactionDebt = 40 << 30
+			p.DeviceAwait = 2*time.Millisecond + 1
+		}, false},
+		{"debt-relief-queue-limit", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 8_000 }, true},
+		{"debt-relief-queue-over", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 8_001 }, false},
+		{"negative-latency", func(p *maintenance.StoragePressure) { p.DeviceAwait = -1 }, false},
 		{"queue-limit", func(p *maintenance.StoragePressure) { p.DeviceQueueMilli = 32_001 }, false},
 		{"memtable-near-stop", func(p *maintenance.StoragePressure) { p.MemTableCount = 7 }, false},
 		{"engine-specific-L0-stop", func(p *maintenance.StoragePressure) { p.L0Sublevels = 3; p.L0StopWritesThreshold = 4 }, false},
@@ -341,6 +354,169 @@ func TestPostingPruneWorkerPressureAdmission(t *testing.T) {
 			runPostingWorkerTestChunk(t, w)
 			if (calls == 1) != tc.ready || (!tc.ready && w.counts["deferred/pressure"] != 1) {
 				t.Fatalf("pressure admission calls=%d deferred=%d, want ready=%v", calls, w.counts["deferred/pressure"], tc.ready)
+			}
+		})
+	}
+}
+
+func TestPostingDebtReliefMakesBoundedProgress(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	defer db.Close()
+	for h := uint64(1); h <= 20; h++ {
+		if err := rawdb.WriteStateDomainChangePostingIndex(db, &rawdb.StateDomainChange{
+			BlockNum: h, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: common.Address{0x41, 1},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pressure := postingWorkerTestPressure(time.Now())
+	pressure.CompactionDebt = 40 << 30 // never crosses below the former veto
+	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(10, 1) },
+		func(ctx context.Context, b PostingPruneBoundary, _ common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			if limits.MaxScannedRows != 2 {
+				t.Fatal("changed bounded budget")
+			}
+			r, err := rawdb.PruneStaleStateChangePostingChunkContext(ctx, db, b.PrunedThrough, cursor, limits)
+			return PostingPruneChunkOutcome{Result: r, Anchor: common.Hash{2}, DebtRelief: true}, err
+		})
+	cfg.Limits = rawdb.StateChangePostingPruneLimits{MaxScannedRows: 2, MaxScannedBytes: 1 << 20, MaxDeleteBytes: 256 << 10, MaxDuration: 10 * time.Millisecond}
+	cfg.LoadProbe = func() maintenance.StoragePressure {
+		pressure.SampledAt = time.Now()
+		pressure.DeviceSampledAt = time.Now()
+		return pressure
+	}
+	w := NewPostingPruneWorker(cfg)
+	defer w.Stop()
+	for i := 0; i < 4; i++ {
+		runPostingWorkerTestChunk(t, w)
+	}
+	cursor := bytes.Clone(w.cursor)
+	pressure.DeviceAwait = 3 * time.Millisecond
+	runPostingWorkerTestChunk(t, w)
+	if !bytes.Equal(cursor, w.cursor) || w.counts["deferred/pressure"] != 1 || w.counts["callbacks"] != 4 {
+		t.Fatal("pressure must preserve traversal")
+	}
+	pressure.DeviceAwait = time.Millisecond
+	for i := 0; i < 20 && w.completed == 0; i++ {
+		runPostingWorkerTestChunk(t, w)
+	}
+	if w.completed != 10 || w.counts["deleted/rows"] != 10 || w.counts["scanned/rows"] != 20 || w.counts["debt_relief/chunks"] != w.counts["chunks"] || w.counts["debt_relief/deleted_bytes"] != w.counts["deleted/bytes"] {
+		t.Fatalf("no bounded relief progress: %+v", w.counts)
+	}
+	var frames, directories int
+	if err := rawdb.ScanStateChangePostingFrames(context.Background(), db, func(row rawdb.StateChangePostingFrameCursor) error {
+		frames++
+		if row.FirstBlock <= 10 {
+			t.Error("retained stale posting")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.ScanStateChangeKeyDirectory(context.Background(), db, func(rawdb.StateChangeDirectoryCursor) error {
+		directories++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 10 || directories != 1 {
+		t.Fatalf("retained index changed: frames=%d directories=%d", frames, directories)
+	}
+}
+
+func TestPostingPruneMeasuredRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		interval, held time.Duration
+		productive     bool
+		want           time.Duration
+	}{
+		{"missing-timing", time.Second, 0, true, time.Second},
+		{"negative-timing", time.Second, -1, true, time.Second},
+		{"cheap-productive", time.Second, time.Millisecond, true, 250 * time.Millisecond},
+		{"ten-ms-held", time.Second, 10 * time.Millisecond, true, 490 * time.Millisecond},
+		{"slow-productive", time.Second, 100 * time.Millisecond, true, 4900 * time.Millisecond},
+		{"cheap-no-progress", time.Second, time.Millisecond, false, time.Second},
+		{"slow-failure", time.Second, time.Second, false, 49 * time.Second},
+		{"custom-short-interval", time.Millisecond, time.Microsecond, true, time.Millisecond},
+		{"duration-saturates", time.Second, time.Duration(math.MaxInt64), true, time.Duration(math.MaxInt64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := postingPruneRecovery(tc.interval, tc.held, tc.productive); got != tc.want {
+				t.Fatalf("recovery=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPostingPruneCatchupLifecycleUsesHoldNotQueueTime(t *testing.T) {
+	second := make(chan struct{})
+	var calls atomic.Int32
+	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(10, 1) },
+		func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			if calls.Add(1) == 2 {
+				close(second)
+			}
+			return PostingPruneChunkOutcome{Anchor: common.Hash{2}, Result: rawdb.StateChangePostingPruneChunkResult{RowsScanned: 1, NextCursor: []byte{1}}, Timings: PostingPruneTimings{ChainHeld: time.Millisecond, ChainWait: 3 * time.Second}}, nil
+		})
+	cfg.Interval = 2 * time.Second
+	w := NewPostingPruneWorker(cfg)
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer w.Stop()
+	select {
+	case <-second:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("productive chunks retained long retry or counted queue wait as lock duty")
+	}
+	started := time.Now()
+	if err := w.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) > 500*time.Millisecond {
+		t.Fatal("stop failed to interrupt recovery")
+	}
+	if got := w.gauges["last/recovery_ns"].Snapshot().Value(); got != int64(250*time.Millisecond) {
+		t.Fatalf("recovery metric %d", got)
+	}
+}
+
+func TestPostingPruneRecoveryBacksOffAfterNoProgress(t *testing.T) {
+	for _, mode := range []string{"success", "pressure", "gate", "boundary", "deferred", "error", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(10, 1) },
+				func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+					out := PostingPruneChunkOutcome{Anchor: common.Hash{2}, Result: rawdb.StateChangePostingPruneChunkResult{RowsScanned: 1}, Timings: PostingPruneTimings{ChainHeld: time.Millisecond}}
+					switch mode {
+					case "pressure":
+						out.PressureDeferred = true
+					case "gate":
+						out.GateDeferred = true
+					case "boundary":
+						out.BoundaryChanged = true
+					case "deferred":
+						out.Deferred = true
+					case "empty":
+						out.Result.RowsScanned = 0
+					case "error":
+						return out, errors.New("injected")
+					}
+					return out, nil
+				})
+			cfg.Interval = time.Second
+			w := NewPostingPruneWorker(cfg)
+			defer w.Stop()
+			err := w.runChunk(context.Background())
+			if (err != nil) != (mode == "error") {
+				t.Fatal(err)
+			}
+			want := time.Second
+			if mode == "success" {
+				want = 250 * time.Millisecond
+			}
+			if w.nextDelay != want {
+				t.Fatalf("recovery=%v want %v", w.nextDelay, want)
 			}
 		})
 	}

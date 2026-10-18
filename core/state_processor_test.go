@@ -13,12 +13,14 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	tronrawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -248,13 +250,70 @@ func TestBuildTransactionInfoFromOpcodeLogTopics(t *testing.T) {
 
 func newTestState(t testing.TB) *state.StateDB {
 	t.Helper()
+	statedb, _ := newTestStateWithDB(t)
+	return statedb
+}
+
+func newTestStateWithDB(t testing.TB) (*state.StateDB, ethdb.Database) {
+	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
 	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), sdb)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return statedb
+	return statedb, diskdb
+}
+
+// copyProcessBlockStateForCommit preserves Copy's materialized execution caches,
+// including code retained after hot pruning, but gives each differential arm its
+// own physical source/HEAD. Production speculative copies execute and revert;
+// these tests additionally commit every arm, which cannot share one mutable HEAD.
+func copyProcessBlockStateForCommit(t testing.TB, base *state.StateDB, source ethdb.Database) (*state.StateDB, error) {
+	t.Helper()
+	index := ethrawdb.NewMemoryDatabase()
+	it := source.NewIterator(nil, nil)
+	for it.Next() {
+		if err := index.Put(bytes.Clone(it.Key()), bytes.Clone(it.Value())); err != nil {
+			it.Release()
+			index.Close()
+			return nil, err
+		}
+	}
+	err := it.Error()
+	it.Release()
+	if err != nil {
+		index.Close()
+		return nil, err
+	}
+	cp, err := base.Copy()
+	if err != nil {
+		index.Close()
+		return nil, err
+	}
+	cp.SetAccountKVIndexStore(index)
+	// Full-set reconstruction is independent of each arm's incremental delta
+	// capture. Check both its initial cut and the final persisted cut, without
+	// changing either expected digest or the existing serial/parallel assertions.
+	verify := func() {
+		rebuilt, err := snapshots.RebuildLatestMuHash(index)
+		if err != nil {
+			t.Errorf("physical source rebuild: %v", err)
+			return
+		}
+		head, present, err := tronrawdb.ReadStateCommitmentHead(index)
+		if err != nil || !present {
+			t.Errorf("physical source HEAD: present=%v err=%v", present, err)
+			return
+		}
+		root, hasRoot, err := tronrawdb.ReadLatestDomainCommitmentRoot(index)
+		if err != nil || !hasRoot || root != head.Root || head.Root != tcommon.Hash(rebuilt.Digest) || head.State != rebuilt.State {
+			t.Errorf("physical source/HEAD/full-set oracle differs: present=%v err=%v root=%x head=%x rebuilt=%x", hasRoot, err, root, head.Root, rebuilt.Digest)
+		}
+	}
+	verify()
+	t.Cleanup(func() { verify(); index.Close() })
+	return cp, nil
 }
 
 func TestRepairMainnetCreateTransferFailureOvercharge(t *testing.T) {
@@ -645,7 +704,7 @@ func makeTestTransferAssetTx(from, to byte, assetName []byte, amount int64) *typ
 }
 
 func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	for _, id := range []byte{1, 2, 3, 4} {
 		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 	}
@@ -657,12 +716,12 @@ func TestProcessBlockParallelTransfersMatchesSerial(t *testing.T) {
 	if _, err := base.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1078,8 +1137,8 @@ func TestProcessBlockParallelTransferFeeRoutingDifferential(t *testing.T) {
 		{name: "burn-with-fee-pool", blackholeOptimized: true, transactionFeePool: true, wantBandwidthInPool: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			newBase := func() *state.StateDB {
-				base := newTestState(t)
+			newBase := func() (*state.StateDB, ethdb.Database) {
+				base, diskdb := newTestStateWithDB(t)
 				for _, id := range []byte{1, 2} {
 					base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 				}
@@ -1102,7 +1161,7 @@ func TestProcessBlockParallelTransferFeeRoutingDifferential(t *testing.T) {
 				if _, err := base.Commit(); err != nil {
 					t.Fatal(err)
 				}
-				return base
+				return base, diskdb
 			}
 
 			tx := makeTestTransferTx(1, 2, 123_456)
@@ -1130,13 +1189,13 @@ func TestProcessBlockParallelTransferFeeRoutingDifferential(t *testing.T) {
 			balanceMatchesBefore := parallelTransferBalanceOracleMatchesCounter.Snapshot().Count()
 			balanceFallbacksBefore := parallelTransferBalanceOracleFallbacksCounter.Snapshot().Count()
 			serialMatchesBefore := parallelTransferSerialVerifyMatchesCounter.Snapshot().Count()
-			base := newBase()
-			serialState, err := base.Copy()
+			base, diskdb := newBase()
+			serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 			if err != nil {
 				t.Fatal(err)
 			}
 			serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-			parallelState, err := base.Copy()
+			parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1235,8 +1294,8 @@ func TestProcessBlockParallelTransfersRandomizedDifferential(t *testing.T) {
 		seedCount        = 16
 		transactionCount = 96
 	)
-	newBase := func(seed int64) *state.StateDB {
-		base := newTestState(t)
+	newBase := func(seed int64) (*state.StateDB, ethdb.Database) {
+		base, diskdb := newTestStateWithDB(t)
 		for id := byte(1); id <= 60; id++ {
 			base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 			base.AddBalance(testProcessorAddr(id), 1_000_000_000)
@@ -1265,7 +1324,7 @@ func TestProcessBlockParallelTransfersRandomizedDifferential(t *testing.T) {
 		if _, err := base.Commit(); err != nil {
 			t.Fatal(err)
 		}
-		return base
+		return base, diskdb
 	}
 	makeTransaction := func(seed int64, txIndex int, from, to byte, amount int64) *types.Transaction {
 		tx := makeTestTransferTx(from, to, amount)
@@ -1333,13 +1392,13 @@ func TestProcessBlockParallelTransfersRandomizedDifferential(t *testing.T) {
 				return infos, trace, finalBalances, processErr
 			}
 
-			base := newBase(seed)
-			serialState, err := base.Copy()
+			base, diskdb := newBase(seed)
+			serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 			if err != nil {
 				t.Fatal(err)
 			}
 			serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-			parallelState, err := base.Copy()
+			parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1418,7 +1477,7 @@ func TestProcessBlockParallelTransfersRandomizedDifferential(t *testing.T) {
 }
 
 func TestProcessBlockParallelTransfersPreservesRepeatedRecipientBalance(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	for _, id := range []byte{1, 2, 3} {
 		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 	}
@@ -1483,12 +1542,12 @@ func TestProcessBlockParallelTransfersPreservesRepeatedRecipientBalance(t *testi
 		)
 		return infos, processErr
 	}
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1531,7 +1590,7 @@ func TestProcessBlockParallelTransfersPreservesRepeatedRecipientBalance(t *testi
 }
 
 func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -1568,32 +1627,32 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
-	transferOnlyState, err := base.Copy()
+	transferOnlyState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	transferOnlyState.SetDynamicProperties(base.DynamicProperties().Copy())
-	corruptState, err := base.Copy()
+	corruptState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	corruptState.SetDynamicProperties(base.DynamicProperties().Copy())
-	preApplyCorruptState, err := base.Copy()
+	preApplyCorruptState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	preApplyCorruptState.SetDynamicProperties(base.DynamicProperties().Copy())
-	payloadCorruptState, err := base.Copy()
+	payloadCorruptState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2001,7 +2060,7 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 }
 
 func TestProcessBlockPublishesVMInternalCreate(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2045,12 +2104,12 @@ func TestProcessBlockPublishesVMInternalCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2146,7 +2205,7 @@ func TestProcessBlockPublishesVMInternalCreate(t *testing.T) {
 }
 
 func TestProcessBlockPublishesVMCallTokenAccountKV(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2195,12 +2254,12 @@ func TestProcessBlockPublishesVMCallTokenAccountKV(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2319,7 +2378,7 @@ func TestProcessBlockPublishesVMCallTokenAccountKV(t *testing.T) {
 }
 
 func TestProcessBlockPublishesVMFreezeResourceAccountKV(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2353,12 +2412,12 @@ func TestProcessBlockPublishesVMFreezeResourceAccountKV(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2480,7 +2539,7 @@ func TestProcessBlockPublishesVMFreezeResourceAccountKV(t *testing.T) {
 }
 
 func TestProcessBlockVMFreezeSharedWeightSerializesConflict(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2519,12 +2578,12 @@ func TestProcessBlockVMFreezeSharedWeightSerializesConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2608,7 +2667,7 @@ func TestProcessBlockVMFreezeSharedWeightSerializesConflict(t *testing.T) {
 }
 
 func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2648,12 +2707,12 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2758,7 +2817,7 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 }
 
 func TestProcessBlockVMSelfDestructFallsBackBeforeOracle(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2791,12 +2850,12 @@ func TestProcessBlockVMSelfDestructFallsBackBeforeOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2876,7 +2935,7 @@ func TestProcessBlockVMSelfDestructFallsBackBeforeOracle(t *testing.T) {
 }
 
 func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -2905,12 +2964,12 @@ func TestProcessBlockVMPublisherFallsBackOnStorageConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3057,12 +3116,12 @@ func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3134,7 +3193,7 @@ func TestProcessBlockVMPublisherRetainsCachedCodeAfterHotPrune(t *testing.T) {
 }
 
 func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
 	dynProps.SetAllowAdaptiveEnergy(true)
@@ -3159,12 +3218,12 @@ func TestProcessBlockPublishesBoundaryReadyAsyncVMRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3710,7 +3769,7 @@ func TestProcessBlockPublishesAsyncSenderRetryOnOrdinaryBlock(t *testing.T) {
 
 func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64) {
 	t.Helper()
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	for id := byte(1); id <= 250; id++ {
 		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 	}
@@ -3722,12 +3781,12 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	if _, err := base.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3984,7 +4043,7 @@ func TestProcessBlockReincarnatesSenderRetryAfterLaterConflict(t *testing.T) {
 }
 
 func TestProcessBlockPublishesVersionedSenderChain(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	for _, id := range []byte{1, 2, 3} {
 		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 	}
@@ -3992,12 +4051,12 @@ func TestProcessBlockPublishesVersionedSenderChain(t *testing.T) {
 	if _, err := base.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4072,7 +4131,7 @@ func TestProcessBlockPublishesVersionedSenderChain(t *testing.T) {
 }
 
 func TestProcessBlockParallelTransfersFallsBackWhenPublicNetLimitIsExhausted(t *testing.T) {
-	base := newTestState(t)
+	base, diskdb := newTestStateWithDB(t)
 	for _, id := range []byte{1, 2, 3, 4} {
 		base.CreateAccount(testProcessorAddr(id), corepb.AccountType_Normal)
 	}
@@ -4082,12 +4141,12 @@ func TestProcessBlockParallelTransfersFallsBackWhenPublicNetLimitIsExhausted(t *
 	if _, err := base.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	serialState, err := base.Copy()
+	serialState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialState.SetDynamicProperties(base.DynamicProperties().Copy())
-	parallelState, err := base.Copy()
+	parallelState, err := copyProcessBlockStateForCommit(t, base, diskdb)
 	if err != nil {
 		t.Fatal(err)
 	}

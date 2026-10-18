@@ -414,7 +414,7 @@ func TestBuildBlock_FinalizesSelfDestructBetweenTransactions(t *testing.T) {
 	code := append([]byte{0x73}, owner.Bytes()[1:]...)
 	code = append(code, 0xff)
 	statedb.SetCode(contractAddr, code)
-	newRoot, err := statedb.Commit()
+	newRoot, err := commitGenesisFixture(t, diskdb, statedb)
 	if err != nil {
 		t.Fatalf("commit seeded contract: %v", err)
 	}
@@ -553,7 +553,7 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 	if err := genesisState.WriteCycleBrokerage(curCycle, witnessAddr.Bytes(), brokerage); err != nil {
 		t.Fatalf("seed cycle brokerage: %v", err)
 	}
-	newGenesisRoot, err := genesisState.Commit()
+	newGenesisRoot, err := commitGenesisFixture(t, diskdb, genesisState)
 	if err != nil {
 		t.Fatalf("commit cycle brokerage seed: %v", err)
 	}

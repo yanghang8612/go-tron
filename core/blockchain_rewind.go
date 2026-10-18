@@ -588,7 +588,6 @@ func (bc *BlockChain) walkUnwindStates(height, currentHead uint64, visit func(ui
 			return err
 		}
 		db.SetAccountKVIndexStore(view)
-		db.SetAccountKVIndexReads(true)
 		db.SetStateCodeReader(view)
 		if err = visit(n, block, db, view); err != nil {
 			return err
@@ -819,7 +818,6 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 		return err
 	}
 	rewoundState.SetAccountKVIndexStore(transition)
-	rewoundState.SetAccountKVIndexReads(true)
 	rewoundDP := state.LoadDynamicProperties(transition, rewoundState)
 	rewoundDP.SetLatestBlockHeaderNumber(int64(height))
 	rewoundDP.SetLatestBlockHeaderTimestamp(target.Timestamp())

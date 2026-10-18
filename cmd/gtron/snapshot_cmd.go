@@ -800,7 +800,7 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 		result.Verification.ActiveSegments,
 		result.ChangesRestored,
 		result.TxRangesRestored,
-		result.RestoredTxNum,
+		result.Progress.HistoryBuildTxNum,
 	)
 	if freezerResult.HasRange {
 		fmt.Printf("Chain freezer restored: blocks=[%d,%d] count=%d coldIndexSegments=%d blockIndexes=%d txIndexes=%d\n",

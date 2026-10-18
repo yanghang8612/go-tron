@@ -86,7 +86,6 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	}
 
 	statedb.SetAccountKVIndexStore(buildBuf)
-	statedb.SetAccountKVIndexReads(true)
 
 	// statedb is already opened at parentRoot; reuse it as the system-KV reader
 	// so rooted dynprops load from the parent state the built block extends.

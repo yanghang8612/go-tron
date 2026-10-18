@@ -32,13 +32,20 @@ func runtimePostingPruneChunk(bc postingPruneChain, gate *maintenance.HeavyWorkG
 	return func(ctx context.Context, boundary pruning.PostingPruneBoundary, anchor common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits) (pruning.PostingPruneChunkOutcome, error) {
 		out := pruning.PostingPruneChunkOutcome{}
 		admit := func() (func(), bool) {
-			if lockedLoad == nil || !pruning.PostingPrunePressureReady(lockedLoad(), time.Now()) {
+			if lockedLoad == nil {
+				out.PressureDeferred = true
+				return nil, false
+			}
+			ready, relief := pruning.PostingPrunePressureAdmission(lockedLoad(), time.Now())
+			if !ready {
 				out.PressureDeferred = true
 				return nil, false
 			}
 			release, ok := gate.TryAcquire()
 			if !ok {
 				out.GateDeferred = true
+			} else {
+				out.DebtRelief = relief
 			}
 			return release, ok
 		}
