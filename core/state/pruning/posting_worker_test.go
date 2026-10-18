@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -420,6 +421,104 @@ func TestPostingDebtReliefMakesBoundedProgress(t *testing.T) {
 	}
 	if frames != 10 || directories != 1 {
 		t.Fatalf("retained index changed: frames=%d directories=%d", frames, directories)
+	}
+}
+
+func TestPostingPruneMeasuredRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		interval, held time.Duration
+		productive     bool
+		want           time.Duration
+	}{
+		{"missing-timing", time.Second, 0, true, time.Second},
+		{"negative-timing", time.Second, -1, true, time.Second},
+		{"cheap-productive", time.Second, time.Millisecond, true, 250 * time.Millisecond},
+		{"ten-ms-held", time.Second, 10 * time.Millisecond, true, 490 * time.Millisecond},
+		{"slow-productive", time.Second, 100 * time.Millisecond, true, 4900 * time.Millisecond},
+		{"cheap-no-progress", time.Second, time.Millisecond, false, time.Second},
+		{"slow-failure", time.Second, time.Second, false, 49 * time.Second},
+		{"custom-short-interval", time.Millisecond, time.Microsecond, true, time.Millisecond},
+		{"duration-saturates", time.Second, time.Duration(math.MaxInt64), true, time.Duration(math.MaxInt64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := postingPruneRecovery(tc.interval, tc.held, tc.productive); got != tc.want {
+				t.Fatalf("recovery=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPostingPruneCatchupLifecycleUsesHoldNotQueueTime(t *testing.T) {
+	second := make(chan struct{})
+	var calls atomic.Int32
+	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(10, 1) },
+		func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			if calls.Add(1) == 2 {
+				close(second)
+			}
+			return PostingPruneChunkOutcome{Anchor: common.Hash{2}, Result: rawdb.StateChangePostingPruneChunkResult{RowsScanned: 1, NextCursor: []byte{1}}, Timings: PostingPruneTimings{ChainHeld: time.Millisecond, ChainWait: 3 * time.Second}}, nil
+		})
+	cfg.Interval = 2 * time.Second
+	w := NewPostingPruneWorker(cfg)
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer w.Stop()
+	select {
+	case <-second:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("productive chunks retained long retry or counted queue wait as lock duty")
+	}
+	started := time.Now()
+	if err := w.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) > 500*time.Millisecond {
+		t.Fatal("stop failed to interrupt recovery")
+	}
+	if got := w.gauges["last/recovery_ns"].Snapshot().Value(); got != int64(250*time.Millisecond) {
+		t.Fatalf("recovery metric %d", got)
+	}
+}
+
+func TestPostingPruneRecoveryBacksOffAfterNoProgress(t *testing.T) {
+	for _, mode := range []string{"success", "pressure", "gate", "boundary", "deferred", "error", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(10, 1) },
+				func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+					out := PostingPruneChunkOutcome{Anchor: common.Hash{2}, Result: rawdb.StateChangePostingPruneChunkResult{RowsScanned: 1}, Timings: PostingPruneTimings{ChainHeld: time.Millisecond}}
+					switch mode {
+					case "pressure":
+						out.PressureDeferred = true
+					case "gate":
+						out.GateDeferred = true
+					case "boundary":
+						out.BoundaryChanged = true
+					case "deferred":
+						out.Deferred = true
+					case "empty":
+						out.Result.RowsScanned = 0
+					case "error":
+						return out, errors.New("injected")
+					}
+					return out, nil
+				})
+			cfg.Interval = time.Second
+			w := NewPostingPruneWorker(cfg)
+			defer w.Stop()
+			err := w.runChunk(context.Background())
+			if (err != nil) != (mode == "error") {
+				t.Fatal(err)
+			}
+			want := time.Second
+			if mode == "success" {
+				want = 250 * time.Millisecond
+			}
+			if w.nextDelay != want {
+				t.Fatalf("recovery=%v want %v", w.nextDelay, want)
+			}
+		})
 	}
 }
 

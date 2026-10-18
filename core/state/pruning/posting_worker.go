@@ -3,6 +3,7 @@ package pruning
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -72,6 +73,7 @@ type PostingPruneWorker struct {
 	gauges       map[string]*metrics.Gauge
 	counts       map[string]uint64
 	lastErrorLog time.Time
+	nextDelay    time.Duration
 }
 
 func NewPostingPruneWorker(cfg PostingPruneWorkerConfig) *PostingPruneWorker {
@@ -88,7 +90,7 @@ func NewPostingPruneWorker(cfg PostingPruneWorkerConfig) *PostingPruneWorker {
 		cfg.MetricsNamespace = "state/prune/posting/"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &PostingPruneWorker{cfg: cfg, ctx: ctx, cancel: cancel, done: make(chan struct{}), gauges: make(map[string]*metrics.Gauge), counts: make(map[string]uint64)}
+	w := &PostingPruneWorker{cfg: cfg, ctx: ctx, cancel: cancel, done: make(chan struct{}), gauges: make(map[string]*metrics.Gauge), counts: make(map[string]uint64), nextDelay: cfg.Interval}
 	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes", "callbacks", "debt_relief/callbacks", "debt_relief/chunks", "debt_relief/deleted_bytes"} {
 		w.gauges[name] = metrics.GetOrRegisterGauge(normalizePrunerMetricNamespace(cfg.MetricsNamespace)+name, nil)
 		w.gauges[name].Update(0)
@@ -100,6 +102,8 @@ func NewPostingPruneWorker(cfg PostingPruneWorkerConfig) *PostingPruneWorker {
 			w.gauges[name].Update(0)
 		}
 	}
+	w.gauges["last/recovery_ns"] = metrics.GetOrRegisterGauge(normalizePrunerMetricNamespace(cfg.MetricsNamespace)+"last/recovery_ns", nil)
+	w.gauges["last/recovery_ns"].Update(int64(cfg.Interval))
 	return w
 }
 
@@ -145,7 +149,7 @@ func (w *PostingPruneWorker) loop() {
 			log.Warn("Posting prune chunk failed; retaining cursor", "err", err)
 			w.lastErrorLog = time.Now()
 		}
-		timer := time.NewTimer(w.cfg.Interval)
+		timer := time.NewTimer(w.nextDelay)
 		select {
 		case <-w.ctx.Done():
 			timer.Stop()
@@ -153,6 +157,26 @@ func (w *PostingPruneWorker) loop() {
 		case <-timer.C:
 		}
 	}
+}
+
+// postingPruneRecovery leaves 49 times the actual writer-lock hold as recovery:
+// a completed work/recovery pair targets at most 2% chain-lock duty. Queueing
+// for the lock consumes no exclusive work budget. Healthy productive chunks
+// can retry every 250ms; missing timing and no-progress attempts keep the
+// configured retry interval. Slow failures also receive their measured rest.
+// This does not bound the latency of a single engine I/O or lock wait.
+func postingPruneRecovery(interval, held time.Duration, productive bool) time.Duration {
+	if held <= 0 {
+		return interval
+	}
+	minimum := interval
+	if productive {
+		minimum = min(minimum, 250*time.Millisecond)
+	}
+	if held > time.Duration(math.MaxInt64/49) {
+		return time.Duration(math.MaxInt64)
+	}
+	return max(minimum, held*49)
 }
 
 func (w *PostingPruneWorker) add(name string, n uint64) {
@@ -197,6 +221,8 @@ func (w *PostingPruneWorker) clearSweep() {
 
 // runChunk is owned by loop; tests call it only without a running lifecycle.
 func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
+	w.nextDelay = w.cfg.Interval
+	defer func() { w.gauges["last/recovery_ns"].Update(int64(w.nextDelay)) }()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -239,6 +265,8 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 	started := time.Now()
 	out, err := w.cfg.Chunk(ctx, w.target, w.anchor, w.cursor, w.cfg.Limits)
 	elapsed := time.Since(started)
+	productive := err == nil && !out.Deferred && !out.PressureDeferred && !out.GateDeferred && !out.BoundaryChanged && out.Result.RowsScanned > 0
+	w.nextDelay = postingPruneRecovery(w.cfg.Interval, out.Timings.ChainHeld, productive)
 	w.add("callbacks", 1)
 	if out.DebtRelief {
 		w.add("debt_relief/callbacks", 1)

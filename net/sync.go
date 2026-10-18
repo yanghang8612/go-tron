@@ -215,6 +215,8 @@ var (
 	stateHistoryIndexStagePassesCounter       = metrics.NewRegisteredCounter("sync/stage/state_history_index/passes", nil)
 	stateHistoryIndexStageBlocksCounter       = metrics.NewRegisteredCounter("sync/stage/state_history_index/blocks", nil)
 	stateHistoryIndexStageChangesCounter      = metrics.NewRegisteredCounter("sync/stage/state_history_index/changes", nil)
+	stateHistoryIndexPostingFramesCounter     = metrics.NewRegisteredCounter("sync/stage/state_history_index/posting_frames_written", nil)
+	stateHistoryIndexDirectoryWritesCounter   = metrics.NewRegisteredCounter("sync/stage/state_history_index/directory_writes", nil)
 	stateHistoryIndexStageAppliedCounter      = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_applied", nil)
 	stateHistoryIndexStageInputBytesCounter   = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_input_bytes", nil)
 	stateHistoryIndexStageBatchWritesCounter  = metrics.NewRegisteredCounter("sync/stage/state_history_index/etl_batch_writes", nil)
@@ -3393,6 +3395,10 @@ func (ss *SyncService) advanceStateHistoryIndexStageWithMinimum(minBlocks uint64
 		if result.Rebuilt != nil {
 			stateHistoryIndexStageBlocksCounter.Inc(int64(result.Rebuilt.BlocksScanned))
 			stateHistoryIndexStageChangesCounter.Inc(int64(result.Rebuilt.ChangesScanned))
+			// ETL.Applied counts unpacked block references, not physical frames.
+			// Directory writes include upserts of already existing logical keys.
+			stateHistoryIndexPostingFramesCounter.Inc(int64(result.Rebuilt.PostingRows))
+			stateHistoryIndexDirectoryWritesCounter.Inc(int64(result.Rebuilt.DirectoryRows))
 			stateHistoryIndexStageAppliedCounter.Inc(int64(result.Rebuilt.ETL.Applied))
 			stateHistoryIndexStageInputBytesCounter.Inc(int64(result.Rebuilt.ETL.InputBytes))
 			stateHistoryIndexStageBatchWritesCounter.Inc(int64(result.Rebuilt.ETL.BatchWrites))
