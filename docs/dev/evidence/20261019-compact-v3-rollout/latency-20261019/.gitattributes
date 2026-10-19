@@ -1,0 +1,4 @@
+# Preserve unified diff context and native pprof output exactly as sealed.
+candidate-read-path.patch -whitespace
+precompact-read-path.diff -whitespace
+cpu-20261019T101936/query-raw.txt -whitespace
