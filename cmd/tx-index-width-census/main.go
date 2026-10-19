@@ -65,7 +65,7 @@ func be64(b []byte, n int) uint64 { return binary.BigEndian.Uint64(b[n : n+8]) }
 func be32(b []byte, n int) uint32 { return binary.BigEndian.Uint32(b[n : n+4]) }
 func inspect(data []byte, ref manifestRun) (s runStats, err error) {
 	fail := func(msg string) (runStats, error) { return s, errors.New(msg) }
-	if len(data) < 128 || string(data[:8]) != "gtxi0001" || be32(data, 8) != 1 || be32(data, 12) != 128 || be32(data, 20) != 64 {
+	if len(data) < 128 || string(data[:8]) != "gtxi0001" || (be32(data, 8) != 1 && be32(data, 8) != 2) || be32(data, 12) != 128 || be32(data, 20) != 64 {
 		return fail("bad header")
 	}
 	if crc32.Checksum(data[:84], castagnoli) != be32(data, 84) {
@@ -87,7 +87,7 @@ func inspect(data []byte, ref manifestRun) (s runStats, err error) {
 	}
 	sum := sha256.Sum256(data)
 	s = runStats{File: ref.File, SHA256: hex.EncodeToString(sum[:]), Start: start, End: end, Rows: rows, Bytes: uint64(len(data))}
-	var seen uint64
+	var seen, storedLocationBytes uint64
 	for i := uint64(0); i+1 < entries; i++ {
 		a, z := be64(directory, int(i*8)), be64(directory, int((i+1)*8))
 		if a < off || z < a || z > uint64(len(data)) {
@@ -97,13 +97,20 @@ func inspect(data []byte, ref manifestRun) (s runStats, err error) {
 			continue
 		}
 		b := data[a:z]
-		if len(b) < 16 || (len(b)-16)%16 != 0 {
+		if len(b) < 16 {
 			return fail("bucket span")
 		}
-		n := uint64((len(b) - 16) / 16)
-		if n > 1<<20 || uint64(be32(b, 0)) != n || crc32.Checksum(b[:12], castagnoli) != be32(b, 12) {
+		count := be32(b, 0)
+		width := uint64(8)
+		n := uint64(count)
+		if be32(data, 8) == 2 {
+			width = uint64(count >> 28)
+			n = uint64(count & ((1 << 28) - 1))
+		}
+		if width < 1 || width > 8 || n > 1<<20 || uint64(len(b)) != 16+n*(8+width) || crc32.Checksum(b[:12], castagnoli) != be32(b, 12) {
 			return fail("bucket header")
 		}
+		storedLocationBytes += n * width
 		fps := b[16 : 16+8*n]
 		locs := b[16+8*n:]
 		if crc32.Checksum(fps, castagnoli) != be32(b, 4) || crc32.Checksum(locs, castagnoli) != be32(b, 8) {
@@ -111,7 +118,16 @@ func inspect(data []byte, ref manifestRun) (s runStats, err error) {
 		}
 		s.Buckets++
 		for j := uint64(0); j < n; j++ {
-			loc := be64(locs, int(j*8))
+			var loc uint64
+			for _, v := range locs[j*width : (j+1)*width] {
+				loc = loc<<8 | uint64(v)
+			}
+			if width < 8 {
+				if loc>>16 >= end-start || start+(loc>>16) >= 1<<47 {
+					return fail("bad relative location")
+				}
+				loc = marker | ((start + (loc >> 16)) << 16) | (loc & 65535)
+			}
 			block := loc
 			if loc&marker != 0 {
 				block = (loc &^ marker) >> 16
@@ -139,7 +155,7 @@ func inspect(data []byte, ref manifestRun) (s runStats, err error) {
 	s.CandidateBytes = s.Bytes
 	if s.Packed == rows {
 		s.RelativeWidth = max(1, (bits.Len64(s.MaxRelative)+7)/8)
-		s.CandidateBytes -= rows * uint64(8-s.RelativeWidth)
+		s.CandidateBytes = min(s.Bytes, s.Bytes-storedLocationBytes+rows*uint64(s.RelativeWidth))
 	}
 	return s, nil
 }

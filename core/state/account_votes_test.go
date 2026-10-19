@@ -112,7 +112,7 @@ func TestAccountVotesPersistOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := decodeStoredAccountCore(t, envelope)
+	stored := decodeStoredAccountCore(t, envelope, addr)
 	if len(stored.Votes) != 0 {
 		t.Fatalf("split votes leaked into account envelope: %+v", stored.Votes)
 	}
@@ -249,7 +249,7 @@ func TestStateDBCopyKeepsSplitFieldsOutOfAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := decodeStoredAccountCore(t, envelope)
+	stored := decodeStoredAccountCore(t, envelope, addr)
 	if len(stored.AssetV2) != 0 || stored.OwnerPermission != nil || len(stored.Votes) != 0 || stored.AccountResource != nil || len(stored.Frozen) != 0 || stored.TronPower != nil {
 		t.Fatalf("copied account leaked split fields into envelope: %+v", &stored)
 	}

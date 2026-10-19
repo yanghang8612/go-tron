@@ -218,7 +218,7 @@ func TestJournalAccountDomainFlushStartsNewPreimageInterval(t *testing.T) {
 		t.Fatalf("journal entries across domain flush = %d, want 2", got)
 	}
 	second := sdb.journal.entries[1].(accountChange)
-	prev, err := types.UnmarshalAccount(second.prev)
+	prev, err := types.UnmarshalAccount(second.prev, addr)
 	if err != nil {
 		t.Fatalf("decode second pre-image: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestAccountProtoCacheTracksEncodeAndRevert(t *testing.T) {
 	if obj.accountProto == nil {
 		t.Fatal("account revert did not restore the deterministic proto cache")
 	}
-	restored, err := types.UnmarshalAccount(obj.accountProto)
+	restored, err := types.UnmarshalAccount(obj.accountProto, addr)
 	if err != nil {
 		t.Fatal(err)
 	}

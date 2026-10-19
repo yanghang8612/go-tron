@@ -64,7 +64,7 @@ func (s *StateDB) hydrateTransactionVersionedAccount(addr tcommon.Address, obj *
 			s.setError(fmt.Errorf("decode transaction-versioned account envelope %s from writer %d: %w", addr.Hex(), writer, err))
 			return nil
 		}
-		account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
+		account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto, addr)
 		if err != nil {
 			s.setError(fmt.Errorf("decode transaction-versioned account core %s from writer %d: %w", addr.Hex(), writer, err))
 			return nil

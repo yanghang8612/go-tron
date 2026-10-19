@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/tronprotocol/go-tron/common"
 
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -13,7 +14,8 @@ var accountStorageV4Magic = [...]byte{0x47, 0x54, 0x52, 0x43} // "GTRC"
 
 const (
 	accountStorageV4CodecVersion byte   = 1
-	accountStorageV4KnownMask    uint32 = 1<<28 - 1
+	accountStorageV4KnownMask    uint32 = 1<<29 - 1
+	accountStorageOwnerAddress   uint32 = 1 << 28
 )
 
 // IsAccountStorageCoreV4 distinguishes the internal account storage codec from
@@ -44,7 +46,7 @@ func accountStorageV4BytesSize(value []byte) int {
 	return accountStorageV4VarintSize(uint64(len(value))) + len(value)
 }
 
-func accountStorageV4Presence(pb *corepb.Account) uint32 {
+func accountStorageV4Presence(pb *corepb.Account, owner ...common.Address) uint32 {
 	var fields uint32
 	setBytes := func(bit uint, value []byte) {
 		if len(value) != 0 {
@@ -94,13 +96,16 @@ func accountStorageV4Presence(pb *corepb.Account) uint32 {
 	setInt(25, pb.DelegatedFrozenV2BalanceForBandwidth)
 	setInt(26, pb.AcquiredDelegatedFrozenV2BalanceForBandwidth)
 	setBytes(27, pb.ProtoReflect().GetUnknown())
+	if len(owner) == 1 && owner[0][0] == common.AddressPrefixMainnet && bytes.Equal(pb.Address, owner[0][:]) {
+		fields = fields&^(1<<2) | accountStorageOwnerAddress
+	}
 	return fields
 }
 
 // StorageCoreV4Size returns the exact size of MarshalStorageCoreV4. A presence
 // bitmap keeps sparse accounts compact while signed varints avoid the ten-byte
 // penalty protobuf applies to negative int64 values.
-func (a *Account) StorageCoreV4Size() (int, error) {
+func (a *Account) StorageCoreV4Size(owner ...common.Address) (int, error) {
 	if a == nil || a.pb == nil {
 		return 0, nil
 	}
@@ -108,7 +113,7 @@ func (a *Account) StorageCoreV4Size() (int, error) {
 		return 0, errors.New("account protobuf schema changed; update storage-v4 codec")
 	}
 	pb := a.pb
-	fields := accountStorageV4Presence(pb)
+	fields := accountStorageV4Presence(pb, owner...)
 	size := len(accountStorageV4Magic) + 1 + 4
 	addBytes := func(bit uint, value []byte) {
 		if fields&(1<<bit) != 0 {
@@ -160,7 +165,7 @@ func appendAccountStorageV4Int64(dst []byte, value int64) []byte {
 // core. The field bitmap is the schema; present values follow in bit order.
 // Unknown protobuf fields are retained as an opaque final field so a
 // load/write cycle never discards data introduced by a newer java-tron schema.
-func (a *Account) AppendStorageCoreV4(dst []byte) ([]byte, error) {
+func (a *Account) AppendStorageCoreV4(dst []byte, owner ...common.Address) ([]byte, error) {
 	if a == nil || a.pb == nil {
 		return dst, nil
 	}
@@ -168,9 +173,13 @@ func (a *Account) AppendStorageCoreV4(dst []byte) ([]byte, error) {
 		return dst, errors.New("account protobuf schema changed; update storage-v4 codec")
 	}
 	pb := a.pb
-	fields := accountStorageV4Presence(pb)
+	fields := accountStorageV4Presence(pb, owner...)
 	dst = append(dst, accountStorageV4Magic[:]...)
-	dst = append(dst, accountStorageV4CodecVersion)
+	version := accountStorageV4CodecVersion
+	if fields&accountStorageOwnerAddress != 0 {
+		version = 2
+	}
+	dst = append(dst, version)
 	var bitmap [4]byte
 	binary.BigEndian.PutUint32(bitmap[:], fields)
 	dst = append(dst, bitmap[:]...)
@@ -211,12 +220,12 @@ func (a *Account) AppendStorageCoreV4(dst []byte) ([]byte, error) {
 	return dst, nil
 }
 
-func (a *Account) MarshalStorageCoreV4() ([]byte, error) {
-	size, err := a.StorageCoreV4Size()
+func (a *Account) MarshalStorageCoreV4(owner ...common.Address) ([]byte, error) {
+	size, err := a.StorageCoreV4Size(owner...)
 	if err != nil || size == 0 {
 		return nil, err
 	}
-	return a.AppendStorageCoreV4(make([]byte, 0, size))
+	return a.AppendStorageCoreV4(make([]byte, 0, size), owner...)
 }
 
 type accountStorageV4Decoder struct {
@@ -267,19 +276,25 @@ func (d *accountStorageV4Decoder) i64() (int64, error) {
 
 // UnmarshalAccountStorageCoreV4 decodes only the internal v4 storage core.
 // Complete java-tron protobuf accounts continue to use UnmarshalAccount.
-func UnmarshalAccountStorageCoreV4(data []byte) (*Account, error) {
+func UnmarshalAccountStorageCoreV4(data []byte, owner ...common.Address) (*Account, error) {
 	if !IsAccountStorageCoreV4(data) {
 		return nil, errors.New("account storage-v4 magic not found")
 	}
 	if len(data) < 9 {
 		return nil, errors.New("truncated account storage-v4 header")
 	}
-	if data[4] != accountStorageV4CodecVersion {
+	if data[4] != accountStorageV4CodecVersion && data[4] != 2 {
 		return nil, fmt.Errorf("unsupported account storage codec version %d", data[4])
 	}
 	fields := binary.BigEndian.Uint32(data[5:9])
 	if fields&^accountStorageV4KnownMask != 0 {
 		return nil, fmt.Errorf("account storage-v4 has unknown bitmap bits %08x", fields&^accountStorageV4KnownMask)
+	}
+	if err := validateAccountStorageOwnerFlag(data[4], fields); err != nil {
+		return nil, err
+	}
+	if fields&accountStorageOwnerAddress != 0 && len(owner) != 1 {
+		return nil, errors.New("owner-elided account core requires row owner")
 	}
 	d := &accountStorageV4Decoder{data: data, off: 9}
 	pb := new(corepb.Account)
@@ -329,6 +344,9 @@ func UnmarshalAccountStorageCoreV4(data []byte) (*Account, error) {
 	}
 	if err := getBytes(2, &pb.Address); err != nil {
 		return nil, err
+	}
+	if fields&accountStorageOwnerAddress != 0 {
+		pb.Address = bytes.Clone(owner[0][:])
 	}
 	for _, field := range []struct {
 		bit    uint
@@ -391,4 +409,12 @@ func UnmarshalAccountStorageCoreV4(data []byte) (*Account, error) {
 	}
 	pb.ProtoReflect().SetUnknown(unknown)
 	return NewAccountFromPB(pb), nil
+}
+
+func validateAccountStorageOwnerFlag(version byte, fields uint32) error {
+	elided := fields&accountStorageOwnerAddress != 0
+	if (version == 2) != elided || elided && fields&(1<<2) != 0 {
+		return errors.New("invalid owner-elided account core flags")
+	}
+	return nil
 }

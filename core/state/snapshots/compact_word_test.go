@@ -59,3 +59,36 @@ func TestCompactManifestRejectsOldStateFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestLatestBinaryCompactUint64ExactAndCanonical(t *testing.T) {
+	for leading := 0; leading <= 8; leading++ {
+		word := make([]byte, 8)
+		for i := leading; i < 8; i++ {
+			word[i] = byte(i + 1)
+		}
+		encoded, frame, err := encodeLatestBinaryValue(word)
+		if err != nil || frame.compactUint64 != (leading > 0) || len(encoded) != 8-leading {
+			t.Fatal(leading, frame, encoded, err)
+		}
+		var buf bytes.Buffer
+		if err := writeLatestBinaryEntry(&buf, 0, LatestEntry{Key: []byte("scalar"), Value: word}); err != nil {
+			t.Fatal(err)
+		}
+		record := buf.Bytes()
+		if leading > 0 && binary.BigEndian.Uint32(record[4:8])&latestBinaryValueUint64Flag == 0 {
+			t.Fatal("missing uint64 flag")
+		}
+		entry, rest, err := decodeLatestBinaryEntry(record, true)
+		if err != nil || len(rest) != 0 || !bytes.Equal(entry.Value, word) {
+			t.Fatal("uint64 framed roundtrip", leading, err)
+		}
+	}
+	for _, bad := range []latestBinaryValueFrame{{compactUint64: true, compactWord: true}, {compactUint64: true, compressed: true}, {compactUint64: true, encodedLen: 8}} {
+		if err := validateLatestBinaryValueFrame(bad); err == nil {
+			t.Fatal("invalid uint64 flags accepted")
+		}
+	}
+	if _, err := decodeLatestBinaryValue([]byte{0, 1}, latestBinaryValueFrame{compactUint64: true, encodedLen: 2}); err == nil {
+		t.Fatal("nonminimal uint64 accepted")
+	}
+}

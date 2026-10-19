@@ -1388,3 +1388,18 @@ var stateCommitmentUnwindCleanupKey = []byte("state-muhash3072-unwind-cleanup-v1
 
 // Immutable fresh-genesis replay recipe; never one accumulator per block.
 var stateGenesisRecipeKey = []byte("state-muhash3072-genesis-recipe-v1")
+
+// VotesIndex keys are logical keys in WitnessVoteState, not physical DB keys.
+func VotesIndexMetaStateKey() []byte      { return []byte("vi3-count") }
+func VotesIndexPageStatePrefix() []byte   { return []byte("vi3-page-") }
+func VotesIndexMemberStatePrefix() []byte { return []byte("vi3-member-") }
+func VotesIndexPageStateKey(page uint64) []byte {
+	return binary.BigEndian.AppendUint64(VotesIndexPageStatePrefix(), page)
+}
+func VotesIndexMemberStateKey(owner common.Address) []byte {
+	return append(VotesIndexMemberStatePrefix(), owner[:]...)
+}
+
+// LegacyVotesIndexStateKey is reserved for isolated predecessor comparisons.
+// Production enumeration uses the rooted v3 count/pages/membership accessors.
+func LegacyVotesIndexStateKey() []byte { return []byte("VotesIndex") }

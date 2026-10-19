@@ -36,6 +36,25 @@ func rewriteStateDomainChangeBinaryIndexV7(file *os.File, name string) (*os.File
 }
 
 func rewriteStateDomainChangeBinaryIndexV7Context(ctx context.Context, file *os.File, name string) (*os.File, string, error) {
+	inner, innerName, err := rewriteStateDomainChangeBinaryIndexV7UnpagedContext(ctx, file, name)
+	if err != nil {
+		return nil, "", err
+	}
+	header, err := readStateDomainChangeBinaryHeaderAt(inner, stateDomainChangeBinaryIndexMagic)
+	if err != nil {
+		inner.Close()
+		os.Remove(innerName)
+		return nil, "", err
+	}
+	out, outName, err := rewriteHistoryIndexPagesContext(ctx, inner, innerName, header)
+	if err != nil {
+		inner.Close()
+		os.Remove(innerName)
+	}
+	return out, outName, err
+}
+
+func rewriteStateDomainChangeBinaryIndexV7UnpagedContext(ctx context.Context, file *os.File, name string) (*os.File, string, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, "", err
 	}
@@ -134,7 +153,7 @@ func rewriteStateDomainChangeBinaryIndexV7Context(ctx context.Context, file *os.
 	}
 	var rawHeader [stateDomainChangeBinaryIndexV7HeaderSize]byte
 	copy(rawHeader[:8], stateDomainChangeBinaryIndexMagic[:])
-	binary.BigEndian.PutUint32(rawHeader[8:12], stateDomainChangeBinaryIndexCurrentVersion)
+	binary.BigEndian.PutUint32(rawHeader[8:12], stateDomainChangeBinaryVersionV7)
 	binary.BigEndian.PutUint64(rawHeader[12:20], header.fromTxNum)
 	binary.BigEndian.PutUint64(rawHeader[20:28], header.toTxNum)
 	binary.BigEndian.PutUint64(rawHeader[28:36], header.count)
@@ -175,7 +194,7 @@ func rewriteStateDomainChangeBinaryIndexV7Context(ctx context.Context, file *os.
 }
 
 type stateDomainChangeBinaryIndexV7Reader struct {
-	file   *os.File
+	file   historySegmentReader
 	header stateDomainChangeBinaryHeader
 	frames []stateDomainChangeBinaryIndexV7Frame
 
@@ -189,7 +208,23 @@ func openStateDomainChangeBinaryIndexV7Reader(file *os.File, size uint64, header
 	return openStateDomainChangeBinaryIndexV7ReaderContext(nil, file, size, header)
 }
 
-func openStateDomainChangeBinaryIndexV7ReaderContext(ctx context.Context, file *os.File, size uint64, header stateDomainChangeBinaryHeader) (*stateDomainChangeBinaryIndexV7Reader, error) {
+func openStateDomainChangeBinaryIndexV7ReaderContext(ctx context.Context, file historySegmentReader, size uint64, header stateDomainChangeBinaryHeader) (*stateDomainChangeBinaryIndexV7Reader, error) {
+	if header.version == 8 {
+		pages, err := openHistoryIndexPages(file, size, header)
+		if err != nil {
+			return nil, err
+		}
+		inner, err := readStateDomainChangeBinaryHeaderAt(pages, stateDomainChangeBinaryIndexMagic)
+		if err != nil || inner.version != stateDomainChangeBinaryVersionV7 || inner.fromTxNum != header.fromTxNum || inner.toTxNum != header.toTxNum || inner.count != header.count {
+			pages.Close()
+			return nil, errors.New("snapshots: paged index inner header mismatch")
+		}
+		reader, err := openStateDomainChangeBinaryIndexV7ReaderContext(ctx, pages, pages.logical, inner)
+		if err != nil {
+			pages.Close()
+		}
+		return reader, err
+	}
 	if size < stateDomainChangeBinaryIndexV7HeaderSize {
 		return nil, io.ErrUnexpectedEOF
 	}

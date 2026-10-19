@@ -10,6 +10,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,7 +18,7 @@ import (
 
 const (
 	transactionIndexMagic               = "gtxi0001"
-	transactionIndexVersion             = uint32(1)
+	transactionIndexVersion             = uint32(2)
 	transactionIndexHeaderSize          = uint32(128)
 	transactionIndexBucketHeaderSize    = uint64(16)
 	transactionIndexDefaultPrefixBits   = uint32(20)
@@ -116,6 +117,7 @@ type TransactionIndexBuildResult struct {
 // on demand from the file.
 type TransactionIndexRun struct {
 	path       string
+	version    uint32
 	file       *os.File
 	prefixBits uint32
 	startBlock uint64
@@ -201,7 +203,16 @@ func BuildTransactionIndexRun(path string, opts TransactionIndexBuildOptions) (T
 			directory[nextDirectory] = cursor
 			nextDirectory++
 		}
-		bucketBytes := int(transactionIndexBucketHeaderSize) + len(fingerprints)*16
+		width := 1
+		for _, loc := range locations {
+			if loc&transactionLocationMarker == 0 {
+				width = 8
+				break
+			}
+			relative := (transactionIndexLocationBlock(loc)-opts.StartBlock)<<16 | (loc & 65535)
+			width = max(width, (bits.Len64(relative)+7)/8)
+		}
+		bucketBytes := int(transactionIndexBucketHeaderSize) + len(fingerprints)*(8+width)
 		if cap(bucketData) < bucketBytes {
 			bucketData = make([]byte, bucketBytes)
 		} else {
@@ -211,10 +222,17 @@ func BuildTransactionIndexRun(path string, opts TransactionIndexBuildOptions) (T
 		locationData := bucketData[transactionIndexBucketHeaderSize+uint64(len(fingerprints))*8:]
 		for i := range fingerprints {
 			binary.BigEndian.PutUint64(fingerprintData[i*8:(i+1)*8], fingerprints[i])
-			binary.BigEndian.PutUint64(locationData[i*8:(i+1)*8], locations[i])
+			loc := locations[i]
+			if width < 8 {
+				loc = (transactionIndexLocationBlock(loc)-opts.StartBlock)<<16 | (loc & 65535)
+			}
+			for j := width - 1; j >= 0; j-- {
+				locationData[i*width+j] = byte(loc)
+				loc >>= 8
+			}
 		}
 		header := bucketData[:transactionIndexBucketHeaderSize]
-		binary.BigEndian.PutUint32(header[0:4], uint32(len(fingerprints)))
+		binary.BigEndian.PutUint32(header[0:4], uint32(len(fingerprints))|uint32(width)<<28)
 		binary.BigEndian.PutUint32(header[4:8], crc32.Checksum(fingerprintData, transactionIndexCRC))
 		binary.BigEndian.PutUint32(header[8:12], crc32.Checksum(locationData, transactionIndexCRC))
 		binary.BigEndian.PutUint32(header[12:16], crc32.Checksum(header[:12], transactionIndexCRC))
@@ -344,7 +362,7 @@ func OpenTransactionIndexRun(path string) (*TransactionIndexRun, error) {
 	if _, err := io.ReadFull(file, header); err != nil {
 		return fail(fmt.Errorf("transaction index header: %w", err))
 	}
-	if string(header[:8]) != transactionIndexMagic || binary.BigEndian.Uint32(header[8:12]) != transactionIndexVersion {
+	if string(header[:8]) != transactionIndexMagic || (binary.BigEndian.Uint32(header[8:12]) != transactionIndexVersion && binary.BigEndian.Uint32(header[8:12]) != 1) {
 		return fail(errors.New("transaction index: unsupported magic or version"))
 	}
 	if binary.BigEndian.Uint32(header[12:16]) != transactionIndexHeaderSize {
@@ -352,6 +370,9 @@ func OpenTransactionIndexRun(path string) (*TransactionIndexRun, error) {
 	}
 	if crc32.Checksum(header[:84], transactionIndexCRC) != binary.BigEndian.Uint32(header[84:88]) {
 		return fail(errors.New("transaction index: header checksum mismatch"))
+	}
+	if binary.BigEndian.Uint32(header[8:12]) == 2 && !bytes.Equal(header[88:], make([]byte, len(header)-88)) {
+		return fail(errors.New("transaction index: nonzero reserved header"))
 	}
 	prefixBits := binary.BigEndian.Uint32(header[16:20])
 	if prefixBits < transactionIndexMinPrefixBits || prefixBits > transactionIndexMaxPrefixBits || binary.BigEndian.Uint32(header[20:24]) != transactionIndexFingerprintBits {
@@ -403,6 +424,7 @@ func OpenTransactionIndexRun(path string) (*TransactionIndexRun, error) {
 	}
 	return &TransactionIndexRun{
 		path:       path,
+		version:    binary.BigEndian.Uint32(header[8:12]),
 		file:       file,
 		prefixBits: prefixBits,
 		startBlock: startBlock,
@@ -439,7 +461,7 @@ func (r *TransactionIndexRun) Candidates(hash [32]byte) ([]uint64, error) {
 		return nil, errors.New("transaction index: closed reader")
 	}
 	prefix, fingerprint := transactionIndexPrefixFingerprint(hash, r.prefixBits)
-	fingerprints, locations, err := r.readBucket(prefix)
+	fingerprints, locations, width, err := r.readEncodedBucket(prefix)
 	if err != nil || len(fingerprints) == 0 {
 		return nil, err
 	}
@@ -456,7 +478,11 @@ func (r *TransactionIndexRun) Candidates(hash [32]byte) ([]uint64, error) {
 	}
 	result := make([]uint64, last-first)
 	for i := range result {
-		result[i] = binary.BigEndian.Uint64(locations[(first+i)*8 : (first+i+1)*8])
+		location, err := r.decodeLocation(locations[(first+i)*width:(first+i+1)*width], width)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = location
 	}
 	return result, nil
 }
@@ -494,49 +520,58 @@ func (r *TransactionIndexRun) VerifyContext(ctx context.Context) error {
 	return nil
 }
 
-func (r *TransactionIndexRun) readBucket(prefix uint32) ([]byte, []byte, error) {
+func (r *TransactionIndexRun) readEncodedBucket(prefix uint32) ([]byte, []byte, int, error) {
 	if uint64(prefix)+1 >= uint64(len(r.directory)) {
-		return nil, nil, errors.New("transaction index: bucket outside directory")
+		return nil, nil, 0, errors.New("transaction index: bucket outside directory")
 	}
 	start, end := r.directory[prefix], r.directory[prefix+1]
 	if start == end {
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	}
 	span := end - start
-	if span < transactionIndexBucketHeaderSize || (span-transactionIndexBucketHeaderSize)%16 != 0 {
-		return nil, nil, errors.New("transaction index: invalid bucket span")
+	if span < transactionIndexBucketHeaderSize {
+		return nil, nil, 0, errors.New("transaction index: invalid bucket span")
 	}
-	rows := (span - transactionIndexBucketHeaderSize) / 16
-	if rows > transactionIndexMaxBucketRows || span > uint64(^uint(0)>>1) {
-		return nil, nil, errors.New("transaction index: bucket exceeds safety limit")
+	if span > transactionIndexBucketHeaderSize+transactionIndexMaxBucketRows*16 || span > uint64(^uint(0)>>1) {
+		return nil, nil, 0, errors.New("transaction index: bucket exceeds safety limit")
 	}
 	data := make([]byte, int(span))
 	if _, err := r.file.ReadAt(data, int64(start)); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
+	}
+	encodedCount := binary.BigEndian.Uint32(data[:4])
+	width := 8
+	rows := uint64(encodedCount)
+	if r.version == 2 {
+		width = int(encodedCount >> 28)
+		rows = uint64(encodedCount & ((1 << 28) - 1))
+	}
+	if width < 1 || width > 8 || rows == 0 || rows > transactionIndexMaxBucketRows || span-transactionIndexBucketHeaderSize != rows*uint64(8+width) {
+		return nil, nil, 0, errors.New("transaction index: invalid location width/span")
 	}
 	header := data[:transactionIndexBucketHeaderSize]
 	if crc32.Checksum(header[:12], transactionIndexCRC) != binary.BigEndian.Uint32(header[12:16]) {
-		return nil, nil, errors.New("transaction index: bucket header checksum mismatch")
+		return nil, nil, 0, errors.New("transaction index: bucket header checksum mismatch")
 	}
-	if uint64(binary.BigEndian.Uint32(header[:4])) != rows {
-		return nil, nil, errors.New("transaction index: bucket row count mismatch")
+	if (r.version == 1 && uint64(binary.BigEndian.Uint32(header[:4])) != rows) || (r.version == 2 && uint64(binary.BigEndian.Uint32(header[:4])&((1<<28)-1)) != rows) {
+		return nil, nil, 0, errors.New("transaction index: bucket row count mismatch")
 	}
 	fingerprintData := data[transactionIndexBucketHeaderSize : transactionIndexBucketHeaderSize+rows*8]
 	locationData := data[transactionIndexBucketHeaderSize+rows*8:]
 	if crc32.Checksum(fingerprintData, transactionIndexCRC) != binary.BigEndian.Uint32(header[4:8]) {
-		return nil, nil, errors.New("transaction index: fingerprint checksum mismatch")
+		return nil, nil, 0, errors.New("transaction index: fingerprint checksum mismatch")
 	}
 	if crc32.Checksum(locationData, transactionIndexCRC) != binary.BigEndian.Uint32(header[8:12]) {
-		return nil, nil, errors.New("transaction index: location checksum mismatch")
+		return nil, nil, 0, errors.New("transaction index: location checksum mismatch")
 	}
 	for i := 1; i < int(rows); i++ {
 		previous := binary.BigEndian.Uint64(fingerprintData[(i-1)*8 : i*8])
 		current := binary.BigEndian.Uint64(fingerprintData[i*8 : (i+1)*8])
 		if current < previous {
-			return nil, nil, errors.New("transaction index: unsorted fingerprints")
+			return nil, nil, 0, errors.New("transaction index: unsorted fingerprints")
 		}
 	}
-	return fingerprintData, locationData, nil
+	return fingerprintData, locationData, width, nil
 }
 
 func visitTransactionIndexEntries(iterate TransactionIndexIterator, prefixBits uint32, visit func(uint32, uint64, TransactionIndexEntry) error) error {
@@ -578,4 +613,47 @@ func checkedMul(a, b uint64) (uint64, bool) {
 		return 0, false
 	}
 	return a * b, true
+}
+
+// readBucket exposes canonical 64-bit locations to merge/verification callers.
+func (r *TransactionIndexRun) readBucket(prefix uint32) ([]byte, []byte, error) {
+	fps, encoded, width, err := r.readEncodedBucket(prefix)
+	if err != nil {
+		return nil, nil, err
+	}
+	if width == 0 {
+		return fps, encoded, nil
+	}
+	locations := encoded
+	if width < 8 {
+		locations = make([]byte, len(fps))
+	}
+	for i := 0; i < len(fps)/8; i++ {
+		location, err := r.decodeLocation(encoded[i*width:(i+1)*width], width)
+		if err != nil {
+			return nil, nil, err
+		}
+		if width < 8 {
+			binary.BigEndian.PutUint64(locations[i*8:], location)
+		}
+	}
+	return fps, locations, nil
+}
+func (r *TransactionIndexRun) decodeLocation(encoded []byte, width int) (uint64, error) {
+	var location uint64
+	for _, b := range encoded {
+		location = location<<8 | uint64(b)
+	}
+	if width < 8 {
+		relativeBlock := location >> 16
+		if relativeBlock >= r.endBlock-r.startBlock || r.startBlock+relativeBlock >= (uint64(1)<<47) {
+			return 0, errors.New("transaction index: invalid relative location")
+		}
+		location = transactionLocationMarker | ((r.startBlock + relativeBlock) << 16) | (location & 65535)
+	}
+	block := transactionIndexLocationBlock(location)
+	if block < r.startBlock || block >= r.endBlock {
+		return 0, errors.New("transaction index: location outside run")
+	}
+	return location, nil
 }

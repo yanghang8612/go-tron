@@ -231,7 +231,7 @@ func (s *stateObject) deterministicAccountProto() ([]byte, error) {
 	if s.accountProto != nil && types.IsAccountStorageCoreV4(s.accountProto) {
 		return s.accountProto, nil
 	}
-	data, err := s.account.MarshalStorageCoreV4()
+	data, err := s.account.MarshalStorageCoreV4(s.address)
 	if err != nil {
 		return nil, err
 	}

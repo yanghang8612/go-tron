@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	latestBinarySegmentVersion  = uint32(2)
+	latestBinarySegmentVersion  = uint32(3)
 	latestBinaryAccessorVersion = uint32(1)
 	latestBinaryBTreeVersion    = uint32(1)
 
@@ -38,6 +38,7 @@ const (
 	// Raw segments have no header flag and treat all 32 bits as the value length.
 	latestBinaryValueCompressedFlag = uint32(1 << 31)
 	latestBinaryValueWordFlag       = uint32(1 << 30)
+	latestBinaryValueUint64Flag     = uint32(1 << 29)
 	latestBinaryMaxDecodedValueSize = 256 << 20
 	latestBinaryCompressMinValue    = 64
 )
@@ -92,9 +93,10 @@ type latestBinaryBTreeEntry struct {
 }
 
 type latestBinaryValueFrame struct {
-	compactWord bool
-	encodedLen  uint32
-	compressed  bool
+	compactWord   bool
+	compactUint64 bool
+	encodedLen    uint32
+	compressed    bool
 }
 
 // latestBinaryWindowReader amortizes sparse, monotonically increasing
@@ -1822,6 +1824,9 @@ func writeLatestBinaryEntry(w io.Writer, index int, entry LatestEntry) error {
 	if frame.compressed {
 		storedLen |= latestBinaryValueCompressedFlag
 	}
+	if frame.compactUint64 {
+		storedLen |= latestBinaryValueUint64Flag
+	}
 	if frame.compactWord {
 		storedLen |= latestBinaryValueWordFlag
 	}
@@ -1840,12 +1845,16 @@ func encodeLatestBinaryValue(value []byte) ([]byte, latestBinaryValueFrame, erro
 	if len(value) > latestBinaryMaxDecodedValueSize {
 		return nil, latestBinaryValueFrame{}, fmt.Errorf("decoded length %d exceeds limit %d", len(value), latestBinaryMaxDecodedValueSize)
 	}
-	if len(value) > int(latestBinaryValueWordFlag-1) {
-		return nil, latestBinaryValueFrame{}, fmt.Errorf("encoded length %d exceeds limit %d", len(value), latestBinaryValueWordFlag-1)
+	if len(value) > int(latestBinaryValueUint64Flag-1) {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("encoded length %d exceeds limit %d", len(value), latestBinaryValueUint64Flag-1)
 	}
 	if CompressLatestSegments && len(value) == common.HashLength && value[0] == 0 {
 		suffix := bytes.TrimLeft(value, "\x00")
 		return suffix, latestBinaryValueFrame{encodedLen: uint32(len(suffix)), compactWord: true}, nil
+	}
+	if CompressLatestSegments && len(value) == 8 && value[0] == 0 {
+		suffix := bytes.TrimLeft(value, "\x00")
+		return suffix, latestBinaryValueFrame{encodedLen: uint32(len(suffix)), compactUint64: true}, nil
 	}
 	frame := latestBinaryValueFrame{encodedLen: uint32(len(value))}
 	if !CompressLatestSegments || len(value) < latestBinaryCompressMinValue {
@@ -1855,8 +1864,8 @@ func encodeLatestBinaryValue(value []byte) ([]byte, latestBinaryValueFrame, erro
 	if len(compressed) >= len(value) {
 		return value, frame, nil
 	}
-	if len(compressed) > int(latestBinaryValueWordFlag-1) {
-		return nil, latestBinaryValueFrame{}, fmt.Errorf("compressed length %d exceeds limit %d", len(compressed), latestBinaryValueWordFlag-1)
+	if len(compressed) > int(latestBinaryValueUint64Flag-1) {
+		return nil, latestBinaryValueFrame{}, fmt.Errorf("compressed length %d exceeds limit %d", len(compressed), latestBinaryValueUint64Flag-1)
 	}
 	return compressed, latestBinaryValueFrame{encodedLen: uint32(len(compressed)), compressed: true}, nil
 }
@@ -1866,9 +1875,10 @@ func latestBinaryValueFrameFromStoredLength(stored uint32, compressedValues bool
 		return latestBinaryValueFrame{encodedLen: stored}, nil
 	}
 	frame := latestBinaryValueFrame{
-		encodedLen:  stored &^ (latestBinaryValueCompressedFlag | latestBinaryValueWordFlag),
-		compactWord: stored&latestBinaryValueWordFlag != 0,
-		compressed:  stored&latestBinaryValueCompressedFlag != 0,
+		encodedLen:    stored &^ (latestBinaryValueCompressedFlag | latestBinaryValueWordFlag | latestBinaryValueUint64Flag),
+		compactWord:   stored&latestBinaryValueWordFlag != 0,
+		compactUint64: stored&latestBinaryValueUint64Flag != 0,
+		compressed:    stored&latestBinaryValueCompressedFlag != 0,
 	}
 	if err := validateLatestBinaryValueFrame(frame); err != nil {
 		return latestBinaryValueFrame{}, err
@@ -1880,6 +1890,9 @@ func latestBinaryValueFrameFromStoredLength(stored uint32, compressedValues bool
 }
 
 func validateLatestBinaryValueFrame(frame latestBinaryValueFrame) error {
+	if frame.compactUint64 && (frame.compactWord || frame.compressed || frame.encodedLen >= 8) {
+		return errors.New("invalid compact uint64 frame")
+	}
 	if frame.compactWord && (frame.compressed || frame.encodedLen >= common.HashLength) {
 		return errors.New("invalid compact latest binary word frame")
 	}
@@ -1896,12 +1909,16 @@ func decodeLatestBinaryValue(encoded []byte, frame latestBinaryValueFrame) ([]by
 	if uint64(len(encoded)) != uint64(frame.encodedLen) {
 		return nil, fmt.Errorf("encoded length %d, want %d", len(encoded), frame.encodedLen)
 	}
-	if frame.compactWord {
+	if frame.compactWord || frame.compactUint64 {
 		if len(encoded) > 0 && encoded[0] == 0 {
 			return nil, errors.New("noncanonical compact latest binary word")
 		}
-		word := make([]byte, common.HashLength)
-		copy(word[common.HashLength-len(encoded):], encoded)
+		width := common.HashLength
+		if frame.compactUint64 {
+			width = 8
+		}
+		word := make([]byte, width)
+		copy(word[width-len(encoded):], encoded)
 		return word, nil
 	}
 	if !frame.compressed {

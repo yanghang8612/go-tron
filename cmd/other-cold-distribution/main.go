@@ -89,7 +89,7 @@ func observe(m map[string]*stats, name string, c *rawdb.StateDomainChange) error
 		if e != nil {
 			return e
 		}
-		acc, e := types.UnmarshalAccountStorageCoreV4(env.AccountProto)
+		acc, e := types.UnmarshalAccountStorageCoreV4(env.AccountProto, c.Owner)
 		if e != nil {
 			return e
 		}

@@ -102,7 +102,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		clearAccountFrozenBandwidthCache(stateObjects[e.address])
 		delete(stateObjects, e.address)
 	} else {
-		acc, err := types.UnmarshalAccount(e.prev)
+		acc, err := types.UnmarshalAccount(e.prev, e.address)
 		if err != nil {
 			return
 		}

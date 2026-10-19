@@ -44,7 +44,7 @@ const (
 	// The streaming builder first emits this fixed-width staging layout. The
 	// published companion is rewritten to the framed V7 layout before publish.
 	stateDomainChangeBinaryIndexVersion        = stateDomainChangeBinaryVersionV2
-	stateDomainChangeBinaryIndexCurrentVersion = stateDomainChangeBinaryVersionV7
+	stateDomainChangeBinaryIndexCurrentVersion = uint32(8)
 
 	stateDomainChangeBinaryHeaderSize     = 8 + 4 + 8 + 8 + 8
 	stateDomainChangeBinaryIndexEntrySize = 8 + 8 + 8 + 8
@@ -3515,7 +3515,7 @@ func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomai
 		return stateDomainChangeBinaryHeader{}, nil, errors.New("snapshots: invalid state-domain-change binary magic")
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 {
+	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && magic == stateDomainChangeBinaryIndexMagic) {
 		return stateDomainChangeBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", version)
 	}
 	return stateDomainChangeBinaryHeader{
@@ -4041,7 +4041,7 @@ func openStateDomainChangeBinaryIndexReaderContext(ctx context.Context, dir stri
 		_ = file.Close()
 		return nil, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary index %q range [%d,%d], want [%d,%d]", ref.Path, header.fromTxNum, header.toTxNum, ref.FromTxNum, ref.ToTxNum)
 	}
-	if header.version == stateDomainChangeBinaryIndexCurrentVersion {
+	if header.version == stateDomainChangeBinaryIndexCurrentVersion || header.version == stateDomainChangeBinaryVersionV7 {
 		reader, err := openStateDomainChangeBinaryIndexV7ReaderContext(ctx, file, uint64(stat.Size()), header)
 		if err != nil {
 			_ = file.Close()

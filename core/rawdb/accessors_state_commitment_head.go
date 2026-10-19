@@ -13,10 +13,10 @@ import (
 	"github.com/tronprotocol/go-tron/common/muhash3072"
 )
 
-const StateCommitmentHeadVersion uint16 = 2
-const StateCommitmentElementVersion uint16 = 2
+const StateCommitmentHeadVersion uint16 = 3
+const StateCommitmentElementVersion uint16 = 3
 
-var stateCommitmentHeadMagic = []byte{'G', 'M', 'H', 'H', 'E', 'A', 'D', 2}
+var stateCommitmentHeadMagic = []byte{'G', 'M', 'H', 'H', 'E', 'A', 'D', 3}
 var ErrStateCommitmentHead = errors.New("invalid MuHash latest-domain HEAD; fresh-genesis resync required")
 
 // StateCommitmentHead is a complete current source-cut commitment. Only HEAD
@@ -162,7 +162,7 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	const domain = "gtron/latest-domain/muhash3072/compact-v2\x00"
+	const domain = "gtron/latest-domain/muhash3072/compact-v3\x00"
 	out := make([]byte, 0, len(domain)+1+16+len(key)+len(value))
 	out = append(out, domain...)
 	out = append(out, family)
@@ -173,7 +173,7 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 }
 func StateCommitmentDeltaID(deltas []StateCommitmentDelta) common.Hash {
 	h := sha256.New()
-	h.Write([]byte("gtron/latest-domain/muhash-delta/compact-v2\x00"))
+	h.Write([]byte("gtron/latest-domain/muhash-delta/compact-v3\x00"))
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(len(deltas)))
 	h.Write(b[:])

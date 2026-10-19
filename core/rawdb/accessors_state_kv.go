@@ -16,6 +16,7 @@ import (
 const (
 	stateKVLatestPresencePrefix = 0x01
 	stateKVLatestWordPrefix     = 0x02
+	stateKVLatestUint64Prefix   = 0x03
 )
 
 // StateKVLatestStore is the mutable flat-latest database surface needed by
@@ -85,7 +86,7 @@ func EncodeStateKVLatestValue(value []byte) []byte {
 
 // StateKVLatestValueSize returns the canonical envelope length without allocating.
 func StateKVLatestValueSize(value []byte) int {
-	if len(value) == common.HashLength && value[0] == 0 {
+	if (len(value) == common.HashLength || len(value) == 8) && value[0] == 0 {
 		return 1 + len(bytes.TrimLeft(value, "\x00"))
 	}
 	return 1 + len(value)
@@ -95,8 +96,12 @@ func StateKVLatestValueSize(value []byte) int {
 // Callers that repeatedly replace a captured value can pass dst[:0] to reuse
 // its backing allocation; EncodeStateKVLatestValue remains the owning helper.
 func AppendStateKVLatestValue(dst, value []byte) []byte {
-	if len(value) == common.HashLength && value[0] == 0 {
-		dst = append(dst, stateKVLatestWordPrefix)
+	if (len(value) == common.HashLength || len(value) == 8) && value[0] == 0 {
+		tag := byte(stateKVLatestWordPrefix)
+		if len(value) == 8 {
+			tag = stateKVLatestUint64Prefix
+		}
+		dst = append(dst, tag)
 		return append(dst, bytes.TrimLeft(value, "\x00")...)
 	}
 	dst = append(dst, stateKVLatestPresencePrefix)
@@ -350,7 +355,7 @@ func DecodeStateKVLatestValue(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if raw[0] == stateKVLatestWordPrefix {
+	if raw[0] == stateKVLatestWordPrefix || raw[0] == stateKVLatestUint64Prefix {
 		// Compact words were already materialized into owned storage.
 		return value, nil
 	}
@@ -367,11 +372,15 @@ func decodeStateKVLatestValueNoCopy(raw []byte) ([]byte, error) {
 	if err := ValidateStateKVLatestValue(raw); err != nil {
 		return nil, err
 	}
-	if raw[0] == stateKVLatestWordPrefix {
+	if raw[0] == stateKVLatestWordPrefix || raw[0] == stateKVLatestUint64Prefix {
 		// Canonical word envelopes save at least one byte. The empty suffix
 		// is a present zero word; an ordinary present empty string has tag 1.
-		word := make([]byte, common.HashLength)
-		copy(word[common.HashLength-len(raw)+1:], raw[1:])
+		width := common.HashLength
+		if raw[0] == stateKVLatestUint64Prefix {
+			width = 8
+		}
+		word := make([]byte, width)
+		copy(word[width-len(raw)+1:], raw[1:])
 		return word, nil
 	}
 	return raw[1:], nil
@@ -383,11 +392,15 @@ func ValidateStateKVLatestValue(raw []byte) error {
 	}
 	switch raw[0] {
 	case stateKVLatestPresencePrefix:
-		if len(raw) == common.HashLength+1 && raw[1] == 0 {
+		if (len(raw) == common.HashLength+1 || len(raw) == 9) && raw[1] == 0 {
 			return fmt.Errorf("state kv latest: noncanonical uncompressed word")
 		}
-	case stateKVLatestWordPrefix:
-		if len(raw) > common.HashLength || len(raw) > 1 && raw[1] == 0 {
+	case stateKVLatestWordPrefix, stateKVLatestUint64Prefix:
+		width := common.HashLength
+		if raw[0] == stateKVLatestUint64Prefix {
+			width = 8
+		}
+		if len(raw) > width || len(raw) > 1 && raw[1] == 0 {
 			return fmt.Errorf("state kv latest: noncanonical compact word")
 		}
 	default:

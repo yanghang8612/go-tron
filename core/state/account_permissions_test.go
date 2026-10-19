@@ -50,7 +50,7 @@ func TestAccountPermissionsPersistOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := decodeStoredAccountCore(t, envelope)
+	stored := decodeStoredAccountCore(t, envelope, addr)
 	if stored.OwnerPermission != nil || stored.WitnessPermission != nil || len(stored.ActivePermission) != 0 {
 		t.Fatalf("split permissions leaked into account envelope: %+v", &stored)
 	}

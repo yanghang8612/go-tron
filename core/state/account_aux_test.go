@@ -229,7 +229,7 @@ func TestTRC10MapsPersistOutsideAccountEnvelope(t *testing.T) {
 	if envelope.Version != StateAccountVersion {
 		t.Fatalf("account version = %d, want %d", envelope.Version, StateAccountVersion)
 	}
-	stored := decodeStoredAccountCore(t, envelope)
+	stored := decodeStoredAccountCore(t, envelope, addr)
 	if len(stored.Asset)+len(stored.AssetV2)+len(stored.FreeAssetNetUsage)+len(stored.FreeAssetNetUsageV2)+len(stored.LatestAssetOperationTime)+len(stored.LatestAssetOperationTimeV2) != 0 {
 		t.Fatalf("split maps leaked into account envelope: %+v", &stored)
 	}

@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -90,6 +91,27 @@ func TestCompactStateHistoryUnwindSnapshotAndContinue(t *testing.T) {
 				v = nil
 			}
 			if err := s.SetAccountKV(owner, kvdomains.ContractStorage, key, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if h == 1 {
+			for i := 0; i < votesIndexPageEntries+1; i++ {
+				voter := testAddr(byte(i))
+				if err := s.AppendVotesIndex(voter); err != nil {
+					t.Fatal(err)
+				}
+			}
+		} else if h == 3 {
+			if err := s.WriteVotesIndex(nil); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if err := s.AppendVotesIndex(testAddr(byte(h))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, value := range [][]byte{nil, make([]byte, 8), binary.BigEndian.AppendUint64(nil, h), binary.BigEndian.AppendUint64(nil, ^uint64(0))} {
+			if err := s.SetAccountKV(owner, kvdomains.AccountAssetV2, []byte{byte(i)}, value); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -185,6 +207,31 @@ func TestCompactStateHistoryUnwindSnapshotAndContinue(t *testing.T) {
 				t.Fatal(err)
 			}
 			view.SetHistoricalLatestView(reader, cut)
+			voters, present, err := view.ReadVotesIndexStrict()
+			want := []tcommon.Address{}
+			if cut < 3 {
+				for i := 0; i <= votesIndexPageEntries; i++ {
+					want = append(want, testAddr(byte(i)))
+				}
+			} else {
+				for h := uint64(4); h <= cut; h++ {
+					want = append(want, testAddr(byte(h)))
+				}
+			}
+			if err != nil || !present || len(voters) != len(want) {
+				t.Fatalf("votes as-of %d: len=%d want=%d present=%v err=%v", cut, len(voters), len(want), present, err)
+			}
+			for i := range want {
+				if voters[i] != want[i] {
+					t.Fatalf("votes as-of %d order at %d", cut, i)
+				}
+			}
+			for i, value := range [][]byte{nil, make([]byte, 8), binary.BigEndian.AppendUint64(nil, cut), binary.BigEndian.AppendUint64(nil, ^uint64(0))} {
+				got, exists, err := view.GetAccountKV(owner, kvdomains.AccountAssetV2, []byte{byte(i)})
+				if err != nil || !exists || !bytes.Equal(got, value) {
+					t.Fatalf("scalar as-of %d key %d: %x/%v/%v", cut, i, got, exists, err)
+				}
+			}
 			for h := uint64(1); h <= cut; h++ {
 				got, ok, err := view.ReadMerkleTreeRootByBlockStrict(int64(h))
 				if err != nil || !ok || !bytes.Equal(got, rootFor(h)) {

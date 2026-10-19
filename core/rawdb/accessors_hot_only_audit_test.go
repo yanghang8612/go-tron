@@ -502,8 +502,9 @@ func TestProductionStateLatestReadsStayBehindStateBoundaries(t *testing.T) {
 	offenders := auditForbiddenRawDBReferencesSkipping(t, root, stateLatestRawDBReferences(), map[string]map[string]struct{}{
 		// Explicit offline diagnostics require an exclusive immutable image,
 		// not an API/archive read boundary. Keep exemptions reference-specific.
-		"cmd/generation-census/pointers.go": {"IterateStateAccountLatest": {}},
-		"cmd/storage-distribution/main.go":  {"ReadStateKVLatest": {}},
+		"cmd/generation-census/pointers.go":      {"IterateStateAccountLatest": {}},
+		"cmd/other-storage-distribution/code.go": {"IterateStateCode": {}},
+		"cmd/storage-distribution/main.go":       {"ReadStateKVLatest": {}},
 	}, map[string]struct{}{
 		"core/state": {},
 	})

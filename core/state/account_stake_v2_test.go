@@ -199,7 +199,7 @@ func TestAccountStakeV2PersistsOutsideAccountEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := decodeStoredAccountCore(t, envelope)
+	stored := decodeStoredAccountCore(t, envelope, addr)
 	if len(stored.FrozenV2) != 0 || len(stored.UnfrozenV2) != 0 {
 		t.Fatalf("split Stake V2 leaked into account envelope: frozen=%+v unfrozen=%+v", stored.FrozenV2, stored.UnfrozenV2)
 	}

@@ -282,7 +282,7 @@ func inspect(db rawdbKeyValue, prior rawdb.GenerationCensus, out string) (r repo
 					err = e
 					break
 				}
-				acc, e := types.UnmarshalAccountStorageCoreV4(env.AccountProto)
+				acc, e := types.UnmarshalAccountStorageCoreV4(env.AccountProto, common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, k[len(prefixes[0]):]...)))
 				if e != nil {
 					err = e
 					break

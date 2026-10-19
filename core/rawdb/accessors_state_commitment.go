@@ -10,7 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
-const LatestDomainCommitmentScheme = "state-flat-latest-muhash3072-compact-v2"
+const LatestDomainCommitmentScheme = "state-flat-latest-muhash3072-compact-v3"
 
 var (
 	latestDomainCommitmentRootKey       = []byte("latest-root")

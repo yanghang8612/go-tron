@@ -9,7 +9,7 @@
   "../../../../cmd/other-storage-distribution/sst.go": "33f08f6e3255d563406ce34ba555cf1be63ac7f03c22bc017d4b634d97c86554",
   "../../../../cmd/tx-index-width-census/main.go": "60583ab054def7a522d9ab3872e3b09677d1e85a06f43cdf195905eca2c7a51a",
   "../../../../cmd/tx-index-width-census/main_test.go": "a38d9d1a036943573ce6da54c3d62021a048a7e5ff88bd2d101efa5dc59fc81f",
-  "README.md": "044d4677696e4125ee5f2e4bf138f192352b96879e860f302dc91585f4ec146b",
+  "README.md": "f7ec5c79e0f0c3bad585aecef21b7ce3f0626c783e914a869e40df4ad07a2a9f",
   "cdc-comparison.json": "cf43d583e933216745e0b79c2995d3d8b110ba828efdabe57a90d402e320fb9e",
   "code-distribution.json": "588263af5b02868305fad9720601d42631cc53dce202f255e512cb1821673be7",
   "cold-distribution-votes.json": "4aa814b4938c8bfb3ddc68770a2d1ac1855c0b76364fe5e954368d2f2c2716be",
@@ -29,5 +29,5 @@
   "nodeinfo-delivery.json": "549c5d741bd2d333f7727a63fb78b67c59d71e05d1f78eec6ca13896f76fd4a8",
   "sidecar-comparison.json": "a597d31ee3a7d3264fbe8dd64297adbe1d4927d06397f594651c02aba3924261",
   "txindex-width.json": "d2b887cbc68affa08912de965c58f15ec8a5fe0af62c95c79cf1a9912b223bf6",
-  "verify.py": "f6e507d23817bf9c854bc7b87589473f00ce8224d776c1f1110fa6bbb990e369"
+  "verify.py": "24aefd0c17a490e6e041b9ea4616a292baf5f0bf6ee4f5a4f927711680ff58ce"
 }

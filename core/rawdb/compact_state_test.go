@@ -49,7 +49,7 @@ func TestCompactWordExactRoundTrip(t *testing.T) {
 }
 
 func TestCompactRejectsMalformedWordsAndOldScheme(t *testing.T) {
-	for _, bad := range [][]byte{nil, {3}, {2, 0}, {2, 0, 1}, append([]byte{2}, bytes.Repeat([]byte{1}, 32)...), append([]byte{1}, make([]byte, 32)...)} {
+	for _, bad := range [][]byte{nil, {4}, {3, 0}, {2, 0}, {2, 0, 1}, append([]byte{2}, bytes.Repeat([]byte{1}, 32)...), append([]byte{1}, make([]byte, 32)...)} {
 		if _, err := DecodeStateKVLatestValue(bad); err == nil {
 			t.Fatalf("accepted %x", bad)
 		}
@@ -59,9 +59,11 @@ func TestCompactRejectsMalformedWordsAndOldScheme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded[7] = 1
-	if _, err = DecodeStateCommitmentHead(encoded); err == nil {
-		t.Fatal("old HEAD accepted")
+	for _, old := range []byte{1, 2} {
+		encoded[7] = old
+		if _, err = DecodeStateCommitmentHead(encoded); err == nil {
+			t.Fatalf("old HEAD %d accepted", old)
+		}
 	}
 }
 

@@ -60,7 +60,7 @@ func accountV5HistoryFixture(t *testing.T) (*historyFixture, tcommon.Address, []
 		if err != nil || envelope.Version != 5 || envelope.AccountKVRoot != EmptyKVRoot {
 			t.Fatalf("normal commit did not write V5: %+v %v", envelope, err)
 		}
-		account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
+		account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto, addr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func accountV5HistoryFixture(t *testing.T) (*historyFixture, tcommon.Address, []
 		if err != nil {
 			t.Fatal(err)
 		}
-		oldAccount, err := types.UnmarshalAccountStorageCoreV4(decodedOld.AccountProto)
+		oldAccount, err := types.UnmarshalAccountStorageCoreV4(decodedOld.AccountProto, addr)
 		if err != nil || !proto.Equal(oldAccount.Proto(), account.Proto()) {
 			t.Fatalf("V4/V5 logical account differs: %v", err)
 		}

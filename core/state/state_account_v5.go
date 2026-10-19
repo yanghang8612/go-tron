@@ -13,8 +13,8 @@ import (
 // Code hash: empty means zero; {1} references a canonical 32-byte core CodeHash;
 // {2} means Keccak256(empty code); 32 bytes preserve an independent hash.
 // A core hash of a different length or
-// value is never inferred or dropped. Address and unknown core fields remain
-// self-contained, including for historical readers without an owner context.
+// value is never inferred or dropped. Codec-2 cores restore a matching address
+// from the enclosing row owner; unknown fields remain opaque and self-contained.
 const (
 	stateAccountV5CoreCodeHashReference  byte = 1
 	stateAccountV5EmptyCodeHashReference byte = 2

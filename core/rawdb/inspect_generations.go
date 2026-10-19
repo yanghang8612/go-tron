@@ -33,8 +33,11 @@ func (s *GenerationBytes) add(key, raw []byte) {
 	s.KeyBytes += uint64(len(key))
 	s.ValueBytes += uint64(len(raw))
 	payload := len(raw) - 1
-	if len(raw) > 0 && raw[0] == stateKVLatestWordPrefix {
+	if len(raw) > 0 && (raw[0] == stateKVLatestWordPrefix || raw[0] == stateKVLatestUint64Prefix) {
 		payload = 32
+		if raw[0] == stateKVLatestUint64Prefix {
+			payload = 8
+		}
 	}
 	s.PayloadBytes += uint64(payload)
 	s.LogicalBytes += uint64(len(key) + len(raw))

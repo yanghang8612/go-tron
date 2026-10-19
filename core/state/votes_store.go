@@ -1,7 +1,11 @@
 package state
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
+
+	"github.com/tronprotocol/go-tron/core/rawdb"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -15,18 +19,16 @@ import (
 // opVote write a per-voter delta record across an epoch, and the maintenance
 // drain (core.applyPendingVotes) reads every record at the cycle boundary,
 // folds the old/new deltas into the witness vote counts, then clears the whole
-// store. Two logical keys live in the domain:
+// store. The following logical rows live in the domain:
 //
 //   - votesStoreKey(voter): one versioned native corepb.Votes-shaped record per
 //     voter. Legacy flat/rooted protobuf bytes remain read-compatible.
-//   - votesStoreIndexKey: the enumeration of every voter that wrote a record
-//     this epoch, iterated by the drain — encoded as the shared address-list
-//     format (4-byte BE count || N×AddressLength), bit-for-bit identical to the
-//     old flat `v-index` accessor.
+//   - count, bounded ordered pages, and membership rows for this epoch.
 //
-// The record codec is statecodec and the index codec is
-// encodeAddressList/decodeAddressList (shared with the witness schedule).
-var votesStoreIndexKey = []byte("VotesIndex")
+// All index rows use the same journal/history/MuHash lifecycle as vote records.
+const votesIndexPageEntries = 128
+
+var votesStoreIndexKey = rawdb.VotesIndexMetaStateKey()
 
 // votesStoreKey maps a voter address to its logical key within the
 // WitnessVoteState domain: a fixed "v" tag followed by the 21-byte address.
@@ -109,42 +111,109 @@ func (s *StateDB) ReadVotesIndex() []tcommon.Address {
 
 // ReadVotesIndexStrict returns the rooted voter index and distinguishes an
 // absent row from unreadable or malformed rooted data.
-func (s *StateDB) ReadVotesIndexStrict() ([]tcommon.Address, bool, error) {
+func (s *StateDB) votesIndexCount() (uint64, bool, error) {
 	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreIndexKey)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	if len(raw) != 8 {
+		return 0, true, fmt.Errorf("votes index: invalid count length %d", len(raw))
+	}
+	n := binary.BigEndian.Uint64(raw)
+	if n > uint64(math.MaxInt/tcommon.AddressLength) {
+		return 0, true, fmt.Errorf("votes index: count overflow")
+	}
+	return n, true, nil
+}
+
+func (s *StateDB) votesIndexPage(page, expected uint64) ([]tcommon.Address, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, rawdb.VotesIndexPageStateKey(page))
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if !ok {
-		return nil, false, nil
+		return nil, fmt.Errorf("votes index: missing page %d", page)
 	}
-	voters, err := decodeAddressListStrict("votes index", raw)
-	if err != nil {
-		return nil, true, err
+	if expected == 0 || expected > votesIndexPageEntries || uint64(len(raw)) != 4+expected*tcommon.AddressLength {
+		return nil, fmt.Errorf("votes index: page %d length", page)
 	}
-	return voters, true, nil
+	entries, err := decodeAddressListStrict("votes index page", raw)
+	if err != nil || uint64(len(entries)) != expected {
+		return nil, fmt.Errorf("votes index: page %d count (%v)", page, err)
+	}
+	return entries, nil
 }
 
-// WriteVotesIndex stages the full voter index into the system-KV. A nil/empty
-// list clears it (the drain's reset path), which encodeAddressList renders as a
-// 4-byte zero count that decodeAddressList maps back to nil.
+func (s *StateDB) ReadVotesIndexStrict() ([]tcommon.Address, bool, error) {
+	n, ok, err := s.votesIndexCount()
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var all []tcommon.Address
+	for page, offset := uint64(0), uint64(0); offset < n; page, offset = page+1, offset+votesIndexPageEntries {
+		entries, err := s.votesIndexPage(page, min(n-offset, votesIndexPageEntries))
+		if err != nil {
+			return nil, true, err
+		}
+		all = append(all, entries...)
+	}
+	return all, true, nil
+}
+
+// WriteVotesIndex preserves explicit list order/duplicates. Empty is present,
+// with no pages or memberships. Replacement uses normal journaled row deletes.
 func (s *StateDB) WriteVotesIndex(voters []tcommon.Address) error {
-	return s.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, encodeAddressList(voters))
+	for _, prefix := range [][]byte{rawdb.VotesIndexPageStatePrefix(), rawdb.VotesIndexMemberStatePrefix()} {
+		if err := s.DeleteAccountKVPrefix(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, prefix); err != nil {
+			return err
+		}
+	}
+	for offset := 0; offset < len(voters); offset += votesIndexPageEntries {
+		entries := voters[offset:min(len(voters), offset+votesIndexPageEntries)]
+		if err := s.SystemKVPut(kvdomains.WitnessVoteState, rawdb.VotesIndexPageStateKey(uint64(offset/votesIndexPageEntries)), encodeAddressList(entries)); err != nil {
+			return err
+		}
+	}
+	for _, addr := range voters {
+		if err := s.SystemKVPut(kvdomains.WitnessVoteState, rawdb.VotesIndexMemberStateKey(addr), []byte{1}); err != nil {
+			return err
+		}
+	}
+	return s.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, binary.BigEndian.AppendUint64(nil, uint64(len(voters))))
 }
 
-// AppendVotesIndex adds addr to the voter index if absent. The read error is
-// propagated (not swallowed) so a transient trie failure aborts the append
-// instead of overwriting the index with a truncated list. The read goes through
-// the WitnessVoteState domain directly (not the witness-schedule-scoped
-// readAddressList helper) so the round-trip stays within this store's domain.
+// AppendVotesIndex performs bounded point reads and only rewrites the tail page.
 func (s *StateDB) AppendVotesIndex(addr tcommon.Address) error {
-	existing, _, err := s.ReadVotesIndexStrict()
+	member, exists, err := s.SystemKVGet(kvdomains.WitnessVoteState, rawdb.VotesIndexMemberStateKey(addr))
 	if err != nil {
 		return err
 	}
-	for _, a := range existing {
-		if a == addr {
-			return nil
+	if exists {
+		if len(member) != 1 || member[0] != 1 {
+			return fmt.Errorf("votes index: malformed membership")
+		}
+		return nil
+	}
+	n, _, err := s.votesIndexCount()
+	if err != nil {
+		return err
+	}
+	if n >= uint64(math.MaxInt/tcommon.AddressLength) {
+		return fmt.Errorf("votes index: count overflow")
+	}
+	var entries []tcommon.Address
+	if n%votesIndexPageEntries != 0 {
+		entries, err = s.votesIndexPage(n/votesIndexPageEntries, n%votesIndexPageEntries)
+		if err != nil {
+			return err
 		}
 	}
-	return s.WriteVotesIndex(append(existing, addr))
+	entries = append(entries, addr)
+	if err = s.SystemKVPut(kvdomains.WitnessVoteState, rawdb.VotesIndexPageStateKey(n/votesIndexPageEntries), encodeAddressList(entries)); err != nil {
+		return err
+	}
+	if err = s.SystemKVPut(kvdomains.WitnessVoteState, rawdb.VotesIndexMemberStateKey(addr), []byte{1}); err != nil {
+		return err
+	}
+	return s.SystemKVPut(kvdomains.WitnessVoteState, votesStoreIndexKey, binary.BigEndian.AppendUint64(nil, n+1))
 }

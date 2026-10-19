@@ -167,7 +167,7 @@ func TestStateDomainChangeIndexV7RoundTripAndCorruption(t *testing.T) {
 	if err := writeStateDomainChangeBinaryHeaderCount(file, count); err != nil {
 		t.Fatal(err)
 	}
-	file, name, err = rewriteStateDomainChangeBinaryIndexV7(file, name)
+	file, name, err = rewriteStateDomainChangeBinaryIndexV7UnpagedContext(context.Background(), file, name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestStateDomainChangeV7FramedAccessorQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if indexHeader.version != stateDomainChangeBinaryVersionV7 {
+	if indexHeader.version != stateDomainChangeBinaryIndexCurrentVersion {
 		t.Fatalf("index version = %d", indexHeader.version)
 	}
 	_ = index.Close()

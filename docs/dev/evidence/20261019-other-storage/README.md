@@ -52,3 +52,5 @@ go run ./cmd/tx-index-width-census --dir /pinned/tx-index --out /new/txindex.jso
 ```
 
 CDC 模式在输出旁新建独占 `.work` 目录，只有其中的私有 manifest/链接可以被替换；不向 migrator 传源目录。hardlink 固定文件会延长原 inode 的保留时间，需考虑后续 GC 的释放，不等于额外复制或可以随意删除线上段。
+
+诊断源码的历史 SHA 固定于提交 `07265b6e`；验证器通过 `git show` 读取该提交，以免后续格式改造使历史证据校验依赖可变工作树。原始采样/统计内容不变。

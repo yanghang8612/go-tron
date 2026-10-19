@@ -11,7 +11,8 @@ import (
 
 // StateAccountVersion is the flat account-latest envelope version written by
 // this build. Version 5 elides the default KV root and zero/duplicated code hash,
-// retaining the exact version-4 account core. Its six TRC10
+// retaining the versioned compact account core (codec 2 uses row-owner address
+// context). Its six TRC10
 // maps, Owner/Witness/Active permissions, votes, Stake V1/V2 fields, frozen
 // supply, and AccountResource live in account-local KV domains.
 // Version 4 envelopes remain explicitly readable; older protobuf-backed

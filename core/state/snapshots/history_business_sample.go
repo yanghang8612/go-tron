@@ -172,6 +172,9 @@ func SampleHistoryBusiness(ctx context.Context, dir string, historyRef, indexRef
 	if err != nil {
 		return report, err
 	}
+	if pages, ok := idx.file.(*historyIndexPages); ok {
+		defer pages.Close()
+	}
 	keys := map[uint32]*HistoryBusinessSampleKey{}
 	var cacheBlock uint64 = math.MaxUint64
 	var cache []stateDomainChangeBinaryAccessorV6Record
@@ -576,9 +579,47 @@ func openBusinessSampleFile(dir string, ref SegmentRef, budget *businessSampleBu
 	return out, nil
 }
 
-func openBusinessSampleIndex(file *businessSampleFile, header stateDomainChangeBinaryHeader, o HistoryBusinessSampleOptions) (*stateDomainChangeBinaryIndexV7Reader, error) {
+func openBusinessSampleIndex(file *businessSampleFile, header stateDomainChangeBinaryHeader, o HistoryBusinessSampleOptions) (result *stateDomainChangeBinaryIndexV7Reader, resultErr error) {
+	var source historySegmentReader = file.file
+	logical := file.logical
+	if header.version == 8 {
+		var outer [historyIndexPageHeader]byte
+		if _, err := file.ReadAt(outer[:], 0); err != nil {
+			return nil, err
+		}
+		dirLen := binary.BigEndian.Uint64(outer[56:64])
+		if dirLen > o.MaxMetadataBytes {
+			return nil, errors.New("snapshots: sample paged index metadata cap exceeded")
+		}
+		if err := file.budget.charge(dirLen); err != nil {
+			return nil, err
+		}
+		pages, err := openHistoryIndexPages(file.file, logical, header)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if resultErr != nil {
+				_ = pages.Close()
+			}
+		}()
+		outerHeader := header
+		source, logical = pages, pages.logical
+		header, err = readStateDomainChangeBinaryHeaderAt(pages, stateDomainChangeBinaryIndexMagic)
+		if err != nil {
+			return nil, err
+		}
+		if header.version != stateDomainChangeBinaryVersionV7 || header.fromTxNum != outerHeader.fromTxNum || header.toTxNum != outerHeader.toTxNum || header.count != outerHeader.count {
+			return nil, errors.New("snapshots: sample paged index inner version")
+		}
+		if err = file.budget.charge(pages.pageBytes); err != nil {
+			return nil, err
+		}
+		o.MaxMetadataBytes -= dirLen
+	}
+
 	var raw [80]byte
-	if _, err := file.ReadAt(raw[:], 0); err != nil {
+	if _, err := source.ReadAt(raw[:], 0); err != nil {
 		return nil, err
 	}
 	frames, dirLen := binary.BigEndian.Uint64(raw[40:48]), binary.BigEndian.Uint64(raw[48:56])
@@ -589,7 +630,7 @@ func openBusinessSampleIndex(file *businessSampleFile, header stateDomainChangeB
 	if err := file.budget.charge(80 + dirLen); err != nil {
 		return nil, err
 	}
-	r, err := openStateDomainChangeBinaryIndexV7Reader(file.file, file.logical, header)
+	r, err := openStateDomainChangeBinaryIndexV7ReaderContext(nil, source, logical, header)
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +647,11 @@ func businessSampleIndexAt(r *stateDomainChangeBinaryIndexV7Reader, file *busine
 	}
 	frame := index / 256
 	if !r.cacheValid || r.cacheIndex != frame {
-		if err := file.budget.charge(uint64(r.frames[frame].dataLen)); err != nil {
+		charge := uint64(r.frames[frame].dataLen)
+		if pages, ok := r.file.(*historyIndexPages); ok {
+			charge += pages.pageBytes * 2
+		}
+		if err := file.budget.charge(charge); err != nil {
 			return stateDomainChangeBinaryTxOffset{}, err
 		}
 	} else if err := file.budget.ctx.Err(); err != nil {

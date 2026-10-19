@@ -55,7 +55,7 @@ func TestManifestValidationRangesIndependentOverlapOracle(t *testing.T) {
 				FromTxNum: from, ToTxNum: to, Path: fmt.Sprintf("event-%d.seg", i)})
 		}
 		rng.Shuffle(len(refs), func(i, j int) { refs[i], refs[j] = refs[j], refs[i] })
-		m := &Manifest{Version: CurrentManifestVersion, CommitmentScheme: "state-flat-latest-muhash3072-compact-v2", ElementVersion: 2, Segments: refs}
+		m := &Manifest{Version: CurrentManifestVersion, CommitmentScheme: "state-flat-latest-muhash3072-compact-v3", ElementVersion: 3, Segments: refs}
 		assertManifestValidationOracle(t, m)
 		if got := m.Validate() == nil; got != valid {
 			t.Fatalf("trial %d: accepted=%v want=%v", trial, got, valid)

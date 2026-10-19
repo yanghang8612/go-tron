@@ -3765,7 +3765,7 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		if obj.accountProto != nil && types.IsAccountStorageCoreV4(obj.accountProto) {
 			newObj.accountProto = bytes.Clone(obj.accountProto)
 		} else {
-			newObj.accountProto, _ = newObj.account.MarshalStorageCoreV4()
+			newObj.accountProto, _ = newObj.account.MarshalStorageCoreV4(newObj.address)
 		}
 	}
 	if copyCleanStorage {
@@ -3809,7 +3809,7 @@ func (s *StateDB) copyCachedCodeStateObjectInto(cp *StateDB, addr tcommon.Addres
 	if err != nil {
 		return false, fmt.Errorf("unmarshal account: %w", err)
 	}
-	accountProto, err := account.MarshalStorageCoreV4()
+	accountProto, err := account.MarshalStorageCoreV4(addr)
 	if err != nil {
 		return false, fmt.Errorf("marshal storage-core-v4 account: %w", err)
 	}
@@ -4104,7 +4104,7 @@ func accountLatestObjectEncodedSize(obj *stateObject, flatRoot bool) (encodedSiz
 	// authoritative in-memory account rather than copying it into rooted state.
 	obj.accountProto = nil
 	obj.accountProtoLoaded = false
-	accountProtoSize, err = obj.account.StorageCoreV4Size()
+	accountProtoSize, err = obj.account.StorageCoreV4Size(obj.address)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -4174,7 +4174,7 @@ func appendAccountLatestObjectPrepared(dst []byte, obj *stateObject, flatRoot bo
 	dst = appendStateAccountV5Prefix(dst, accountProtoSize, accountKVRoot, obj.accountKVGeneration, obj.codeHash, reference)
 	protoStart := len(dst)
 	var err error
-	dst, err = obj.account.AppendStorageCoreV4(dst)
+	dst, err = obj.account.AppendStorageCoreV4(dst, obj.address)
 	if err != nil {
 		return dst, false, err
 	}
@@ -4986,7 +4986,7 @@ func (s *StateDB) getStateObjectWithoutAccess(addr tcommon.Address) *stateObject
 		var envelope StateAccountV3
 		if decodeErr := decodeStateAccountV3Into(data, &envelope); decodeErr != nil {
 			s.setError(fmt.Errorf("decode rooted account envelope %s: %w", addr.Hex(), decodeErr))
-		} else if acc, decodeErr := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto); decodeErr != nil {
+		} else if acc, decodeErr := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto, addr); decodeErr != nil {
 			s.setError(fmt.Errorf("decode rooted account core %s: %w", addr.Hex(), decodeErr))
 		} else if acc.Address() != addr {
 			s.setError(fmt.Errorf("rooted account address mismatch: key %s, value %s", addr.Hex(), acc.Address().Hex()))

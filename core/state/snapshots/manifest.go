@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	CurrentManifestVersion = 3
+	CurrentManifestVersion = 4
 	ManifestVersion        = CurrentManifestVersion
 	ManifestFile           = "manifest.json"
 )

@@ -806,9 +806,9 @@ func (a *Account) AppendStorageCore(dst []byte) ([]byte, error) {
 	return appendAccountStorageCore(dst, a.pb)
 }
 
-func UnmarshalAccount(data []byte) (*Account, error) {
+func UnmarshalAccount(data []byte, owner ...common.Address) (*Account, error) {
 	if IsAccountStorageCoreV4(data) {
-		return UnmarshalAccountStorageCoreV4(data)
+		return UnmarshalAccountStorageCoreV4(data, owner...)
 	}
 	decoded := new(decodedAccount)
 	decoded.account.pb = &decoded.pb

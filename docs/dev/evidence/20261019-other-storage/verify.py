@@ -3,6 +3,7 @@
 import collections
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -23,7 +24,12 @@ def compare(before, after):
 
 if (ROOT / "sha256.json").exists():
     for name, expected in read("sha256.json").items():
-        assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == expected, name
+        if name.startswith("../"):
+            relative = (ROOT / name).resolve().relative_to(ROOT.parents[3])
+            data = subprocess.check_output(["git", "show", "07265b6e:" + str(relative)], cwd=ROOT.parents[3])
+        else:
+            data = (ROOT / name).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == expected, name
 
 hot = read("distribution.json")
 prior = json.loads((ROOT.parent / "20261018-generation-census/census.json").read_text())

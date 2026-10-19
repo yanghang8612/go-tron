@@ -16,7 +16,7 @@ func TestAppendAccountLatestObjectPreparedOwnsProtoInFinalArena(t *testing.T) {
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
 	sdb.AddBalance(addr, 987654)
 	obj := sdb.getStateObject(addr)
-	wantProto, err := obj.account.MarshalStorageCoreV4()
+	wantProto, err := obj.account.MarshalStorageCoreV4(addr)
 	if err != nil {
 		t.Fatal(err)
 	}

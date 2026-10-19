@@ -15,12 +15,15 @@ func AccountStorageCoreV4CodeHash(data []byte) ([]byte, error) {
 	if !IsAccountStorageCoreV4(data) || len(data) < 9 {
 		return nil, errors.New("invalid account storage-v4 header")
 	}
-	if data[4] != accountStorageV4CodecVersion {
+	if data[4] != accountStorageV4CodecVersion && data[4] != 2 {
 		return nil, fmt.Errorf("unsupported account storage codec version %d", data[4])
 	}
 	fields := binary.BigEndian.Uint32(data[5:9])
 	if fields&^accountStorageV4KnownMask != 0 {
 		return nil, errors.New("account storage-v4 has unknown bitmap bits")
+	}
+	if err := validateAccountStorageOwnerFlag(data[4], fields); err != nil {
+		return nil, err
 	}
 	d := accountStorageV4Decoder{data: data, off: 9}
 	var hash []byte

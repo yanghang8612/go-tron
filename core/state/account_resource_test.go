@@ -130,7 +130,7 @@ func TestAccountResourcePersistsOutsideAccountEnvelopeAndLoadsLazily(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := decodeStoredAccountCore(t, envelope)
+	stored := decodeStoredAccountCore(t, envelope, addr)
 	if stored.AccountResource != nil {
 		t.Fatalf("split AccountResource leaked into account envelope: %+v", stored.AccountResource)
 	}

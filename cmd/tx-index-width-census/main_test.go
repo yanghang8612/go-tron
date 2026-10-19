@@ -40,7 +40,7 @@ func TestRelativeLocationsAndCorruption(t *testing.T) {
 		if s.Rows != 10 || s.Bytes != res.FileBytes {
 			t.Fatal("lost rows")
 		}
-		if !mixed && (s.RelativeWidth != 4 || s.CandidateBytes != s.Bytes-40) {
+		if !mixed && (s.RelativeWidth != 4 || s.CandidateBytes != s.Bytes) {
 			t.Fatalf("bad compact result %+v", s)
 		}
 		if mixed && (s.Plain != 1 || s.RelativeWidth != 8 || s.CandidateBytes != s.Bytes) {

@@ -488,7 +488,7 @@ func main() {
 			if derr != nil {
 				return true, nil
 			}
-			acct, aerr := types.UnmarshalAccountStorageCoreV4(env.AccountProto)
+			acct, aerr := types.UnmarshalAccountStorageCoreV4(env.AccountProto, owner)
 			if aerr != nil || acct == nil {
 				return true, nil
 			}
@@ -516,12 +516,12 @@ func main() {
 
 	if *tallyAudit {
 		sum := make(map[tcommon.Address]int64)
-		err := stateDB.IterateAccountLatest(nil, func(_ tcommon.Address, value []byte) (bool, error) {
+		err := stateDB.IterateAccountLatest(nil, func(owner tcommon.Address, value []byte) (bool, error) {
 			env, derr := state.DecodeStateAccountV2(value)
 			if derr != nil {
 				return true, nil
 			}
-			acct, aerr := types.UnmarshalAccountStorageCoreV4(env.AccountProto)
+			acct, aerr := types.UnmarshalAccountStorageCoreV4(env.AccountProto, owner)
 			if aerr != nil || acct == nil {
 				return true, nil
 			}
