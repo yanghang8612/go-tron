@@ -1,0 +1,10 @@
+{
+  "packet.txt": {
+    "sha256": "6d77527cf5b1dc45826b9242e8ab6106cdd49c59007da7f8862f194c4cba249e",
+    "bytes": 355043
+  },
+  "latency-packet.txt": {
+    "sha256": "a443fc724fc348131a1616283b9c582c9539a18dd825c3e4f7b4892f6b5d479e",
+    "bytes": 3163
+  }
+}

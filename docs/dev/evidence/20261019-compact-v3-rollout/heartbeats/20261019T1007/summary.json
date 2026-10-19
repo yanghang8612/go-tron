@@ -1,0 +1,131 @@
+{
+  "utc": "2026-10-19T10:08:39.035198+00:00",
+  "head": 4589068,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T09:23:41.140306+00:00",
+  "sample_window_end": "2026-10-19T10:07:44.215652+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.297224,
+    "start": "2026-10-19T10:02:43.918428+00:00",
+    "end": "2026-10-19T10:07:44.215652+00:00",
+    "blocks_per_second": 92.55163810638489,
+    "transactions_per_second": 7951.202372753202
+  },
+  "disk_sample_utc": "2026-10-19T10:04:43.998715+00:00",
+  "disk_sample_height": 4565599,
+  "disk_bytes": {
+    "ancient": 6093426688,
+    "chaindata": 9748303872,
+    "history": 8899407872,
+    "state-snapshots": 7525707776
+  },
+  "disk_total_bytes": 32266846208,
+  "rss_sample_utc": "2026-10-19T10:07:44.215652+00:00",
+  "rss_kib": 5363356,
+  "rss_max_kib_in_window": 6404000,
+  "cold_published_block": 4255827,
+  "cold_pruned_block": 4255827,
+  "eligible_backlog_blocks": 261911,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "tvm_cold_probe_observations": [
+    {
+      "utc": "2026-10-19T09:24:41.239877+00:00",
+      "milliseconds": [
+        338.4527638554573,
+        290.0993525981903
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:29:41.458038+00:00",
+      "milliseconds": [
+        681.0667589306831,
+        721.5607985854149
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:34:41.876808+00:00",
+      "milliseconds": [
+        376.5954226255417,
+        379.8851817846298
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:39:42.258252+00:00",
+      "milliseconds": [
+        1066.5255784988403,
+        1140.9700363874435
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:44:42.533810+00:00",
+      "milliseconds": [
+        1088.1079137325287,
+        1073.5048800706863
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:49:42.890549+00:00",
+      "milliseconds": [
+        1262.3774409294128,
+        1416.8328940868378
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:54:43.327533+00:00",
+      "milliseconds": [
+        951.6574442386627,
+        449.67082142829895
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T09:59:43.703250+00:00",
+      "milliseconds": [
+        965.7227545976639,
+        1012.5828012824059
+      ],
+      "correct": true
+    },
+    {
+      "utc": "2026-10-19T10:04:43.998715+00:00",
+      "milliseconds": [
+        2736.1286878585815,
+        2875.489242374897
+      ],
+      "correct": true
+    }
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "report_decision": "report increasing cold historical lookup tail latency; service identity, synchronization, cold publication/pruning, history correctness and resources remain healthy. No production change.",
+  "packet_sha256": "6d77527cf5b1dc45826b9242e8ab6106cdd49c59007da7f8862f194c4cba249e",
+  "latency_recheck": {
+    "utc": "2026-10-19T10:10:17.769771+00:00",
+    "cold_samples": 6,
+    "cold_range_ms": [
+      420.980304479599,
+      2140.4092013835907
+    ],
+    "cold_pooled_median_ms": 1237.88495734334,
+    "latest_samples": 3,
+    "latest_range_ms": [
+      0.7314160466194153,
+      0.8188113570213318
+    ],
+    "latest_median_ms": 0.7668212056159973,
+    "all_values_correct": true,
+    "periodic_probe_max_ms": 2875.489242374897,
+    "interpretation": "Small online sample during synchronization. Confirms second-scale cold lookup latency, not a p95 estimate or matched-height old-format regression. Latest counter is 55; historical values remain 6/7."
+  }
+}

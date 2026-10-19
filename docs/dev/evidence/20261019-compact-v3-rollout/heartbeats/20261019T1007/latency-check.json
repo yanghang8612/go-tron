@@ -1,0 +1,107 @@
+{
+  "utc": "2026-10-19T10:10:17.769771+00:00",
+  "pid_before": "MainPID=10692",
+  "pid_after": "MainPID=10692",
+  "rows": [
+    {
+      "round": 1,
+      "height": 3144020,
+      "milliseconds": 1865.2566820383072,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true
+    },
+    {
+      "round": 1,
+      "height": 3144021,
+      "milliseconds": 1958.5173428058624,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true
+    },
+    {
+      "round": 1,
+      "height": "latest",
+      "milliseconds": 0.8188113570213318,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000037"
+      },
+      "correct": true
+    },
+    {
+      "round": 2,
+      "height": 3144020,
+      "milliseconds": 2140.4092013835907,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true
+    },
+    {
+      "round": 2,
+      "height": 3144021,
+      "milliseconds": 610.5132326483727,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true
+    },
+    {
+      "round": 2,
+      "height": "latest",
+      "milliseconds": 0.7668212056159973,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000037"
+      },
+      "correct": true
+    },
+    {
+      "round": 3,
+      "height": 3144020,
+      "milliseconds": 420.980304479599,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true
+    },
+    {
+      "round": 3,
+      "height": 3144021,
+      "milliseconds": 532.764382660389,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true
+    },
+    {
+      "round": 3,
+      "height": "latest",
+      "milliseconds": 0.7314160466194153,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000037"
+      },
+      "correct": true
+    }
+  ],
+  "note": "Three sequential interleaved cold/cold/latest rounds during live synchronization; total loop bounded to 30 s plus one request timeout. Not a matched-height old-format benchmark."
+}
