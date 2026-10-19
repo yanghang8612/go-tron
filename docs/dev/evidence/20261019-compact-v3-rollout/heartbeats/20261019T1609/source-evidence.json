@@ -1,0 +1,22 @@
+{
+  "core/state/snapshots/cold_builder.go": {
+    "deployed_source_sha256": "0d0673e693f36ea6dbe0c4962a6280d50a6896b3eb9c500328fe01a422a824a7",
+    "excerpts": [
+      {
+        "start_line": 1467,
+        "end_line": 1507,
+        "text": "\t\t\t\t}\n\t\t\t\tmaxBusyDeferred := r.cfg.MaxBusyDeferredHistoryBlocks\n\t\t\t\tif maxBusyDeferred < maxDeferred {\n\t\t\t\t\tmaxBusyDeferred = maxDeferred\n\t\t\t\t}\n\t\t\t\tif r.cfg.SyncBuildReady != nil {\n\t\t\t\t\tresult.HistoryAdmissionChecked = true\n\t\t\t\t\tresult.HistoryAdmissionReady = r.cfg.SyncBuildReady()\n\t\t\t\t\tif !result.HistoryAdmissionReady {\n\t\t\t\t\t\t// Accelerated means an actually unthrottled ready build, not\n\t\t\t\t\t\t// merely a large lag candidate which a busy importer rejected.\n\t\t\t\t\t\tresult.HistoryAccelerated = false\n\t\t\t\t\t\tif readyBlocks <= maxBusyDeferred && !pressured {\n\t\t\t\t\t\t\tresult.HistoryBusyResourceReady, result.HistoryModerateL0 = r.busyHistoryAdmission(time.Now())\n\t\t\t\t\t\t\tif !result.HistoryBusyResourceReady {\n\t\t\t\t\t\t\t\tresult.HistoryDeferred = true\n\t\t\t\t\t\t\t\tr.armBusyHistoryObservation(&result, time.Now())\n\t\t\t\t\t\t\t\treturn result, nil\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}\n\t\t\t\t\t\t// Both the liveness fallback and a resource opportunity use\n\t\t\t\t\t\t// bounded busy work. In particular, the latter must retain the\n\t\t\t\t\t\t// measured recovery instead of using ready acceleration or\n\t\t\t\t\t\t// falling back to the fixed ordinary build interval.\n\t\t\t\t\t\tresult.HistoryForcedBusy = true\n\t\t\t\t\t\t// Above busy remains independently admitted even if this optional\n\t\t\t\t\t\t// tier is unavailable. Never turn that fallback into a wait.\n\t\t\t\t\t\tif !result.HistoryBusyResourceReady && r.historyLoad.moderateL0Ready(time.Now()) {\n\t\t\t\t\t\t\t_, result.HistoryModerateL0 = r.busyHistoryAdmission(time.Now())\n\t\t\t\t\t\t}\n\t\t\t\t\t\tresult.HistoryDebtBlocks = readyBlocks\n\t\t\t\t\t\tresult.HistoryDebtGrowth = coldSnapshotSignedDelta(readyBlocks, r.lastLagBlocks.Load())\n\t\t\t\t\t\t// Start conservatively. A successful build replaces this with a\n\t\t\t\t\t\t// duration-derived recovery after all history/compaction work is\n\t\t\t\t\t\t// measured; a failed attempt keeps the full configured interval.\n\t\t\t\t\t\tresult.HistoryMinRecovery = r.forcedBusyHistoryRecovery(0)\n\t\t\t\t\t\tbatchBlocks = r.forcedBusyHistoryBatchLimit(batchBlocks)\n\t\t\t\t\t\tbatchTxNums = r.forcedBusyHistoryBatchLimit(batchTxNums)\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n"
+      }
+    ]
+  },
+  "cmd/gtron/history_config.go": {
+    "deployed_source_sha256": "bbc0ded01ddfd3307f8c8f89478addba0c8678ebc4ff3d859bfbc4887bf5aa4d",
+    "excerpts": [
+      {
+        "start_line": 170,
+        "end_line": 184,
+        "text": "func maxDeferredColdHistoryBlocks(historyWindow uint64) uint64 {\n\tconst multiplier = uint64(4)\n\tif historyWindow > ^uint64(0)/multiplier {\n\t\treturn ^uint64(0)\n\t}\n\treturn historyWindow * multiplier\n}\n\nfunc maxBusyDeferredColdHistoryBlocks(maxDeferred uint64) uint64 {\n\tconst multiplier = uint64(2)\n\tif maxDeferred > ^uint64(0)/multiplier {\n\t\treturn ^uint64(0)\n\t}\n\treturn maxDeferred * multiplier\n}\n"
+      }
+    ]
+  }
+}
