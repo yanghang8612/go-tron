@@ -20,7 +20,7 @@ const (
 
 // commitmentUpdateBatch owns the transient update descriptors and their
 // packed physical keys until the commitment fold returns. Values continue to
-// borrow immutable latest-state storage exactly as before. Keeping both
+// borrow immutable latest-state storage and collector-owned before images. Keeping both
 // allocations behind one explicit lifetime lets the synchronous fold and the
 // async CapturedCommit return them safely without changing any layer value's
 // ownership.
@@ -254,7 +254,8 @@ func (d *DomainCommitmentState) resetForCommit(s *StateDB, generation statedomai
 // finishCommit drops references to per-block keys and captured values while
 // retaining the allocation backing the touch index for the next scoped block.
 // latestUpdatesFromTouches has already copied physical keys into its own arena;
-// update values borrow the layer-owned encodings, not these slice headers.
+// update values retain the immutable layer encodings and owned before images;
+// clearing the map/slice headers never modifies their backing bytes.
 func (d *DomainCommitmentState) finishCommit() {
 	if d == nil {
 		return

@@ -280,6 +280,9 @@ type PassResult struct {
 	// Throughput adapts both range limits by observed density; balanced retains
 	// its smaller forced batch. Atomic history publication is unchanged.
 	HistoryForcedBusy bool
+	// HistoryModerateL0 latches the independently admitted serial 60% lane for
+	// this pass, including provisional and complete outer maintenance recovery.
+	HistoryModerateL0 bool
 	// HistoryBusyResourceReady identifies the resource opportunity between the
 	// soft and busy watermarks. It is a policy decision, not a heavy-work lease:
 	// a deadline or the shared gate can still defer this candidate.
@@ -1474,7 +1477,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 						// merely a large lag candidate which a busy importer rejected.
 						result.HistoryAccelerated = false
 						if readyBlocks <= maxBusyDeferred && !pressured {
-							result.HistoryBusyResourceReady = r.busyHistoryBuildReady(time.Now())
+							result.HistoryBusyResourceReady, result.HistoryModerateL0 = r.busyHistoryAdmission(time.Now())
 							if !result.HistoryBusyResourceReady {
 								result.HistoryDeferred = true
 								r.armBusyHistoryObservation(&result, time.Now())
@@ -1486,6 +1489,11 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 						// measured recovery instead of using ready acceleration or
 						// falling back to the fixed ordinary build interval.
 						result.HistoryForcedBusy = true
+						// Above busy remains independently admitted even if this optional
+						// tier is unavailable. Never turn that fallback into a wait.
+						if !result.HistoryBusyResourceReady && r.historyLoad.moderateL0Ready(time.Now()) {
+							_, result.HistoryModerateL0 = r.busyHistoryAdmission(time.Now())
+						}
 						result.HistoryDebtBlocks = readyBlocks
 						result.HistoryDebtGrowth = coldSnapshotSignedDelta(readyBlocks, r.lastLagBlocks.Load())
 						// Start conservatively. A successful build replaces this with a
@@ -1505,7 +1513,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 			batchTxNums = min(batchTxNums, pressureHistoryBatchLimit(r.cfg.BatchTxNums))
 		}
 	}
-	batchBlocks, batchTxNums = r.adaptiveHistoryBatchLimits(batchBlocks, batchTxNums)
+	batchBlocks, batchTxNums = r.adaptiveHistoryBatchLimitsForPass(batchBlocks, batchTxNums, result.HistoryModerateL0)
 	if r.cfg.HistoryReferenceContainer {
 		batchBlocks = min(batchBlocks, uint64(historyReferenceBlockLimit))
 	}
@@ -1576,8 +1584,18 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	}
 	var releaseHeavyWork func()
 	var admitted bool
+	if !r.revalidateModerateL0Pass(&result) {
+		return result, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if (result.HistoryAccelerated || result.HistoryForcedBusy) && r.cfg.CatchupHeavyWorkCooldown > 0 {
-		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireNamedWithCooldown(maintenance.HeavyWorkHistory, r.historyLeaseCooldown())
+		cooldown := r.historyLeaseCooldown()
+		if result.HistoryModerateL0 {
+			cooldown = r.cfg.CatchupHeavyWorkCooldown
+		}
+		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireNamedWithCooldown(maintenance.HeavyWorkHistory, cooldown)
 	} else {
 		releaseHeavyWork, admitted = r.cfg.HeavyWorkGate.TryAcquireNamed(maintenance.HeavyWorkHistory)
 	}
@@ -1590,7 +1608,11 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	result.historyWasSyncing = r.historySyncBudgetActive()
 	result.HistoryBatchBlocks = cutoffBlock - startBlock + 1
 	result.HistoryBatchTxNums = toTxNum - fromTxNum + 1
-	readOptions, readFallback := r.selectHistoryReadOptions(result.HistoryForcedBusy, time.Now())
+	readOptions := HistoryReadOptions{ReferenceContainer: r.cfg.HistoryReferenceContainer}
+	readFallback := historyReadStoragePressure
+	if !result.HistoryModerateL0 {
+		readOptions, readFallback = r.selectHistoryReadOptions(result.HistoryForcedBusy, time.Now())
+	}
 	// A plain database may be a snapshot factory rather than a pinned view.
 	// Inspect the actual acquired view, and close an owned snapshot after all
 	// file builders join but before publishing any manifest or stage progress.
@@ -1687,6 +1709,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 		"accelerated", result.HistoryAccelerated,
 		"forcedBusy", result.HistoryForcedBusy,
 		"busyResourceReady", result.HistoryBusyResourceReady,
+		"moderateL0", result.HistoryModerateL0,
 		"historyPressure", pressured,
 		"sharedReadWorkers", readOptions.Workers,
 		"sharedChunkCache", readOptions.ChunkCache,
@@ -1711,7 +1734,7 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	// The selected cache-only reader has one consumer and one codec worker.
 	// It can share the admitted pair budget; speculative read pools and the
 	// reference-container codec topology still build separately.
-	if readOptions.Workers == 0 && !readOptions.ReferenceContainer && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
+	if !result.HistoryModerateL0 && readOptions.Workers == 0 && !readOptions.ReferenceContainer && r.parallelHistoryEventReady(plannedEvents, plannedDerived, time.Now()) {
 		// Only an admitted pair plans derived work before history. Serial work
 		// retains its post-history sync observation and does not require a
 		// ChainDB when history fails or yields no output.
@@ -1897,6 +1920,9 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		result.HistoryMinRecovery = r.forcedBusyHistoryRecovery(elapsed)
 		if r.throughputCatchup() {
 			result.HistoryMinRecovery = r.throughputRecovery(elapsed, false)
+			if result.HistoryModerateL0 {
+				result.HistoryMinRecovery = r.moderateL0Recovery(elapsed, false)
+			}
 		} else if result.HistoryPressureActive {
 			result.HistoryMinRecovery = r.pressureHistoryRecovery(elapsed)
 		}
@@ -1946,6 +1972,7 @@ func logColdSnapshotPublished(r *Runner, result PassResult, started time.Time, h
 		"accelerated", result.HistoryAccelerated,
 		"forcedBusy", result.HistoryForcedBusy,
 		"busyResourceReady", result.HistoryBusyResourceReady,
+		"moderateL0", result.HistoryModerateL0,
 		"minRecovery", result.HistoryMinRecovery,
 	}
 	if result.HistoryForcedBusy {
@@ -2887,6 +2914,7 @@ func nextSectionBloomCatchupRange(manifest *Manifest, cutoffBlock uint64) (coldS
 
 func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 	r.historyEventMetrics.record(result)
+	r.historyLoad.recordModerateL0Pass(result)
 	completedAt := time.Now()
 	r.passesCompleted.Add(1)
 	if passErr != nil {

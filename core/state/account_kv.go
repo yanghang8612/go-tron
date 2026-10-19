@@ -997,9 +997,15 @@ func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint
 // immediate decode completes. Pending values and blockbuffer cache values are
 // immutable; generic stores fall back to their ordinary owned read.
 func (w *accountKVLatestBatch) readLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
+	return w.readLatestBorrowed(owner, generation, domain, logicalKey, true)
+}
+
+// readLatestBorrowed lends an immutable row until immediate decoding or owned
+// commitment capture. Only execution decoding counts pending SLOAD resolutions.
+func (w *accountKVLatestBatch) readLatestBorrowed(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte, countStoragePending bool) ([]byte, bool, error) {
 	if w != nil {
 		if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, domain, logicalKey)]; ok {
-			if domain == kvdomains.ContractStorage && w.storagePendingResolved != nil {
+			if countStoragePending && domain == kvdomains.ContractStorage && w.storagePendingResolved != nil {
 				(*w.storagePendingResolved)++
 			}
 			if pending.deleted {

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -152,6 +153,9 @@ func StateCommitmentElementFamily(key []byte) (byte, error) {
 	}
 	return 0, fmt.Errorf("invalid latest-domain commitment source key %x", key)
 }
+
+const stateCommitmentElementDomain = "gtron/latest-domain/muhash3072/compact-v3\x00"
+
 func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 	family, err := StateCommitmentElementFamily(key)
 	if err != nil {
@@ -162,14 +166,33 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	const domain = "gtron/latest-domain/muhash3072/compact-v3\x00"
-	out := make([]byte, 0, len(domain)+1+16+len(key)+len(value))
-	out = append(out, domain...)
+	out := make([]byte, 0, len(stateCommitmentElementDomain)+1+16+len(key)+len(value))
+	return appendStateCommitmentElement(out, family, key, value), nil
+}
+
+// AppendStateCommitmentElement appends the canonical element to dst. Inputs
+// must not overlap dst. Invalid source keys/values never modify dst.
+func AppendStateCommitmentElement(dst, key, value []byte) ([]byte, error) {
+	family, err := StateCommitmentElementFamily(key)
+	if err != nil {
+		return nil, err
+	}
+	if family == 3 {
+		if err := ValidateStateKVLatestValue(value); err != nil {
+			return nil, err
+		}
+	}
+	dst = slices.Grow(dst, len(stateCommitmentElementDomain)+1+16+len(key)+len(value))
+	return appendStateCommitmentElement(dst, family, key, value), nil
+}
+
+func appendStateCommitmentElement(out []byte, family byte, key, value []byte) []byte {
+	out = append(out, stateCommitmentElementDomain...)
 	out = append(out, family)
 	out = binary.BigEndian.AppendUint64(out, uint64(len(key)))
 	out = append(out, key...)
 	out = binary.BigEndian.AppendUint64(out, uint64(len(value)))
-	return append(out, value...), nil
+	return append(out, value...)
 }
 func StateCommitmentDeltaID(deltas []StateCommitmentDelta) common.Hash {
 	h := sha256.New()

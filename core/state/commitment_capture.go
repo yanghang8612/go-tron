@@ -32,7 +32,14 @@ func (d *DomainCommitmentState) recordPhysicalBefore(key, value []byte, exists b
 	if _, ok := d.before[string(key)]; ok {
 		return nil
 	}
-	d.before[string(key)] = rawdb.CloneStateCommitmentDelta(rawdb.StateCommitmentDelta{Key: key, BeforeExists: exists, Before: value})
+	// The map string owns the physical key; only the first immutable before
+	// image needs another owned buffer. An assembled update retains its slice
+	// header across map cleanup, so these bytes must never be overwritten/pooled.
+	var ownedBefore []byte
+	if exists {
+		ownedBefore = bytes.Clone(value)
+	}
+	d.before[string(key)] = rawdb.StateCommitmentDelta{BeforeExists: exists, Before: ownedBefore}
 	if owner, ok := rawdb.DecodeStateKVGenerationKey(key); ok {
 		d.recordKVGenerationTouch(owner)
 		return nil
@@ -57,7 +64,9 @@ func (w *accountKVLatestBatch) captureKVBefore(owner common.Address, gen uint64,
 	if w.commitment.hasPhysicalBefore(physical) {
 		return nil
 	}
-	value, present, err := w.readLatest(owner, gen, domain, key)
+	// Borrow only until presence encoding and recordPhysicalBefore own it.
+	// Commitment capture is not an execution SLOAD resolution.
+	value, present, err := w.readLatestBorrowed(owner, gen, domain, key, false)
 	if err != nil {
 		return err
 	}
@@ -106,6 +115,8 @@ func (d *DomainCommitmentState) attachPhysicalBefore(update rawdb.StateCommitmen
 	}
 	update.BeforeKnown = true
 	update.BeforeExists = before.BeforeExists
-	update.Before = bytes.Clone(before.Before)
+	// The collector owns immutable bytes. Keeping this reference extends their
+	// lifetime through collector reset/release and any delayed captured fold.
+	update.Before = before.Before
 	return update, nil
 }
