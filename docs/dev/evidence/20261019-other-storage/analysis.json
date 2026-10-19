@@ -1,0 +1,148 @@
+{
+  "verified": true,
+  "hot_cut_block": 5715086,
+  "cold_cut_hot_prune_block": 10235628,
+  "cold_active_bytes": 98140085898,
+  "hot_sst_comparisons": {
+    "int64-snappy": {
+      "before": 146875958,
+      "after": 134432259,
+      "saved": 12443699,
+      "saved_percent": 8.472250441423503
+    },
+    "int64-none": {
+      "before": 403429457,
+      "after": 314129335,
+      "saved": 89300122,
+      "saved_percent": 22.13525077322254
+    },
+    "account-snappy": {
+      "before": 67897044,
+      "after": 61587825,
+      "saved": 6309219,
+      "saved_percent": 9.2923323731148
+    },
+    "account-none": {
+      "before": 118287909,
+      "after": 88052541,
+      "saved": 30235368,
+      "saved_percent": 25.560827184797052
+    },
+    "native-snappy": {
+      "before": 10704958,
+      "after": 9760646,
+      "saved": 944312,
+      "saved_percent": 8.821258336557696
+    },
+    "native-none": {
+      "before": 27864252,
+      "after": 9833639,
+      "saved": 18030613,
+      "saved_percent": 64.70876375938604
+    },
+    "code-snappy": {
+      "before": 4654903,
+      "after": 3874884,
+      "saved": 780019,
+      "saved_percent": 16.75693349571409
+    },
+    "code-none": {
+      "before": 11651407,
+      "after": 3887947,
+      "saved": 7763460,
+      "saved_percent": 66.63109442490507
+    }
+  },
+  "cold_sample_rows": 11229671,
+  "cold_sample_prev_payload_bytes": 553761185,
+  "cold_sample_prev_payload_percent": {
+    "account-latest": 67.54486846166367,
+    "kv-latest/AccountAsset": 0.17487827356480393,
+    "kv-latest/AccountAssetOperationTime": 2.3114657268728575e-05,
+    "kv-latest/AccountAssetOperationTimeV2": 3.9005984140979474e-05,
+    "kv-latest/AccountAssetV2": 0.32688314909612165,
+    "kv-latest/AccountFreeAssetNetUsage": 2.600398942731965e-05,
+    "kv-latest/AccountFreeAssetNetUsageV2": 4.1895316299570545e-05,
+    "kv-latest/AccountFrozenBandwidthAux": 0.007361657173570227,
+    "kv-latest/AccountFrozenSupplyAux": 3.6116651982388403e-06,
+    "kv-latest/AccountPermissionAux": 0.0,
+    "kv-latest/AccountResourceAux": 10.162795176769206,
+    "kv-latest/AccountVotesAux": 0.025050690398244507,
+    "kv-latest/ContractABI": 0.0,
+    "kv-latest/ContractStorage": 16.422137640434297,
+    "kv-latest/SystemAccountIndex": 0.0,
+    "kv-latest/SystemAsset": 0.00015042585550664768,
+    "kv-latest/SystemDelegation": 0.006525376096918024,
+    "kv-latest/SystemDynamicProperty": 0.23212027762473095,
+    "kv-latest/SystemExchange": 0.1020035378608199,
+    "kv-latest/SystemForkVote": 0.00013652094449342816,
+    "kv-latest/SystemProposal": 9.227804581500236e-05,
+    "kv-latest/SystemShielded": 0.0,
+    "kv-latest/SystemWitnessSchedule": 0.003913419825551695,
+    "kv-latest/WitnessCapsule": 0.8296049135332589,
+    "kv-latest/WitnessVoteState/VotesIndex": 4.03388998815437,
+    "kv-latest/WitnessVoteState/voter-record": 0.1274545813462892
+  },
+  "votes_index_share_of_vote_prev_payload_percent": 96.93717789484606,
+  "cdc_actual_trios": {
+    "before": 288606989,
+    "after": 304466473,
+    "saved": -15859484,
+    "saved_percent": -5.495183624953725
+  },
+  "cold_page_models": {
+    "accessor-4096": {
+      "before": 86055383,
+      "after": 79312305,
+      "saved": 6743078,
+      "saved_percent": 7.835742245200396
+    },
+    "accessor-16384": {
+      "before": 86055383,
+      "after": 77726240,
+      "saved": 8329143,
+      "saved_percent": 9.678816954425733
+    },
+    "accessor-65536": {
+      "before": 86055383,
+      "after": 77121051,
+      "saved": 8934332,
+      "saved_percent": 10.382072205756147
+    },
+    "inverted-4096": {
+      "before": 9278583,
+      "after": 3994386,
+      "saved": 5284197,
+      "saved_percent": 56.9504740109562
+    },
+    "inverted-16384": {
+      "before": 9278583,
+      "after": 3476394,
+      "saved": 5802189,
+      "saved_percent": 62.53313679470238
+    },
+    "inverted-65536": {
+      "before": 9278583,
+      "after": 3266891,
+      "saved": 6011692,
+      "saved_percent": 64.79105699652631
+    }
+  },
+  "txindex_rows": 491120809,
+  "txindex_exclusive_end_block": 10706944,
+  "txindex_layout_model": {
+    "before": 8146612152,
+    "after": 6182128916,
+    "saved": 1964483236,
+    "saved_percent": 24.11411270533749
+  },
+  "final_service_differs_from_census_service": true,
+  "limits": [
+    "hot full authenticated 5.715M cut; not current live hot state",
+    "cold 16 ordinal samples: exact sample bytes, not a full-domain census",
+    "SSTs are isolated identical-setting models, not production LSM attribution",
+    "page and tx-index layouts are models; no production latency benchmark",
+    "ancient/event/accessor section inventory is header-only; tx-index census verifies all CRCs/rows",
+    "later production version changed externally; collection did not deploy/restart/prune"
+  ]
+}

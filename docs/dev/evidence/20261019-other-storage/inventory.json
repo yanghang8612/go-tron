@@ -1,0 +1,204 @@
+{
+  "utc": "2026-10-19T02:45:43.701002+00:00",
+  "service_pid": "2369",
+  "service_exe": "/data/gtron/releases/auto-e45b39b09b0e-25c2b8612490a2e9/gtron",
+  "manifest_sha256": "15df333fae026f1c664427b21037d1751b8c6b02bb85cb9b81d719f03cea2ee2",
+  "manifest_header": {
+    "sourceRows": [
+      0,
+      0,
+      0
+    ],
+    "commitmentScheme": "state-flat-latest-muhash3072-v1",
+    "elementVersion": 1,
+    "version": 2,
+    "generation": 4533,
+    "publishedUnix": 1792377913,
+    "visibleTxStart": 1,
+    "visibleTxEnd": 481766429,
+    "progress": {
+      "historyBuildTxNum": 481766429,
+      "accessorBuildTxNum": 481766429,
+      "hotPruneTxNum": 481766429,
+      "hotPruneBlockNum": 10235628
+    }
+  },
+  "active": {
+    "event-log/event-log": {
+      "files": 4367,
+      "bytes": 17792823946,
+      "rows": 0,
+      "from": 1,
+      "to": 10235628
+    },
+    "event-log/event-log-index": {
+      "files": 4367,
+      "bytes": 962862161,
+      "rows": 0,
+      "from": 1,
+      "to": 10235628
+    },
+    "state-domain-change/accessor": {
+      "files": 4053,
+      "bytes": 23757262719,
+      "rows": 0,
+      "from": 1,
+      "to": 481766429
+    },
+    "state-domain-change/history": {
+      "files": 4053,
+      "bytes": 53160827955,
+      "rows": 0,
+      "from": 1,
+      "to": 481766429
+    },
+    "state-domain-change/inverted": {
+      "files": 4053,
+      "bytes": 2466309117,
+      "rows": 0,
+      "from": 1,
+      "to": 481766429
+    }
+  },
+  "retired": {},
+  "state_physical": {
+    ".chain-freezer-verification-v1.json/.json": {
+      "files": 1,
+      "bytes": 2534426,
+      "allocated": 2535424
+    },
+    "manifest.json/.json": {
+      "files": 1,
+      "bytes": 5686346,
+      "allocated": 5689344
+    },
+    ".state-domain-history-verification-v1.json/.json": {
+      "files": 1,
+      "bytes": 4860785,
+      "allocated": 4861952
+    },
+    "history/.kv": {
+      "files": 4054,
+      "bytes": 23762090756,
+      "allocated": 23770406912
+    },
+    "history/.seg": {
+      "files": 4054,
+      "bytes": 53169633292,
+      "allocated": 53178073088
+    },
+    "history/.idx": {
+      "files": 4054,
+      "bytes": 2466761089,
+      "allocated": 2475024384
+    },
+    "log/.seg": {
+      "files": 4367,
+      "bytes": 17792823946,
+      "allocated": 17802981376
+    },
+    "log/.idx": {
+      "files": 4367,
+      "bytes": 962862161,
+      "allocated": 973139968
+    },
+    "log/.tmp": {
+      "files": 2,
+      "bytes": 395122,
+      "allocated": 397312
+    }
+  },
+  "state_outside_manifest": {
+    "outside-current-manifest": {
+      "files": 8,
+      "bytes": 27562025
+    }
+  },
+  "missing": [],
+  "size_mismatches": [],
+  "state_file_versions": {
+    "event-log/event-log/677465766c67340a/0": 4367,
+    "event-log/event-log-index/677465766c78320a/0": 4367,
+    "state-domain-change/accessor/67747364636b7631/7": 4053,
+    "state-domain-change/history/677463626c6b3031/2": 4053,
+    "state-domain-change/inverted/6774736463696478/7": 4053
+  },
+  "ancient_physical": {
+    "FLOCK/": {
+      "files": 1,
+      "bytes": 0,
+      "allocated": 0
+    },
+    "state_roots/.ridx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated": 4096
+    },
+    "bodies/.cidx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated": 4096
+    },
+    "tx_infos/.cidx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated": 4096
+    },
+    "tx_infos/.cdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated": 0
+    },
+    "state_roots/.rdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated": 0
+    },
+    "bodies/.cdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated": 0
+    },
+    "tx_infos/.meta": {
+      "files": 1,
+      "bytes": 4,
+      "allocated": 4096
+    },
+    "state_roots/.meta": {
+      "files": 1,
+      "bytes": 4,
+      "allocated": 4096
+    },
+    "bodies/.meta": {
+      "files": 1,
+      "bytes": 4,
+      "allocated": 4096
+    },
+    "tx-index/.json": {
+      "files": 1,
+      "bytes": 237368,
+      "allocated": 237568
+    },
+    "tx-index/.gtxi": {
+      "files": 1240,
+      "bytes": 7768519120,
+      "allocated": 7771054080
+    },
+    "v2/.json": {
+      "files": 156,
+      "bytes": 51305,
+      "allocated": 638976
+    },
+    "v2/.gtv2": {
+      "files": 468,
+      "bytes": 50155529064,
+      "allocated": 50157060096
+    }
+  },
+  "ancient_codecs": {
+    "v2/.gtv2/codec-0": 312,
+    "v2/.gtv2/codec-2": 155,
+    "v2/.gtv2/codec-1": 1
+  },
+  "ancient_v2_manifests": 0
+}

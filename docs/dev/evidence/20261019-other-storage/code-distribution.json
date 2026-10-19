@@ -1,0 +1,58 @@
+{
+  "Complete": true,
+  "Block": 5715086,
+  "Started": "2026-10-19T03:35:48.663868067Z",
+  "Finished": "2026-10-19T03:35:49.105483965Z",
+  "Rows": 1809,
+  "KeyBytes": 83214,
+  "CodeBytes": 11499696,
+  "MaxCode": 68843,
+  "SourceSHA": "2bf0d3029dff2e1ab06aab079325ac026a17a6516791af48ade14e34e2c2a813",
+  "Experiments": {
+    "code-baseline-none": {
+      "rows": 1809,
+      "key_bytes": 83214,
+      "value_bytes": 11499696,
+      "sst_bytes": 11651407,
+      "data_block_bytes": 11608993,
+      "index_bytes": 39175,
+      "filter_bytes": 2373,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "code-baseline-snappy": {
+      "rows": 1809,
+      "key_bytes": 83214,
+      "value_bytes": 11499696,
+      "sst_bytes": 4654903,
+      "data_block_bytes": 4632769,
+      "index_bytes": 38647,
+      "filter_bytes": 2373,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "code-zstd-none": {
+      "rows": 1809,
+      "key_bytes": 83214,
+      "value_bytes": 3760001,
+      "sst_bytes": 3887947,
+      "data_block_bytes": 3859196,
+      "index_bytes": 25527,
+      "filter_bytes": 2373,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "code-zstd-snappy": {
+      "rows": 1809,
+      "key_bytes": 83214,
+      "value_bytes": 3760001,
+      "sst_bytes": 3874884,
+      "data_block_bytes": 3859196,
+      "index_bytes": 25527,
+      "filter_bytes": 2373,
+      "files": 1,
+      "checksums_verified": true
+    }
+  },
+  "Limitation": "all content-addressed code rows, including possibly unreferenced hashes; every code hash checked, but reachability/deletion not assessed; isolated SSTs are not live LSM sizes"
+}

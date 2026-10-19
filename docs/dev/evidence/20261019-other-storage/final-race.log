@@ -1,0 +1,3 @@
+ok  	github.com/tronprotocol/go-tron/cmd/other-storage-distribution	2.718s
+ok  	github.com/tronprotocol/go-tron/cmd/other-cold-distribution	2.606s
+ok  	github.com/tronprotocol/go-tron/cmd/tx-index-width-census	2.492s

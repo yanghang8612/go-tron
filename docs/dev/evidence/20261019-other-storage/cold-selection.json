@@ -1,0 +1,362 @@
+{
+  "utc": "2026-10-19T02:49:54.951736+00:00",
+  "population_segments": 4053,
+  "selection": "16 evenly spaced ordinal positions, entire selected segment, no size filter",
+  "selected_indices": [
+    0,
+    270,
+    540,
+    810,
+    1080,
+    1350,
+    1620,
+    1890,
+    2161,
+    2431,
+    2701,
+    2971,
+    3241,
+    3511,
+    3781,
+    4052
+  ],
+  "original_manifest_sha256": "15df333fae026f1c664427b21037d1751b8c6b02bb85cb9b81d719f03cea2ee2",
+  "files": [
+    {
+      "path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.kv",
+      "size": 192335,
+      "dev": 66304,
+      "inode": 94110436,
+      "manifest_checksum": "sha256:de2f8abbd3aa30543f67b10395621e15f3baeff55033c4037e8171d5763268b1"
+    },
+    {
+      "path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.kv",
+      "size": 4582825,
+      "dev": 66304,
+      "inode": 94112720,
+      "manifest_checksum": "sha256:4f48a73200c2c26e5ecc6ed32158d282a7e2eb421b63ef4aa82fd7d0f6a63e67"
+    },
+    {
+      "path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.kv",
+      "size": 4466835,
+      "dev": 66304,
+      "inode": 94118517,
+      "manifest_checksum": "sha256:51950b0c64278c6429ec303dd251cba4a6e9159738318fc3ee9420fc8c0eb0c5"
+    },
+    {
+      "path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.kv",
+      "size": 4431904,
+      "dev": 66304,
+      "inode": 94119204,
+      "manifest_checksum": "sha256:beb5b5350aff1f37d70409d1b039b620308964a5c4efc038bb6e418208121a0d"
+    },
+    {
+      "path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.kv",
+      "size": 8187544,
+      "dev": 66304,
+      "inode": 94123040,
+      "manifest_checksum": "sha256:ac532e8cb29e164b364dcdabd23fd99608e14bd67b1f8e7fa6e987c84e87fd4b"
+    },
+    {
+      "path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.kv",
+      "size": 7214897,
+      "dev": 66304,
+      "inode": 94126594,
+      "manifest_checksum": "sha256:ec5f51c3ce1278b6da7616c44df6e09f184b82e8a1172656f3f3bc50a81f01f9"
+    },
+    {
+      "path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.kv",
+      "size": 7751329,
+      "dev": 66304,
+      "inode": 94125722,
+      "manifest_checksum": "sha256:03bb6fc054b8d7698731072344d4e3175ff32e23128c6ffba086bddaa1e711ce"
+    },
+    {
+      "path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.kv",
+      "size": 2331239,
+      "dev": 66304,
+      "inode": 94129892,
+      "manifest_checksum": "sha256:1f71f0e5e845de59a4c80a0154c7f9a832f379a011ee08d52f59c64fdc0d909e"
+    },
+    {
+      "path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.kv",
+      "size": 6706971,
+      "dev": 66304,
+      "inode": 94131378,
+      "manifest_checksum": "sha256:87e02ade2fbc03bf6b185da7841f25a4def32f23f698b7fb2f72c4ae6d23a244"
+    },
+    {
+      "path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.kv",
+      "size": 2325431,
+      "dev": 66304,
+      "inode": 94131933,
+      "manifest_checksum": "sha256:60435da1da0b35ec5029972d154c2285ae773583e0ffecc44d8f128909b59c9f"
+    },
+    {
+      "path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.kv",
+      "size": 2048910,
+      "dev": 66304,
+      "inode": 94134891,
+      "manifest_checksum": "sha256:e0dd64f69b997b8efcc5cfeb40082d74bd64db05e1569fb2ca1b8ea8a7b72d60"
+    },
+    {
+      "path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.kv",
+      "size": 3797039,
+      "dev": 66304,
+      "inode": 94134791,
+      "manifest_checksum": "sha256:8bff7950f0fbe3f1f6366c78515bf61626c2d39625bcbeafb821b5704eb4474e"
+    },
+    {
+      "path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.kv",
+      "size": 9555339,
+      "dev": 66304,
+      "inode": 94135418,
+      "manifest_checksum": "sha256:2e7bf05d33f29d78a3b3c56f1f23d85c2d2946d27941d37bca56608753de0d29"
+    },
+    {
+      "path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.kv",
+      "size": 10926055,
+      "dev": 66304,
+      "inode": 94138528,
+      "manifest_checksum": "sha256:9da59c7ce9960e85d5157268886e0ed1427e860fd43ea2e7232086c4f639eca4"
+    },
+    {
+      "path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.kv",
+      "size": 6242250,
+      "dev": 66304,
+      "inode": 94139167,
+      "manifest_checksum": "sha256:6eb21c269e10e2dbd958fc42ce719de784201ba3d3d5ba16ac129b6fc5ed9dbf"
+    },
+    {
+      "path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.kv",
+      "size": 5294480,
+      "dev": 66304,
+      "inode": 94141598,
+      "manifest_checksum": "sha256:bf8d5f15bcd0744a701d728948be4b5d7a52c8ce64f2a1b08bb441ed56cfd879"
+    },
+    {
+      "path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.seg",
+      "size": 300286,
+      "dev": 66304,
+      "inode": 94110432,
+      "manifest_checksum": "sha256:267c6e3af0a4d82a1f3b3bb971e5cc23e2bba2b4038f08cf13ebf59c3e6b8433"
+    },
+    {
+      "path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.seg",
+      "size": 6434881,
+      "dev": 66304,
+      "inode": 94111737,
+      "manifest_checksum": "sha256:ce4358a89435bd0fd1d67815cbd64cbaf5fa4d85d6b05359e405189662dbc43c"
+    },
+    {
+      "path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.seg",
+      "size": 11013410,
+      "dev": 66304,
+      "inode": 94118483,
+      "manifest_checksum": "sha256:e38fa058f065937dcc9576e62cfadf2673c484a6b6b892c59aa90dc62a4b10d4"
+    },
+    {
+      "path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.seg",
+      "size": 12192154,
+      "dev": 66304,
+      "inode": 94119106,
+      "manifest_checksum": "sha256:0effe9a794c4ef261616ab7d1dc83ef0c30397fe36a2a4dd4b8845261f97e0f1"
+    },
+    {
+      "path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.seg",
+      "size": 19796375,
+      "dev": 66304,
+      "inode": 94119886,
+      "manifest_checksum": "sha256:646b957b0d2f394914636a037024f9610764a5befa0bad21d3ec75e7562d2228"
+    },
+    {
+      "path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.seg",
+      "size": 18279938,
+      "dev": 66304,
+      "inode": 94126567,
+      "manifest_checksum": "sha256:1b79e40f9860295059f4e795352fc3871b5028e691442c17867e6e1a10f5eb7a"
+    },
+    {
+      "path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.seg",
+      "size": 21159733,
+      "dev": 66304,
+      "inode": 94128807,
+      "manifest_checksum": "sha256:31f95f4456488c3462f3c461b7834285ad557a1b427b0c0857cea25b90fb29a3"
+    },
+    {
+      "path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.seg",
+      "size": 5708841,
+      "dev": 66304,
+      "inode": 94127530,
+      "manifest_checksum": "sha256:b38e6669a86fd2bec11868cf37bede9214c1e84972e9816101ecba32ab25fd59"
+    },
+    {
+      "path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.seg",
+      "size": 12848937,
+      "dev": 66304,
+      "inode": 94131156,
+      "manifest_checksum": "sha256:5fcec8e76011144041185a75ba96b7627fb0e0b4a5f09c1d03211ea4cc0c37b7"
+    },
+    {
+      "path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.seg",
+      "size": 5399218,
+      "dev": 66304,
+      "inode": 94129848,
+      "manifest_checksum": "sha256:209570ccbc8f29a3db6cac8cc49ec17d3dcff3936eb74126443adb6b21f2e956"
+    },
+    {
+      "path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.seg",
+      "size": 4981851,
+      "dev": 66304,
+      "inode": 94134428,
+      "manifest_checksum": "sha256:4c5169bc95a4898e15ea8a7c2cfed2c5674fbcce072964ca9efcbbe6f3fd4400"
+    },
+    {
+      "path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.seg",
+      "size": 10386535,
+      "dev": 66304,
+      "inode": 94136052,
+      "manifest_checksum": "sha256:6c517c01cb98fe7dc4cb148eb33732e36149e673c873898695cc9a0229648ecf"
+    },
+    {
+      "path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.seg",
+      "size": 17764817,
+      "dev": 66304,
+      "inode": 94135166,
+      "manifest_checksum": "sha256:4185cac27ff8fccc8bad6e012e44fe859f65ffe35090da4c525181c893dcbd1d"
+    },
+    {
+      "path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.seg",
+      "size": 22797338,
+      "dev": 66304,
+      "inode": 94138465,
+      "manifest_checksum": "sha256:8863a8f7ee1249015df7d62c5fdbf6152acf4b4554d27c8932f62476596832f4"
+    },
+    {
+      "path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.seg",
+      "size": 12472299,
+      "dev": 66304,
+      "inode": 94136793,
+      "manifest_checksum": "sha256:72350b54a1860cbcba815b45bb2b9b61b14fe4ca652b7118a61dde9b611ddb2b"
+    },
+    {
+      "path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.seg",
+      "size": 11736410,
+      "dev": 66304,
+      "inode": 94141207,
+      "manifest_checksum": "sha256:8dc3db74c84dda495d2963327a9a91f1d2dc8d3994b0b18874f0b3646dcaae85"
+    },
+    {
+      "path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.idx",
+      "size": 29293,
+      "dev": 66304,
+      "inode": 94110435,
+      "manifest_checksum": "sha256:28aeb5d6c60a1895d86e5d5ed1fa6c609272ce80c82fb97df15a3d303f44016a"
+    },
+    {
+      "path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.idx",
+      "size": 380854,
+      "dev": 66304,
+      "inode": 94112599,
+      "manifest_checksum": "sha256:ad2c93faaba51cb138d468d69eb4df4941c6dc9c656f8a371ce6d7f25a63dcc9"
+    },
+    {
+      "path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.idx",
+      "size": 629404,
+      "dev": 66304,
+      "inode": 94118504,
+      "manifest_checksum": "sha256:0a38113fbf96692b44ac42d672617ac193470733a443802b4916a6318e5cecb0"
+    },
+    {
+      "path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.idx",
+      "size": 532755,
+      "dev": 66304,
+      "inode": 94119129,
+      "manifest_checksum": "sha256:f15b4cc1748b1fdd640d4b93a545fc14379bbfe22802b98ef536674aaf522d0c"
+    },
+    {
+      "path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.idx",
+      "size": 1019710,
+      "dev": 66304,
+      "inode": 94122950,
+      "manifest_checksum": "sha256:79de96f1d720ce2f5d0c7e55074e9a5e49ee0922955423a6b2eadaf2bca3692b"
+    },
+    {
+      "path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.idx",
+      "size": 912958,
+      "dev": 66304,
+      "inode": 94126584,
+      "manifest_checksum": "sha256:8fb13e2ad7214ee648532d5fd15e6fbe48480b333daa351f73f94701ac5854dd"
+    },
+    {
+      "path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.idx",
+      "size": 958999,
+      "dev": 66304,
+      "inode": 94123916,
+      "manifest_checksum": "sha256:1ce9b6709280d59da5b9d327c1ea0ec3f611795abdc8004f4031fcfd3952ae70"
+    },
+    {
+      "path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.idx",
+      "size": 272233,
+      "dev": 66304,
+      "inode": 94129663,
+      "manifest_checksum": "sha256:843a69599ac14af3fd8dcd67e8c600629ba99c1c1750eaac6da0980809f1e35e"
+    },
+    {
+      "path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.idx",
+      "size": 588265,
+      "dev": 66304,
+      "inode": 94131266,
+      "manifest_checksum": "sha256:b0af4fa10c91566d6a6f6c49ec5fd1d40149c98b2d49886e29757b394bd0976b"
+    },
+    {
+      "path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.idx",
+      "size": 228897,
+      "dev": 66304,
+      "inode": 94129883,
+      "manifest_checksum": "sha256:99c6eeffc1490453d8d1e39a879a5d23ce733431c5a0c31c104a444cc3b87830"
+    },
+    {
+      "path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.idx",
+      "size": 198946,
+      "dev": 66304,
+      "inode": 94134654,
+      "manifest_checksum": "sha256:65402928a68270ea139279b8b571a8cb7b25e76faf529fad2c8cf423b2e07200"
+    },
+    {
+      "path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.idx",
+      "size": 610842,
+      "dev": 66304,
+      "inode": 94134107,
+      "manifest_checksum": "sha256:8649a54f6e3755854feff9518896bbd94477cd08ad5b80ebb462409976bae95d"
+    },
+    {
+      "path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.idx",
+      "size": 748573,
+      "dev": 66304,
+      "inode": 94135326,
+      "manifest_checksum": "sha256:af011812d4300ebe12e844bcb0a2ef3facfe13bc0c78c926eb97f133e14648b7"
+    },
+    {
+      "path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.idx",
+      "size": 1047577,
+      "dev": 66304,
+      "inode": 94138520,
+      "manifest_checksum": "sha256:5988ce982b5aa58a14901c7bdc42e63564bb2f5870a44af176fa941e634fa6bf"
+    },
+    {
+      "path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.idx",
+      "size": 573866,
+      "dev": 66304,
+      "inode": 94137100,
+      "manifest_checksum": "sha256:11bce385f4cf763179307fda6adb05b27e014db46fc12c9216085de504879ae2"
+    },
+    {
+      "path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.idx",
+      "size": 545411,
+      "dev": 66304,
+      "inode": 94141277,
+      "manifest_checksum": "sha256:94c6a5f2b2c1477efb7680b0e0a551ba5fcc9bd39617007891a936843f65e375"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "utc": "2026-10-19T02:59:40.492430+00:00",
+  "state_manifest_sha256": "15df333fae026f1c664427b21037d1751b8c6b02bb85cb9b81d719f03cea2ee2",
+  "event_log_v4_sections": {
+    "files": 4367,
+    "rows": 266418068,
+    "header": 768592,
+    "block_dictionary": 278799256,
+    "tx_dictionary": 6851764920,
+    "row_directory": 33396024,
+    "row_data": 4093919313,
+    "payload_directory": 36449688,
+    "payload_data": 3834089124,
+    "address_lookup": 294184452,
+    "topic_lookup": 2369452577,
+    "total": 17792823946
+  },
+  "history_accessor_v7_sections": {
+    "files": 4053,
+    "records": 3079278455,
+    "keys": 269688258,
+    "block_directory": 181840687,
+    "key_data": 4026647111,
+    "posting_data": 19548288561,
+    "header": 486360,
+    "total": 23757262719
+  },
+  "transaction_index_manifest_sha256": "1940b31475d292f4d7445fee5f11abd1d55470373cbf1a7464fb4ecc4d068ba6",
+  "transaction_index_sections": {
+    "files": 1268,
+    "rows": 478813486,
+    "directory": 95037344,
+    "fingerprints": 3830507888,
+    "locations": 3830507888,
+    "header": 162304,
+    "total": 7942218576,
+    "bucket_headers_and_trailers": 186003152
+  },
+  "transaction_index_prefix_bits": {
+    "12": 458,
+    "13": 423,
+    "14": 375,
+    "15": 12
+  },
+  "ancient_v2_tables": {
+    "bodies": {
+      "files": 159,
+      "blocks": 10420224,
+      "total": 48157057453,
+      "frame_table": 7815168,
+      "dictionary": 10275078,
+      "header": 10176,
+      "compressed": 48138957031,
+      "uncompressed": 147999260410
+    },
+    "state_roots": {
+      "files": 159,
+      "blocks": 10420224,
+      "total": 353972128,
+      "frame_table": 7815168,
+      "dictionary": 0,
+      "header": 10176,
+      "compressed": 346146784,
+      "uncompressed": 343867360
+    },
+    "tx_infos": {
+      "files": 159,
+      "blocks": 10420224,
+      "total": 2614954262,
+      "frame_table": 7815168,
+      "dictionary": 0,
+      "header": 10176,
+      "compressed": 2607128918,
+      "uncompressed": 23747027233
+    }
+  },
+  "ancient_v2_codecs": {
+    "bodies/2": 158,
+    "state_roots/0": 159,
+    "tx_infos/0": 159,
+    "bodies/1": 1
+  },
+  "limitation": "header and section bounds verified; payload checksums not scanned in this header inventory"
+}

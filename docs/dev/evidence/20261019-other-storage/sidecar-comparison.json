@@ -1,0 +1,106 @@
+{
+  "Complete": true,
+  "Started": "2026-10-19T03:02:41.495790801Z",
+  "Finished": "2026-10-19T03:02:45.096577576Z",
+  "Models": {
+    "accessor": [
+      {
+        "PageBytes": 4096,
+        "Files": 16,
+        "Raw": 86055383,
+        "Stored": 79312305,
+        "Pages": 21017,
+        "FrameDirectory": 504408,
+        "LargestStoredPage": 4096,
+        "RawFallbackPages": 13744
+      },
+      {
+        "PageBytes": 16384,
+        "Files": 16,
+        "Raw": 86055383,
+        "Stored": 77726240,
+        "Pages": 5260,
+        "FrameDirectory": 126240,
+        "LargestStoredPage": 16384,
+        "RawFallbackPages": 3199
+      },
+      {
+        "PageBytes": 65536,
+        "Files": 16,
+        "Raw": 86055383,
+        "Stored": 77121051,
+        "Pages": 1320,
+        "FrameDirectory": 31680,
+        "LargestStoredPage": 65536,
+        "RawFallbackPages": 745
+      }
+    ],
+    "inverted": [
+      {
+        "PageBytes": 4096,
+        "Files": 16,
+        "Raw": 9278583,
+        "Stored": 3994386,
+        "Pages": 2273,
+        "FrameDirectory": 54552,
+        "LargestStoredPage": 2124,
+        "RawFallbackPages": 0
+      },
+      {
+        "PageBytes": 16384,
+        "Files": 16,
+        "Raw": 9278583,
+        "Stored": 3476394,
+        "Pages": 574,
+        "FrameDirectory": 13776,
+        "LargestStoredPage": 7233,
+        "RawFallbackPages": 0
+      },
+      {
+        "PageBytes": 65536,
+        "Files": 16,
+        "Raw": 9278583,
+        "Stored": 3266891,
+        "Pages": 149,
+        "FrameDirectory": 3576,
+        "LargestStoredPage": 27040,
+        "RawFallbackPages": 0
+      }
+    ]
+  },
+  "Files": [
+    "history/state-domain-change-1-5714-267c6e3af0a4d82a.kv",
+    "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.kv",
+    "history/state-domain-change-35300559-35423113-e38fa058f065937d.kv",
+    "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.kv",
+    "history/state-domain-change-124682249-124880810-646b957b0d2f3949.kv",
+    "history/state-domain-change-148476911-148655270-1b79e40f98602950.kv",
+    "history/state-domain-change-183657655-183845572-31f95f4456488c34.kv",
+    "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.kv",
+    "history/state-domain-change-229132437-229247038-5fcec8e760111440.kv",
+    "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.kv",
+    "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.kv",
+    "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.kv",
+    "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.kv",
+    "history/state-domain-change-413973965-414180052-8863a8f7ee124901.kv",
+    "history/state-domain-change-450870221-450983509-72350b54a1860cbc.kv",
+    "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.kv",
+    "history/state-domain-change-1-5714-267c6e3af0a4d82a.idx",
+    "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.idx",
+    "history/state-domain-change-35300559-35423113-e38fa058f065937d.idx",
+    "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.idx",
+    "history/state-domain-change-124682249-124880810-646b957b0d2f3949.idx",
+    "history/state-domain-change-148476911-148655270-1b79e40f98602950.idx",
+    "history/state-domain-change-183657655-183845572-31f95f4456488c34.idx",
+    "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.idx",
+    "history/state-domain-change-229132437-229247038-5fcec8e760111440.idx",
+    "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.idx",
+    "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.idx",
+    "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.idx",
+    "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.idx",
+    "history/state-domain-change-413973965-414180052-8863a8f7ee124901.idx",
+    "history/state-domain-change-450870221-450983509-72350b54a1860cbc.idx",
+    "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.idx"
+  ],
+  "Limitation": "same full files compressed as independent pages; 48-byte wrapper header and 24-byte page directory counted; read latency/cache and integration not measured"
+}

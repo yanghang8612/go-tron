@@ -1,0 +1,594 @@
+{
+  "complete": true,
+  "Started": "2026-10-19T02:50:53.936374802Z",
+  "Finished": "2026-10-19T02:52:36.72640828Z",
+  "Block": 5715086,
+  "BlockHash": "000000000057348e8ed54d676bea369a0a413af09e92e00a4ef630091218e6ad",
+  "TxNum": 174114684,
+  "Root": "3840ed6f0fb414aae75d26169149f638fb82aa4335c13defbf2cab85a811a9e3",
+  "source_rows": [
+    1349700,
+    89,
+    45366888
+  ],
+  "source_sha256": [
+    "26aaba3554f26e7be3a23de86e33af70743de1aa45c79e5776e774a444980d51",
+    "1b9c0f8bd7ffb02b9ff2a8f900052c6908fcd75bf842ad5df7cc99b934852706",
+    "22f5b286cc87f10f63b62c6009653f487d35a2eff69116029f45104b4e42f353"
+  ],
+  "matches_authenticated_baseline": true,
+  "Domains": {
+    "AccountAsset/current": {
+      "rows": 6221993,
+      "key_bytes": 355020128,
+      "wrapped_bytes": 55997937,
+      "payload_bytes": 49775944
+    },
+    "AccountAsset/obsolete": {
+      "rows": 2,
+      "key_bytes": 109,
+      "wrapped_bytes": 18,
+      "payload_bytes": 16
+    },
+    "AccountAssetOperationTime/current": {
+      "rows": 716,
+      "key_bytes": 38162,
+      "wrapped_bytes": 6444,
+      "payload_bytes": 5728
+    },
+    "AccountAssetOperationTimeV2/current": {
+      "rows": 931,
+      "key_bytes": 52136,
+      "wrapped_bytes": 8379,
+      "payload_bytes": 7448
+    },
+    "AccountAssetV2/current": {
+      "rows": 6253493,
+      "key_bytes": 350195608,
+      "wrapped_bytes": 56281437,
+      "payload_bytes": 50027944
+    },
+    "AccountAssetV2/obsolete": {
+      "rows": 2,
+      "key_bytes": 112,
+      "wrapped_bytes": 18,
+      "payload_bytes": 16
+    },
+    "AccountFreeAssetNetUsage/current": {
+      "rows": 716,
+      "key_bytes": 38162,
+      "wrapped_bytes": 6444,
+      "payload_bytes": 5728
+    },
+    "AccountFreeAssetNetUsageV2/current": {
+      "rows": 931,
+      "key_bytes": 52136,
+      "wrapped_bytes": 8379,
+      "payload_bytes": 7448
+    },
+    "AccountFrozenBandwidthAux/current": {
+      "rows": 30111,
+      "key_bytes": 1595883,
+      "wrapped_bytes": 569051,
+      "payload_bytes": 538940
+    },
+    "AccountFrozenSupplyAux/current": {
+      "rows": 950,
+      "key_bytes": 50350,
+      "wrapped_bytes": 17436,
+      "payload_bytes": 16486
+    },
+    "AccountPermissionAux/current": {
+      "rows": 1,
+      "key_bytes": 50,
+      "wrapped_bytes": 45,
+      "payload_bytes": 44
+    },
+    "AccountResourceAux/current": {
+      "rows": 117110,
+      "key_bytes": 5855500,
+      "wrapped_bytes": 2855761,
+      "payload_bytes": 2738651
+    },
+    "AccountVotesAux/current": {
+      "rows": 46277,
+      "key_bytes": 2452681,
+      "wrapped_bytes": 1482634,
+      "payload_bytes": 1436357
+    },
+    "ContractABI/current": {
+      "rows": 3426,
+      "key_bytes": 178152,
+      "wrapped_bytes": 4597487,
+      "payload_bytes": 4594061
+    },
+    "ContractABI/obsolete": {
+      "rows": 4,
+      "key_bytes": 208,
+      "wrapped_bytes": 4939,
+      "payload_bytes": 4935
+    },
+    "ContractMetadata/current": {
+      "rows": 3667,
+      "key_bytes": 194351,
+      "wrapped_bytes": 22616031,
+      "payload_bytes": 22612364
+    },
+    "ContractMetadata/obsolete": {
+      "rows": 4,
+      "key_bytes": 212,
+      "wrapped_bytes": 27067,
+      "payload_bytes": 27063
+    },
+    "ContractStorage/current": {
+      "rows": 26939941,
+      "key_bytes": 2182135221,
+      "wrapped_bytes": 889018053,
+      "payload_bytes": 862078112
+    },
+    "ContractStorage/obsolete": {
+      "rows": 837,
+      "key_bytes": 67797,
+      "wrapped_bytes": 27621,
+      "payload_bytes": 26784
+    },
+    "SystemAccountIndex/current": {
+      "rows": 16407,
+      "key_bytes": 990428,
+      "wrapped_bytes": 360954,
+      "payload_bytes": 344547
+    },
+    "SystemAsset/current": {
+      "rows": 13269,
+      "key_bytes": 797982,
+      "wrapped_bytes": 1100283,
+      "payload_bytes": 1087014
+    },
+    "SystemDynamicProperty/current": {
+      "rows": 23,
+      "key_bytes": 1575,
+      "wrapped_bytes": 358,
+      "payload_bytes": 335
+    },
+    "SystemExchange/current": {
+      "rows": 295,
+      "key_bytes": 17110,
+      "wrapped_bytes": 21322,
+      "payload_bytes": 21027
+    },
+    "SystemForkVote/current": {
+      "rows": 2,
+      "key_bytes": 112,
+      "wrapped_bytes": 56,
+      "payload_bytes": 54
+    },
+    "SystemProposal/current": {
+      "rows": 16,
+      "key_bytes": 932,
+      "wrapped_bytes": 21374,
+      "payload_bytes": 21358
+    },
+    "SystemShielded/current": {
+      "rows": 5715088,
+      "key_bytes": 348620393,
+      "wrapped_bytes": 188597856,
+      "payload_bytes": 182882768
+    },
+    "SystemWitnessSchedule/current": {
+      "rows": 2,
+      "key_bytes": 125,
+      "wrapped_bytes": 4399,
+      "payload_bytes": 4397
+    },
+    "WitnessCapsule/current": {
+      "rows": 182,
+      "key_bytes": 13104,
+      "wrapped_bytes": 15724,
+      "payload_bytes": 15542
+    },
+    "WitnessVoteState/current": {
+      "rows": 492,
+      "key_bytes": 34920,
+      "wrapped_bytes": 104344,
+      "payload_bytes": 103852
+    }
+  },
+  "Numbers": {
+    "AccountAsset/current": {
+      "rows": 6221993,
+      "key_bytes": 355020128,
+      "wrapped_bytes": 55997937,
+      "payload_bytes": 49775944,
+      "minimal_be_widths": {
+        "0": 347610,
+        "1": 5387361,
+        "2": 411189,
+        "3": 66246,
+        "4": 7842,
+        "5": 1422,
+        "6": 247,
+        "7": 37,
+        "8": 39
+      },
+      "unsigned_varint_bytes": 6924488,
+      "negative_rows": 0,
+      "zero_rows": 347610,
+      "logical_key_widths": {
+        "10": 1035346,
+        "11": 957014,
+        "12": 26806,
+        "13": 37153,
+        "14": 67581,
+        "15": 49801,
+        "16": 9884,
+        "17": 12504,
+        "18": 17253,
+        "19": 3500,
+        "2": 524,
+        "20": 7781,
+        "21": 6706,
+        "22": 211,
+        "23": 227,
+        "24": 159,
+        "25": 9,
+        "26": 9,
+        "27": 5,
+        "28": 9,
+        "29": 197,
+        "3": 248645,
+        "30": 2,
+        "31": 31,
+        "32": 5755,
+        "4": 667757,
+        "5": 286422,
+        "6": 100809,
+        "7": 1886750,
+        "8": 286096,
+        "9": 507047
+      }
+    },
+    "AccountAsset/obsolete": {
+      "rows": 2,
+      "key_bytes": 109,
+      "wrapped_bytes": 18,
+      "payload_bytes": 16,
+      "minimal_be_widths": {
+        "1": 2
+      },
+      "unsigned_varint_bytes": 2,
+      "negative_rows": 0,
+      "zero_rows": 0,
+      "logical_key_widths": {
+        "4": 1,
+        "7": 1
+      }
+    },
+    "AccountAssetOperationTime/current": {
+      "rows": 716,
+      "key_bytes": 38162,
+      "wrapped_bytes": 6444,
+      "payload_bytes": 5728,
+      "minimal_be_widths": {
+        "4": 716
+      },
+      "unsigned_varint_bytes": 3580,
+      "negative_rows": 0,
+      "zero_rows": 0,
+      "logical_key_widths": {
+        "3": 530,
+        "8": 186
+      }
+    },
+    "AccountAssetOperationTimeV2/current": {
+      "rows": 931,
+      "key_bytes": 52136,
+      "wrapped_bytes": 8379,
+      "payload_bytes": 7448,
+      "minimal_be_widths": {
+        "4": 931
+      },
+      "unsigned_varint_bytes": 4655,
+      "negative_rows": 0,
+      "zero_rows": 0,
+      "logical_key_widths": {
+        "7": 931
+      }
+    },
+    "AccountAssetV2/current": {
+      "rows": 6253493,
+      "key_bytes": 350195608,
+      "wrapped_bytes": 56281437,
+      "payload_bytes": 50027944,
+      "minimal_be_widths": {
+        "0": 354971,
+        "1": 5404991,
+        "2": 414829,
+        "3": 68890,
+        "4": 8043,
+        "5": 1437,
+        "6": 249,
+        "7": 41,
+        "8": 42
+      },
+      "unsigned_varint_bytes": 6968206,
+      "negative_rows": 0,
+      "zero_rows": 354971,
+      "logical_key_widths": {
+        "7": 6253493
+      }
+    },
+    "AccountAssetV2/obsolete": {
+      "rows": 2,
+      "key_bytes": 112,
+      "wrapped_bytes": 18,
+      "payload_bytes": 16,
+      "minimal_be_widths": {
+        "1": 2
+      },
+      "unsigned_varint_bytes": 2,
+      "negative_rows": 0,
+      "zero_rows": 0,
+      "logical_key_widths": {
+        "7": 2
+      }
+    },
+    "AccountFreeAssetNetUsage/current": {
+      "rows": 716,
+      "key_bytes": 38162,
+      "wrapped_bytes": 6444,
+      "payload_bytes": 5728,
+      "minimal_be_widths": {
+        "1": 482,
+        "2": 233,
+        "3": 1
+      },
+      "unsigned_varint_bytes": 1443,
+      "negative_rows": 0,
+      "zero_rows": 0,
+      "logical_key_widths": {
+        "3": 530,
+        "8": 186
+      }
+    },
+    "AccountFreeAssetNetUsageV2/current": {
+      "rows": 931,
+      "key_bytes": 52136,
+      "wrapped_bytes": 8379,
+      "payload_bytes": 7448,
+      "minimal_be_widths": {
+        "1": 482,
+        "2": 448,
+        "3": 1
+      },
+      "unsigned_varint_bytes": 1872,
+      "negative_rows": 0,
+      "zero_rows": 0,
+      "logical_key_widths": {
+        "7": 931
+      }
+    }
+  },
+  "Assets": {
+    "Legacy": 6221993,
+    "V2": 6253493,
+    "Equal": 6167717,
+    "Different": 54276,
+    "MissingV2": 0,
+    "V2Only": 31500,
+    "MissingNameMapping": 0,
+    "MappingCollision": 0,
+    "MaxLegacyPerOwner": 533
+  },
+  "Accounts": {
+    "rows": 1349700,
+    "key_bytes": 59386800,
+    "wrapped_bytes": 71867611,
+    "payload_bytes": 63409361,
+    "CoreBytes": 63409361,
+    "EnvelopeBytes": 8458250,
+    "AddressMatchesOwner": 1349700,
+    "AddressAbsent": 0,
+    "AddressDiffers": 0,
+    "AddressElisionBytes": 29930892,
+    "V5Rows": 1349700
+  },
+  "Native": {
+    "ContractABI/current": {
+      "rows": 3426,
+      "key_bytes": 178152,
+      "wrapped_bytes": 4597487,
+      "payload_bytes": 4594061,
+      "RawZstdBytes": 1602411,
+      "SelectedZstdBytes": 1605109
+    },
+    "ContractABI/obsolete": {
+      "rows": 4,
+      "key_bytes": 208,
+      "wrapped_bytes": 4939,
+      "payload_bytes": 4935,
+      "RawZstdBytes": 1827,
+      "SelectedZstdBytes": 1831
+    },
+    "ContractMetadata/current": {
+      "rows": 3667,
+      "key_bytes": 194351,
+      "wrapped_bytes": 22616031,
+      "payload_bytes": 22612364,
+      "RawZstdBytes": 7708656,
+      "SelectedZstdBytes": 7709164
+    },
+    "ContractMetadata/obsolete": {
+      "rows": 4,
+      "key_bytes": 212,
+      "wrapped_bytes": 27067,
+      "payload_bytes": 27063,
+      "RawZstdBytes": 12602,
+      "SelectedZstdBytes": 12606
+    },
+    "SystemShielded/current": {
+      "rows": 2,
+      "key_bytes": 147,
+      "wrapped_bytes": 18,
+      "payload_bytes": 16,
+      "RawZstdBytes": 42,
+      "SelectedZstdBytes": 18
+    },
+    "WitnessCapsule/current": {
+      "rows": 182,
+      "key_bytes": 13104,
+      "wrapped_bytes": 15724,
+      "payload_bytes": 15542,
+      "RawZstdBytes": 17244,
+      "SelectedZstdBytes": 15708
+    },
+    "WitnessVoteState/current": {
+      "rows": 491,
+      "key_bytes": 34861,
+      "wrapped_bytes": 94028,
+      "payload_bytes": 93537,
+      "RawZstdBytes": 64949,
+      "SelectedZstdBytes": 64176
+    }
+  },
+  "MetadataABIRows": 3430,
+  "MetadataABIBytes": 4598996,
+  "SeparateABIRows": 3430,
+  "SeparateABIBytes": 4598996,
+  "SameABIRows": 3430,
+  "DifferentABIRows": 0,
+  "MissingSeparateABIRows": 0,
+  "sst_experiments": {
+    "account-address-elided-none": {
+      "rows": 1349700,
+      "key_bytes": 59386800,
+      "value_bytes": 41936719,
+      "sst_bytes": 88052541,
+      "data_block_bytes": 85337867,
+      "index_bytes": 1023584,
+      "filter_bytes": 1687375,
+      "files": 3,
+      "checksums_verified": true
+    },
+    "account-address-elided-snappy": {
+      "rows": 1349700,
+      "key_bytes": 59386800,
+      "value_bytes": 41936719,
+      "sst_bytes": 61587825,
+      "data_block_bytes": 59512453,
+      "index_bytes": 1022911,
+      "filter_bytes": 1687375,
+      "files": 3,
+      "checksums_verified": true
+    },
+    "account-baseline-none": {
+      "rows": 1349700,
+      "key_bytes": 59386800,
+      "value_bytes": 71867611,
+      "sst_bytes": 118287909,
+      "data_block_bytes": 115208592,
+      "index_bytes": 1387782,
+      "filter_bytes": 1687375,
+      "files": 3,
+      "checksums_verified": true
+    },
+    "account-baseline-snappy": {
+      "rows": 1349700,
+      "key_bytes": 59386800,
+      "value_bytes": 71867611,
+      "sst_bytes": 67897044,
+      "data_block_bytes": 65685369,
+      "index_bytes": 1386594,
+      "filter_bytes": 1687375,
+      "files": 3,
+      "checksums_verified": true
+    },
+    "int64-post-v2-none": {
+      "rows": 12478784,
+      "key_bytes": 518214793,
+      "value_bytes": 112309056,
+      "sst_bytes": 403429457,
+      "data_block_bytes": 382417804,
+      "index_bytes": 5383709,
+      "filter_bytes": 15600829,
+      "files": 25,
+      "checksums_verified": true
+    },
+    "int64-post-v2-snappy": {
+      "rows": 12478784,
+      "key_bytes": 518214793,
+      "value_bytes": 112309056,
+      "sst_bytes": 146875958,
+      "data_block_bytes": 127685556,
+      "index_bytes": 5358323,
+      "filter_bytes": 15600829,
+      "files": 25,
+      "checksums_verified": true
+    },
+    "int64-trim-none": {
+      "rows": 12478784,
+      "key_bytes": 518214793,
+      "value_bytes": 25419509,
+      "sst_bytes": 314129335,
+      "data_block_bytes": 294362322,
+      "index_bytes": 4140594,
+      "filter_bytes": 15600829,
+      "files": 25,
+      "checksums_verified": true
+    },
+    "int64-trim-snappy": {
+      "rows": 12478784,
+      "key_bytes": 518214793,
+      "value_bytes": 25419509,
+      "sst_bytes": 134432259,
+      "data_block_bytes": 116048707,
+      "index_bytes": 4120843,
+      "filter_bytes": 15600829,
+      "files": 25,
+      "checksums_verified": true
+    },
+    "native-baseline-none": {
+      "rows": 7776,
+      "key_bytes": 304395,
+      "value_bytes": 27355294,
+      "sst_bytes": 27864252,
+      "data_block_bytes": 27719023,
+      "index_bytes": 134451,
+      "filter_bytes": 9797,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "native-baseline-snappy": {
+      "rows": 7776,
+      "key_bytes": 304395,
+      "value_bytes": 27355294,
+      "sst_bytes": 10704958,
+      "data_block_bytes": 10606816,
+      "index_bytes": 133670,
+      "filter_bytes": 9797,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "native-zstd-none": {
+      "rows": 7776,
+      "key_bytes": 304395,
+      "value_bytes": 9408612,
+      "sst_bytes": 9833639,
+      "data_block_bytes": 9735134,
+      "index_bytes": 87782,
+      "filter_bytes": 9797,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "native-zstd-snappy": {
+      "rows": 7776,
+      "key_bytes": 304395,
+      "value_bytes": 9408612,
+      "sst_bytes": 9760646,
+      "data_block_bytes": 9692448,
+      "index_bytes": 87782,
+      "filter_bytes": 9797,
+      "files": 1,
+      "checksums_verified": true
+    }
+  }
+}

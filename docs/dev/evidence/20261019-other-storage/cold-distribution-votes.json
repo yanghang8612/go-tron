@@ -1,0 +1,3578 @@
+{
+  "Complete": true,
+  "ManifestSHA256": "73f40b934b3673995bbfb99764f9aa614af46c6d6fabd5e95d178a7e83144c71",
+  "ManifestGeneration": 4533,
+  "Started": "2026-10-19T03:10:15.840535933Z",
+  "Finished": "2026-10-19T03:12:45.38638169Z",
+  "Samples": [
+    {
+      "Path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.seg",
+      "From": 1,
+      "To": 5714,
+      "Rows": 22044,
+      "Bytes": 300286,
+      "SHA256": "sha256:267c6e3af0a4d82a1f3b3bb971e5cc23e2bba2b4038f08cf13ebf59c3e6b8433",
+      "Domains": {
+        "account-latest": {
+          "Rows": 7938,
+          "Present": 6822,
+          "Payload": 329252,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 152444
+        },
+        "kv-latest/AccountAsset": {
+          "Rows": 3,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 11,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 3,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 21,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 22,
+          "Present": 4,
+          "Payload": 66,
+          "KeyBytes": 88,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 21,
+          "Present": 4,
+          "Payload": 120,
+          "KeyBytes": 84,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 64,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 665,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 21,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 189,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 4948,
+          "Present": 4939,
+          "Payload": 43712,
+          "KeyBytes": 116682,
+          "Zero": 35,
+          "Widths": {
+            "0": 35,
+            "1": 4429,
+            "2": 105,
+            "3": 36,
+            "4": 279,
+            "5": 20
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 4464,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 53593,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemWitnessSchedule": {
+          "Rows": 21,
+          "Present": 21,
+          "Payload": 16401,
+          "KeyBytes": 252,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 4506,
+          "Present": 4485,
+          "Payload": 443654,
+          "KeyBytes": 103638,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 15,
+          "Present": 14,
+          "Payload": 2261,
+          "KeyBytes": 150,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 18,
+          "Present": 3,
+          "Payload": 298,
+          "KeyBytes": 396,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.seg",
+      "From": 13955142,
+      "To": 14029412,
+      "Rows": 372189,
+      "Bytes": 6434881,
+      "SHA256": "sha256:ce4358a89435bd0fd1d67815cbd64cbaf5fa4d85d6b05359e405189662dbc43c",
+      "Domains": {
+        "account-latest": {
+          "Rows": 139511,
+          "Present": 137664,
+          "Payload": 9449312,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 3171352
+        },
+        "kv-latest/AccountAsset": {
+          "Rows": 83579,
+          "Present": 74847,
+          "Payload": 598776,
+          "KeyBytes": 587750,
+          "Zero": 350,
+          "Widths": {
+            "0": 350,
+            "1": 26730,
+            "2": 6490,
+            "3": 9046,
+            "4": 7888,
+            "5": 24303,
+            "6": 17,
+            "8": 23
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 83579,
+          "Present": 74847,
+          "Payload": 598776,
+          "KeyBytes": 585053,
+          "Zero": 350,
+          "Widths": {
+            "0": 350,
+            "1": 26730,
+            "2": 6490,
+            "3": 9046,
+            "4": 7888,
+            "5": 24303,
+            "6": 17,
+            "8": 23
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 653,
+          "Present": 509,
+          "Payload": 9473,
+          "KeyBytes": 2612,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenSupplyAux": {
+          "Rows": 2,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 8,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 1576,
+          "Present": 1137,
+          "Payload": 35629,
+          "KeyBytes": 6304,
+          "Zero": 0,
+          "Widths": {
+            "32": 500
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 18,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 196,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 21,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 276,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 40905,
+          "Present": 40905,
+          "Payload": 327480,
+          "KeyBytes": 790914,
+          "Zero": 79,
+          "Widths": {
+            "0": 79,
+            "1": 9923,
+            "3": 9971,
+            "4": 9968,
+            "5": 10960,
+            "6": 2
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 10000,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 120000,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemWitnessSchedule": {
+          "Rows": 2,
+          "Present": 2,
+          "Payload": 3557,
+          "KeyBytes": 27,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 10056,
+          "Present": 10055,
+          "Payload": 1132466,
+          "KeyBytes": 231288,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 793,
+          "Present": 793,
+          "Payload": 4383940,
+          "KeyBytes": 7930,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 1494,
+          "Present": 702,
+          "Payload": 195042,
+          "KeyBytes": 32868,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.seg",
+      "From": 35300559,
+      "To": 35423113,
+      "Rows": 746732,
+      "Bytes": 11013410,
+      "SHA256": "sha256:e38fa058f065937dcc9576e62cfadf2673c484a6b6b892c59aa90dc62a4b10d4",
+      "Domains": {
+        "account-latest": {
+          "Rows": 358184,
+          "Present": 357852,
+          "Payload": 24010958,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 8321064
+        },
+        "kv-latest/AccountAsset": {
+          "Rows": 18562,
+          "Present": 16971,
+          "Payload": 135768,
+          "KeyBytes": 125348,
+          "Zero": 148,
+          "Widths": {
+            "0": 148,
+            "1": 3745,
+            "2": 4839,
+            "3": 3364,
+            "4": 3865,
+            "5": 1010
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 18562,
+          "Present": 16971,
+          "Payload": 135768,
+          "KeyBytes": 129934,
+          "Zero": 148,
+          "Widths": {
+            "0": 148,
+            "1": 3745,
+            "2": 4839,
+            "3": 3364,
+            "4": 3865,
+            "5": 1010
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 242,
+          "Present": 197,
+          "Payload": 3673,
+          "KeyBytes": 968,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 163623,
+          "Present": 163601,
+          "Payload": 5772756,
+          "KeyBytes": 163623,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 405,
+          "Present": 345,
+          "Payload": 10838,
+          "KeyBytes": 1620,
+          "Zero": 0,
+          "Widths": {
+            "32": 152
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 170836,
+          "Present": 170571,
+          "Payload": 5458272,
+          "KeyBytes": 5466752,
+          "Zero": 0,
+          "Widths": {
+            "1": 72,
+            "10": 60985,
+            "11": 1627,
+            "14": 42316,
+            "2": 188,
+            "20": 156,
+            "28": 33,
+            "3": 5361,
+            "32": 7,
+            "4": 31134,
+            "5": 6256,
+            "6": 175,
+            "7": 2,
+            "8": 290,
+            "9": 21969
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 6,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 69,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 9978,
+          "Present": 9978,
+          "Payload": 79824,
+          "KeyBytes": 200332,
+          "Zero": 22,
+          "Widths": {
+            "0": 22,
+            "1": 2849,
+            "3": 1865,
+            "4": 1885,
+            "5": 3357
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemProposal": {
+          "Rows": 1,
+          "Present": 1,
+          "Payload": 511,
+          "KeyBytes": 9,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 2871,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 34452,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 2871,
+          "Present": 2871,
+          "Payload": 337303,
+          "KeyBytes": 66033,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 259,
+          "Present": 259,
+          "Payload": 1453249,
+          "KeyBytes": 2590,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 332,
+          "Present": 73,
+          "Payload": 14077,
+          "KeyBytes": 7304,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.seg",
+      "From": 75063350,
+      "To": 75167093,
+      "Rows": 666456,
+      "Bytes": 12192154,
+      "SHA256": "sha256:0effe9a794c4ef261616ab7d1dc83ef0c30397fe36a2a4dd4b8845261f97e0f1",
+      "Domains": {
+        "account-latest": {
+          "Rows": 332435,
+          "Present": 331932,
+          "Payload": 22395615,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 7724982
+        },
+        "kv-latest/AccountAsset": {
+          "Rows": 7647,
+          "Present": 6937,
+          "Payload": 55496,
+          "KeyBytes": 61762,
+          "Zero": 225,
+          "Widths": {
+            "0": 225,
+            "1": 895,
+            "2": 2023,
+            "3": 2736,
+            "4": 488,
+            "5": 202,
+            "8": 368
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 7647,
+          "Present": 6937,
+          "Payload": 55496,
+          "KeyBytes": 53529,
+          "Zero": 225,
+          "Widths": {
+            "0": 225,
+            "1": 895,
+            "2": 2023,
+            "3": 2736,
+            "4": 488,
+            "5": 202,
+            "8": 368
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 211,
+          "Present": 160,
+          "Payload": 2952,
+          "KeyBytes": 844,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 100148,
+          "Present": 100129,
+          "Payload": 3228691,
+          "KeyBytes": 100148,
+          "Zero": 0,
+          "Widths": {
+            "32": 2
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 378,
+          "Present": 275,
+          "Payload": 8650,
+          "KeyBytes": 1512,
+          "Zero": 0,
+          "Widths": {
+            "32": 133
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 204321,
+          "Present": 188293,
+          "Payload": 6025376,
+          "KeyBytes": 6538272,
+          "Zero": 0,
+          "Widths": {
+            "1": 381,
+            "10": 63197,
+            "11": 2066,
+            "12": 10,
+            "13": 1,
+            "14": 42952,
+            "2": 804,
+            "20": 3,
+            "27": 4,
+            "28": 122,
+            "3": 25338,
+            "31": 4,
+            "32": 268,
+            "4": 24269,
+            "5": 1065,
+            "6": 5615,
+            "7": 1672,
+            "8": 190,
+            "9": 20332
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 9,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 114,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 6821,
+          "Present": 6821,
+          "Payload": 69928,
+          "KeyBytes": 132669,
+          "Zero": 14,
+          "Widths": {
+            "0": 14,
+            "1": 1641,
+            "4": 3014,
+            "5": 2024
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 3004,
+          "Present": 3004,
+          "Payload": 211197,
+          "KeyBytes": 27036,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemForkVote": {
+          "Rows": 1,
+          "Present": 1,
+          "Payload": 27,
+          "KeyBytes": 7,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 1655,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 19860,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 1719,
+          "Present": 1719,
+          "Payload": 204177,
+          "KeyBytes": 39537,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 196,
+          "Present": 196,
+          "Payload": 2875810,
+          "KeyBytes": 1960,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 264,
+          "Present": 68,
+          "Payload": 11286,
+          "KeyBytes": 5808,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.seg",
+      "From": 124682249,
+      "To": 124880810,
+      "Rows": 1219338,
+      "Bytes": 19796375,
+      "SHA256": "sha256:646b957b0d2f394914636a037024f9610764a5befa0bad21d3ec75e7562d2228",
+      "Domains": {
+        "account-latest": {
+          "Rows": 631360,
+          "Present": 629985,
+          "Payload": 42324840,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 14647813
+        },
+        "kv-latest/AccountAsset": {
+          "Rows": 19381,
+          "Present": 18710,
+          "Payload": 149680,
+          "KeyBytes": 166271,
+          "Zero": 373,
+          "Widths": {
+            "0": 373,
+            "1": 1988,
+            "2": 4158,
+            "3": 5702,
+            "4": 5684,
+            "5": 800,
+            "8": 5
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetOperationTime": {
+          "Rows": 13,
+          "Present": 12,
+          "Payload": 96,
+          "KeyBytes": 104,
+          "Zero": 0,
+          "Widths": {
+            "4": 12
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetOperationTimeV2": {
+          "Rows": 13,
+          "Present": 12,
+          "Payload": 96,
+          "KeyBytes": 91,
+          "Zero": 0,
+          "Widths": {
+            "4": 12
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 19381,
+          "Present": 18710,
+          "Payload": 149680,
+          "KeyBytes": 135667,
+          "Zero": 373,
+          "Widths": {
+            "0": 373,
+            "1": 1988,
+            "2": 4158,
+            "3": 5702,
+            "4": 5684,
+            "5": 800,
+            "8": 5
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsage": {
+          "Rows": 15,
+          "Present": 14,
+          "Payload": 112,
+          "KeyBytes": 120,
+          "Zero": 0,
+          "Widths": {
+            "2": 14
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsageV2": {
+          "Rows": 15,
+          "Present": 14,
+          "Payload": 112,
+          "KeyBytes": 105,
+          "Zero": 0,
+          "Widths": {
+            "2": 14
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 178,
+          "Present": 136,
+          "Payload": 2514,
+          "KeyBytes": 712,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 214765,
+          "Present": 214738,
+          "Payload": 7018213,
+          "KeyBytes": 214765,
+          "Zero": 0,
+          "Widths": {
+            "32": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 506,
+          "Present": 375,
+          "Payload": 11745,
+          "KeyBytes": 2024,
+          "Zero": 0,
+          "Widths": {
+            "32": 132
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 4,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 12,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 314953,
+          "Present": 282948,
+          "Payload": 9054336,
+          "KeyBytes": 10078496,
+          "Zero": 0,
+          "Widths": {
+            "1": 1886,
+            "10": 83052,
+            "11": 3841,
+            "12": 22,
+            "14": 60225,
+            "2": 2196,
+            "20": 59,
+            "21": 6,
+            "23": 8,
+            "24": 36,
+            "26": 18,
+            "27": 934,
+            "28": 227,
+            "3": 38339,
+            "31": 4,
+            "32": 5865,
+            "4": 42491,
+            "5": 5228,
+            "6": 8121,
+            "7": 9083,
+            "8": 47,
+            "9": 21260
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 12,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 148,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 30,
+          "Present": 30,
+          "Payload": 510,
+          "KeyBytes": 270,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 10077,
+          "Present": 10077,
+          "Payload": 83856,
+          "KeyBytes": 200293,
+          "Zero": 19,
+          "Widths": {
+            "0": 19,
+            "1": 2244,
+            "4": 4305,
+            "5": 3481,
+            "6": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 2726,
+          "Present": 2726,
+          "Payload": 198206,
+          "KeyBytes": 24534,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemForkVote": {
+          "Rows": 23,
+          "Present": 23,
+          "Payload": 621,
+          "KeyBytes": 161,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 2261,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 27132,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemWitnessSchedule": {
+          "Rows": 1,
+          "Present": 1,
+          "Payload": 571,
+          "KeyBytes": 15,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 2337,
+          "Present": 2337,
+          "Payload": 274677,
+          "KeyBytes": 53751,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 267,
+          "Present": 267,
+          "Payload": 1076247,
+          "KeyBytes": 2670,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 1020,
+          "Present": 754,
+          "Payload": 149013,
+          "KeyBytes": 22440,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.seg",
+      "From": 148476911,
+      "To": 148655270,
+      "Rows": 1081842,
+      "Bytes": 18279938,
+      "SHA256": "sha256:1b79e40f9860295059f4e795352fc3871b5028e691442c17867e6e1a10f5eb7a",
+      "Domains": {
+        "account-latest": {
+          "Rows": 607160,
+          "Present": 606131,
+          "Payload": 41251840,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 14095708
+        },
+        "kv-latest/AccountAsset": {
+          "Rows": 3820,
+          "Present": 3586,
+          "Payload": 28688,
+          "KeyBytes": 26311,
+          "Zero": 103,
+          "Widths": {
+            "0": 103,
+            "1": 761,
+            "2": 1215,
+            "3": 860,
+            "4": 388,
+            "5": 259
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetOperationTime": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 32,
+          "KeyBytes": 32,
+          "Zero": 0,
+          "Widths": {
+            "4": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetOperationTimeV2": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 32,
+          "KeyBytes": 28,
+          "Zero": 0,
+          "Widths": {
+            "4": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 3820,
+          "Present": 3586,
+          "Payload": 28688,
+          "KeyBytes": 26740,
+          "Zero": 103,
+          "Widths": {
+            "0": 103,
+            "1": 761,
+            "2": 1215,
+            "3": 860,
+            "4": 388,
+            "5": 259
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsage": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 32,
+          "KeyBytes": 32,
+          "Zero": 0,
+          "Widths": {
+            "2": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsageV2": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 32,
+          "KeyBytes": 28,
+          "Zero": 0,
+          "Widths": {
+            "2": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 175,
+          "Present": 145,
+          "Payload": 2661,
+          "KeyBytes": 700,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 171259,
+          "Present": 171145,
+          "Payload": 5641655,
+          "KeyBytes": 171259,
+          "Zero": 0,
+          "Widths": {
+            "32": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 302,
+          "Present": 254,
+          "Payload": 8007,
+          "KeyBytes": 1208,
+          "Zero": 0,
+          "Widths": {
+            "32": 89
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 282336,
+          "Present": 242423,
+          "Payload": 7757536,
+          "KeyBytes": 9034752,
+          "Zero": 0,
+          "Widths": {
+            "1": 1272,
+            "10": 58716,
+            "11": 6059,
+            "12": 16,
+            "14": 48732,
+            "15": 76,
+            "16": 664,
+            "17": 37,
+            "2": 2268,
+            "20": 123,
+            "21": 7,
+            "22": 83,
+            "23": 386,
+            "24": 54,
+            "25": 19,
+            "27": 2208,
+            "28": 267,
+            "29": 1067,
+            "3": 30477,
+            "30": 7612,
+            "32": 3949,
+            "4": 35711,
+            "5": 10163,
+            "6": 11548,
+            "7": 5711,
+            "8": 263,
+            "9": 14935
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 2,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 19,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 8,
+          "Present": 8,
+          "Payload": 136,
+          "KeyBytes": 72,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 8077,
+          "Present": 8077,
+          "Payload": 66176,
+          "KeyBytes": 159616,
+          "Zero": 14,
+          "Widths": {
+            "0": 14,
+            "1": 1793,
+            "4": 3531,
+            "5": 2726
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 900,
+          "Present": 900,
+          "Payload": 63123,
+          "KeyBytes": 8100,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 1807,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 21684,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 1813,
+          "Present": 1813,
+          "Payload": 214533,
+          "KeyBytes": 41699,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 152,
+          "Present": 152,
+          "Payload": 1138556,
+          "KeyBytes": 1520,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 195,
+          "Present": 43,
+          "Payload": 8300,
+          "KeyBytes": 4290,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.seg",
+      "From": 183657655,
+      "To": 183845572,
+      "Rows": 1143462,
+      "Bytes": 21159733,
+      "SHA256": "sha256:31f95f4456488c3462f3c461b7834285ad557a1b427b0c0857cea25b90fb29a3",
+      "Domains": {
+        "account-latest": {
+          "Rows": 602520,
+          "Present": 601848,
+          "Payload": 40367629,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 14012464
+        },
+        "kv-latest/AccountAssetOperationTimeV2": {
+          "Rows": 5,
+          "Present": 5,
+          "Payload": 40,
+          "KeyBytes": 35,
+          "Zero": 0,
+          "Widths": {
+            "4": 5
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 14837,
+          "Present": 12378,
+          "Payload": 99024,
+          "KeyBytes": 103859,
+          "Zero": 143,
+          "Widths": {
+            "0": 143,
+            "1": 1566,
+            "2": 3865,
+            "3": 3436,
+            "4": 1082,
+            "5": 2225,
+            "6": 21,
+            "7": 36,
+            "8": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsageV2": {
+          "Rows": 5,
+          "Present": 5,
+          "Payload": 40,
+          "KeyBytes": 35,
+          "Zero": 0,
+          "Widths": {
+            "2": 5
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 177,
+          "Present": 129,
+          "Payload": 2392,
+          "KeyBytes": 708,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 156726,
+          "Present": 156430,
+          "Payload": 4943873,
+          "KeyBytes": 156726,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 469,
+          "Present": 338,
+          "Payload": 10684,
+          "KeyBytes": 1876,
+          "Zero": 0,
+          "Widths": {
+            "32": 117
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 4,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 12,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 354918,
+          "Present": 329115,
+          "Payload": 10531680,
+          "KeyBytes": 11357376,
+          "Zero": 0,
+          "Widths": {
+            "1": 1650,
+            "10": 96243,
+            "11": 10469,
+            "12": 16,
+            "13": 1,
+            "14": 69558,
+            "15": 114,
+            "16": 381,
+            "17": 79,
+            "18": 96,
+            "19": 4,
+            "2": 3843,
+            "20": 230,
+            "21": 631,
+            "22": 475,
+            "23": 219,
+            "24": 8,
+            "25": 35,
+            "26": 40,
+            "27": 809,
+            "28": 340,
+            "29": 618,
+            "3": 37371,
+            "30": 3664,
+            "31": 1,
+            "32": 7019,
+            "4": 53379,
+            "5": 8788,
+            "6": 5205,
+            "7": 5647,
+            "8": 2445,
+            "9": 19737
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 9,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 99,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 5,
+          "Present": 5,
+          "Payload": 85,
+          "KeyBytes": 45,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 8104,
+          "Present": 8104,
+          "Payload": 74312,
+          "KeyBytes": 159225,
+          "Zero": 16,
+          "Widths": {
+            "0": 16,
+            "1": 1866,
+            "4": 3572,
+            "5": 2570,
+            "6": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 493,
+          "Present": 493,
+          "Payload": 34510,
+          "KeyBytes": 4437,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 1880,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 22560,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemWitnessSchedule": {
+          "Rows": 1,
+          "Present": 1,
+          "Payload": 571,
+          "KeyBytes": 15,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 1989,
+          "Present": 1989,
+          "Payload": 233943,
+          "KeyBytes": 45747,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 183,
+          "Present": 183,
+          "Payload": 2795706,
+          "KeyBytes": 1830,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 1137,
+          "Present": 955,
+          "Payload": 175749,
+          "KeyBytes": 25014,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.seg",
+      "From": 211406107,
+      "To": 211459108,
+      "Rows": 297286,
+      "Bytes": 5708841,
+      "SHA256": "sha256:b38e6669a86fd2bec11868cf37bede9214c1e84972e9816101ecba32ab25fd59",
+      "Domains": {
+        "account-latest": {
+          "Rows": 174080,
+          "Present": 173836,
+          "Payload": 11606426,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 4051502
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 1499,
+          "Present": 1401,
+          "Payload": 11208,
+          "KeyBytes": 10493,
+          "Zero": 35,
+          "Widths": {
+            "0": 35,
+            "1": 393,
+            "2": 284,
+            "3": 233,
+            "4": 434,
+            "5": 10,
+            "7": 12
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 93,
+          "Present": 77,
+          "Payload": 1426,
+          "KeyBytes": 372,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenSupplyAux": {
+          "Rows": 1,
+          "Present": 1,
+          "Payload": 20,
+          "KeyBytes": 4,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 39693,
+          "Present": 39503,
+          "Payload": 1269119,
+          "KeyBytes": 39693,
+          "Zero": 0,
+          "Widths": {
+            "32": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 204,
+          "Present": 158,
+          "Payload": 4929,
+          "KeyBytes": 816,
+          "Zero": 0,
+          "Widths": {
+            "32": 45
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 77286,
+          "Present": 68959,
+          "Payload": 2206688,
+          "KeyBytes": 2473152,
+          "Zero": 0,
+          "Widths": {
+            "1": 615,
+            "10": 15890,
+            "11": 163,
+            "12": 13,
+            "14": 10774,
+            "15": 65,
+            "16": 171,
+            "17": 5,
+            "18": 10,
+            "2": 1881,
+            "20": 213,
+            "21": 281,
+            "22": 97,
+            "23": 149,
+            "24": 6,
+            "25": 2,
+            "27": 389,
+            "28": 314,
+            "29": 153,
+            "3": 7961,
+            "30": 3598,
+            "31": 25,
+            "32": 1565,
+            "4": 9179,
+            "5": 3266,
+            "6": 2514,
+            "7": 907,
+            "8": 1163,
+            "9": 7590
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 1,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 10,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 2847,
+          "Present": 2847,
+          "Payload": 24696,
+          "KeyBytes": 55755,
+          "Zero": 5,
+          "Widths": {
+            "0": 5,
+            "1": 635,
+            "4": 1266,
+            "5": 925
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 116,
+          "Present": 116,
+          "Payload": 8120,
+          "KeyBytes": 1044,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 640,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 7680,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 649,
+          "Present": 649,
+          "Payload": 76723,
+          "KeyBytes": 14927,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 78,
+          "Present": 78,
+          "Payload": 872547,
+          "KeyBytes": 780,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 99,
+          "Present": 21,
+          "Payload": 6967,
+          "KeyBytes": 2178,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.seg",
+      "From": 229132437,
+      "To": 229247038,
+      "Rows": 801251,
+      "Bytes": 12848937,
+      "SHA256": "sha256:5fcec8e76011144041185a75ba96b7627fb0e0b4a5f09c1d03211ea4cc0c37b7",
+      "Domains": {
+        "account-latest": {
+          "Rows": 363868,
+          "Present": 363320,
+          "Payload": 24582926,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 8407138
+        },
+        "kv-latest/AccountAssetOperationTimeV2": {
+          "Rows": 2,
+          "Present": 2,
+          "Payload": 16,
+          "KeyBytes": 14,
+          "Zero": 0,
+          "Widths": {
+            "4": 2
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 8433,
+          "Present": 8159,
+          "Payload": 65272,
+          "KeyBytes": 59031,
+          "Zero": 143,
+          "Widths": {
+            "0": 143,
+            "1": 1964,
+            "2": 1968,
+            "3": 1603,
+            "4": 1244,
+            "5": 1082,
+            "6": 87,
+            "7": 66,
+            "8": 2
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsageV2": {
+          "Rows": 2,
+          "Present": 2,
+          "Payload": 16,
+          "KeyBytes": 14,
+          "Zero": 0,
+          "Widths": {
+            "2": 2
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 147,
+          "Present": 104,
+          "Payload": 1923,
+          "KeyBytes": 588,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenSupplyAux": {
+          "Rows": 1,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 4,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 131456,
+          "Present": 130814,
+          "Payload": 4274742,
+          "KeyBytes": 131456,
+          "Zero": 0,
+          "Widths": {
+            "32": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 277,
+          "Present": 203,
+          "Payload": 6358,
+          "KeyBytes": 1108,
+          "Zero": 0,
+          "Widths": {
+            "32": 79
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 285997,
+          "Present": 215577,
+          "Payload": 6898464,
+          "KeyBytes": 9151904,
+          "Zero": 0,
+          "Widths": {
+            "1": 1388,
+            "10": 19525,
+            "11": 1151,
+            "12": 102,
+            "13": 9,
+            "14": 21658,
+            "15": 1674,
+            "16": 780,
+            "17": 16,
+            "18": 3,
+            "19": 3,
+            "2": 2445,
+            "20": 414,
+            "21": 26,
+            "22": 162,
+            "23": 334,
+            "24": 11,
+            "26": 6,
+            "27": 789,
+            "28": 2987,
+            "29": 620,
+            "3": 42721,
+            "30": 2703,
+            "31": 3737,
+            "32": 4296,
+            "4": 32355,
+            "5": 26573,
+            "6": 22181,
+            "7": 13319,
+            "8": 2516,
+            "9": 11073
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 46,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 343,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 6,
+          "Present": 2,
+          "Payload": 34,
+          "KeyBytes": 67,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 7167,
+          "Present": 7167,
+          "Payload": 57696,
+          "KeyBytes": 140108,
+          "Zero": 13,
+          "Widths": {
+            "0": 13,
+            "1": 1630,
+            "3": 1,
+            "4": 3298,
+            "5": 2222
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 244,
+          "Present": 244,
+          "Payload": 17080,
+          "KeyBytes": 2196,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 1643,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 19716,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 1643,
+          "Present": 1643,
+          "Payload": 194227,
+          "KeyBytes": 37789,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 139,
+          "Present": 139,
+          "Payload": 756577,
+          "KeyBytes": 1390,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 180,
+          "Present": 41,
+          "Payload": 6652,
+          "KeyBytes": 3960,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.seg",
+      "From": 246398687,
+      "To": 246443377,
+      "Rows": 287054,
+      "Bytes": 5399218,
+      "SHA256": "sha256:209570ccbc8f29a3db6cac8cc49ec17d3dcff3936eb74126443adb6b21f2e956",
+      "Domains": {
+        "account-latest": {
+          "Rows": 131739,
+          "Present": 131506,
+          "Payload": 8795599,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 3043840
+        },
+        "kv-latest/AccountAssetOperationTimeV2": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 32,
+          "KeyBytes": 28,
+          "Zero": 0,
+          "Widths": {
+            "4": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 16078,
+          "Present": 15954,
+          "Payload": 127632,
+          "KeyBytes": 112546,
+          "Zero": 51,
+          "Widths": {
+            "0": 51,
+            "1": 4484,
+            "2": 10478,
+            "3": 247,
+            "4": 301,
+            "5": 137,
+            "6": 99,
+            "7": 154,
+            "8": 3
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFreeAssetNetUsageV2": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 32,
+          "KeyBytes": 28,
+          "Zero": 0,
+          "Widths": {
+            "2": 4
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 98,
+          "Present": 70,
+          "Payload": 1237,
+          "KeyBytes": 392,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenSupplyAux": {
+          "Rows": 1,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 4,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 48914,
+          "Present": 48786,
+          "Payload": 1604920,
+          "KeyBytes": 48914,
+          "Zero": 0,
+          "Widths": {
+            "32": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 230,
+          "Present": 142,
+          "Payload": 4384,
+          "KeyBytes": 920,
+          "Zero": 0,
+          "Widths": {
+            "32": 23
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 84337,
+          "Present": 67434,
+          "Payload": 2157888,
+          "KeyBytes": 2698784,
+          "Zero": 0,
+          "Widths": {
+            "1": 923,
+            "10": 6837,
+            "11": 429,
+            "12": 72,
+            "13": 36,
+            "14": 8830,
+            "15": 330,
+            "16": 352,
+            "17": 6,
+            "18": 3,
+            "2": 1351,
+            "20": 142,
+            "21": 15,
+            "22": 50,
+            "23": 218,
+            "24": 19,
+            "25": 5,
+            "26": 11,
+            "27": 408,
+            "28": 319,
+            "29": 305,
+            "3": 12268,
+            "30": 1109,
+            "31": 2040,
+            "32": 2497,
+            "4": 8583,
+            "5": 6107,
+            "6": 4434,
+            "7": 3255,
+            "8": 1325,
+            "9": 5155
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 6,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 56,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 8,
+          "Present": 4,
+          "Payload": 68,
+          "KeyBytes": 85,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 3661,
+          "Present": 3661,
+          "Payload": 29888,
+          "KeyBytes": 71288,
+          "Zero": 7,
+          "Widths": {
+            "0": 7,
+            "1": 834,
+            "3": 1,
+            "4": 1693,
+            "5": 1121
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 60,
+          "Present": 60,
+          "Payload": 4200,
+          "KeyBytes": 540,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 841,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 10092,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 844,
+          "Present": 844,
+          "Payload": 99790,
+          "KeyBytes": 19412,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 100,
+          "Present": 100,
+          "Payload": 1414750,
+          "KeyBytes": 1000,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 129,
+          "Present": 29,
+          "Payload": 7111,
+          "KeyBytes": 2838,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.seg",
+      "From": 290375707,
+      "To": 290414500,
+      "Rows": 284273,
+      "Bytes": 4981851,
+      "SHA256": "sha256:4c5169bc95a4898e15ea8a7c2cfed2c5674fbcce072964ca9efcbbe6f3fd4400",
+      "Domains": {
+        "account-latest": {
+          "Rows": 149421,
+          "Present": 149200,
+          "Payload": 10097655,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 3470490
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 1121,
+          "Present": 794,
+          "Payload": 6352,
+          "KeyBytes": 7847,
+          "Zero": 13,
+          "Widths": {
+            "0": 13,
+            "1": 194,
+            "2": 163,
+            "3": 73,
+            "4": 274,
+            "5": 36,
+            "6": 29,
+            "7": 11,
+            "8": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 35,
+          "Present": 31,
+          "Payload": 571,
+          "KeyBytes": 140,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 39127,
+          "Present": 39087,
+          "Payload": 1177386,
+          "KeyBytes": 39127,
+          "Zero": 0,
+          "Widths": {
+            "32": 1
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 73,
+          "Present": 68,
+          "Payload": 2115,
+          "KeyBytes": 292,
+          "Zero": 0,
+          "Widths": {
+            "32": 15
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 91491,
+          "Present": 78701,
+          "Payload": 2518432,
+          "KeyBytes": 2927712,
+          "Zero": 0,
+          "Widths": {
+            "1": 534,
+            "10": 10917,
+            "11": 1079,
+            "12": 29,
+            "13": 19,
+            "14": 9708,
+            "15": 71,
+            "16": 83,
+            "17": 8,
+            "2": 1082,
+            "20": 20,
+            "22": 24,
+            "23": 171,
+            "24": 13,
+            "25": 1,
+            "26": 5,
+            "27": 129,
+            "28": 569,
+            "29": 221,
+            "3": 16213,
+            "30": 8980,
+            "31": 1278,
+            "32": 1206,
+            "4": 8705,
+            "5": 9599,
+            "6": 2003,
+            "7": 977,
+            "8": 577,
+            "9": 4480
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 1,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 13,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 2019,
+          "Present": 2019,
+          "Payload": 16152,
+          "KeyBytes": 39849,
+          "Zero": 3,
+          "Widths": {
+            "0": 3,
+            "1": 444,
+            "4": 905,
+            "5": 667
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 22,
+          "Present": 22,
+          "Payload": 1540,
+          "KeyBytes": 198,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 447,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 5364,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 447,
+          "Present": 447,
+          "Payload": 52854,
+          "KeyBytes": 10281,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 31,
+          "Present": 31,
+          "Payload": 323020,
+          "KeyBytes": 310,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 38,
+          "Present": 7,
+          "Payload": 2939,
+          "KeyBytes": 836,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.seg",
+      "From": 332875444,
+      "To": 332994459,
+      "Rows": 549371,
+      "Bytes": 10386535,
+      "SHA256": "sha256:6c517c01cb98fe7dc4cb148eb33732e36149e673c873898695cc9a0229648ecf",
+      "Domains": {
+        "account-latest": {
+          "Rows": 392341,
+          "Present": 392161,
+          "Payload": 26797519,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 9124300
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 5342,
+          "Present": 5282,
+          "Payload": 42256,
+          "KeyBytes": 37394,
+          "Zero": 159,
+          "Widths": {
+            "0": 159,
+            "1": 1143,
+            "2": 1320,
+            "3": 2456,
+            "4": 68,
+            "5": 63,
+            "6": 63,
+            "7": 10
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 61,
+          "Present": 45,
+          "Payload": 835,
+          "KeyBytes": 244,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountPermissionAux": {
+          "Rows": 356,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 1068,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 68220,
+          "Present": 67963,
+          "Payload": 2042583,
+          "KeyBytes": 68220,
+          "Zero": 0,
+          "Widths": {
+            "32": 40
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 143,
+          "Present": 92,
+          "Payload": 2906,
+          "KeyBytes": 572,
+          "Zero": 0,
+          "Widths": {
+            "32": 47
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 2,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 6,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 78793,
+          "Present": 72830,
+          "Payload": 2330560,
+          "KeyBytes": 2521376,
+          "Zero": 0,
+          "Widths": {
+            "1": 1422,
+            "10": 8744,
+            "11": 605,
+            "12": 78,
+            "13": 53,
+            "14": 9292,
+            "15": 231,
+            "16": 256,
+            "17": 8,
+            "18": 7,
+            "19": 5,
+            "2": 2187,
+            "20": 2455,
+            "21": 16,
+            "22": 47,
+            "23": 188,
+            "24": 3,
+            "25": 2,
+            "26": 34,
+            "27": 425,
+            "28": 247,
+            "29": 340,
+            "3": 10249,
+            "30": 1005,
+            "31": 1851,
+            "32": 1926,
+            "4": 13485,
+            "5": 8805,
+            "6": 2586,
+            "7": 940,
+            "8": 989,
+            "9": 4349
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 2,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 28,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDelegation": {
+          "Rows": 5,
+          "Present": 2,
+          "Payload": 361,
+          "KeyBytes": 195,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 2652,
+          "Present": 2652,
+          "Payload": 33696,
+          "KeyBytes": 51511,
+          "Zero": 5,
+          "Widths": {
+            "0": 5,
+            "1": 579,
+            "4": 1193,
+            "5": 771
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 70,
+          "Present": 70,
+          "Payload": 4900,
+          "KeyBytes": 630,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 584,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 7008,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 638,
+          "Present": 638,
+          "Payload": 75341,
+          "KeyBytes": 14674,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 72,
+          "Present": 72,
+          "Payload": 85716,
+          "KeyBytes": 720,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 90,
+          "Present": 18,
+          "Payload": 4542,
+          "KeyBytes": 1980,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.seg",
+      "From": 376506998,
+      "To": 376653165,
+      "Rows": 1075463,
+      "Bytes": 17764817,
+      "SHA256": "sha256:4185cac27ff8fccc8bad6e012e44fe859f65ffe35090da4c525181c893dcbd1d",
+      "Domains": {
+        "account-latest": {
+          "Rows": 429378,
+          "Present": 428474,
+          "Payload": 29783544,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 9893524
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 23796,
+          "Present": 20246,
+          "Payload": 161968,
+          "KeyBytes": 166572,
+          "Zero": 501,
+          "Widths": {
+            "0": 501,
+            "1": 728,
+            "2": 1109,
+            "3": 3181,
+            "4": 2940,
+            "5": 7969,
+            "6": 3160,
+            "7": 651,
+            "8": 7
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 198,
+          "Present": 160,
+          "Payload": 2952,
+          "KeyBytes": 792,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountPermissionAux": {
+          "Rows": 1800,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 5400,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 167729,
+          "Present": 167038,
+          "Payload": 5370419,
+          "KeyBytes": 167729,
+          "Zero": 0,
+          "Widths": {
+            "32": 887
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 366,
+          "Present": 249,
+          "Payload": 7790,
+          "KeyBytes": 1464,
+          "Zero": 0,
+          "Widths": {
+            "32": 110
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 4,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 12,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 435914,
+          "Present": 372119,
+          "Payload": 11907808,
+          "KeyBytes": 13949248,
+          "Zero": 0,
+          "Widths": {
+            "1": 15236,
+            "10": 13925,
+            "11": 767,
+            "12": 130,
+            "13": 100,
+            "14": 18635,
+            "15": 504,
+            "16": 1181,
+            "17": 96,
+            "18": 9,
+            "19": 1511,
+            "2": 11197,
+            "20": 28406,
+            "21": 1345,
+            "22": 314,
+            "23": 356,
+            "24": 8,
+            "25": 663,
+            "26": 541,
+            "27": 8656,
+            "28": 2785,
+            "29": 616,
+            "3": 49967,
+            "30": 5937,
+            "31": 11533,
+            "32": 14666,
+            "4": 75932,
+            "5": 68016,
+            "6": 25290,
+            "7": 1884,
+            "8": 2584,
+            "9": 9329
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 5,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 55,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDelegation": {
+          "Rows": 26,
+          "Present": 15,
+          "Payload": 4465,
+          "KeyBytes": 972,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 10773,
+          "Present": 10773,
+          "Payload": 87864,
+          "KeyBytes": 210760,
+          "Zero": 20,
+          "Widths": {
+            "0": 20,
+            "1": 2441,
+            "4": 4980,
+            "5": 864,
+            "6": 2454
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 115,
+          "Present": 115,
+          "Payload": 8050,
+          "KeyBytes": 1035,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 2461,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 29532,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 2468,
+          "Present": 2468,
+          "Payload": 291505,
+          "KeyBytes": 56764,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 187,
+          "Present": 187,
+          "Payload": 731170,
+          "KeyBytes": 1870,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 243,
+          "Present": 56,
+          "Payload": 15977,
+          "KeyBytes": 5346,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.seg",
+      "From": 413973965,
+      "To": 414180052,
+      "Rows": 1309930,
+      "Bytes": 22797338,
+      "SHA256": "sha256:8863a8f7ee1249015df7d62c5fdbf6152acf4b4554d27c8932f62476596832f4",
+      "Domains": {
+        "account-latest": {
+          "Rows": 595938,
+          "Present": 593890,
+          "Payload": 40482645,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 13743035
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 37003,
+          "Present": 23585,
+          "Payload": 188680,
+          "KeyBytes": 259021,
+          "Zero": 1521,
+          "Widths": {
+            "0": 1521,
+            "1": 738,
+            "2": 462,
+            "3": 2035,
+            "4": 13549,
+            "5": 2334,
+            "6": 2853,
+            "7": 93
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 229,
+          "Present": 189,
+          "Payload": 3488,
+          "KeyBytes": 916,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountPermissionAux": {
+          "Rows": 4090,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 12270,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 197082,
+          "Present": 196490,
+          "Payload": 5834859,
+          "KeyBytes": 197082,
+          "Zero": 0,
+          "Widths": {
+            "32": 3025
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 379,
+          "Present": 292,
+          "Payload": 9189,
+          "KeyBytes": 1516,
+          "Zero": 0,
+          "Widths": {
+            "32": 130
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 3,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 9,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 455959,
+          "Present": 395171,
+          "Payload": 12645472,
+          "KeyBytes": 14590688,
+          "Zero": 0,
+          "Widths": {
+            "1": 8917,
+            "10": 30426,
+            "11": 3921,
+            "12": 647,
+            "13": 22753,
+            "14": 11,
+            "15": 210,
+            "16": 850,
+            "17": 19,
+            "18": 21,
+            "19": 2592,
+            "2": 6288,
+            "20": 6643,
+            "21": 317,
+            "22": 4689,
+            "23": 638,
+            "24": 19,
+            "25": 475,
+            "26": 502,
+            "27": 828,
+            "28": 2013,
+            "29": 913,
+            "3": 31649,
+            "30": 3572,
+            "31": 6605,
+            "32": 29593,
+            "4": 39193,
+            "5": 120704,
+            "6": 42855,
+            "7": 10882,
+            "8": 4067,
+            "9": 12359
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 3,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 33,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDelegation": {
+          "Rows": 78,
+          "Present": 72,
+          "Payload": 17595,
+          "KeyBytes": 2976,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 12667,
+          "Present": 12667,
+          "Payload": 111176,
+          "KeyBytes": 247156,
+          "Zero": 23,
+          "Widths": {
+            "0": 23,
+            "1": 2872,
+            "4": 5870,
+            "5": 929,
+            "6": 2891
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 137,
+          "Present": 137,
+          "Payload": 9590,
+          "KeyBytes": 1233,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 2895,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 34740,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 2936,
+          "Present": 2936,
+          "Payload": 346556,
+          "KeyBytes": 67528,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 233,
+          "Present": 233,
+          "Payload": 2031527,
+          "KeyBytes": 2330,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 298,
+          "Present": 65,
+          "Payload": 10879,
+          "KeyBytes": 6556,
+          "Zero": 0,
+          "Widths": {
+            "31": 1
+          },
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.seg",
+      "From": 450870221,
+      "To": 450983509,
+      "Rows": 699698,
+      "Bytes": 12472299,
+      "SHA256": "sha256:72350b54a1860cbcba815b45bb2b9b61b14fe4ca652b7118a61dde9b611ddb2b",
+      "Domains": {
+        "account-latest": {
+          "Rows": 316584,
+          "Present": 315756,
+          "Payload": 21163378,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 7312624
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 5660,
+          "Present": 5230,
+          "Payload": 41840,
+          "KeyBytes": 39620,
+          "Zero": 298,
+          "Widths": {
+            "0": 298,
+            "1": 431,
+            "2": 622,
+            "3": 442,
+            "4": 502,
+            "5": 770,
+            "6": 1778,
+            "7": 387
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 163,
+          "Present": 134,
+          "Payload": 2475,
+          "KeyBytes": 652,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenSupplyAux": {
+          "Rows": 1,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 4,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountPermissionAux": {
+          "Rows": 1626,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 4878,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 145894,
+          "Present": 145565,
+          "Payload": 4329428,
+          "KeyBytes": 145894,
+          "Zero": 0,
+          "Widths": {
+            "32": 644
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 263,
+          "Present": 221,
+          "Payload": 6961,
+          "KeyBytes": 1052,
+          "Zero": 0,
+          "Widths": {
+            "32": 114
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 15,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 45,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 213873,
+          "Present": 176426,
+          "Payload": 5645632,
+          "KeyBytes": 6843936,
+          "Zero": 0,
+          "Widths": {
+            "1": 6848,
+            "10": 9215,
+            "11": 665,
+            "12": 94,
+            "13": 43,
+            "14": 17745,
+            "15": 706,
+            "16": 991,
+            "17": 547,
+            "18": 94,
+            "19": 1030,
+            "2": 2275,
+            "20": 2821,
+            "21": 333,
+            "22": 2591,
+            "23": 240,
+            "24": 4,
+            "25": 74,
+            "26": 7,
+            "27": 1768,
+            "28": 731,
+            "29": 795,
+            "3": 22487,
+            "30": 2410,
+            "31": 4907,
+            "32": 7752,
+            "4": 26164,
+            "5": 22635,
+            "6": 17388,
+            "7": 4591,
+            "8": 3433,
+            "9": 15042
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 3,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 27,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAsset": {
+          "Rows": 4,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 49,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDelegation": {
+          "Rows": 48,
+          "Present": 31,
+          "Payload": 6849,
+          "KeyBytes": 1800,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 10283,
+          "Present": 10283,
+          "Payload": 84424,
+          "KeyBytes": 200407,
+          "Zero": 19,
+          "Widths": {
+            "0": 19,
+            "1": 2389,
+            "3": 1,
+            "4": 4816,
+            "5": 638,
+            "6": 2402
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 43,
+          "Present": 43,
+          "Payload": 3010,
+          "KeyBytes": 387,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 2408,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 28896,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 2417,
+          "Present": 2417,
+          "Payload": 285290,
+          "KeyBytes": 55591,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 183,
+          "Present": 183,
+          "Payload": 1211277,
+          "KeyBytes": 1830,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 230,
+          "Present": 47,
+          "Payload": 7355,
+          "KeyBytes": 5060,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    },
+    {
+      "Path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.seg",
+      "From": 481659196,
+      "To": 481766429,
+      "Rows": 673282,
+      "Bytes": 11736410,
+      "SHA256": "sha256:8dc3db74c84dda495d2963327a9a91f1d2dc8d3994b0b18874f0b3646dcaae85",
+      "Domains": {
+        "account-latest": {
+          "Rows": 305141,
+          "Present": 304728,
+          "Payload": 20598126,
+          "KeyBytes": 0,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 7076134
+        },
+        "kv-latest/AccountAssetV2": {
+          "Rows": 13040,
+          "Present": 12189,
+          "Payload": 97512,
+          "KeyBytes": 91280,
+          "Zero": 243,
+          "Widths": {
+            "0": 243,
+            "1": 2234,
+            "2": 2878,
+            "3": 3966,
+            "4": 298,
+            "5": 999,
+            "6": 1497,
+            "7": 74
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountFrozenBandwidthAux": {
+          "Rows": 147,
+          "Present": 115,
+          "Payload": 2128,
+          "KeyBytes": 588,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountPermissionAux": {
+          "Rows": 824,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 2472,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountResourceAux": {
+          "Rows": 126471,
+          "Present": 126373,
+          "Payload": 3768971,
+          "KeyBytes": 126471,
+          "Zero": 0,
+          "Widths": {
+            "32": 1437
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/AccountVotesAux": {
+          "Rows": 356,
+          "Present": 266,
+          "Payload": 8416,
+          "KeyBytes": 1424,
+          "Zero": 0,
+          "Widths": {
+            "32": 134
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractABI": {
+          "Rows": 1,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 3,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/ContractStorage": {
+          "Rows": 209458,
+          "Present": 181290,
+          "Payload": 5801280,
+          "KeyBytes": 6702656,
+          "Zero": 0,
+          "Widths": {
+            "1": 4758,
+            "10": 11490,
+            "11": 651,
+            "12": 113,
+            "13": 102,
+            "14": 24059,
+            "15": 390,
+            "16": 1664,
+            "17": 673,
+            "18": 85,
+            "19": 780,
+            "2": 3950,
+            "20": 3089,
+            "21": 941,
+            "22": 1813,
+            "23": 646,
+            "24": 1,
+            "25": 30,
+            "26": 3,
+            "27": 946,
+            "28": 633,
+            "29": 741,
+            "3": 27267,
+            "30": 2951,
+            "31": 6272,
+            "32": 5507,
+            "4": 24757,
+            "5": 12981,
+            "6": 6452,
+            "7": 10880,
+            "8": 2810,
+            "9": 23855
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemAccountIndex": {
+          "Rows": 3,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 34,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDelegation": {
+          "Rows": 34,
+          "Present": 21,
+          "Payload": 6865,
+          "KeyBytes": 1320,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemDynamicProperty": {
+          "Rows": 11364,
+          "Present": 11364,
+          "Payload": 94512,
+          "KeyBytes": 220135,
+          "Zero": 23,
+          "Widths": {
+            "0": 23,
+            "1": 2732,
+            "4": 5432,
+            "5": 393,
+            "6": 2754
+          },
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemExchange": {
+          "Rows": 19,
+          "Present": 19,
+          "Payload": 1330,
+          "KeyBytes": 171,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemForkVote": {
+          "Rows": 4,
+          "Present": 4,
+          "Payload": 108,
+          "KeyBytes": 28,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemShielded": {
+          "Rows": 2753,
+          "Present": 0,
+          "Payload": 0,
+          "KeyBytes": 33036,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/SystemWitnessSchedule": {
+          "Rows": 1,
+          "Present": 1,
+          "Payload": 571,
+          "KeyBytes": 15,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessCapsule": {
+          "Rows": 2808,
+          "Present": 2808,
+          "Payload": 330991,
+          "KeyBytes": 64584,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/VotesIndex": {
+          "Rows": 173,
+          "Present": 173,
+          "Payload": 1185764,
+          "KeyBytes": 1730,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        },
+        "kv-latest/WitnessVoteState/voter-record": {
+          "Rows": 685,
+          "Present": 513,
+          "Payload": 89607,
+          "KeyBytes": 15070,
+          "Zero": 0,
+          "Widths": {},
+          "AddressElisionBytes": 0
+        }
+      }
+    }
+  ],
+  "Total": {
+    "account-latest": {
+      "Rows": 5537598,
+      "Present": 5525105,
+      "Payload": 374037264,
+      "KeyBytes": 0,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 128248414
+    },
+    "kv-latest/AccountAsset": {
+      "Rows": 132992,
+      "Present": 121051,
+      "Payload": 968408,
+      "KeyBytes": 967453,
+      "Zero": 1199,
+      "Widths": {
+        "0": 1199,
+        "1": 34119,
+        "2": 18725,
+        "3": 21708,
+        "4": 18313,
+        "5": 26574,
+        "6": 17,
+        "8": 396
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountAssetOperationTime": {
+      "Rows": 17,
+      "Present": 16,
+      "Payload": 128,
+      "KeyBytes": 136,
+      "Zero": 0,
+      "Widths": {
+        "4": 16
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountAssetOperationTimeV2": {
+      "Rows": 28,
+      "Present": 27,
+      "Payload": 216,
+      "KeyBytes": 196,
+      "Zero": 0,
+      "Widths": {
+        "4": 27
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountAssetV2": {
+      "Rows": 259801,
+      "Present": 226269,
+      "Payload": 1810152,
+      "KeyBytes": 1818607,
+      "Zero": 4306,
+      "Widths": {
+        "0": 4306,
+        "1": 47994,
+        "2": 41874,
+        "3": 39380,
+        "4": 39005,
+        "5": 42199,
+        "6": 9604,
+        "7": 1494,
+        "8": 413
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountFreeAssetNetUsage": {
+      "Rows": 19,
+      "Present": 18,
+      "Payload": 144,
+      "KeyBytes": 152,
+      "Zero": 0,
+      "Widths": {
+        "2": 18
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountFreeAssetNetUsageV2": {
+      "Rows": 30,
+      "Present": 29,
+      "Payload": 232,
+      "KeyBytes": 210,
+      "Zero": 0,
+      "Widths": {
+        "2": 29
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountFrozenBandwidthAux": {
+      "Rows": 2829,
+      "Present": 2205,
+      "Payload": 40766,
+      "KeyBytes": 11316,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountFrozenSupplyAux": {
+      "Rows": 6,
+      "Present": 1,
+      "Payload": 20,
+      "KeyBytes": 24,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountPermissionAux": {
+      "Rows": 8696,
+      "Present": 0,
+      "Payload": 0,
+      "KeyBytes": 26088,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountResourceAux": {
+      "Rows": 1771107,
+      "Present": 1767662,
+      "Payload": 56277615,
+      "KeyBytes": 1771107,
+      "Zero": 0,
+      "Widths": {
+        "32": 6041
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/AccountVotesAux": {
+      "Rows": 5948,
+      "Present": 4419,
+      "Payload": 138721,
+      "KeyBytes": 23792,
+      "Zero": 0,
+      "Widths": {
+        "32": 1820
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/ContractABI": {
+      "Rows": 33,
+      "Present": 0,
+      "Payload": 0,
+      "KeyBytes": 99,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/ContractStorage": {
+      "Rows": 3260472,
+      "Present": 2841857,
+      "Payload": 90939424,
+      "KeyBytes": 104335104,
+      "Zero": 0,
+      "Widths": {
+        "1": 45902,
+        "10": 489162,
+        "11": 33493,
+        "12": 1342,
+        "13": 23117,
+        "14": 384495,
+        "15": 4371,
+        "16": 7373,
+        "17": 1494,
+        "18": 328,
+        "19": 5925,
+        "2": 41955,
+        "20": 44774,
+        "21": 3918,
+        "22": 10345,
+        "23": 3553,
+        "24": 182,
+        "25": 1306,
+        "26": 1167,
+        "27": 18293,
+        "28": 11587,
+        "29": 6389,
+        "3": 357668,
+        "30": 43541,
+        "31": 38257,
+        "32": 86116,
+        "4": 425337,
+        "5": 310186,
+        "6": 156367,
+        "7": 69750,
+        "8": 22699,
+        "9": 191465
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemAccountIndex": {
+      "Rows": 190,
+      "Present": 0,
+      "Payload": 0,
+      "KeyBytes": 1909,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemAsset": {
+      "Rows": 103,
+      "Present": 49,
+      "Payload": 833,
+      "KeyBytes": 1053,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemDelegation": {
+      "Rows": 191,
+      "Present": 141,
+      "Payload": 36135,
+      "KeyBytes": 7263,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemDynamicProperty": {
+      "Rows": 152343,
+      "Present": 152334,
+      "Payload": 1285392,
+      "KeyBytes": 2996700,
+      "Zero": 317,
+      "Widths": {
+        "0": 317,
+        "1": 39301,
+        "2": 105,
+        "3": 11875,
+        "4": 56007,
+        "5": 33668,
+        "6": 10505
+      },
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemExchange": {
+      "Rows": 7949,
+      "Present": 7949,
+      "Payload": 564856,
+      "KeyBytes": 71541,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemForkVote": {
+      "Rows": 28,
+      "Present": 28,
+      "Payload": 756,
+      "KeyBytes": 196,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemProposal": {
+      "Rows": 1,
+      "Present": 1,
+      "Payload": 511,
+      "KeyBytes": 9,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemShielded": {
+      "Rows": 39610,
+      "Present": 0,
+      "Payload": 0,
+      "KeyBytes": 475345,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/SystemWitnessSchedule": {
+      "Rows": 26,
+      "Present": 26,
+      "Payload": 21671,
+      "KeyBytes": 324,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/WitnessCapsule": {
+      "Rows": 40141,
+      "Present": 40119,
+      "Payload": 4594030,
+      "KeyBytes": 923243,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/WitnessVoteState/VotesIndex": {
+      "Rows": 3061,
+      "Present": 3060,
+      "Payload": 22338117,
+      "KeyBytes": 30610,
+      "Zero": 0,
+      "Widths": {},
+      "AddressElisionBytes": 0
+    },
+    "kv-latest/WitnessVoteState/voter-record": {
+      "Rows": 6452,
+      "Present": 3395,
+      "Payload": 705794,
+      "KeyBytes": 141944,
+      "Zero": 0,
+      "Widths": {
+        "31": 1
+      },
+      "AddressElisionBytes": 0
+    }
+  }
+}
