@@ -22,9 +22,16 @@ func ApplyMuHashCommitment(db CommitmentDB, updates []rawdb.StateCommitmentUpdat
 	if err != nil {
 		return common.Hash{}, err
 	}
-	return ApplyMuHashDeltas(db, deltas, id, common.Hash{})
+	return applyMuHashDeltas(db, deltas, id, common.Hash{}, true)
 }
 func ApplyMuHashDeltas(db CommitmentDB, deltas []rawdb.StateCommitmentDelta, id CommitmentIdentity, expected common.Hash) (common.Hash, error) {
+	return applyMuHashDeltas(db, deltas, id, expected, false)
+}
+
+// ownedCanonical is only true for the private Updates path whose conversion
+// already copied, validated and coalesced deltas. Public Deltas callers retain
+// HEAD/root-before-coalesce error order and defensive ownership validation.
+func applyMuHashDeltas(db CommitmentDB, deltas []rawdb.StateCommitmentDelta, id CommitmentIdentity, expected common.Hash, ownedCanonical bool) (common.Hash, error) {
 	head, present, err := rawdb.ReadStateCommitmentHead(db)
 	if err != nil {
 		return common.Hash{}, err
@@ -39,9 +46,11 @@ func ApplyMuHashDeltas(db CommitmentDB, deltas []rawdb.StateCommitmentDelta, id 
 	if !hasRoot || currentRoot != head.Root {
 		return common.Hash{}, errors.New("commitment HEAD/latest root mismatch")
 	}
-	deltas, err = rawdb.CoalesceStateCommitmentDeltas(deltas)
-	if err != nil {
-		return common.Hash{}, err
+	if !ownedCanonical {
+		deltas, err = rawdb.CoalesceStateCommitmentDeltas(deltas)
+		if err != nil {
+			return common.Hash{}, err
+		}
 	}
 	deltaID := rawdb.StateCommitmentDeltaID(deltas)
 	bound := id.BlockHash != (common.Hash{})
@@ -63,13 +72,13 @@ func ApplyMuHashDeltas(db CommitmentDB, deltas []rawdb.StateCommitmentDelta, id 
 	if err != nil {
 		return common.Hash{}, err
 	}
-	acc, err = acc.Clone()
-	if err != nil {
-		return common.Hash{}, err
-	}
+	// FromState already owns an independent accumulator. Elements are consumed
+	// synchronously, so this invocation can reuse one local encoding buffer.
+	var element []byte
 	for _, d := range deltas {
 		if d.BeforeExists {
-			element, e := rawdb.EncodeStateCommitmentElement(d.Key, d.Before)
+			var e error
+			element, e = rawdb.AppendStateCommitmentElement(element[:0], d.Key, d.Before)
 			if e != nil {
 				return common.Hash{}, e
 			}
@@ -78,7 +87,8 @@ func ApplyMuHashDeltas(db CommitmentDB, deltas []rawdb.StateCommitmentDelta, id 
 			}
 		}
 		if d.AfterExists {
-			element, e := rawdb.EncodeStateCommitmentElement(d.Key, d.After)
+			var e error
+			element, e = rawdb.AppendStateCommitmentElement(element[:0], d.Key, d.After)
 			if e != nil {
 				return common.Hash{}, e
 			}

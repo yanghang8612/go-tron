@@ -29,8 +29,9 @@ const stateVersion uint16 = 1
 // Accumulator is exclusively owned; copying this struct is forbidden. Clone
 // deep-copies math/big storage. The zero value is invalid, never the identity.
 type Accumulator struct {
-	num, den  big.Int
-	reduction reductionScratch
+	num, den         big.Int
+	mapping, product big.Int
+	reduction        reductionScratch
 }
 
 // reductionScratch is owned by one accumulator or one Finalize call. Globals
@@ -84,13 +85,6 @@ func (a *Accumulator) Clone() (*Accumulator, error) {
 	c.den.Set(&a.den)
 	return c, nil
 }
-func fromLE(b []byte) *big.Int {
-	be := make([]byte, len(b))
-	for i := range b {
-		be[len(b)-1-i] = b[i]
-	}
-	return new(big.Int).SetBytes(be)
-}
 func toLE(n *big.Int) (out [fieldBytes]byte) {
 	var be [fieldBytes]byte
 	n.FillBytes(be[:])
@@ -100,7 +94,7 @@ func toLE(n *big.Int) (out [fieldBytes]byte) {
 	return out
 }
 
-func mapElement(raw []byte) (*big.Int, error) {
+func (a *Accumulator) mapElement(raw []byte) (*big.Int, error) {
 	key := sha256.Sum256(raw)
 	var nonce [12]byte
 	c, e := chacha20.NewUnauthenticatedCipher(key[:], nonce[:])
@@ -109,7 +103,12 @@ func mapElement(raw []byte) (*big.Int, error) {
 	}
 	var stream [fieldBytes]byte
 	c.XORKeyStream(stream[:], stream[:])
-	n := fromLE(stream[:])
+	// The stream is local and no longer needed in little-endian order. Reuse
+	// its fixed storage while SetBytes copies into accumulator-owned limbs.
+	for i, j := 0, len(stream)-1; i < j; i, j = i+1, j-1 {
+		stream[i], stream[j] = stream[j], stream[i]
+	}
+	n := a.mapping.SetBytes(stream[:])
 	// The 384-byte mapping is already below 2^3072, so at most one
 	// subtraction is needed. Do not normalize values read by FromState.
 	if n.Cmp(modulus) >= 0 {
@@ -124,24 +123,28 @@ func (a *Accumulator) Insert(raw []byte) error {
 	if e := a.valid(); e != nil {
 		return e
 	}
-	n, e := mapElement(raw)
+	n, e := a.mapElement(raw)
 	if e != nil {
 		return e
 	}
-	a.num.Mul(&a.num, n)
-	a.reduction.reduceProduct(&a.num)
+	a.product.Mul(&a.num, n)
+	a.reduction.reduceProduct(&a.product)
+	// Move the two exclusively owned limb buffers; no reference to either
+	// field survives this move. This is not a general shallow-copy operation.
+	a.num, a.product = a.product, a.num
 	return nil
 }
 func (a *Accumulator) Remove(raw []byte) error {
 	if e := a.valid(); e != nil {
 		return e
 	}
-	n, e := mapElement(raw)
+	n, e := a.mapElement(raw)
 	if e != nil {
 		return e
 	}
-	a.den.Mul(&a.den, n)
-	a.reduction.reduceProduct(&a.den)
+	a.product.Mul(&a.den, n)
+	a.reduction.reduceProduct(&a.product)
+	a.den, a.product = a.product, a.den
 	return nil
 }
 
@@ -185,7 +188,11 @@ func (a *Accumulator) Digest() ([32]byte, error) {
 // never interpreted as the empty set.
 func FromState(state State) (*Accumulator, error) {
 	a := NewAccumulator()
-	a.num.Set(fromLE(state[:]))
+	var be [fieldBytes]byte
+	for i := range state {
+		be[len(be)-1-i] = state[i]
+	}
+	a.num.SetBytes(be[:])
 	if err := a.valid(); err != nil {
 		return nil, err
 	}
