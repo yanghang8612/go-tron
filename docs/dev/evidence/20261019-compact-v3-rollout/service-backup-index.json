@@ -1,0 +1,66 @@
+[
+  {
+    "path": "/etc/systemd/system/gtron.service",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/0-gtron.service",
+    "sha256": "a5fa22e6630e374330cbb5ebdeeaf0cb03bbee876ea1cab59d9ba9c3b0aad5b9",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/etc/systemd/system/gtron.service.d/98-mainnet-space-guard.conf",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/1-98-mainnet-space-guard.conf",
+    "sha256": "590e65fbb8ddbd3eba6296c46b92245ca6a50e504fd91f3e4464b7fcb91ab10c",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/etc/systemd/system/gtron.service.d/99-offline-disk-20260907.conf",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/2-99-offline-disk-20260907.conf",
+    "sha256": "bda1624c1f42bc412b9603ee30c7b88c6dcd8e71705c2c686e9d82ee9b499bbd",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/etc/systemd/system/gtron.service.d/zz-history-shared-reader.conf",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/3-zz-history-shared-reader.conf",
+    "sha256": "8a4f50efcf8245f4c7533ff970dc7e80b192b9ccddf8f141a2acab31ab69eabf",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/etc/systemd/system/gtron.service.d/zz-history-staging-guard.conf",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/4-zz-history-staging-guard.conf",
+    "sha256": "5be33fce194079cf1f074901bbc885e8f0366c6ee3d6d04ceac37f437f899e3d",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/etc/systemd/system/gtron.service.d/zz-memory-budget-20260918.conf",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/5-zz-memory-budget-20260918.conf",
+    "sha256": "46a7b76dced6b57d429930fc184d9b3a2ad8c98d2a8088fb6181b5697a3ef3e7",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/data/gtron/main/HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/6-HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json",
+    "sha256": "2fb0a1517fbff4d2e5410d3550a6967af6be16bf53a430382b52509aa9f66351",
+    "uid": 0,
+    "gid": 0,
+    "mode": 420
+  },
+  {
+    "path": "/data/gtron/deployed-master.rev",
+    "copy": "/data/gtron/compact-v3-rollout-20261019-01/service-backup/7-deployed-master.rev",
+    "sha256": "8a23984add1aa3287666b539cfa69bf526c2e1e154148e68e093d54e94267964",
+    "uid": 1003,
+    "gid": 1003,
+    "mode": 420
+  }
+]

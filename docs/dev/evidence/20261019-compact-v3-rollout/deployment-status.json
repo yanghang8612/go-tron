@@ -1,0 +1,53 @@
+{
+  "complete": true,
+  "phase": "fresh-service-running",
+  "source": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "release": {
+    "binary": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+    "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+    "deployed": true,
+    "pid": 9116,
+    "source_commit": "659ab0780e7c50db694d909cd357495c2d1d3473"
+  },
+  "retention": {
+    "retained": "/data/gtron/main/datadir-pre-compact-v3-20261019-659ab078",
+    "new_directory": "/data/gtron/main/datadir",
+    "old_dev": 66304,
+    "old_inode": 93979262,
+    "new_inode": 94642617,
+    "files": 27652,
+    "apparent_bytes": 220955872783,
+    "inventory_sha256": "318de55a385e3a506bf37463a228fe2a91803b26a7e2eecd0d92af2b2a5165fb",
+    "old_binary": "/data/gtron/releases/auto-eaae18c8bbf2-7ef3727950d0a3b1/gtron",
+    "old_binary_sha256": "7ef3727950d0a3b19a2938140183f3022fe9b7b7d44b2f698c1559133a97b4fc",
+    "old_log": "/data/gtron/main/gtron-pre-compact-v3-20261019-659ab078.log",
+    "utc": "2026-10-19T05:56:19.543280+00:00"
+  },
+  "wallet": {
+    "version": "0.2.0-dev",
+    "currentBlock": 800,
+    "lastInsertTime": 1792389393678,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 6,
+      "syncPeerCount": 1,
+      "targetHead": 85652198,
+      "appliedTip": 800,
+      "sessionBlocks": 800,
+      "sessionTransactions": 1,
+      "remaining": 85651398,
+      "inflight": 100,
+      "bufferedBlocks": 0,
+      "bufferedBytes": 0,
+      "fetchBackpressured": false,
+      "requestedBlocks": 100,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  },
+  "old_files_unchanged": true,
+  "auto_deploy_timer": "temporarily held for initial validation",
+  "utc": "2026-10-19T05:56:34.673329+00:00"
+}

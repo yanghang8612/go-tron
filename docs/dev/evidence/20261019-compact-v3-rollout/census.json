@@ -1,0 +1,330 @@
+{
+  "source": "/data/gtron/compact-v3-rollout-20261019-01/checkpoint-1/chaindata",
+  "note": "Exhaustive visible logical KV census on immutable offline copy. Absent generation=0; obsolete means stored\u003ccurrent; future is an anomaly. Logical bytes are not compressed physical reclaim. No deletion authority or production changes.",
+  "account_generation_pointers": {
+    "accounts": 4608,
+    "explicit_generation_accounts": 0,
+    "implicit_zero_accounts": 4608,
+    "mismatches": 0
+  },
+  "complete": true,
+  "started_utc": "2026-10-19T06:02:50.427397986Z",
+  "finished_utc": "2026-10-19T06:02:50.471248381Z",
+  "block_num": 227222,
+  "block_hash": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    3,
+    119,
+    150,
+    108,
+    199,
+    254,
+    222,
+    86,
+    223,
+    66,
+    43,
+    140,
+    92,
+    112,
+    33,
+    141,
+    109,
+    43,
+    86,
+    40,
+    51,
+    200,
+    97,
+    8,
+    40,
+    10,
+    92
+  ],
+  "tx_num": 245565,
+  "muhash_root": [
+    25,
+    74,
+    248,
+    102,
+    207,
+    253,
+    43,
+    236,
+    19,
+    241,
+    183,
+    130,
+    105,
+    241,
+    55,
+    163,
+    61,
+    115,
+    98,
+    4,
+    7,
+    132,
+    49,
+    204,
+    70,
+    107,
+    68,
+    106,
+    145,
+    26,
+    79,
+    250
+  ],
+  "muhash_verified": true,
+  "source_rows": [
+    4608,
+    0,
+    3042
+  ],
+  "source_logical_bytes": [
+    353170,
+    0,
+    209464
+  ],
+  "source_sha256": [
+    "1fb94da8d70067f73511ba9ee5c397123211799b97d13e27bbba2b9d208914e7",
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ae5ffc516c8a4bd03a2fdd155afc1fb163eb6e250522a50cd2fb43ca8f0a6d33"
+  ],
+  "class_sha256": {
+    "current": "ae5ffc516c8a4bd03a2fdd155afc1fb163eb6e250522a50cd2fb43ca8f0a6d33",
+    "future": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "obsolete": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "total_kv": {
+    "rows": 3042,
+    "physical_key_bytes": 122651,
+    "wrapped_value_bytes": 86813,
+    "payload_bytes": 85847,
+    "logical_bytes": 209464,
+    "max_payload_bytes": 1558
+  },
+  "classes": {
+    "current": {
+      "rows": 3042,
+      "physical_key_bytes": 122651,
+      "wrapped_value_bytes": 86813,
+      "payload_bytes": 85847,
+      "logical_bytes": 209464,
+      "max_payload_bytes": 1558
+    },
+    "future": {
+      "rows": 0,
+      "physical_key_bytes": 0,
+      "wrapped_value_bytes": 0,
+      "payload_bytes": 0,
+      "logical_bytes": 0,
+      "max_payload_bytes": 0
+    },
+    "obsolete": {
+      "rows": 0,
+      "physical_key_bytes": 0,
+      "wrapped_value_bytes": 0,
+      "payload_bytes": 0,
+      "logical_bytes": 0,
+      "max_payload_bytes": 0
+    }
+  },
+  "domains": {
+    "AccountAsset": {
+      "current": {
+        "rows": 139,
+        "physical_key_bytes": 5489,
+        "wrapped_value_bytes": 355,
+        "payload_bytes": 1112,
+        "logical_bytes": 5844,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountAssetV2": {
+      "current": {
+        "rows": 139,
+        "physical_key_bytes": 5699,
+        "wrapped_value_bytes": 355,
+        "payload_bytes": 1112,
+        "logical_bytes": 6054,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountFrozenBandwidthAux": {
+      "current": {
+        "rows": 1001,
+        "physical_key_bytes": 38038,
+        "wrapped_value_bytes": 19183,
+        "payload_bytes": 18182,
+        "logical_bytes": 57221,
+        "max_payload_bytes": 20
+      }
+    },
+    "AccountFrozenSupplyAux": {
+      "current": {
+        "rows": 14,
+        "physical_key_bytes": 532,
+        "wrapped_value_bytes": 261,
+        "payload_bytes": 247,
+        "logical_bytes": 793,
+        "max_payload_bytes": 19
+      }
+    },
+    "AccountPermissionAux": {
+      "current": {
+        "rows": 1,
+        "physical_key_bytes": 35,
+        "wrapped_value_bytes": 45,
+        "payload_bytes": 44,
+        "logical_bytes": 80,
+        "max_payload_bytes": 44
+      }
+    },
+    "AccountVotesAux": {
+      "current": {
+        "rows": 1121,
+        "physical_key_bytes": 42598,
+        "wrapped_value_bytes": 36109,
+        "payload_bytes": 34988,
+        "logical_bytes": 78707,
+        "max_payload_bytes": 33
+      }
+    },
+    "SystemAccountIndex": {
+      "current": {
+        "rows": 340,
+        "physical_key_bytes": 15436,
+        "wrapped_value_bytes": 7480,
+        "payload_bytes": 7140,
+        "logical_bytes": 22916,
+        "max_payload_bytes": 21
+      }
+    },
+    "SystemAsset": {
+      "current": {
+        "rows": 133,
+        "physical_key_bytes": 5894,
+        "wrapped_value_bytes": 10249,
+        "payload_bytes": 10344,
+        "logical_bytes": 16143,
+        "max_payload_bytes": 399
+      }
+    },
+    "SystemDynamicProperty": {
+      "current": {
+        "rows": 11,
+        "physical_key_bytes": 578,
+        "wrapped_value_bytes": 172,
+        "payload_bytes": 208,
+        "logical_bytes": 750,
+        "max_payload_bytes": 128
+      }
+    },
+    "SystemShielded": {
+      "current": {
+        "rows": 3,
+        "physical_key_bytes": 163,
+        "wrapped_value_bytes": 49,
+        "payload_bytes": 48,
+        "logical_bytes": 212,
+        "max_payload_bytes": 32
+      }
+    },
+    "SystemWitnessSchedule": {
+      "current": {
+        "rows": 2,
+        "physical_key_bytes": 95,
+        "wrapped_value_bytes": 2131,
+        "payload_bytes": 2129,
+        "logical_bytes": 2226,
+        "max_payload_bytes": 1558
+      }
+    },
+    "WitnessCapsule": {
+      "current": {
+        "rows": 74,
+        "physical_key_bytes": 4218,
+        "wrapped_value_bytes": 6219,
+        "payload_bytes": 6145,
+        "logical_bytes": 10437,
+        "max_payload_bytes": 113
+      }
+    },
+    "WitnessVoteState": {
+      "current": {
+        "rows": 64,
+        "physical_key_bytes": 3876,
+        "wrapped_value_bytes": 4205,
+        "payload_bytes": 4148,
+        "logical_bytes": 8081,
+        "max_payload_bytes": 655
+      }
+    }
+  },
+  "payload_sizes": {
+    "1..32": {
+      "current": {
+        "rows": 2812,
+        "physical_key_bytes": 111738,
+        "wrapped_value_bytes": 62080,
+        "payload_bytes": 61344,
+        "logical_bytes": 173818,
+        "max_payload_bytes": 32
+      }
+    },
+    "1025..4096": {
+      "current": {
+        "rows": 1,
+        "physical_key_bytes": 46,
+        "wrapped_value_bytes": 1559,
+        "payload_bytes": 1558,
+        "logical_bytes": 1605,
+        "max_payload_bytes": 1558
+      }
+    },
+    "129..1024": {
+      "current": {
+        "rows": 42,
+        "physical_key_bytes": 1822,
+        "wrapped_value_bytes": 10894,
+        "payload_bytes": 10852,
+        "logical_bytes": 12716,
+        "max_payload_bytes": 655
+      }
+    },
+    "33..128": {
+      "current": {
+        "rows": 187,
+        "physical_key_bytes": 9045,
+        "wrapped_value_bytes": 12280,
+        "payload_bytes": 12093,
+        "logical_bytes": 21325,
+        "max_payload_bytes": 128
+      }
+    }
+  },
+  "stored_generation_buckets": {
+    "0": {
+      "current": {
+        "rows": 3042,
+        "physical_key_bytes": 122651,
+        "wrapped_value_bytes": 86813,
+        "payload_bytes": 85847,
+        "logical_bytes": 209464,
+        "max_payload_bytes": 1558
+      }
+    }
+  },
+  "owners_with_kv": 1123,
+  "owners_with_obsolete": 0,
+  "owners_with_future": 0,
+  "owners_without_explicit_generation": 1123,
+  "inactive_owners_without_account": 0,
+  "top_obsolete_owners": null
+}

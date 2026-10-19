@@ -1,0 +1,14 @@
+{
+  "retained": "/data/gtron/main/datadir-pre-compact-v3-20261019-659ab078",
+  "new_directory": "/data/gtron/main/datadir",
+  "old_dev": 66304,
+  "old_inode": 93979262,
+  "new_inode": 94642617,
+  "files": 27652,
+  "apparent_bytes": 220955872783,
+  "inventory_sha256": "318de55a385e3a506bf37463a228fe2a91803b26a7e2eecd0d92af2b2a5165fb",
+  "old_binary": "/data/gtron/releases/auto-eaae18c8bbf2-7ef3727950d0a3b1/gtron",
+  "old_binary_sha256": "7ef3727950d0a3b19a2938140183f3022fe9b7b7d44b2f698c1559133a97b4fc",
+  "old_log": "/data/gtron/main/gtron-pre-compact-v3-20261019-659ab078.log",
+  "utc": "2026-10-19T05:56:19.543280+00:00"
+}

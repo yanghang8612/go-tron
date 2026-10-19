@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "source": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "candidate": "/data/gtron/go-tron/build/deploy.compact-v3-20261019/gtron",
+  "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "bytes": 65394344,
+  "rust_lock_sha256": "e630e6f3070df107cfe26790584e3bee06797ebc8832b60e8b0751b3160156f7",
+  "utc": "2026-10-19T05:54:41.201232+00:00"
+}

@@ -1,0 +1,1 @@
+{"binary": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron", "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505", "deployed": true, "pid": 9116, "source_commit": "659ab0780e7c50db694d909cd357495c2d1d3473"}

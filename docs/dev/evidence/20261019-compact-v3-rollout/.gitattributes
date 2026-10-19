@@ -1,0 +1,2 @@
+# Preserve native go version -m output verbatim, including its trailing tabs.
+candidate-buildinfo.txt -whitespace

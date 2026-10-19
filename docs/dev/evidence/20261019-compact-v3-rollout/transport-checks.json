@@ -1,0 +1,14 @@
+{
+  "rollout-packet.txt": {
+    "decoded_sha256": "32ea93ff38fc46d2f0689d3b5146360851dfdbff3971ac3977a36f13a55c01f4",
+    "decoded_bytes": 79513
+  },
+  "runtime-packet.txt": {
+    "decoded_sha256": "cef0d614ae80857862af360be4642d1a501e2d9f68446a6d1443fce3c40bb8b7",
+    "decoded_bytes": 97093
+  },
+  "proof-packet.txt": {
+    "decoded_sha256": "2234c76089749dfdf6b01fb73c100fd23aca3701819c955c3059252304a43a3e",
+    "decoded_bytes": 8997
+  }
+}

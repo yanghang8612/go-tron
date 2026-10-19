@@ -1,0 +1,374 @@
+{
+  "utc": "2026-10-19T06:15:01.882273+00:00",
+  "metrics": {
+    "state/prune/last/domain_change/pruned_through_block": {
+      "value": 274369
+    },
+    "state/prune/last/domain_change/pruned_through_tx": {
+      "value": 296844
+    },
+    "state/prune/last/domain_change/start_block": {
+      "value": 269370
+    },
+    "state/snapshot/chain_freezer/verification/event_log/persist_errors": {
+      "value": 0
+    },
+    "state/snapshot/chain_freezer/verification/load_errors": {
+      "value": 0
+    },
+    "state/snapshot/cold/compaction/deferred/catchup": {
+      "value": 57
+    },
+    "state/snapshot/cold/compaction/outer/last/candidates/duration": {
+      "value": 79050
+    },
+    "state/snapshot/cold/compaction/outer/last/claim/duration": {
+      "value": 2743
+    },
+    "state/snapshot/cold/compaction/outer/last/cleanup/duration": {
+      "value": 512892
+    },
+    "state/snapshot/cold/compaction/outer/last/duration": {
+      "value": 151780673
+    },
+    "state/snapshot/cold/compaction/outer/last/inner/duration": {
+      "value": 143987375
+    },
+    "state/snapshot/cold/compaction/outer/last/integrate/duration": {
+      "value": 6785110
+    },
+    "state/snapshot/cold/compaction/outer/last/manifest/duration": {
+      "value": 50194
+    },
+    "state/snapshot/cold/compaction/outer/last/prepare/duration": {
+      "value": 2471
+    },
+    "state/snapshot/cold/compaction/outer/last/revalidate/duration": {
+      "value": 190236
+    },
+    "state/snapshot/cold/compaction/outer/last/select/duration": {
+      "value": 170602
+    },
+    "state/snapshot/cold/compaction/outer/max/candidates/duration": {
+      "value": 105179
+    },
+    "state/snapshot/cold/compaction/outer/max/claim/duration": {
+      "value": 3779
+    },
+    "state/snapshot/cold/compaction/outer/max/cleanup/duration": {
+      "value": 531192
+    },
+    "state/snapshot/cold/compaction/outer/max/duration": {
+      "value": 166889980
+    },
+    "state/snapshot/cold/compaction/outer/max/inner/duration": {
+      "value": 158693245
+    },
+    "state/snapshot/cold/compaction/outer/max/integrate/duration": {
+      "value": 8966985
+    },
+    "state/snapshot/cold/compaction/outer/max/manifest/duration": {
+      "value": 76725
+    },
+    "state/snapshot/cold/compaction/outer/max/prepare/duration": {
+      "value": 3619
+    },
+    "state/snapshot/cold/compaction/outer/max/revalidate/duration": {
+      "value": 271433
+    },
+    "state/snapshot/cold/compaction/outer/max/select/duration": {
+      "value": 251959
+    },
+    "state/snapshot/cold/compaction/outer/total/candidates/duration": {
+      "count": 968022
+    },
+    "state/snapshot/cold/compaction/outer/total/claim/duration": {
+      "count": 31787
+    },
+    "state/snapshot/cold/compaction/outer/total/cleanup/duration": {
+      "count": 4758567
+    },
+    "state/snapshot/cold/compaction/outer/total/duration": {
+      "count": 1853855326
+    },
+    "state/snapshot/cold/compaction/outer/total/inner/duration": {
+      "count": 1750715934
+    },
+    "state/snapshot/cold/compaction/outer/total/integrate/duration": {
+      "count": 91538921
+    },
+    "state/snapshot/cold/compaction/outer/total/manifest/duration": {
+      "count": 634562
+    },
+    "state/snapshot/cold/compaction/outer/total/prepare/duration": {
+      "count": 35650
+    },
+    "state/snapshot/cold/compaction/outer/total/revalidate/duration": {
+      "count": 2697226
+    },
+    "state/snapshot/cold/compaction/outer/total/select/duration": {
+      "count": 2474657
+    },
+    "state/snapshot/cold/errors": {
+      "value": 0
+    },
+    "state/snapshot/cold/history/budget/deferred": {
+      "value": 0
+    },
+    "state/snapshot/cold/history/busy_observation/last_duration": {
+      "value": 0
+    },
+    "state/snapshot/cold/history/deferred/rate_limit": {
+      "value": 72
+    },
+    "state/snapshot/cold/history/deferred/resource": {
+      "value": 10
+    },
+    "state/snapshot/cold/history/deferred/sync": {
+      "value": 11
+    },
+    "state/snapshot/cold/history/recovery_observation/last_duration": {
+      "value": 0
+    },
+    "state/snapshot/cold/history/shared_read/last/last_published": {
+      "value": 1
+    },
+    "state/snapshot/cold/history/shared_read/published": {
+      "count": 62
+    },
+    "state/snapshot/cold/last/eligible_cutoff_block": {
+      "value": 555917
+    },
+    "state/snapshot/cold/last/from_tx": {
+      "value": 291481
+    },
+    "state/snapshot/cold/last/latest_build_block": {
+      "value": 227204
+    },
+    "state/snapshot/cold/last/published_block": {
+      "value": 274369
+    },
+    "state/snapshot/cold/last/selected_cutoff_block": {
+      "value": 555917
+    },
+    "state/snapshot/cold/last/solidified_block": {
+      "value": 621453
+    },
+    "state/snapshot/cold/last/to_tx": {
+      "value": 296844
+    },
+    "state/snapshot/cold/last/visible_tx_end": {
+      "value": 296844
+    },
+    "state/snapshot/cold/lastpass/build/duration": {
+      "value": 126485455
+    },
+    "state/snapshot/cold/lastpass/compaction/defer_reason": {
+      "value": 2
+    },
+    "state/snapshot/cold/lastpass/compaction/duration": {
+      "value": 7397
+    },
+    "state/snapshot/cold/lastpass/duration": {
+      "value": 5906500
+    },
+    "state/snapshot/cold/lastpass/latest/duration": {
+      "value": 0
+    },
+    "state/snapshot/cold/lastpass/maintenance/duration": {
+      "value": 313195008
+    },
+    "state/snapshot/cold/latest/deferred/sync": {
+      "value": 155
+    },
+    "state/snapshot/cold/sidecar/deferred/sync_or_resource": {
+      "value": 63
+    },
+    "state/snapshot/generation/duration/storage/clean": {
+      "count": 0
+    },
+    "sync/import/window/account_state_root_milliseconds_per_block": {
+      "value": 0
+    },
+    "sync/import/window/active_peers": {
+      "value": 8
+    },
+    "sync/import/window/adaptive_energy_milliseconds_per_block": {
+      "value": 0
+    },
+    "sync/import/window/apply_milliseconds_per_block": {
+      "value": 1.7582056636175862
+    },
+    "sync/import/window/apply_sample_blocks": {
+      "value": 16945
+    },
+    "sync/import/window/apply_sample_coverage_ratio": {
+      "value": 1
+    },
+    "sync/import/window/apply_sample_transactions": {
+      "value": 14687
+    },
+    "sync/import/window/billed_to_raw_energy_ratio": {
+      "value": 0
+    },
+    "sync/import/window/block_statistics_milliseconds_per_block": {
+      "value": 0.01871145022130422
+    },
+    "sync/import/window/blocks_per_second": {
+      "value": 564.617241065493
+    },
+    "sync/import/window/buffer_wait_ratio": {
+      "value": 0.09253702137705024
+    },
+    "sync/import/window/buffer_wait_seconds": {
+      "value": 2.777173124
+    },
+    "sync/import/window/buffered_blocks": {
+      "value": 1259
+    },
+    "sync/import/window/dp_update_milliseconds_per_block": {
+      "value": 0.003967607966951903
+    },
+    "sync/import/window/elapsed_seconds": {
+      "value": 30.011481704
+    },
+    "sync/import/window/energy_per_block": {
+      "value": 0
+    },
+    "sync/import/window/energy_per_second": {
+      "value": 0
+    },
+    "sync/import/window/energy_per_transaction": {
+      "value": 0
+    },
+    "sync/import/window/exec_busy_ratio": {
+      "value": 0.8904523960720736
+    },
+    "sync/import/window/execute_fixed_milliseconds_per_block": {
+      "value": 1.2107804060784892
+    },
+    "sync/import/window/execute_milliseconds_per_block": {
+      "value": 1.3728613672469756
+    },
+    "sync/import/window/hooks_milliseconds_per_block": {
+      "value": 0.0062109347890233115
+    },
+    "sync/import/window/import_milliseconds_per_block": {
+      "value": 1.5770903389200355
+    },
+    "sync/import/window/import_overhead_milliseconds_per_block": {
+      "value": 0
+    },
+    "sync/import/window/inflight_blocks": {
+      "value": 77
+    },
+    "sync/import/window/maintenance_milliseconds_per_block": {
+      "value": 0.005123143110061966
+    },
+    "sync/import/window/native_transactions_per_block": {
+      "value": 0.8667453526113897
+    },
+    "sync/import/window/native_transactions_per_second": {
+      "value": 489.37936969778076
+    },
+    "sync/import/window/outside_transaction_milliseconds_per_block": {
+      "value": 1.5961247024491
+    },
+    "sync/import/window/persist_metadata_bytes_per_block": {
+      "value": 550.2960755385069
+    },
+    "sync/import/window/persist_metadata_bytes_per_transaction": {
+      "value": 634.8993667869545
+    },
+    "sync/import/window/persist_metadata_records_per_block": {
+      "value": 5
+    },
+    "sync/import/window/persist_milliseconds_per_block": {
+      "value": 0.04934142301563883
+    },
+    "sync/import/window/persist_trace_accounts_per_block": {
+      "value": 0
+    },
+    "sync/import/window/persist_transaction_lookup_rows_per_block": {
+      "value": 0
+    },
+    "sync/import/window/raw_energy_per_second": {
+      "value": 0
+    },
+    "sync/import/window/raw_energy_per_vm_transaction": {
+      "value": 0
+    },
+    "sync/import/window/requested_blocks": {
+      "value": 77
+    },
+    "sync/import/window/retry_blocks": {
+      "value": 0
+    },
+    "sync/import/window/rewards_milliseconds_per_block": {
+      "value": 0.004656848450870463
+    },
+    "sync/import/window/shielded_finalize_milliseconds_per_block": {
+      "value": 1.1650336851578635
+    },
+    "sync/import/window/state_commit_accounts_per_block": {
+      "value": 3.4424313956919446
+    },
+    "sync/import/window/state_commit_commitment_updates_per_block": {
+      "value": 6.25618176453231
+    },
+    "sync/import/window/state_commit_kv_accounts_per_block": {
+      "value": 2.5615225730303925
+    },
+    "sync/import/window/state_commit_kv_items_per_block": {
+      "value": 3.9958099734434938
+    },
+    "sync/import/window/state_commit_kv_writes_per_block": {
+      "value": 3.9958099734434938
+    },
+    "sync/import/window/state_commit_milliseconds_per_block": {
+      "value": 0.27107536217173206
+    },
+    "sync/import/window/state_commit_nanoseconds_per_commitment_update": {
+      "value": 43329.20179981323
+    },
+    "sync/import/window/state_commit_storage_writes_per_block": {
+      "value": 0
+    },
+    "sync/import/window/transaction_milliseconds_per_block": {
+      "value": 0.16208096116848628
+    },
+    "sync/import/window/transaction_milliseconds_per_transaction": {
+      "value": 0.1869995156941513
+    },
+    "sync/import/window/transactions_per_block": {
+      "value": 0.8667453526113897
+    },
+    "sync/import/window/transactions_per_second": {
+      "value": 489.37936969778076
+    },
+    "sync/import/window/updated_unix": {
+      "value": 1792390459
+    },
+    "sync/import/window/validate_milliseconds_per_block": {
+      "value": 0.049625825317202714
+    },
+    "sync/import/window/vm_execution_milliseconds_per_vm_transaction": {
+      "value": 0
+    },
+    "sync/import/window/vm_execution_nanoseconds_per_raw_energy": {
+      "value": 0
+    },
+    "sync/import/window/vm_transaction_share": {
+      "value": 0
+    },
+    "sync/import/window/vm_transactions_per_block": {
+      "value": 0
+    },
+    "sync/import/window/vm_transactions_per_second": {
+      "value": 0
+    },
+    "sync/import/window/witness_flush_milliseconds_per_block": {
+      "value": 0.00027939250516376515
+    }
+  }
+}

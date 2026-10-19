@@ -1,0 +1,29 @@
+{
+  "utc": "2026-10-19T06:05:41.315464+00:00",
+  "timer": "NextElapseUSecRealtime=0\nActiveState=active\nSubState=running\n",
+  "rollout_locks_released": true,
+  "wallet": {
+    "version": "0.2.0-dev",
+    "currentBlock": 296625,
+    "lastInsertTime": 1792389940289,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 14,
+      "syncPeerCount": 8,
+      "targetHead": 87238970,
+      "appliedTip": 296649,
+      "sessionBlocks": 69395,
+      "sessionTransactions": 7527,
+      "remaining": 86942345,
+      "inflight": 0,
+      "bufferedBlocks": 473,
+      "bufferedBytes": 93168,
+      "fetchBackpressured": false,
+      "requestedBlocks": 100,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  }
+}
