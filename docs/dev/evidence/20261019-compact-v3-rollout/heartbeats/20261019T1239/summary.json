@@ -1,0 +1,50 @@
+{
+  "utc": "2026-10-19T12:40:47.265281+00:00",
+  "head": 5378874,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T11:55:51.650947+00:00",
+  "sample_window_end": "2026-10-19T12:39:55.085425+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.395296,
+    "blocks_per_second": 83.25030495817086,
+    "transactions_per_second": 7905.2968925319
+  },
+  "disk_sample_utc": "2026-10-19T12:39:55.085425+00:00",
+  "disk_sample_height": 5375223,
+  "disk_bytes": {
+    "ancient": 12232003584,
+    "chaindata": 18458918912,
+    "history": 11039674368,
+    "state-snapshots": 17579593728
+  },
+  "rss_sample_utc": "2026-10-19T12:39:55.085425+00:00",
+  "rss_kib": 10705336,
+  "rss_max_kib_in_window": 10705336,
+  "host_available_memory_bytes": 35574157312,
+  "cold_published_block": 5048364,
+  "cold_pruned_block": 5048364,
+  "eligible_backlog_blocks": 261266,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "last_tvm_probe_milliseconds": [
+    1664.2038822174072,
+    1744.343377649784
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "report observed cold catch-up recovery: eligible backlog back to approximately 26万 after prior approximately 37万; publication and pruning advance, identity and old inventory unchanged, periodic history probes correct. Known seconds-scale historical query latency persists. No runtime mutation.",
+  "packet_sha256": "5bc3944c62ba9095b0393ec7b9d98db3479c2d2a07a3b19c2046af698711089a",
+  "comparison_limit": "Same-process windows describe current workload only; no matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred.",
+  "disk_total_bytes": 59310190592,
+  "pressure_snapshot": {
+    "l0_sublevels": 3,
+    "reason_bits": 0,
+    "compaction_debt": 41742182425,
+    "hard": 0
+  }
+}

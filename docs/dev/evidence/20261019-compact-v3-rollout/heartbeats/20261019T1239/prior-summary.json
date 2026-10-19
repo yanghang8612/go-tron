@@ -1,0 +1,61 @@
+{
+  "utc": "2026-10-19T12:11:26.208596+00:00",
+  "head": 5231237,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T11:26:49.188099+00:00",
+  "sample_window_end": "2026-10-19T12:10:52.660883+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.225395,
+    "blocks_per_second": 89.92577060311638,
+    "transactions_per_second": 7676.1960792823675
+  },
+  "disk_sample_utc": "2026-10-19T12:09:52.560845+00:00",
+  "disk_sample_height": 5222317,
+  "disk_bytes": {
+    "ancient": 10240806912,
+    "chaindata": 18684391424,
+    "history": 10257268736,
+    "state-snapshots": 13610192896
+  },
+  "rss_sample_utc": "2026-10-19T12:10:52.660883+00:00",
+  "rss_kib": 7799024,
+  "rss_max_kib_in_window": 8196168,
+  "host_available_memory_bytes": 38632132608,
+  "cold_published_block": 4803632,
+  "cold_pruned_block": 4803632,
+  "eligible_backlog_blocks": 358376,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "last_tvm_probe_milliseconds": [
+    2435.1671934127808,
+    2518.1302279233932
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "report transient cold-publication pause and observed recovery after L0 pressure eased; backlog remains above prior roughly 26万. Same production identity and old inventory, all history probes pass, no resource emergency. No production mutation.",
+  "packet_sha256": "6b12587068c91addaae2de4eb7cb87e72a23487d7f685cd558bec1d562ebac90",
+  "comparison_limit": "Same-process windows describe current workload only; no matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred.",
+  "disk_total_bytes": 52792659968,
+  "cold_pause": {
+    "first_observed_utc": "2026-10-19T11:57:51.824256+00:00",
+    "last_minute_sample_utc": "2026-10-19T12:10:52.660883+00:00",
+    "fixed_published_block": 4803632,
+    "equal_frontier_minute_samples": 14,
+    "followup_reason_bits": 8,
+    "followup_l0_sublevels": 16,
+    "source_reason": "L0 pressure, early busy-history admission rejected; lifecycle stack waiting in select, no stuck build observed",
+    "confirmation_utc": "2026-10-19T12:14:18.067726+00:00",
+    "confirmation_published_block": 4811231,
+    "confirmation_eligible_backlog_blocks": 369573,
+    "confirmation_l0_sublevels": 14,
+    "confirmation_reason_bits": 384,
+    "confirmation_compaction_debt_bytes": 42075349617,
+    "confirmation_busy_resource_builds": 1434,
+    "confirmation_moderate_l0_ready": 1
+  }
+}
