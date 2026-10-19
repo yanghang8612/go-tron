@@ -1,0 +1,442 @@
+{
+  "complete": true,
+  "started_utc": "2026-10-19T01:23:01.00337449Z",
+  "finished_utc": "2026-10-19T01:25:43.615898238Z",
+  "block_num": 5715086,
+  "block_hash": "000000000057348e8ed54d676bea369a0a413af09e92e00a4ef630091218e6ad",
+  "tx_num": 174114684,
+  "muhash_root": "3840ed6f0fb414aae75d26169149f638fb82aa4335c13defbf2cab85a811a9e3",
+  "source_rows": [
+    1349700,
+    89,
+    45366888
+  ],
+  "source_sha256": [
+    "26aaba3554f26e7be3a23de86e33af70743de1aa45c79e5776e774a444980d51",
+    "1b9c0f8bd7ffb02b9ff2a8f900052c6908fcd75bf842ad5df7cc99b934852706",
+    "22f5b286cc87f10f63b62c6009653f487d35a2eff69116029f45104b4e42f353"
+  ],
+  "matches_authenticated_baseline": true,
+  "storage_classes": {
+    "current": {
+      "rows": 26939941,
+      "key_bytes": 2182135221,
+      "wrapped_value_bytes": 889018053,
+      "payload_bytes": 862078112
+    },
+    "obsolete": {
+      "rows": 837,
+      "key_bytes": 67797,
+      "wrapped_value_bytes": 27621,
+      "payload_bytes": 26784
+    }
+  },
+  "shielded_subkeys": {
+    "block-root-index/current": {
+      "rows": 5715086,
+      "key_bytes": 348620246,
+      "wrapped_value_bytes": 188597838,
+      "payload_bytes": 182882752
+    },
+    "last-tree/current": {
+      "rows": 1,
+      "key_bytes": 62,
+      "wrapped_value_bytes": 9,
+      "payload_bytes": 8
+    },
+    "root-tree/current": {
+      "rows": 1,
+      "key_bytes": 85,
+      "wrapped_value_bytes": 9,
+      "payload_bytes": 8
+    }
+  },
+  "storage_value_leading_zero_bytes": {
+    "0": {
+      "rows": 55983,
+      "key_bytes": 4534623,
+      "wrapped_value_bytes": 1847439,
+      "payload_bytes": 1791456
+    },
+    "1": {
+      "rows": 14837,
+      "key_bytes": 1201797,
+      "wrapped_value_bytes": 489621,
+      "payload_bytes": 474784
+    },
+    "10": {
+      "rows": 28539,
+      "key_bytes": 2311659,
+      "wrapped_value_bytes": 941787,
+      "payload_bytes": 913248
+    },
+    "11": {
+      "rows": 6070,
+      "key_bytes": 491670,
+      "wrapped_value_bytes": 200310,
+      "payload_bytes": 194240
+    },
+    "12": {
+      "rows": 4939240,
+      "key_bytes": 400078440,
+      "wrapped_value_bytes": 162994920,
+      "payload_bytes": 158055680
+    },
+    "13": {
+      "rows": 15700,
+      "key_bytes": 1271700,
+      "wrapped_value_bytes": 518100,
+      "payload_bytes": 502400
+    },
+    "14": {
+      "rows": 331,
+      "key_bytes": 26811,
+      "wrapped_value_bytes": 10923,
+      "payload_bytes": 10592
+    },
+    "15": {
+      "rows": 734,
+      "key_bytes": 59454,
+      "wrapped_value_bytes": 24222,
+      "payload_bytes": 23488
+    },
+    "16": {
+      "rows": 1218,
+      "key_bytes": 98658,
+      "wrapped_value_bytes": 40194,
+      "payload_bytes": 38976
+    },
+    "17": {
+      "rows": 945,
+      "key_bytes": 76545,
+      "wrapped_value_bytes": 31185,
+      "payload_bytes": 30240
+    },
+    "18": {
+      "rows": 964,
+      "key_bytes": 78084,
+      "wrapped_value_bytes": 31812,
+      "payload_bytes": 30848
+    },
+    "19": {
+      "rows": 388,
+      "key_bytes": 31428,
+      "wrapped_value_bytes": 12804,
+      "payload_bytes": 12416
+    },
+    "2": {
+      "rows": 33633,
+      "key_bytes": 2724273,
+      "wrapped_value_bytes": 1109889,
+      "payload_bytes": 1076256
+    },
+    "20": {
+      "rows": 7674,
+      "key_bytes": 621594,
+      "wrapped_value_bytes": 253242,
+      "payload_bytes": 245568
+    },
+    "21": {
+      "rows": 2237,
+      "key_bytes": 181197,
+      "wrapped_value_bytes": 73821,
+      "payload_bytes": 71584
+    },
+    "22": {
+      "rows": 9644,
+      "key_bytes": 781164,
+      "wrapped_value_bytes": 318252,
+      "payload_bytes": 308608
+    },
+    "23": {
+      "rows": 14041,
+      "key_bytes": 1137321,
+      "wrapped_value_bytes": 463353,
+      "payload_bytes": 449312
+    },
+    "24": {
+      "rows": 6496,
+      "key_bytes": 526176,
+      "wrapped_value_bytes": 214368,
+      "payload_bytes": 207872
+    },
+    "25": {
+      "rows": 33962,
+      "key_bytes": 2750922,
+      "wrapped_value_bytes": 1120746,
+      "payload_bytes": 1086784
+    },
+    "26": {
+      "rows": 33051,
+      "key_bytes": 2677131,
+      "wrapped_value_bytes": 1090683,
+      "payload_bytes": 1057632
+    },
+    "27": {
+      "rows": 580305,
+      "key_bytes": 47004705,
+      "wrapped_value_bytes": 19150065,
+      "payload_bytes": 18569760
+    },
+    "28": {
+      "rows": 8933955,
+      "key_bytes": 723650355,
+      "wrapped_value_bytes": 294820515,
+      "payload_bytes": 285886560
+    },
+    "29": {
+      "rows": 1572648,
+      "key_bytes": 127384488,
+      "wrapped_value_bytes": 51897384,
+      "payload_bytes": 50324736
+    },
+    "3": {
+      "rows": 404729,
+      "key_bytes": 32783049,
+      "wrapped_value_bytes": 13356057,
+      "payload_bytes": 12951328
+    },
+    "30": {
+      "rows": 464523,
+      "key_bytes": 37626363,
+      "wrapped_value_bytes": 15329259,
+      "payload_bytes": 14864736
+    },
+    "31": {
+      "rows": 9570121,
+      "key_bytes": 775179801,
+      "wrapped_value_bytes": 315813993,
+      "payload_bytes": 306243872
+    },
+    "4": {
+      "rows": 144021,
+      "key_bytes": 11665701,
+      "wrapped_value_bytes": 4752693,
+      "payload_bytes": 4608672
+    },
+    "5": {
+      "rows": 33972,
+      "key_bytes": 2751732,
+      "wrapped_value_bytes": 1121076,
+      "payload_bytes": 1087104
+    },
+    "6": {
+      "rows": 1832,
+      "key_bytes": 148392,
+      "wrapped_value_bytes": 60456,
+      "payload_bytes": 58624
+    },
+    "7": {
+      "rows": 987,
+      "key_bytes": 79947,
+      "wrapped_value_bytes": 32571,
+      "payload_bytes": 31584
+    },
+    "8": {
+      "rows": 1790,
+      "key_bytes": 144990,
+      "wrapped_value_bytes": 59070,
+      "payload_bytes": 57280
+    },
+    "9": {
+      "rows": 26208,
+      "key_bytes": 2122848,
+      "wrapped_value_bytes": 864864,
+      "payload_bytes": 838656
+    }
+  },
+  "storage_payload_lengths": {
+    "32": {
+      "rows": 26940778,
+      "key_bytes": 2182203018,
+      "wrapped_value_bytes": 889045674,
+      "payload_bytes": 862104896
+    }
+  },
+  "storage_value_kinds": {
+    "one": {
+      "rows": 371957,
+      "key_bytes": 30128517,
+      "wrapped_value_bytes": 12274581,
+      "payload_bytes": 11902624
+    },
+    "u160": {
+      "rows": 4993116,
+      "key_bytes": 404442396,
+      "wrapped_value_bytes": 164772828,
+      "payload_bytes": 159779712
+    },
+    "u32": {
+      "rows": 10971126,
+      "key_bytes": 888661206,
+      "wrapped_value_bytes": 362047158,
+      "payload_bytes": 351076032
+    },
+    "u64": {
+      "rows": 653814,
+      "key_bytes": 52958934,
+      "wrapped_value_bytes": 21575862,
+      "payload_bytes": 20922048
+    },
+    "u8-other": {
+      "rows": 9198164,
+      "key_bytes": 745051284,
+      "wrapped_value_bytes": 303539412,
+      "payload_bytes": 294341248
+    },
+    "wide": {
+      "rows": 752601,
+      "key_bytes": 60960681,
+      "wrapped_value_bytes": 24835833,
+      "payload_bytes": 24083232
+    }
+  },
+  "storage_owners": 3240,
+  "storage_incarnations": 3240,
+  "incarnations_with_multiple_slot_prefixes": 0,
+  "storage_trimmed_payload_bytes": 175256452,
+  "block_root_rows": 5715086,
+  "distinct_block_roots": 1,
+  "block_root_runs": 1,
+  "min_indexed_height": 1,
+  "max_indexed_height": 5715086,
+  "missing_heights_between_index_rows": 0,
+  "largest_root_run_blocks": 5715086,
+  "block_root_frequencies": {
+    "fbc2f4300c01f0b7820d00e3347c8da4ee614674376cbc45359daa54f9b5493e": 5715086
+  },
+  "sst_experiments": {
+    "shielded-baseline-none": {
+      "rows": 5715086,
+      "key_bytes": 348620246,
+      "value_bytes": 188597838,
+      "sst_bytes": 299557852,
+      "data_block_bytes": 286419670,
+      "index_bytes": 5976124,
+      "filter_bytes": 7144892,
+      "files": 12,
+      "checksums_verified": true
+    },
+    "shielded-baseline-snappy": {
+      "rows": 5715086,
+      "key_bytes": 348620246,
+      "value_bytes": 188597838,
+      "sst_bytes": 47133615,
+      "data_block_bytes": 38750481,
+      "index_bytes": 5934842,
+      "filter_bytes": 7144892,
+      "files": 12,
+      "checksums_verified": true
+    },
+    "shielded-runs-none": {
+      "rows": 1,
+      "key_bytes": 36,
+      "value_bytes": 40,
+      "sst_bytes": 974,
+      "data_block_bytes": 101,
+      "index_bytes": 46,
+      "filter_bytes": 69,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "shielded-runs-snappy": {
+      "rows": 1,
+      "key_bytes": 36,
+      "value_bytes": 40,
+      "sst_bytes": 919,
+      "data_block_bytes": 70,
+      "index_bytes": 46,
+      "filter_bytes": 69,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "storage-baseline-none": {
+      "rows": 26940778,
+      "key_bytes": 2182203018,
+      "value_bytes": 889045674,
+      "sst_bytes": 1603412077,
+      "data_block_bytes": 1531768861,
+      "index_bytes": 37871916,
+      "filter_bytes": 33680910,
+      "files": 54,
+      "checksums_verified": true
+    },
+    "storage-baseline-snappy": {
+      "rows": 26940778,
+      "key_bytes": 2182203018,
+      "value_bytes": 889045674,
+      "sst_bytes": 666190038,
+      "data_block_bytes": 620991394,
+      "index_bytes": 37828034,
+      "filter_bytes": 33680910,
+      "files": 54,
+      "checksums_verified": true
+    },
+    "storage-compact-key-none": {
+      "rows": 26940778,
+      "key_bytes": 1185394232,
+      "value_bytes": 889045674,
+      "sst_bytes": 1512832949,
+      "data_block_bytes": 1457220243,
+      "index_bytes": 21860816,
+      "filter_bytes": 33680910,
+      "files": 54,
+      "checksums_verified": true
+    },
+    "storage-compact-key-snappy": {
+      "rows": 26940778,
+      "key_bytes": 1185394232,
+      "value_bytes": 889045674,
+      "sst_bytes": 641441810,
+      "data_block_bytes": 598248014,
+      "index_bytes": 21818898,
+      "filter_bytes": 33680910,
+      "files": 54,
+      "checksums_verified": true
+    },
+    "storage-compact-key-trim-none": {
+      "rows": 26940778,
+      "key_bytes": 1185394232,
+      "value_bytes": 175256452,
+      "sst_bytes": 785366434,
+      "data_block_bytes": 740732174,
+      "index_bytes": 10895690,
+      "filter_bytes": 33680910,
+      "files": 54,
+      "checksums_verified": true
+    },
+    "storage-compact-key-trim-snappy": {
+      "rows": 26940778,
+      "key_bytes": 1185394232,
+      "value_bytes": 175256452,
+      "sst_bytes": 500773642,
+      "data_block_bytes": 462391725,
+      "index_bytes": 10878401,
+      "filter_bytes": 33680910,
+      "files": 54,
+      "checksums_verified": true
+    },
+    "storage-prefix-metadata-none": {
+      "rows": 3240,
+      "key_bytes": 90720,
+      "value_bytes": 51840,
+      "sst_bytes": 185801,
+      "data_block_bytes": 179876,
+      "index_bytes": 989,
+      "filter_bytes": 4165,
+      "files": 1,
+      "checksums_verified": true
+    },
+    "storage-prefix-metadata-snappy": {
+      "rows": 3240,
+      "key_bytes": 90720,
+      "value_bytes": 51840,
+      "sst_bytes": 146616,
+      "data_block_bytes": 140971,
+      "index_bytes": 988,
+      "filter_bytes": 4165,
+      "files": 1,
+      "checksums_verified": true
+    }
+  }
+}

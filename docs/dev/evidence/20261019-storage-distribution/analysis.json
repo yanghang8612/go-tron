@@ -1,0 +1,106 @@
+{
+  "complete": true,
+  "source_block": 5715086,
+  "source_counts_and_hashes_match": true,
+  "all_local_conservation_checks": true,
+  "storage_rows": 26940778,
+  "storage_logical_bytes": 3071248692,
+  "zero_values": 0,
+  "storage_mean_minimal_value_bytes": 6.505248363651562,
+  "repeated_values_percent": 95.61087656785561,
+  "concentration": [
+    {
+      "top": 1,
+      "rows": 8741658,
+      "percent": 32.4476820973767
+    },
+    {
+      "top": 2,
+      "rows": 14891338,
+      "percent": 55.274342856765315
+    },
+    {
+      "top": 4,
+      "rows": 19967702,
+      "percent": 74.1170206740132
+    },
+    {
+      "top": 6,
+      "rows": 22721948,
+      "percent": 84.34035572395125
+    },
+    {
+      "top": 10,
+      "rows": 24505289,
+      "percent": 90.95984162001558
+    },
+    {
+      "top": 20,
+      "rows": 25823133,
+      "percent": 95.8514746678808
+    },
+    {
+      "top": 100,
+      "rows": 26767254,
+      "percent": 99.35590575743582
+    }
+  ],
+  "sst_comparison": [
+    {
+      "domain": "ContractStorage",
+      "compression": "snappy",
+      "model": "storage-compact-key",
+      "baseline_bytes": 666190038,
+      "candidate_with_metadata_bytes": 641588426,
+      "saved_bytes": 24601612,
+      "saved_percent": 3.6928820001358234
+    },
+    {
+      "domain": "ContractStorage",
+      "compression": "snappy",
+      "model": "storage-compact-key-trim",
+      "baseline_bytes": 666190038,
+      "candidate_with_metadata_bytes": 500920258,
+      "saved_bytes": 165269780,
+      "saved_percent": 24.808203451400153
+    },
+    {
+      "domain": "SystemShielded.block-root-index",
+      "compression": "snappy",
+      "model": "explicit-runs",
+      "baseline_bytes": 47133615,
+      "candidate_with_metadata_bytes": 919,
+      "saved_bytes": 47132696,
+      "saved_percent": 99.99805022381585
+    },
+    {
+      "domain": "ContractStorage",
+      "compression": "none",
+      "model": "storage-compact-key",
+      "baseline_bytes": 1603412077,
+      "candidate_with_metadata_bytes": 1513018750,
+      "saved_bytes": 90393327,
+      "saved_percent": 5.637560568280539
+    },
+    {
+      "domain": "ContractStorage",
+      "compression": "none",
+      "model": "storage-compact-key-trim",
+      "baseline_bytes": 1603412077,
+      "candidate_with_metadata_bytes": 785552235,
+      "saved_bytes": 817859842,
+      "saved_percent": 51.0074642527468
+    },
+    {
+      "domain": "SystemShielded.block-root-index",
+      "compression": "none",
+      "model": "explicit-runs",
+      "baseline_bytes": 299557852,
+      "candidate_with_metadata_bytes": 974,
+      "saved_bytes": 299556878,
+      "saved_percent": 99.99967485412468
+    }
+  ],
+  "diagnostic_sst_total_bytes": 6057042727,
+  "archive_sha256": "9f8e713e08606f20a5050be19c0cc3078611c08c8d0e93cf60d250c44ba2c20c"
+}

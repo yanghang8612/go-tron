@@ -1,0 +1,19 @@
+{
+  "complete": true,
+  "utc": "2026-10-19T01:26:46.300214+00:00",
+  "source_block": 5715086,
+  "source_full_hashes_match_authenticated_cut": true,
+  "copied_files_verified": 599,
+  "all_conservation_checks": true,
+  "storage_rows": 26940778,
+  "owner_incarnations": 3240,
+  "all_comparison_sst_checksums": true,
+  "service": {
+    "MainPID": "23101",
+    "ActiveState": "active"
+  },
+  "binary": "/data/gtron/releases/auto-bc939af29656-3eaf3405eb877f48/gtron",
+  "tool_sha256": "17a2c7818db96ea15f2a462146c292685eae01954625b3115a44719538c04a6f",
+  "source_bundle_sha256": "7536bb6f3827b1ed467bcb135c00c364e53cf9e4347b37ec0f86ce17c04056f8",
+  "production_stop_or_delete": false
+}
