@@ -1,0 +1,9 @@
+{
+  "heartbeat-capture.py": "24910b9552385bef63ca6257857607130224d0bdfb9d76231320874500d440e4",
+  "latest-sync-policy.json": "8e7b84fc9dab458c2914c48473b5171b67378b2db0496ca46e4aa7c07bd85df4",
+  "packet.txt": "07ae2388e4516cb8ddb9a46334415cf1304c9451018dfef113ec67d4758fb124",
+  "status.json": "73aa5f1a9443b195a179df3a614fc2b5e89c21dc00cd89bc34003dc5cd28113f",
+  "summary.json": "827b416cf04f9e7e82bee2457061d183aac80be057ff6dc79da8dfbe47badf44",
+  "transfer-proof.json": "ab38d1b8d39e95b22c2329ada34d2eb22310c1e9fc9667433c8d8cda27fee0c9",
+  "verify.py": "728873e0610c58f4047c13162f0bfdfb8a19ba7e1f7a41c163d9327d3d781bdd"
+}

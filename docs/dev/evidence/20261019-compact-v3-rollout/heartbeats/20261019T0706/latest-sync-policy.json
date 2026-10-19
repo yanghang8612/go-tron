@@ -1,0 +1,27 @@
+{
+  "source_commit": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "runtime_counter": {
+    "name": "state/snapshot/cold/latest/deferred/sync",
+    "value": 1149
+  },
+  "evidence": [
+    {
+      "file": "cmd/gtron/main.go",
+      "start_line": 1325,
+      "end_line": 1335,
+      "text": "\t\t\t\tCatalogChain:                snapshotCatalogChain,\n\t\t\t\t// LatestBuildBlocks controls how often latest-dataset snapshots\n\t\t\t\t// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest\n\t\t\t\t// datasets share this single coarse cadence. Operators may tune it.\n\t\t\t\tLatestBuildBlocks:            statesnapshots.DefaultLatestBuildBlocks,\n\t\t\t\tDeferLatestBuildWhileSyncing: true,\n\t\t\t\t// Periodic sync-time rotation is disabled until immutable-base point\n\t\t\t\t// reads and full-base rewrite amortization meet the replay release gate.\n\t\t\t\t// A 40k-block cadence can otherwise continuously rewrite a large base.\n\t\t\t\tDeferHistoryBuildWhileSyncing: shouldDeferColdSnapshotHistoryWhileSyncing(chainConfig),\n\t\t\t\tMaxDeferredHistoryBlocks:      maxDeferredHistoryBlocks,"
+    },
+    {
+      "file": "core/state/snapshots/cold_builder.go",
+      "start_line": 147,
+      "end_line": 159,
+      "text": "\t// elapse between production latest-snapshot builds. 0 disables the latest\n\t// build pass entirely. Latest builds are full-keyspace scans, so all latest\n\t// datasets share this single coarse cadence rather than rebuilding every tick.\n\tLatestBuildBlocks uint64\n\t// DeferLatestBuildWhileSyncing prevents the full-keyspace latest snapshot\n\t// scan from competing with an active historical sync session. The regular\n\t// lifecycle/sync-complete wake builds it once the importer is idle.\n\tDeferLatestBuildWhileSyncing bool\n\t// DeferHistoryBuildWhileSyncing prevents state-history compression and its\n\t// mandatory history accessors from competing with a node that is farther\n\t// behind than HistoryWindow while the cold backlog remains below\n\t// MaxDeferredHistoryBlocks. The ordered lifecycle drains the bounded backlog\n\t// immediately once sync enters the recent hot window."
+    },
+    {
+      "file": "core/state/snapshots/cold_builder.go",
+      "start_line": 3604,
+      "end_line": 3623,
+      "text": "\tif r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {\n\t\treturn false, false, nil\n\t}\n\tif ctx == nil {\n\t\tctx = context.Background()\n\t}\n\tif err = ctx.Err(); err != nil {\n\t\treturn\n\t}\n\tif r.pendingLatest != nil {\n\t\treturn r.publishPreparedLatest(ctx)\n\t}\n\tif r.cfg.DeferLatestBuildWhileSyncing && r.syncActive() {\n\t\treturn false, true, nil\n\t}\n\tblock, _, ok, err := r.latestBuildWatermark()\n\tif err != nil || !ok {\n\t\treturn false, false, err\n\t}\n\tprev := r.lastLatestBuildBlock.Load()"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "observed_utc": "2026-10-19T07:15:10.888277+00:00",
+  "source_commit": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "expected_identity": true,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "pid": 10692,
+  "head": 2227681,
+  "paused": false,
+  "old_inventory_unchanged": true,
+  "old_inventory_sha256": "318de55a385e3a506bf37463a228fe2a91803b26a7e2eecd0d92af2b2a5165fb",
+  "sample_count": 45,
+  "error_sample_count": 0,
+  "speed_window": {
+    "start_utc": "2026-10-19T07:09:10.779718+00:00",
+    "end_utc": "2026-10-19T07:14:11.123363+00:00",
+    "from_block": 2092811,
+    "to_block": 2203001,
+    "seconds": 300.343645,
+    "blocks_per_second": 366.8797453663453,
+    "transactions_per_second": 4056.097141659182
+  },
+  "cold": {
+    "published_block": 1898902,
+    "pruned_through_block": 1898902,
+    "eligible_cutoff_block": 2158271,
+    "eligible_backlog_blocks": 259369,
+    "errors": 0,
+    "latest_build_block": 227204,
+    "latest_deferred_sync": 1149
+  },
+  "disk_sample": {
+    "utc": "2026-10-19T07:13:11.036801+00:00",
+    "head": 2180168,
+    "bytes": {
+      "ancient": 886575104,
+      "chaindata": 2222837760,
+      "history": 2983473152,
+      "state-snapshots": 852660224
+    },
+    "total_bytes": 6945546240,
+    "rss_kib": 2818120,
+    "filesystem_free_bytes": 2800260419584
+  },
+  "latest_history_probe": {
+    "utc": "2026-10-19T07:13:11.036801+00:00",
+    "balances": [
+      {
+        "height": 341,
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 341,
+          "result": "0x0"
+        },
+        "correct": true,
+        "milliseconds": 19.06590908765793
+      },
+      {
+        "height": 342,
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 342,
+          "result": "0x6b714021d45c37522e100000"
+        },
+        "correct": true,
+        "milliseconds": 11.363856494426727
+      }
+    ],
+    "transaction_lookup_correct": true
+  },
+  "last_full_muhash_verification": {
+    "block_num": 227222,
+    "verified": true,
+    "note": "No new independent full scan or production stop in this read-only heartbeat."
+  },
+  "runtime_samples_sha256": "3bf33d10a16c52e0e35250e0e170dc2b54a0fc38ad4d8f7b928221b9ad72a242",
+  "transport_decoded_sha256": "466b97e5d1a296ebb431c561e7927ae73157576e2ab5884bc2556fc81c22f257",
+  "transport_decoded_bytes": 348115,
+  "server_evidence_directory": "/data/gtron/compact-v3-rollout-20261019-01/heartbeat-20261019T0706"
+}
