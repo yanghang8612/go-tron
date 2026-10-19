@@ -1,0 +1,235 @@
+{
+  "utc": "2026-10-19T06:39:45.979808+00:00",
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "expected_identity": true,
+  "pid": 10692,
+  "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+  "samples": 39,
+  "latest": {
+    "utc": "2026-10-19T06:39:08.775888+00:00",
+    "iteration": 27,
+    "errors": [],
+    "service": {
+      "MainPID": "10692",
+      "ActiveState": "active"
+    },
+    "identity": {
+      "pid": 10692,
+      "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+      "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+    },
+    "wallet": {
+      "version": "0.2.0-dev",
+      "currentBlock": 1385275,
+      "lastInsertTime": 1792391948773,
+      "syncInfo": {
+        "active": true,
+        "paused": false,
+        "peerCount": 30,
+        "syncPeerCount": 8,
+        "targetHead": 87239640,
+        "appliedTip": 1385276,
+        "sessionBlocks": 1158053,
+        "sessionTransactions": 2055337,
+        "remaining": 85854365,
+        "inflight": 100,
+        "bufferedBlocks": 37,
+        "bufferedBytes": 70572,
+        "fetchBackpressured": false,
+        "requestedBlocks": 409,
+        "retryBlocks": 0,
+        "retainedDecodedBlocks": 0,
+        "retainedDecodedBytes": 0
+      }
+    },
+    "rss_kib": 2092012,
+    "metrics": {
+      "history/storage/keyspace/account_kv_latest/attempted_at": 1792391598,
+      "history/storage/keyspace/account_kv_latest/attempts/total": 6,
+      "history/storage/keyspace/account_kv_latest/duration_ns": 34568,
+      "history/storage/keyspace/account_kv_latest/errors/total": 0,
+      "history/storage/keyspace/account_kv_latest/known": 1,
+      "history/storage/keyspace/account_kv_latest/sampled_at": 1792391598,
+      "history/storage/keyspace/account_kv_latest/sst_bytes": 1618,
+      "history/storage/keyspace/account_latest/attempted_at": 1792391928,
+      "history/storage/keyspace/account_latest/attempts/total": 7,
+      "history/storage/keyspace/account_latest/duration_ns": 206291,
+      "history/storage/keyspace/account_latest/errors/total": 0,
+      "history/storage/keyspace/account_latest/known": 1,
+      "history/storage/keyspace/account_latest/sampled_at": 1792391928,
+      "history/storage/keyspace/account_latest/sst_bytes": 5599,
+      "history/storage/keyspace/block_body/attempted_at": 1792391838,
+      "history/storage/keyspace/block_body/attempts/total": 6,
+      "history/storage/keyspace/block_body/duration_ns": 22541,
+      "history/storage/keyspace/block_body/errors/total": 0,
+      "history/storage/keyspace/block_body/known": 1,
+      "history/storage/keyspace/block_body/sampled_at": 1792391838,
+      "history/storage/keyspace/block_body/sst_bytes": 0,
+      "history/storage/keyspace/commitment/attempted_at": 1792391688,
+      "history/storage/keyspace/commitment/attempts/total": 6,
+      "history/storage/keyspace/commitment/duration_ns": 62239,
+      "history/storage/keyspace/commitment/errors/total": 0,
+      "history/storage/keyspace/commitment/known": 1,
+      "history/storage/keyspace/commitment/sampled_at": 1792391688,
+      "history/storage/keyspace/commitment/sst_bytes": 7359,
+      "history/storage/keyspace/enabled": 1,
+      "history/storage/keyspace/inflight": 0,
+      "history/storage/keyspace/kv_generation/attempted_at": 1792391628,
+      "history/storage/keyspace/kv_generation/attempts/total": 6,
+      "history/storage/keyspace/kv_generation/duration_ns": 46640,
+      "history/storage/keyspace/kv_generation/errors/total": 0,
+      "history/storage/keyspace/kv_generation/known": 1,
+      "history/storage/keyspace/kv_generation/sampled_at": 1792391628,
+      "history/storage/keyspace/kv_generation/sst_bytes": 7359,
+      "history/storage/keyspace/owner": 2,
+      "history/storage/keyspace/range_count": 12,
+      "history/storage/keyspace/staged_body/attempted_at": 1792391808,
+      "history/storage/keyspace/staged_body/attempts/total": 6,
+      "history/storage/keyspace/staged_body/duration_ns": 30761,
+      "history/storage/keyspace/staged_body/errors/total": 0,
+      "history/storage/keyspace/staged_body/known": 1,
+      "history/storage/keyspace/staged_body/sampled_at": 1792391808,
+      "history/storage/keyspace/staged_body/sst_bytes": 0,
+      "history/storage/keyspace/state_change_index/attempted_at": 1792391748,
+      "history/storage/keyspace/state_change_index/attempts/total": 6,
+      "history/storage/keyspace/state_change_index/duration_ns": 214068,
+      "history/storage/keyspace/state_change_index/errors/total": 0,
+      "history/storage/keyspace/state_change_index/known": 1,
+      "history/storage/keyspace/state_change_index/sampled_at": 1792391748,
+      "history/storage/keyspace/state_change_index/sst_bytes": 93658325,
+      "history/storage/keyspace/state_changeset/attempted_at": 1792391718,
+      "history/storage/keyspace/state_changeset/attempts/total": 6,
+      "history/storage/keyspace/state_changeset/duration_ns": 85275,
+      "history/storage/keyspace/state_changeset/errors/total": 0,
+      "history/storage/keyspace/state_changeset/known": 1,
+      "history/storage/keyspace/state_changeset/sampled_at": 1792391718,
+      "history/storage/keyspace/state_changeset/sst_bytes": 349276389,
+      "history/storage/keyspace/state_code/attempted_at": 1792391658,
+      "history/storage/keyspace/state_code/attempts/total": 6,
+      "history/storage/keyspace/state_code/duration_ns": 39748,
+      "history/storage/keyspace/state_code/errors/total": 0,
+      "history/storage/keyspace/state_code/known": 1,
+      "history/storage/keyspace/state_code/sampled_at": 1792391658,
+      "history/storage/keyspace/state_code/sst_bytes": 7359,
+      "history/storage/keyspace/state_tx_range/attempted_at": 1792391778,
+      "history/storage/keyspace/state_tx_range/attempts/total": 6,
+      "history/storage/keyspace/state_tx_range/duration_ns": 80198,
+      "history/storage/keyspace/state_tx_range/errors/total": 0,
+      "history/storage/keyspace/state_tx_range/known": 1,
+      "history/storage/keyspace/state_tx_range/sampled_at": 1792391778,
+      "history/storage/keyspace/state_tx_range/sst_bytes": 60915975,
+      "history/storage/keyspace/transaction_index/attempted_at": 1792391868,
+      "history/storage/keyspace/transaction_index/attempts/total": 6,
+      "history/storage/keyspace/transaction_index/duration_ns": 23154,
+      "history/storage/keyspace/transaction_index/errors/total": 0,
+      "history/storage/keyspace/transaction_index/known": 1,
+      "history/storage/keyspace/transaction_index/sampled_at": 1792391868,
+      "history/storage/keyspace/transaction_index/sst_bytes": 0,
+      "history/storage/keyspace/transaction_receipts/attempted_at": 1792391898,
+      "history/storage/keyspace/transaction_receipts/attempts/total": 6,
+      "history/storage/keyspace/transaction_receipts/duration_ns": 26690,
+      "history/storage/keyspace/transaction_receipts/errors/total": 0,
+      "history/storage/keyspace/transaction_receipts/known": 1,
+      "history/storage/keyspace/transaction_receipts/sampled_at": 1792391898,
+      "history/storage/keyspace/transaction_receipts/sst_bytes": 0,
+      "state/prune/last/domain_change/pruned_through_block": 1055666,
+      "state/prune/last/domain_change/pruned_through_tx": 1644511,
+      "state/snapshot/cold/last/eligible_cutoff_block": 1313849,
+      "state/snapshot/cold/last/from_tx": 1634180,
+      "state/snapshot/cold/last/latest_build_block": 227204,
+      "state/snapshot/cold/last/published_block": 1055666,
+      "state/snapshot/cold/last/selected_cutoff_block": 1313849,
+      "state/snapshot/cold/last/solidified_block": 1379385,
+      "state/snapshot/cold/last/to_tx": 1644511,
+      "state/snapshot/cold/last/visible_tx_end": 1644511,
+      "sync/import/window/blocks_per_second": 406.67957211032706,
+      "sync/import/window/buffer_wait_ratio": 0.09089917913580996,
+      "sync/import/window/energy_per_second": 0,
+      "sync/import/window/exec_busy_ratio": 0.8947424959006482,
+      "sync/import/window/transactions_per_second": 3271.9628320282327,
+      "sync/import/window/updated_unix": 1792391930
+    },
+    "window_seconds": 60.10045289248228,
+    "observed_blocks_per_second": 399.3813498034794,
+    "observed_transactions_per_second": 3811.7017256063855,
+    "filesystem_free_bytes": 2804326555648
+  },
+  "sample_errors": [],
+  "sampler": "MainPID=13306\nActiveState=active\n",
+  "timer": "ActiveState=active\nSubState=waiting\n",
+  "old_inventory_sha256": "318de55a385e3a506bf37463a228fe2a91803b26a7e2eecd0d92af2b2a5165fb",
+  "old_inventory_unchanged": true,
+  "old_files": 27652,
+  "wallet": {
+    "version": "0.2.0-dev",
+    "currentBlock": 1401222,
+    "lastInsertTime": 1792391986907,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87239651,
+      "appliedTip": 1401222,
+      "sessionBlocks": 1174000,
+      "sessionTransactions": 2187568,
+      "remaining": 85838429,
+      "inflight": 0,
+      "bufferedBlocks": 0,
+      "bufferedBytes": 0,
+      "fetchBackpressured": false,
+      "requestedBlocks": 100,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  },
+  "cold_metrics": {
+    "state/prune/last/domain_change/pruned_through_block": {
+      "value": 1055666
+    },
+    "state/prune/last/domain_change/pruned_through_tx": {
+      "value": 1644511
+    },
+    "state/prune/last/domain_change/start_block": {
+      "value": 1050667
+    },
+    "state/snapshot/cold/errors": {
+      "value": 0
+    },
+    "state/snapshot/cold/last/eligible_cutoff_block": {
+      "value": 1334690
+    },
+    "state/snapshot/cold/last/from_tx": {
+      "value": 1634180
+    },
+    "state/snapshot/cold/last/latest_build_block": {
+      "value": 227204
+    },
+    "state/snapshot/cold/last/published_block": {
+      "value": 1055666
+    },
+    "state/snapshot/cold/last/selected_cutoff_block": {
+      "value": 1060666
+    },
+    "state/snapshot/cold/last/solidified_block": {
+      "value": 1400226
+    },
+    "state/snapshot/cold/last/to_tx": {
+      "value": 1644511
+    },
+    "state/snapshot/cold/last/visible_tx_end": {
+      "value": 1644511
+    },
+    "sync/import/window/blocks_per_second": {
+      "value": 424.3623675029335
+    },
+    "sync/import/window/energy_per_second": {
+      "value": 0
+    },
+    "sync/import/window/transactions_per_second": {
+      "value": 3363.121726632746
+    }
+  },
+  "memory": "              total        used        free      shared  buff/cache   available\nMem:    65842163712 16914309120   439144448  4092678144 48488710144 44297093120\nSwap:             0           0           0\n"
+}

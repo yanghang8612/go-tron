@@ -1,0 +1,217 @@
+{
+  "utc": "2026-10-19T06:36:55.365883+00:00",
+  "transfer_block": 342,
+  "transfer_amount_sun": 33251807524000000,
+  "balances": {
+    "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318": {
+      "0": 99000000000000000,
+      "341": 99000000000000000,
+      "342": 65748192475900000,
+      "343": 65748192475900000,
+      "1000": 65748192475900000
+    },
+    "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1": {
+      "0": 0,
+      "341": 0,
+      "342": 33251807524000000,
+      "343": 33251807524000000,
+      "1000": 33251807524000000
+    }
+  },
+  "queries": [
+    {
+      "method": "eth_getBalance",
+      "address": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "height": 0,
+      "milliseconds": 779.2394999996759,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "height": 341,
+      "milliseconds": 692.0968339836691,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "height": 342,
+      "milliseconds": 695.6816659949254,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0xd471a14ff7e21ac32c660000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "height": 343,
+      "milliseconds": 728.341875015758,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0xd471a14ff7e21ac32c660000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "height": 1000,
+      "milliseconds": 698.3084169914946,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0xd471a14ff7e21ac32c660000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "height": 0,
+      "milliseconds": 771.2913750146981,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "height": 341,
+      "milliseconds": 737.5169589940924,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "height": 342,
+      "milliseconds": 770.1120000274386,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x6b714021d45c37522e100000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "height": 343,
+      "milliseconds": 780.871916009346,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x6b714021d45c37522e100000"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "address": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "height": 1000,
+      "milliseconds": 722.1197089820635,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x6b714021d45c37522e100000"
+      }
+    },
+    {
+      "java_height": 1,
+      "response": {}
+    },
+    {
+      "java_height": 1000,
+      "response": {}
+    },
+    {
+      "java_height": 100000,
+      "response": {}
+    }
+  ],
+  "checks": {
+    "receiver_before_zero": true,
+    "receiver_after_amount": true,
+    "owner_debit_transfer_plus_creation_fee": true,
+    "constant_next_block": true,
+    "tx_lookup_exact": true,
+    "receipt_block": true
+  },
+  "transaction_by_id": {
+    "raw_data": {
+      "contract": [
+        {
+          "parameter": {
+            "@type": "type.googleapis.com/protocol.TransferContract",
+            "amount": 33251807524000000,
+            "owner_address": "4171b0af54e0a1182a5e0947d6a64f3b22740ef318",
+            "to_address": "41b87f2be4dede9fc25387f8df7e0944b5cb7900e1"
+          },
+          "type": "TransferContract"
+        }
+      ],
+      "expiration": 1529892573000,
+      "ref_block_bytes": "0145",
+      "ref_block_hash": "499a95010de906a4",
+      "timestamp": 1529892550266
+    },
+    "raw_data_hex": "0a0201452208499a95010de906a440c89ed0a5c32c5a6c080112680a2d747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e5472616e73666572436f6e747261637412370a154171b0af54e0a1182a5e0947d6a64f3b22740ef318121541b87f2be4dede9fc25387f8df7e0944b5cb7900e11880a2eefcfbca883b70faeccea5c32c",
+    "signature": [
+      "d9e9abac1f4fbd560da9499b8bca17fddb86be9d82cb1dd7840e4ad1f59ff17838b4fb82d0edacfb88e5883c0f89a529305a5b5c430ebc3b1bbb6c78a6f6eaa101"
+    ],
+    "txID": "5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2"
+  },
+  "rpc_transaction": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "blockHash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+      "blockNumber": "0x156",
+      "from": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "gas": "0x0",
+      "gasPrice": "0x1",
+      "hash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+      "input": "0x",
+      "nonce": "0x0",
+      "r": "0x0",
+      "s": "0x0",
+      "to": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "transactionIndex": "0x0",
+      "type": "0x0",
+      "v": "0x0",
+      "value": "0x762257bf9b9100"
+    }
+  },
+  "receipt": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "blockHash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+      "blockNumber": "0x156",
+      "contractAddress": null,
+      "cumulativeGasUsed": "0x0",
+      "from": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "gasUsed": "0x0",
+      "logs": [],
+      "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "status": "0x1",
+      "to": "0x0000000000000000000000000000000000000000",
+      "transactionHash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+      "transactionIndex": "0x0",
+      "type": "0x0"
+    }
+  }
+}
