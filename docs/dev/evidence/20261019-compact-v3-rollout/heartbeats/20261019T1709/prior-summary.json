@@ -1,0 +1,67 @@
+{
+  "utc": "2026-10-19T16:11:00.145556+00:00",
+  "head": 6448879,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T15:26:06.616832+00:00",
+  "sample_window_end": "2026-10-19T16:10:10.051080+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.41498,
+    "blocks_per_second": 97.40193381834688,
+    "transactions_per_second": 5498.607293151626
+  },
+  "disk_sample_utc": "2026-10-19T16:06:09.732967+00:00",
+  "disk_sample_height": 6419782,
+  "disk_bytes": {
+    "ancient": 21087432704,
+    "chaindata": 21627973632,
+    "history": 14640771072,
+    "state-snapshots": 28983435264
+  },
+  "rss_sample_utc": "2026-10-19T16:10:10.051080+00:00",
+  "rss_kib": 10260456,
+  "rss_max_kib_in_window": 10365344,
+  "host_available_memory_bytes": 36191440896,
+  "cold_published_block": 5845001,
+  "cold_pruned_block": 5845001,
+  "eligible_backlog_blocks": 537612,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "last_tvm_probe_milliseconds": [
+    2096.834547817707,
+    1995.7503080368042
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "report new fallback phase: resource admission still blocked, over-busy fallback has begun publishing after prolonged pause, but observed backlog continues growing past524288 because current fallback throughput is below importer throughput. L0 pressure eased to22, hard and write stalls remain0, all historical probes pass; no runtime mutation.",
+  "packet_sha256": "7c5bf2c9eef627a99bf787a1e2a88faf21f695afbcf5a5f457b12e688d892084",
+  "comparison_limit": "Same-process windows describe current workload only; no matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred.",
+  "disk_total_bytes": 86339612672,
+  "pressure_snapshot": {
+    "l0_sublevels": 34,
+    "reason_bits": 8,
+    "compaction_debt": 43393506754,
+    "hard": 0
+  },
+  "fallback_observation": {
+    "retrieved_utc": "2026-10-19T16:12:20.542387+00:00",
+    "published_block": 5847951,
+    "eligible_backlog_blocks": 542712,
+    "forced_busy_builds": 2125,
+    "busy_resource_builds": 2100,
+    "new_non_resource_fallback_builds": 25,
+    "l0_sublevels": 22,
+    "hard": 0,
+    "last_complete_batch_blocks": 406,
+    "last_completion_interval_ns": 11357795965,
+    "last_gross_blocks_per_second_milli": 35746,
+    "last_net_catchup_blocks_per_second_milli": -69732,
+    "write_stall_count": 0,
+    "busy_launch_watermark_blocks": 524288,
+    "watermark_note": "Launch watermark, not a hard upper bound on backlog."
+  }
+}
