@@ -72,11 +72,21 @@ func (r *Runner) applyThroughputRecovery(result *PassResult, started, completed 
 	result.HistoryMaintenanceDuration = work
 	// Optional merges have an independent gated admission/recovery budget.
 	result.HistoryRecoveryCost = max(time.Duration(0), work-result.CompactionDuration)
+	if result.HistoryModerateL0 {
+		// The selected lane charges the entire outer lifecycle, including merge
+		// work, and cannot inherit a later faster global budget.
+		result.HistoryRecoveryCost = work
+	}
 	r.historyLoad.metric("recovery_cost", int64(result.HistoryRecoveryCost))
 	if !result.HistoryForcedBusy && !result.historyWasSyncing && !r.syncActive() && passErr == nil {
 		return
 	}
-	recovery := r.throughputRecovery(result.HistoryRecoveryCost, passErr != nil)
+	var recovery time.Duration
+	if result.HistoryModerateL0 {
+		recovery = r.moderateL0Recovery(work, passErr != nil)
+	} else {
+		recovery = r.throughputRecovery(result.HistoryRecoveryCost, passErr != nil)
+	}
 	result.HistoryMinRecovery = recovery
 	deadline := historyRecoveryDeadline(completed, recovery)
 	r.extendHistoryNotBefore(deadline)
@@ -132,6 +142,9 @@ func (r *Runner) completeHistoryMaintenance(result *PassResult, started, complet
 	r.pendingMaintenanceID = 0
 	r.completedMaintenanceID = result.historyMaintenanceID
 	r.applyThroughputRecovery(result, started, completed, passErr)
+	if result.HistoryModerateL0 && result.HistoryBuildAttempted && result.Built && passErr == nil && r.historyLoad.moderateL0.completed != nil {
+		r.historyLoad.moderateL0.completed.Inc(1)
+	}
 	// Completed construction remains a density observation even when a later
 	// prune/catalog operation fails. Successful frontier accounting stays below.
 	r.recordHistoryWork(result)
@@ -165,7 +178,7 @@ func (r *Runner) completeHistoryMaintenance(result *PassResult, started, complet
 	ctx := []any{
 		"publishedBlock", result.PublishedBlock, "blocks", result.HistoryBatchBlocks,
 		"work", result.HistoryMaintenanceDuration, "recovery", result.HistoryMinRecovery,
-		"recoveryCost", result.HistoryRecoveryCost, "mergeWork", result.CompactionDuration, "budgetLevel", r.historyLoad.level,
+		"moderateL0", result.HistoryModerateL0, "recoveryCost", result.HistoryRecoveryCost, "mergeWork", result.CompactionDuration, "budgetLevel", r.historyLoad.level,
 		"retryAt", result.HistoryRetryDeadline, "failed", passErr != nil,
 	}
 	if errors.Is(passErr, context.Canceled) || errors.Is(passErr, context.DeadlineExceeded) {

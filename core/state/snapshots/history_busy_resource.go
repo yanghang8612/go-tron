@@ -22,7 +22,33 @@ func (r *Runner) busyHistoryObservationEnabled() bool {
 // In particular cpuBurstReady describes storage, so it cannot replace the
 // separate CPU/runtime/memory observation supplied by the node.
 func (r *Runner) busyHistoryBuildReady(now time.Time) bool {
-	return r.busyHistoryObservationEnabled() && r.historyLoad.cpuBurstReady(now) && r.cfg.BusyHistoryBuildReady()
+	ready, _ := r.busyHistoryAdmission(now)
+	return ready
+}
+
+func (r *Runner) busyHistoryAdmission(now time.Time) (ready, moderateL0 bool) {
+	if !r.busyHistoryObservationEnabled() {
+		return false, false
+	}
+	r.historyLoad.revokeExpiredModerateL0(now)
+	burst, bounded := r.historyLoad.cpuBurstReady(now), r.historyLoad.moderateL0Ready(now)
+	if !burst && !bounded {
+		return false, false
+	}
+	resourceReady := r.cfg.BusyHistoryBuildReady()
+	r.historyLoad.revokeExpiredModerateL0(time.Now())
+	if !resourceReady {
+		return false, false
+	}
+	// Preserve an already legal legacy opportunity, including its topology and
+	// budget. The new lane only supplies capacity the old predicate denied.
+	if burst {
+		return true, false
+	}
+	// Only the independent bounded tier is new. Its callback must not carry
+	// expired evidence into admission; the existing burst predicate is unchanged.
+	bounded = bounded && r.historyLoad.moderateL0Ready(time.Now())
+	return bounded, bounded
 }
 
 // Called only under passMu after the complete soft/busy eligibility check.
