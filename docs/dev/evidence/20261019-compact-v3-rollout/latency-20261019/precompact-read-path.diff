@@ -1,0 +1,31 @@
+diff --git a/core/state/history.go b/core/state/history.go
+index d9e582f3..af9eedc7 100644
+--- a/core/state/history.go
++++ b/core/state/history.go
+@@ -496,7 +496,7 @@ func (r *PersistentHistoryReader) BalanceAt(addr tcommon.Address, blockNum uint6
+ 	if err != nil {
+ 		return 0, err
+ 	}
+-	account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
++	account, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto, addr)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+@@ -693,7 +693,7 @@ func (r *PersistentHistoryReader) accountAndCodeFromStateDomain(addr tcommon.Add
+ 	if err != nil {
+ 		return accountCacheEntry{}, false, err
+ 	}
+-	acc, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
++	acc, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto, addr)
+ 	if err != nil {
+ 		return accountCacheEntry{}, false, err
+ 	}
+@@ -1705,7 +1705,7 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) (
+ 	if !ok {
+ 		return accountCacheEntry{}, nil
+ 	}
+-	acc, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto)
++	acc, err := types.UnmarshalAccountStorageCoreV4(envelope.AccountProto, addr)
+ 	if err != nil {
+ 		return accountCacheEntry{}, fmt.Errorf("decode live account proto %s: %w", addr.Hex(), err)
+ 	}

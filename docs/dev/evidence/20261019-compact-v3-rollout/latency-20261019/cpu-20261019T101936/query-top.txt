@@ -1,0 +1,70 @@
+File: gtron
+Build ID: 3fd66e97bfcd357cfcd30ca433be11dd446a2990
+Type: cpu
+Time: 2026-10-19 18:19:36 CST
+Duration: 15.16s, Total samples = 10.37s (68.40%)
+Active filters:
+   focus=GetStorageAtBlockContext
+Showing nodes accounting for 4.34s, 41.85% of 10.37s total
+Showing top 60 nodes out of 371
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/core.(*TronBackend).GetStorageAtBlockContext
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).StorageAt
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).storageFromStateDomain
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/jsonrpc.(*EthAPI).GetStorageAt
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*callback).call
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCall
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCallMsg
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleMsg.func1.1
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleNonBatchCall
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).runMethod
+         0     0%     0%     10.37s   100%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).startCallProc.func1
+         0     0%     0%     10.37s   100%  reflect.Value.Call
+         0     0%     0%     10.37s   100%  reflect.Value.call
+         0     0%     0%      9.20s 88.72%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).collectStateAccountKVChanges
+         0     0%     0%      9.20s 88.72%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).collectStateDomainChangesByKey
+         0     0%     0%      9.20s 88.72%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateAccountKVAsOf
+         0     0%     0%      6.92s 66.73%  github.com/tronprotocol/go-tron/core/rawdb.IterateStateDomainChangesByKeyBlockRange
+         0     0%     0%      6.92s 66.73%  github.com/tronprotocol/go-tron/core/rawdb.iterateStateDomainChangesByKey
+         0     0%     0%      6.92s 66.73%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).iterateHotStateDomainChangesByKey
+         0     0%     0%      6.91s 66.63%  github.com/tronprotocol/go-tron/core/rawdb.IterateStateDomainChangesByBlockRange (inline)
+         0     0%     0%      6.91s 66.63%  github.com/tronprotocol/go-tron/core/rawdb.IterateStateDomainChangesByBlockRangeContext
+     0.09s  0.87%  0.87%      6.79s 65.48%  github.com/tronprotocol/go-tron/core/rawdb.decodePersistedStateDomainChangeBlock
+         0     0%  0.87%      5.60s 54.00%  github.com/ethereum/go-ethereum/rlp.DecodeBytes
+         0     0%  0.87%      5.59s 53.91%  github.com/ethereum/go-ethereum/rlp.(*Stream).Decode
+         0     0%  0.87%      5.59s 53.91%  github.com/ethereum/go-ethereum/rlp.decodeListSlice
+     0.05s  0.48%  1.35%      5.59s 53.91%  github.com/ethereum/go-ethereum/rlp.decodeSliceElems
+         0     0%  1.35%      5.59s 53.91%  github.com/ethereum/go-ethereum/rlp.makeListDecoder.func3
+     0.41s  3.95%  5.30%      5.59s 53.91%  github.com/ethereum/go-ethereum/rlp.makeStructDecoder.func1
+         0     0%  5.30%      3.44s 33.17%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).IterateStateDomainChangesByKey
+         0     0%  5.30%      3.42s 32.98%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeHistoryByKey
+         0     0%  5.30%      3.41s 32.88%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorFile
+         0     0%  5.30%      3.41s 32.88%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorKeysFile
+         0     0%  5.30%      2.69s 25.94%  github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead (inline)
+         0     0%  5.30%      2.69s 25.94%  github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit
+         0     0%  5.30%      2.69s 25.94%  github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext
+     0.14s  1.35%  6.65%      2.55s 24.59%  runtime.mallocgc
+         0     0%  6.65%      2.35s 22.66%  github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt
+         0     0%  6.65%      2.30s 22.18%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).ReadAt
+         0     0%  6.65%      2.28s 21.99%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).blockBytes
+         0     0%  6.65%      2.28s 21.99%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readAtLocked
+         0     0%  6.65%      2.26s 21.79%  github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt
+     0.01s 0.096%  6.75%      1.69s 16.30%  github.com/klauspost/compress/zstd.(*Decoder).DecodeAll
+         0     0%  6.75%      1.67s 16.10%  github.com/klauspost/compress/zstd.(*frameDec).runDecoder
+         0     0%  6.75%      1.58s 15.24%  github.com/klauspost/compress/zstd.(*blockDec).decodeBuf
+         0     0%  6.75%      1.58s 15.24%  github.com/klauspost/compress/zstd.(*blockDec).decodeCompressed
+     0.02s  0.19%  6.94%      1.56s 15.04%  github.com/ethereum/go-ethereum/rlp.decodeByteSlice
+         0     0%  6.94%      1.52s 14.66%  github.com/klauspost/compress/zstd.(*sequenceDecs).decodeSync
+         0     0%  6.94%      1.52s 14.66%  github.com/klauspost/compress/zstd.(*sequenceDecs).decodeSyncSimple
+     1.52s 14.66% 21.60%      1.52s 14.66%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.09s  0.87% 22.47%      1.29s 12.44%  github.com/ethereum/go-ethereum/rlp.(*Stream).Bytes
+     0.08s  0.77% 23.24%      1.28s 12.34%  runtime.makeslice
+     0.29s  2.80% 26.04%      1.27s 12.25%  github.com/ethereum/go-ethereum/rlp.(*Stream).Kind
+     0.10s  0.96% 27.00%      1.24s 11.96%  github.com/ethereum/go-ethereum/rlp.decodeUint
+     1.18s 11.38% 38.38%      1.18s 11.38%  runtime.memclrNoHeapPointers
+         0     0% 38.38%      1.17s 11.28%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).firstStateDomainChangeByKey
+         0     0% 38.38%      1.13s 10.90%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateAccountLatestAsOf
+     0.14s  1.35% 39.73%      1.04s 10.03%  github.com/ethereum/go-ethereum/rlp.(*Stream).uint
+         0     0% 39.73%      0.86s  8.29%  runtime.mallocgcLarge
+     0.21s  2.03% 41.76%      0.83s  8.00%  github.com/ethereum/go-ethereum/rlp.(*Stream).readKind
+     0.01s 0.096% 41.85%      0.82s  7.91%  reflect.MakeSlice

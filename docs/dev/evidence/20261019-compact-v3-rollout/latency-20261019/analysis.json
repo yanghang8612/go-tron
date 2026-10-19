@@ -1,0 +1,79 @@
+{
+  "utc_window": "2026-10-19T10:18:08Z through 2026-10-19T10:31:19Z",
+  "identity": {
+    "MainPID": "10692",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+    "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+  },
+  "loopback_latencies_ms": {
+    "genesis_storage": [
+      1163.0698293447495,
+      614.8353144526482
+    ],
+    "cold_missing_slot": [
+      769.0111920237541,
+      774.8357355594635
+    ],
+    "recent_storage": [
+      963.0767405033112,
+      182.74768441915512
+    ],
+    "cold_balance": [
+      199.64659959077835,
+      153.82762253284454
+    ],
+    "latest_storage": [
+      0.8361637592315674,
+      0.8218064904212952
+    ],
+    "cold_code": [
+      156.73396736383438,
+      158.70628505945206
+    ],
+    "cold_storage_after": [
+      1533.1438705325127,
+      588.5403081774712
+    ],
+    "cold_storage_before": [
+      1433.853067457676,
+      646.076463162899
+    ]
+  },
+  "query_cpu_attribution_file": "cpu-20261019T101936/attribution.json",
+  "scope_note": "CPU profile focuses all historical storage calls, potentially including bounded observer probes, not just this client. Fractions are CPU sample shares, not wall latency decomposition.",
+  "primary_bottleneck": "Contract metadata recovery performs two complete key-specific scans of an unindexed hot tail, decoding every unrelated packed RLP row; cold missing-key searches repeatedly open and decompress history headers before confirming accessor misses.",
+  "indexed_tail_blocks_observed": [
+    417,
+    1356,
+    2059
+  ],
+  "compression_conclusion": "No evidence new V8 paged .idx compression is the second-scale primary cause: no samples in page reader; hot changeset codec, cold generic codec, key-search backend and segment search code are byte-identical to precompact eaae18c8. New .idx has a separately measured microsecond cost in the prior 16-file paired corpus, so not claiming zero overhead.",
+  "latent_correctness_issue": {
+    "location": "core/rawdb/accessors_state_changeset.go:1522",
+    "trigger": "target < indexed watermark < head; no indexed candidate, but matching mutation exists in unindexed tail",
+    "baseline_repro": "baseline-tail-repro.log: FAIL, returned nil instead of block 3; full collector control returned block 3",
+    "candidate_repro": "candidate-tests.log: PASS",
+    "prior_to_compact_v3": true,
+    "observed_live_failure": false
+  },
+  "prototype_scope": "Go overlays only: fix premature first-seek return and reuse target account generation for storage metadata; no production sources modified or deployed. 52 targeted top-level tests passed.",
+  "component_experiment": {
+    "synthetic": true,
+    "tail_blocks": 512,
+    "rows_per_block": 128,
+    "generic_packed_reads": 1024,
+    "known_generation_packed_reads": 512,
+    "generic_elapsed_ms": 54.15,
+    "known_generation_elapsed_ms": 27.16,
+    "claim_limit": "Isolates metadata work, not whole RPC speed. Correcting the tail omission may add previously skipped reads; must combine with cold-first bounds and grouped tail lookups before claiming net speedup."
+  },
+  "recommended_order": [
+    "Fix first-seek tail omission and add boundary regression matrix.",
+    "Reuse exact target generation for contract metadata; prefer earliest cold result and bound or skip later hot search without losing tx/seq ordering.",
+    "Group exact-key tail lookups or add a bounded MVCC-aware shared tail directory/cache; do not decode unrelated rows separately for each key; propagate cancellation.",
+    "Check accessor key presence before opening/decompressing .seg; reuse bounded immutable metadata across request pins.",
+    "Only then optimize .idx reader/header reuse and stage batch scheduling using matched workload; no format rollback, database reset, or memory increase is justified by these samples."
+  ],
+  "production_actions": "Read-only RPC and bounded pprof; diagnostic evidence files only. No restart, deployment, configuration or database mutation."
+}

@@ -1,0 +1,110 @@
+=== RUN   TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingIterator
+--- PASS: TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingIterator (0.00s)
+=== RUN   TestReadFirstStateDomainChangeByKeyBlockRangeContextCancelsDuringPostingScan
+--- PASS: TestReadFirstStateDomainChangeByKeyBlockRangeContextCancelsDuringPostingScan (0.00s)
+=== RUN   TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingForStagedIndex
+--- PASS: TestReadFirstStateDomainChangeByKeyBlockRangeUsesPostingForStagedIndex (0.00s)
+=== RUN   TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail
+--- PASS: TestStateDomainChangeBlockRangeReadsScanUnindexedStageTail (0.00s)
+=== RUN   TestDiagnosticColdLatencyFirstSeekUnindexedTail
+--- PASS: TestDiagnosticColdLatencyFirstSeekUnindexedTail (0.00s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	1.655s
+=== RUN   TestDiagnosticColdLatencyMetadataTailWork
+    cold_latency_diagnostic_test.go:62: DIAGNOSTIC mode=generic-generation-walk tail_blocks=512 rows_per_block=128 packed_reads=1024 packed_value_bytes=1504614 milliseconds=53.442
+    cold_latency_diagnostic_test.go:62: DIAGNOSTIC mode=known-target-generation-point tail_blocks=512 rows_per_block=128 packed_reads=512 packed_value_bytes=752307 milliseconds=25.569
+--- PASS: TestDiagnosticColdLatencyMetadataTailWork (0.12s)
+=== RUN   TestPersistentHistoryReaderHonorsCanceledContext
+--- PASS: TestPersistentHistoryReaderHonorsCanceledContext (0.00s)
+=== RUN   TestPersistentHistoryReaderBoundsHotHistoryAtPrunedColdBoundary
+--- PASS: TestPersistentHistoryReaderBoundsHotHistoryAtPrunedColdBoundary (0.00s)
+=== RUN   TestPersistentHistoryReaderBatchKVAsOfUsesPrunedColdBoundary
+--- PASS: TestPersistentHistoryReaderBatchKVAsOfUsesPrunedColdBoundary (0.00s)
+=== RUN   TestPersistentHistoryReaderBatchKVAsOfHonorsCanceledContext
+--- PASS: TestPersistentHistoryReaderBatchKVAsOfHonorsCanceledContext (0.00s)
+=== RUN   TestPersistentHistoryReaderSurfacesHotPruneBoundaryError
+--- PASS: TestPersistentHistoryReaderSurfacesHotPruneBoundaryError (0.00s)
+=== RUN   TestPersistentHistoryReaderCachesStateTxRanges
+--- PASS: TestPersistentHistoryReaderCachesStateTxRanges (0.00s)
+=== RUN   TestPersistentHistoryReaderUsesPostingIndexForExactAndPrefixState
+--- PASS: TestPersistentHistoryReaderUsesPostingIndexForExactAndPrefixState (0.00s)
+=== RUN   TestPersistentHistoryReaderBatchKVAsOf
+--- PASS: TestPersistentHistoryReaderBatchKVAsOf (0.00s)
+=== RUN   TestPersistentHistoryReaderBatchKVAsOfMergesKeyedColdHistory
+--- PASS: TestPersistentHistoryReaderBatchKVAsOfMergesKeyedColdHistory (0.00s)
+=== RUN   TestPersistentHistoryReaderBatchKVAsOfUsesSingleColdBatch
+--- PASS: TestPersistentHistoryReaderBatchKVAsOfUsesSingleColdBatch (0.00s)
+=== RUN   TestPersistentHistoryReaderMaterializesAccountAuxWithColdPrefixSeeks
+--- PASS: TestPersistentHistoryReaderMaterializesAccountAuxWithColdPrefixSeeks (0.00s)
+=== RUN   TestPersistentHistoryReaderBalanceAtSkipsAccountAuxMaterialization
+--- PASS: TestPersistentHistoryReaderBalanceAtSkipsAccountAuxMaterialization (0.00s)
+=== RUN   TestPersistentHistoryReaderLiveAccountSurfacesCorruptEnvelope
+--- PASS: TestPersistentHistoryReaderLiveAccountSurfacesCorruptEnvelope (0.00s)
+=== RUN   TestPersistentHistoryReaderLiveAccountSurfacesCorruptAccountProto
+--- PASS: TestPersistentHistoryReaderLiveAccountSurfacesCorruptAccountProto (0.00s)
+=== RUN   TestPersistentHistoryReaderUsesStateDomainAccountLatest
+--- PASS: TestPersistentHistoryReaderUsesStateDomainAccountLatest (0.00s)
+=== RUN   TestPersistentHistoryReaderCodeAtSkipsAccountAuxiliaryDomains
+--- PASS: TestPersistentHistoryReaderCodeAtSkipsAccountAuxiliaryDomains (0.00s)
+=== RUN   TestPersistentHistoryReaderReadsAccountStorageAndCodeFromColdStateDomainHistory
+--- PASS: TestPersistentHistoryReaderReadsAccountStorageAndCodeFromColdStateDomainHistory (0.16s)
+=== RUN   TestPersistentHistoryReaderHeadLatestUsesColdSnapshotTxNumWithoutStateRange
+--- PASS: TestPersistentHistoryReaderHeadLatestUsesColdSnapshotTxNumWithoutStateRange (0.07s)
+=== RUN   TestPersistentHistoryReaderAccountKVPrefixAtUsesStateDomainHistory
+--- PASS: TestPersistentHistoryReaderAccountKVPrefixAtUsesStateDomainHistory (0.00s)
+=== RUN   TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory
+--- PASS: TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory (0.09s)
+=== RUN   TestPersistentHistoryReaderReadsCodeFromColdCodeDomain
+--- PASS: TestPersistentHistoryReaderReadsCodeFromColdCodeDomain (0.05s)
+=== RUN   TestPersistentHistoryReaderCodeAtSurfacesMissingHistoricalCodeRow
+--- PASS: TestPersistentHistoryReaderCodeAtSurfacesMissingHistoricalCodeRow (0.00s)
+=== RUN   TestPersistentHistoryReaderHeadCodeSurfacesMissingCodeRowWithoutLiveState
+--- PASS: TestPersistentHistoryReaderHeadCodeSurfacesMissingCodeRowWithoutLiveState (0.00s)
+=== RUN   TestPersistentHistoryReader_TenBlockSweep
+--- PASS: TestPersistentHistoryReader_TenBlockSweep (0.00s)
+=== RUN   TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshot
+--- PASS: TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshot (0.06s)
+=== RUN   TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshotAcrossRecreate
+--- PASS: TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshotAcrossRecreate (0.06s)
+=== RUN   TestPersistentHistoryReader_NeverModified
+--- PASS: TestPersistentHistoryReader_NeverModified (0.00s)
+=== RUN   TestPersistentHistoryReader_PastHead
+--- PASS: TestPersistentHistoryReader_PastHead (0.00s)
+=== RUN   TestPersistentHistoryReader_BlockNumZero
+--- PASS: TestPersistentHistoryReader_BlockNumZero (0.00s)
+=== RUN   TestPersistentHistoryReader_CacheHit
+--- PASS: TestPersistentHistoryReader_CacheHit (0.00s)
+=== RUN   TestPersistentHistoryReader_AccountDeletedThenRecreated
+--- PASS: TestPersistentHistoryReader_AccountDeletedThenRecreated (0.00s)
+=== RUN   TestPersistentHistoryReader_CodeUpdateHistory
+--- PASS: TestPersistentHistoryReader_CodeUpdateHistory (0.00s)
+=== RUN   TestPersistentHistoryReader_StorageSlotZeroPreValue
+--- PASS: TestPersistentHistoryReader_StorageSlotZeroPreValue (0.00s)
+=== RUN   TestPersistentHistoryReaderStorageAtSurfacesOversizedValue
+--- PASS: TestPersistentHistoryReaderStorageAtSurfacesOversizedValue (0.00s)
+=== RUN   TestPersistentHistoryReaderLiveStorageSurfacesCorruptMetadata
+--- PASS: TestPersistentHistoryReaderLiveStorageSurfacesCorruptMetadata (0.00s)
+=== RUN   TestPersistentHistoryReaderHistoricalStorageSurfacesCorruptMetadataContext
+--- PASS: TestPersistentHistoryReaderHistoricalStorageSurfacesCorruptMetadataContext (0.00s)
+=== RUN   TestPersistentHistoryReader_SparseInverseIndexSeek
+--- PASS: TestPersistentHistoryReader_SparseInverseIndexSeek (0.00s)
+=== RUN   TestPersistentHistoryReaderUsesKeyedColdHistory
+--- PASS: TestPersistentHistoryReaderUsesKeyedColdHistory (0.00s)
+=== RUN   TestPersistentHistoryReaderPointReadSeeksFirstColdChange
+--- PASS: TestPersistentHistoryReaderPointReadSeeksFirstColdChange (0.00s)
+=== RUN   TestPersistentHistoryReaderPointReadChoosesEarlierColdChangeAcrossOverlap
+--- PASS: TestPersistentHistoryReaderPointReadChoosesEarlierColdChangeAcrossOverlap (0.00s)
+=== RUN   TestPersistentHistoryReaderKeyedHotHistoryUsesInverseIndex
+--- PASS: TestPersistentHistoryReaderKeyedHotHistoryUsesInverseIndex (0.00s)
+=== RUN   TestPersistentHistoryReaderReadsAccountKVWithKeyedColdHistory
+--- PASS: TestPersistentHistoryReaderReadsAccountKVWithKeyedColdHistory (0.00s)
+=== RUN   TestPersistentHistoryReaderColdMergeUsesHotLatestReader
+--- PASS: TestPersistentHistoryReaderColdMergeUsesHotLatestReader (0.00s)
+=== RUN   TestPersistentHistoryReader_RecreatedMultiSlotStorageNoLeak
+--- PASS: TestPersistentHistoryReader_RecreatedMultiSlotStorageNoLeak (0.00s)
+=== RUN   TestPersistentHistoryReaderAccountKVPrefixAtDoesNotLeakOldGeneration
+--- PASS: TestPersistentHistoryReaderAccountKVPrefixAtDoesNotLeakOldGeneration (0.00s)
+=== RUN   TestStateAccountV5HotColdHistoryAndCodeHashes
+--- PASS: TestStateAccountV5HotColdHistoryAndCodeHashes (0.06s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state	2.324s

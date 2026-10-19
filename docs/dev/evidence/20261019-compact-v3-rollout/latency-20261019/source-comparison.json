@@ -1,0 +1,31 @@
+{
+  "before_commit": "eaae18c8",
+  "deployed_commit": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "files": [
+    {
+      "path": "core/rawdb/accessors_state_changeset.go",
+      "before_sha256": "4aa0d32d51b23d47ccfa12a8fe91909ab1152f3f06e77c89c9279d65f6965bd2",
+      "after_sha256": "4aa0d32d51b23d47ccfa12a8fe91909ab1152f3f06e77c89c9279d65f6965bd2",
+      "identical": true
+    },
+    {
+      "path": "core/state/snapshots/compressed_block.go",
+      "before_sha256": "c12f4d726185826c0a2bf4bfb8ea6f8cf66edff6f77426acde0cbdf02c7c8361",
+      "after_sha256": "c12f4d726185826c0a2bf4bfb8ea6f8cf66edff6f77426acde0cbdf02c7c8361",
+      "identical": true
+    },
+    {
+      "path": "core/state/snapshots/history_segment.go",
+      "before_sha256": "dd74f362c4229d21237de8c8d7a8bb8530dedf6fc9aa82e6957d8a90b34d5e89",
+      "after_sha256": "dd74f362c4229d21237de8c8d7a8bb8530dedf6fc9aa82e6957d8a90b34d5e89",
+      "identical": true
+    },
+    {
+      "path": "core/tron_backend.go",
+      "before_sha256": "51173ba949f25882779b77571b11089e2b278717a38005bddeeacdf1737421d3",
+      "after_sha256": "51173ba949f25882779b77571b11089e2b278717a38005bddeeacdf1737421d3",
+      "identical": true
+    }
+  ],
+  "history_go_diff": "Only three account core owner-context arguments changed; metadata restoration and indexed-tail algorithms unchanged. See precompact-read-path.diff."
+}

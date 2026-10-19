@@ -1,0 +1,6 @@
+=== RUN   TestDiagnosticColdLatencyMetadataTailWork
+    cold_latency_diagnostic_test.go:62: DIAGNOSTIC mode=generic-generation-walk tail_blocks=512 rows_per_block=128 packed_reads=1024 packed_value_bytes=1504614 milliseconds=54.150
+    cold_latency_diagnostic_test.go:62: DIAGNOSTIC mode=known-target-generation-point tail_blocks=512 rows_per_block=128 packed_reads=512 packed_value_bytes=752307 milliseconds=27.160
+--- PASS: TestDiagnosticColdLatencyMetadataTailWork (0.12s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state	1.742s

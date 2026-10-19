@@ -1,0 +1,39 @@
+[
+  {
+    "file": "request-1-stack-1.txt",
+    "state": "goroutine 7814846 [runnable]:",
+    "tail_from": 4652886,
+    "tail_to": 4654241,
+    "tail_blocks": 1356,
+    "phase": "metadata-tail"
+  },
+  {
+    "file": "request-2-stack-1.txt",
+    "state": "goroutine 7815314 [runnable]:",
+    "phase": "account-cold"
+  },
+  {
+    "file": "request-3-stack-1.txt",
+    "state": "goroutine 7816689 [runnable]:",
+    "tail_from": 4652886,
+    "tail_to": 4654944,
+    "tail_blocks": 2059,
+    "phase": "metadata-tail"
+  },
+  {
+    "file": "request-3-stack-2.txt",
+    "state": "goroutine 7816689 [runnable]:",
+    "tail_from": 4652886,
+    "tail_to": 4654944,
+    "tail_blocks": 2059,
+    "phase": "metadata-tail"
+  },
+  {
+    "file": "request-4-stack-1.txt",
+    "state": "goroutine 7817222 [runnable]:",
+    "tail_from": 4654886,
+    "tail_to": 4655302,
+    "tail_blocks": 417,
+    "phase": "metadata-tail"
+  }
+]

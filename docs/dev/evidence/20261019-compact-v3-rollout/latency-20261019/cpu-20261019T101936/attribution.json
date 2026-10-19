@@ -1,0 +1,57 @@
+{
+  "sample_period_ns": 10000000,
+  "query_cpu_ns": 10370000000,
+  "matched_sample_rows": 808,
+  "cumulative_functions": {
+    "readStateAccountKVAsOf": {
+      "cpu_ns": 9200000000,
+      "percent_of_query_cpu": 88.71745419479267
+    },
+    "IterateStateDomainChangesByBlockRangeContext": {
+      "cpu_ns": 6910000000,
+      "percent_of_query_cpu": 66.63452266152363
+    },
+    "decodePersistedStateDomainChangeBlock": {
+      "cpu_ns": 6790000000,
+      "percent_of_query_cpu": 65.47733847637416
+    },
+    "rlp.DecodeBytes": {
+      "cpu_ns": 5600000000,
+      "percent_of_query_cpu": 54.001928640308584
+    },
+    "(*Manager).IterateStateDomainChangesByKey": {
+      "cpu_ns": 3440000000,
+      "percent_of_query_cpu": 33.17261330761813
+    },
+    "openHistorySegmentForReadWithCacheLimitContext": {
+      "cpu_ns": 2690000000,
+      "percent_of_query_cpu": 25.940212150433943
+    },
+    "zstd.(*Decoder).DecodeAll": {
+      "cpu_ns": 1690000000,
+      "percent_of_query_cpu": 16.2970106075217
+    },
+    "historyIndexPages": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    },
+    "openHistoryIndexPages": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    },
+    "historyReaderAtContext": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    },
+    "captureReadSnapshot": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    }
+  },
+  "exclusive_high_level_phases_ns": {
+    "metadata": 9200000000,
+    "account": 1130000000,
+    "other": 40000000
+  },
+  "note": "CPU samples focused to all GetStorageAtBlockContext stacks in this 15 s window, including any concurrent observer probes. Inclusive function totals overlap; not wall latency percentages. Zero samples do not prove zero time."
+}

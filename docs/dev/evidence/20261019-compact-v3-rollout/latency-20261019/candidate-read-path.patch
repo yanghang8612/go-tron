@@ -1,0 +1,26 @@
+--- a/core/rawdb/accessors_state_changeset.go
++++ b/core/rawdb/accessors_state_changeset.go
+@@ -1519,8 +1519,11 @@
+ 	}
+ 	for fromBlock <= indexedHead {
+ 		blockNum, ok, err := firstStateDomainChangeBlockByKeyRangeContext(ctx, db, fromBlock, indexedHead, flatDomain, owner, generation, domain, key)
+-		if err != nil || !ok {
++		if err != nil {
+ 			return nil, err
++		}
++		if !ok {
++			break
+ 		}
+ 		var first *StateDomainChange
+ 		if err := IterateStateDomainChangesContext(ctx, db, blockNum, func(change *StateDomainChange) (bool, error) {
+--- a/core/state/history.go
++++ b/core/state/history.go
+@@ -759,7 +759,7 @@
+ 		return tcommon.Hash{}, false, err
+ 	}
+ 	var meta *contractpb.SmartContract
+-	if data, ok, err := r.readStateAccountKVAsOf(addr, kvdomains.ContractMetadata, contractMetaKVKey, blockNum, r.headNum); err != nil {
++	if data, ok, err := r.readStateKVAsOf(addr, envelope.AccountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey, blockNum, r.headNum); err != nil {
+ 		return tcommon.Hash{}, false, err
+ 	} else if ok && len(data) > 0 {
+ 		var sc contractpb.SmartContract

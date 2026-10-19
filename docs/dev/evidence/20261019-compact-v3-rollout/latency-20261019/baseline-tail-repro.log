@@ -1,0 +1,6 @@
+=== RUN   TestDiagnosticColdLatencyFirstSeekUnindexedTail
+    cold_latency_diagnostic_test.go:34: first-change seek missed unindexed block 3 after empty indexed span [2,2]: got <nil>; full collector returned correct block 3
+--- FAIL: TestDiagnosticColdLatencyFirstSeekUnindexedTail (0.00s)
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core/rawdb	1.412s
+FAIL

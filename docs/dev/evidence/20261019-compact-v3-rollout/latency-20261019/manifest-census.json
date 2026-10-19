@@ -1,0 +1,52 @@
+{
+  "utc": "2026-10-19T10:31:19.092404+00:00",
+  "manifest_sha256": "2691ec3b20b5676bc346d55aa8857c1744f99db91c9b06fc2a2b8c9956ba6777",
+  "manifest_bytes": 1209008,
+  "version": 4,
+  "generation": 1248,
+  "segments": 4547,
+  "history_segments": 787,
+  "overlapping_history_segments_after_target_tx": 401,
+  "target_tx": 20587119,
+  "first_overlap": {
+    "dataset": "state-domain-change",
+    "kind": "history",
+    "fromTxNum": 20528899,
+    "toTxNum": 20607971,
+    "aggregationSteps": 2,
+    "path": "history/state-domain-change-20528899-20607971-b2d4a1aaace54b5d.seg",
+    "size": 4779805,
+    "checksum": "sha256:b2d4a1aaace54b5dae58a2c917d9d70a45959231df0da89eebd9fa62f2c7c256"
+  },
+  "last_overlap": {
+    "dataset": "state-domain-change",
+    "kind": "history",
+    "fromTxNum": 63820123,
+    "toTxNum": 63937764,
+    "aggregationSteps": 1,
+    "path": "history/state-domain-change-63820123-63937764-50f9f5f03d0f5da5.seg",
+    "size": 9540645,
+    "checksum": "sha256:50f9f5f03d0f5da5af056ce92e7e41f20f51ae5d9ebb4c6af46287f4021eb95e"
+  },
+  "index_header_samples": [
+    {
+      "path": "history/state-domain-change-1-5714-0a8e0df0a8adfa93.idx",
+      "header_hex": "677473646369647800000008000000000000000100000000000016520000000000001652800010000000000000007257000000000000000800000000000000c00000000000001624b2e656ff07a5a17300000000000000000000000000000000",
+      "version": 8,
+      "page_code": 2147487744
+    },
+    {
+      "path": "history/state-domain-change-5715-12941-4d518b1faac307fd.idx",
+      "header_hex": "6774736463696478000000080000000000001653000000000000328d0000000000001c3b800010000000000000009078000000000000000a00000000000000f00000000000001e428e979a5440a9029d00000000000000000000000000000000",
+      "version": 8,
+      "page_code": 2147487744
+    },
+    {
+      "path": "history/state-domain-change-12942-27489-43bbb21820173007.idx",
+      "header_hex": "677473646369647800000008000000000000328e0000000000006b6100000000000038d48000100000000000000122fb000000000000001300000000000001c800000000000031c987cbb8d9367c253b00000000000000000000000000000000",
+      "version": 8,
+      "page_code": 2147487744
+    }
+  ],
+  "note": "Read-only manifest census, not a retained corpus or a count of per-request file opens."
+}

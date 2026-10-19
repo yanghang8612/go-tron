@@ -1,0 +1,297 @@
+{
+  "started_utc": "2026-10-19T10:23:46.944264+00:00",
+  "identity_before": {
+    "MainPID": "10692",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+    "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+  },
+  "wallet_before": {
+    "version": "0.2.0-dev",
+    "currentBlock": 4690530,
+    "lastInsertTime": 1792405426942,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87244128,
+      "appliedTip": 4690546,
+      "sessionBlocks": 4463292,
+      "sessionTransactions": 77819640,
+      "remaining": 82553598,
+      "inflight": 0,
+      "bufferedBlocks": 357,
+      "bufferedBytes": 6433711,
+      "fetchBackpressured": false,
+      "requestedBlocks": 0,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  },
+  "cases": [
+    [
+      "cold_storage_before",
+      "eth_getStorageAt",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff954"
+      ],
+      6
+    ],
+    [
+      "cold_balance",
+      "eth_getBalance",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x2ff954"
+      ],
+      null
+    ],
+    [
+      "cold_code",
+      "eth_getCode",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x2ff954"
+      ],
+      null
+    ],
+    [
+      "cold_storage_after",
+      "eth_getStorageAt",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff955"
+      ],
+      7
+    ],
+    [
+      "genesis_storage",
+      "eth_getStorageAt",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x0"
+      ],
+      0
+    ],
+    [
+      "recent_storage",
+      "eth_getStorageAt",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x4791e2"
+      ],
+      null
+    ],
+    [
+      "cold_missing_slot",
+      "eth_getStorageAt",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0xdeadbeef",
+        "0x2ff954"
+      ],
+      0
+    ],
+    [
+      "latest_storage",
+      "eth_getStorageAt",
+      [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "latest"
+      ],
+      null
+    ]
+  ],
+  "rows": [
+    {
+      "round": 1,
+      "case": "cold_storage_before",
+      "utc": "2026-10-19T10:23:47.180451+00:00",
+      "milliseconds": 1433.853067457676,
+      "response_bytes": 66,
+      "response_sha256": "1b20faab6bd4f0a28e6dccc40387fbb6bc37cf249914e73abb87378079425035",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006",
+      "correct": true
+    },
+    {
+      "round": 1,
+      "case": "cold_balance",
+      "utc": "2026-10-19T10:23:48.614347+00:00",
+      "milliseconds": 199.64659959077835,
+      "response_bytes": 3,
+      "response_sha256": "b8ad1bd2ff50021ff6a1239585cc9ccde31e70072299c3cc910da54f9e791f7c",
+      "result": "0x0"
+    },
+    {
+      "round": 1,
+      "case": "cold_code",
+      "utc": "2026-10-19T10:23:48.814041+00:00",
+      "milliseconds": 156.73396736383438,
+      "response_bytes": 4580,
+      "response_sha256": "a13542a26bd148f5d71db0e078e8904b58629fd755cfc68b4beab88a93acc628"
+    },
+    {
+      "round": 1,
+      "case": "cold_storage_after",
+      "utc": "2026-10-19T10:23:48.970843+00:00",
+      "milliseconds": 1533.1438705325127,
+      "response_bytes": 66,
+      "response_sha256": "4121d382e342e1874c97e3b258fc322fa0370fea0393e31d3c1b4fdb4edf3529",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000007",
+      "correct": true
+    },
+    {
+      "round": 1,
+      "case": "genesis_storage",
+      "utc": "2026-10-19T10:23:50.504034+00:00",
+      "milliseconds": 1163.0698293447495,
+      "response_bytes": 66,
+      "response_sha256": "6aed34e6bddff5e1d872b5d7d5698a7b73abd6f3b33402732edc73ab9ffb9c70",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "correct": true
+    },
+    {
+      "round": 1,
+      "case": "recent_storage",
+      "utc": "2026-10-19T10:23:51.667147+00:00",
+      "milliseconds": 963.0767405033112,
+      "response_bytes": 66,
+      "response_sha256": "92591d31fc7c0971b18c56f83e9553b8311c02d777f79c9ab1c709c0b92f9764",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000038"
+    },
+    {
+      "round": 1,
+      "case": "cold_missing_slot",
+      "utc": "2026-10-19T10:23:52.630264+00:00",
+      "milliseconds": 769.0111920237541,
+      "response_bytes": 66,
+      "response_sha256": "6aed34e6bddff5e1d872b5d7d5698a7b73abd6f3b33402732edc73ab9ffb9c70",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "correct": true
+    },
+    {
+      "round": 1,
+      "case": "latest_storage",
+      "utc": "2026-10-19T10:23:53.399316+00:00",
+      "milliseconds": 0.8361637592315674,
+      "response_bytes": 66,
+      "response_sha256": "92591d31fc7c0971b18c56f83e9553b8311c02d777f79c9ab1c709c0b92f9764",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000038"
+    },
+    {
+      "round": 2,
+      "case": "cold_storage_before",
+      "utc": "2026-10-19T10:23:53.400185+00:00",
+      "milliseconds": 646.076463162899,
+      "response_bytes": 66,
+      "response_sha256": "1b20faab6bd4f0a28e6dccc40387fbb6bc37cf249914e73abb87378079425035",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006",
+      "correct": true
+    },
+    {
+      "round": 2,
+      "case": "cold_balance",
+      "utc": "2026-10-19T10:23:54.046298+00:00",
+      "milliseconds": 153.82762253284454,
+      "response_bytes": 3,
+      "response_sha256": "b8ad1bd2ff50021ff6a1239585cc9ccde31e70072299c3cc910da54f9e791f7c",
+      "result": "0x0"
+    },
+    {
+      "round": 2,
+      "case": "cold_code",
+      "utc": "2026-10-19T10:23:54.200175+00:00",
+      "milliseconds": 158.70628505945206,
+      "response_bytes": 4580,
+      "response_sha256": "a13542a26bd148f5d71db0e078e8904b58629fd755cfc68b4beab88a93acc628"
+    },
+    {
+      "round": 2,
+      "case": "cold_storage_after",
+      "utc": "2026-10-19T10:23:54.358945+00:00",
+      "milliseconds": 588.5403081774712,
+      "response_bytes": 66,
+      "response_sha256": "4121d382e342e1874c97e3b258fc322fa0370fea0393e31d3c1b4fdb4edf3529",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000007",
+      "correct": true
+    },
+    {
+      "round": 2,
+      "case": "genesis_storage",
+      "utc": "2026-10-19T10:23:54.947531+00:00",
+      "milliseconds": 614.8353144526482,
+      "response_bytes": 66,
+      "response_sha256": "6aed34e6bddff5e1d872b5d7d5698a7b73abd6f3b33402732edc73ab9ffb9c70",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "correct": true
+    },
+    {
+      "round": 2,
+      "case": "recent_storage",
+      "utc": "2026-10-19T10:23:55.562409+00:00",
+      "milliseconds": 182.74768441915512,
+      "response_bytes": 66,
+      "response_sha256": "92591d31fc7c0971b18c56f83e9553b8311c02d777f79c9ab1c709c0b92f9764",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000038"
+    },
+    {
+      "round": 2,
+      "case": "cold_missing_slot",
+      "utc": "2026-10-19T10:23:55.745199+00:00",
+      "milliseconds": 774.8357355594635,
+      "response_bytes": 66,
+      "response_sha256": "6aed34e6bddff5e1d872b5d7d5698a7b73abd6f3b33402732edc73ab9ffb9c70",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "correct": true
+    },
+    {
+      "round": 2,
+      "case": "latest_storage",
+      "utc": "2026-10-19T10:23:56.520077+00:00",
+      "milliseconds": 0.8218064904212952,
+      "response_bytes": 66,
+      "response_sha256": "92591d31fc7c0971b18c56f83e9553b8311c02d777f79c9ab1c709c0b92f9764",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000038"
+    }
+  ],
+  "note": "Two interleaved sequential rounds on server loopback during live sync; 60 s loop budget plus one request timeout. No restart or configuration change.",
+  "identity_after": {
+    "MainPID": "10692",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+    "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+  },
+  "wallet_after": {
+    "version": "0.2.0-dev",
+    "currentBlock": 4691519,
+    "lastInsertTime": 1792405436723,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87244134,
+      "appliedTip": 4691522,
+      "sessionBlocks": 4464268,
+      "sessionTransactions": 77884597,
+      "remaining": 82552615,
+      "inflight": 0,
+      "bufferedBlocks": 1381,
+      "bufferedBytes": 27774945,
+      "fetchBackpressured": false,
+      "requestedBlocks": 0,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  },
+  "memory": "              total        used        free      shared  buff/cache   available\nMem:    65842163712 20646006784   663556096  4109455360 44532600832 40548114432\nSwap:             0           0           0\n"
+}
