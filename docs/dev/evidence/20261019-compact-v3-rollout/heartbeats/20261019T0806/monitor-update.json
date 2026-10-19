@@ -1,0 +1,244 @@
+{
+  "utc": "2026-10-19T08:24:19.245442+00:00",
+  "monitor_sha256": "4e4029013b0313424bfb3a87d0e05dd144f93df46e5f0be0519081edf417ebd3",
+  "sampler": "MainPID=24359\nActiveState=active\n",
+  "gtron": "MainPID=10692\nActiveState=active\n",
+  "latest": {
+    "utc": "2026-10-19T08:23:36.974870+00:00",
+    "iteration": 0,
+    "errors": [],
+    "service": {
+      "MainPID": "10692",
+      "ActiveState": "active"
+    },
+    "identity": {
+      "pid": 10692,
+      "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+      "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+    },
+    "wallet": {
+      "version": "0.2.0-dev",
+      "currentBlock": 3667718,
+      "lastInsertTime": 1792398217882,
+      "syncInfo": {
+        "active": true,
+        "paused": false,
+        "peerCount": 30,
+        "syncPeerCount": 8,
+        "targetHead": 87241729,
+        "appliedTip": 3667721,
+        "sessionBlocks": 3440467,
+        "sessionTransactions": 27080264,
+        "remaining": 83574011,
+        "inflight": 0,
+        "bufferedBlocks": 1181,
+        "bufferedBytes": 8644756,
+        "fetchBackpressured": false,
+        "requestedBlocks": 0,
+        "retryBlocks": 0,
+        "retainedDecodedBlocks": 0,
+        "retainedDecodedBytes": 0
+      }
+    },
+    "rss_kib": 3383236,
+    "metrics": {
+      "history/storage/keyspace/account_kv_latest/attempted_at": 1792398078,
+      "history/storage/keyspace/account_kv_latest/attempts/total": 24,
+      "history/storage/keyspace/account_kv_latest/duration_ns": 173513,
+      "history/storage/keyspace/account_kv_latest/errors/total": 0,
+      "history/storage/keyspace/account_kv_latest/known": 1,
+      "history/storage/keyspace/account_kv_latest/sampled_at": 1792398078,
+      "history/storage/keyspace/account_kv_latest/sst_bytes": 1213,
+      "history/storage/keyspace/account_latest/attempted_at": 1792398048,
+      "history/storage/keyspace/account_latest/attempts/total": 24,
+      "history/storage/keyspace/account_latest/duration_ns": 170769,
+      "history/storage/keyspace/account_latest/errors/total": 0,
+      "history/storage/keyspace/account_latest/known": 1,
+      "history/storage/keyspace/account_latest/sampled_at": 1792398048,
+      "history/storage/keyspace/account_latest/sst_bytes": 5264,
+      "history/storage/keyspace/block_body/attempted_at": 1792397958,
+      "history/storage/keyspace/block_body/attempts/total": 23,
+      "history/storage/keyspace/block_body/duration_ns": 168994,
+      "history/storage/keyspace/block_body/errors/total": 0,
+      "history/storage/keyspace/block_body/known": 1,
+      "history/storage/keyspace/block_body/sampled_at": 1792397958,
+      "history/storage/keyspace/block_body/sst_bytes": 0,
+      "history/storage/keyspace/commitment/attempted_at": 1792398168,
+      "history/storage/keyspace/commitment/attempts/total": 24,
+      "history/storage/keyspace/commitment/duration_ns": 185047,
+      "history/storage/keyspace/commitment/errors/total": 0,
+      "history/storage/keyspace/commitment/known": 1,
+      "history/storage/keyspace/commitment/sampled_at": 1792398168,
+      "history/storage/keyspace/commitment/sst_bytes": 17028,
+      "history/storage/keyspace/enabled": 1,
+      "history/storage/keyspace/inflight": 0,
+      "history/storage/keyspace/kv_generation/attempted_at": 1792398108,
+      "history/storage/keyspace/kv_generation/attempts/total": 24,
+      "history/storage/keyspace/kv_generation/duration_ns": 216142,
+      "history/storage/keyspace/kv_generation/errors/total": 0,
+      "history/storage/keyspace/kv_generation/known": 1,
+      "history/storage/keyspace/kv_generation/sampled_at": 1792398108,
+      "history/storage/keyspace/kv_generation/sst_bytes": 11192,
+      "history/storage/keyspace/owner": 2,
+      "history/storage/keyspace/range_count": 12,
+      "history/storage/keyspace/staged_body/attempted_at": 1792397928,
+      "history/storage/keyspace/staged_body/attempts/total": 23,
+      "history/storage/keyspace/staged_body/duration_ns": 153339,
+      "history/storage/keyspace/staged_body/errors/total": 0,
+      "history/storage/keyspace/staged_body/known": 1,
+      "history/storage/keyspace/staged_body/sampled_at": 1792397928,
+      "history/storage/keyspace/staged_body/sst_bytes": 0,
+      "history/storage/keyspace/state_change_index/attempted_at": 1792397868,
+      "history/storage/keyspace/state_change_index/attempts/total": 23,
+      "history/storage/keyspace/state_change_index/duration_ns": 378956,
+      "history/storage/keyspace/state_change_index/errors/total": 0,
+      "history/storage/keyspace/state_change_index/known": 1,
+      "history/storage/keyspace/state_change_index/sampled_at": 1792397868,
+      "history/storage/keyspace/state_change_index/sst_bytes": 805253940,
+      "history/storage/keyspace/state_changeset/attempted_at": 1792398198,
+      "history/storage/keyspace/state_changeset/attempts/total": 24,
+      "history/storage/keyspace/state_changeset/duration_ns": 355127,
+      "history/storage/keyspace/state_changeset/errors/total": 0,
+      "history/storage/keyspace/state_changeset/known": 1,
+      "history/storage/keyspace/state_changeset/sampled_at": 1792398198,
+      "history/storage/keyspace/state_changeset/sst_bytes": 5085126379,
+      "history/storage/keyspace/state_code/attempted_at": 1792398138,
+      "history/storage/keyspace/state_code/attempts/total": 24,
+      "history/storage/keyspace/state_code/duration_ns": 181463,
+      "history/storage/keyspace/state_code/errors/total": 0,
+      "history/storage/keyspace/state_code/known": 1,
+      "history/storage/keyspace/state_code/sampled_at": 1792398138,
+      "history/storage/keyspace/state_code/sst_bytes": 13006,
+      "history/storage/keyspace/state_tx_range/attempted_at": 1792397898,
+      "history/storage/keyspace/state_tx_range/attempts/total": 23,
+      "history/storage/keyspace/state_tx_range/duration_ns": 213181,
+      "history/storage/keyspace/state_tx_range/errors/total": 0,
+      "history/storage/keyspace/state_tx_range/known": 1,
+      "history/storage/keyspace/state_tx_range/sampled_at": 1792397898,
+      "history/storage/keyspace/state_tx_range/sst_bytes": 196698186,
+      "history/storage/keyspace/transaction_index/attempted_at": 1792397988,
+      "history/storage/keyspace/transaction_index/attempts/total": 23,
+      "history/storage/keyspace/transaction_index/duration_ns": 157671,
+      "history/storage/keyspace/transaction_index/errors/total": 0,
+      "history/storage/keyspace/transaction_index/known": 1,
+      "history/storage/keyspace/transaction_index/sampled_at": 1792397988,
+      "history/storage/keyspace/transaction_index/sst_bytes": 0,
+      "history/storage/keyspace/transaction_receipts/attempted_at": 1792398018,
+      "history/storage/keyspace/transaction_receipts/attempts/total": 23,
+      "history/storage/keyspace/transaction_receipts/duration_ns": 179145,
+      "history/storage/keyspace/transaction_receipts/errors/total": 0,
+      "history/storage/keyspace/transaction_receipts/known": 1,
+      "history/storage/keyspace/transaction_receipts/sampled_at": 1792398018,
+      "history/storage/keyspace/transaction_receipts/sst_bytes": 0,
+      "state/prune/last/domain_change/pruned_through_block": 3332975,
+      "state/prune/last/domain_change/pruned_through_tx": 22697249,
+      "state/snapshot/cold/last/eligible_cutoff_block": 3595016,
+      "state/snapshot/cold/last/from_tx": 22612132,
+      "state/snapshot/cold/last/latest_build_block": 227204,
+      "state/snapshot/cold/last/published_block": 3332975,
+      "state/snapshot/cold/last/selected_cutoff_block": 3595016,
+      "state/snapshot/cold/last/solidified_block": 3660552,
+      "state/snapshot/cold/last/to_tx": 22697249,
+      "state/snapshot/cold/last/visible_tx_end": 22697249,
+      "sync/import/window/blocks_per_second": 259.26585532009904,
+      "sync/import/window/buffer_wait_ratio": 0.036271958623866014,
+      "sync/import/window/energy_per_second": 181249596.2641801,
+      "sync/import/window/exec_busy_ratio": 0.9534038561179726,
+      "sync/import/window/transactions_per_second": 5182.817114225456,
+      "sync/import/window/updated_unix": 1792398214
+    },
+    "disk_live_sample": {
+      "ancient": {
+        "rc": 0,
+        "raw": "2612518912\t/data/gtron/main/datadir/gtron/ancient",
+        "error": ""
+      },
+      "chaindata": {
+        "rc": 0,
+        "raw": "4148219904\t/data/gtron/main/datadir/gtron/chaindata",
+        "error": ""
+      },
+      "history": {
+        "rc": 0,
+        "raw": "6381596672\t/data/gtron/main/datadir/gtron/history",
+        "error": ""
+      },
+      "state-snapshots": {
+        "rc": 0,
+        "raw": "2642989056\t/data/gtron/main/datadir/gtron/state-snapshots",
+        "error": ""
+      }
+    },
+    "genesis_balance_rpc": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x13fe2e171cda1978db8000000"
+    },
+    "genesis_balance_correct": true,
+    "transfer_history_probes": [
+      {
+        "height": 341,
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 341,
+          "result": "0x0"
+        },
+        "correct": true,
+        "milliseconds": 13.59463483095169
+      },
+      {
+        "height": 342,
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 342,
+          "result": "0x6b714021d45c37522e100000"
+        },
+        "correct": true,
+        "milliseconds": 10.27350127696991
+      }
+    ],
+    "first_transaction_lookup_correct": true,
+    "tvm_counter_history_probes": [
+      {
+        "height": 3144020,
+        "slot": 0,
+        "expected_counter": 6,
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 3144020,
+          "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+        },
+        "correct": true,
+        "milliseconds": 256.57493621110916
+      },
+      {
+        "height": 3144021,
+        "slot": 0,
+        "expected_counter": 7,
+        "response": {
+          "jsonrpc": "2.0",
+          "id": 3144021,
+          "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+        },
+        "correct": true,
+        "milliseconds": 224.10333156585693
+      }
+    ],
+    "cold_manifest": {
+      "version": 4,
+      "commitmentScheme": "state-flat-latest-muhash3072-compact-v3",
+      "elementVersion": 3,
+      "generation": 878,
+      "visibleTxStart": 1,
+      "visibleTxEnd": 22697249,
+      "progress": {
+        "historyBuildTxNum": 22697249,
+        "accessorBuildTxNum": 22697249,
+        "hotPruneTxNum": 22697249,
+        "hotPruneBlockNum": 3332975
+      },
+      "active_segments": 2705
+    },
+    "filesystem_free_bytes": 2790981599232
+  }
+}

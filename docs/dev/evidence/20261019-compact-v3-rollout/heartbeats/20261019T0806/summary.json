@@ -1,0 +1,92 @@
+{
+  "observed_utc": "2026-10-19T08:24:19.245442+00:00",
+  "sample_utc": "2026-10-19T08:23:36.974870+00:00",
+  "source_commit": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "pid": 10692,
+  "head": 3667718,
+  "paused": false,
+  "old_inventory_verified_utc": "2026-10-19T08:10:23.267097+00:00",
+  "old_inventory_unchanged": true,
+  "sample_count": 45,
+  "sample_errors": [],
+  "first_nonzero_tvm_sample": {
+    "utc": "2026-10-19T07:53:13.844838+00:00",
+    "head": 3142502,
+    "energy_per_second": 3217147.349425728,
+    "note": "First observed minute sample, not an exact fork/activation height."
+  },
+  "speed_window": {
+    "start_utc": "2026-10-19T08:05:14.517065+00:00",
+    "end_utc": "2026-10-19T08:10:14.842641+00:00",
+    "from_block": 3391246,
+    "to_block": 3478800,
+    "seconds": 300.325576,
+    "blocks_per_second": 291.5302824558638,
+    "transactions_per_second": 5333.531766871563
+  },
+  "disk_sample": {
+    "bytes": {
+      "ancient": 2612518912,
+      "chaindata": 4148219904,
+      "history": 6381596672,
+      "state-snapshots": 2642989056
+    },
+    "total_bytes": 15785324544,
+    "rss_kib": 3383236,
+    "free_bytes": 2790981599232
+  },
+  "cold": {
+    "published_block": 3332975,
+    "pruned_through_block": 3332975,
+    "eligible_cutoff_block": 3595016,
+    "eligible_backlog_blocks": 262041
+  },
+  "cold_contract_checks": {
+    "slot_before_6": true,
+    "slot_after_7": true,
+    "getter_before_matches": true,
+    "getter_after_matches": true,
+    "latest_counter_differs_from_historical": true,
+    "receipt_contains_log": true
+  },
+  "recent_contract_checks": {
+    "recent_code_nonempty": true,
+    "genesis_code_empty": true,
+    "all_storage_32_bytes": true,
+    "genesis_slot_zero": true,
+    "recent_nonzero_slot_count": 7,
+    "view_slots_match": true,
+    "bounded_log_query_success": true,
+    "cold_contract_checks_pass": true
+  },
+  "cold_storage_latency": {
+    "3144020": {
+      "count": 5,
+      "min_ms": 101.67598724365234,
+      "median_ms": 455.2609696984291,
+      "max_ms": 617.5134181976318
+    },
+    "3144021": {
+      "count": 5,
+      "min_ms": 96.16152942180634,
+      "median_ms": 477.108359336853,
+      "max_ms": 583.5014283657074
+    },
+    "latest": {
+      "count": 5,
+      "min_ms": 0.7511526346206665,
+      "median_ms": 0.8502006530761719,
+      "max_ms": 1.5742778778076172
+    }
+  },
+  "latency_note": "Five samples per block tag, server local HTTP while syncing. Not a p95 benchmark or old-format comparison; no attribution to page compression.",
+  "last_full_muhash_verification": {
+    "block_num": 227222,
+    "verified": true,
+    "new_full_scan_this_heartbeat": false
+  },
+  "production_restart_this_heartbeat": false,
+  "sampler_updated_sha256": "4e4029013b0313424bfb3a87d0e05dd144f93df46e5f0be0519081edf417ebd3",
+  "tvm_monitor_probe_success": true
+}

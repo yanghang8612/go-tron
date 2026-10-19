@@ -1,0 +1,14 @@
+{
+  "packet.txt": {
+    "sha256": "a15870731f0ad74358a0a67b35ba18df0e78e617686ae69bbe19181ca857f7d5",
+    "bytes": 349488
+  },
+  "monitor-update-packet.txt": {
+    "sha256": "40d01dc063689eddcbf5f08e257a062be088ed5ca57f97e9d29b8fbfff2f5da1",
+    "bytes": 11439
+  },
+  "tvm-latency-packet.txt": {
+    "sha256": "27e4b38ea78d0d3ceb1519e541dbd9d1750d5f3cb626a8f202c2b6dd86d92cb6",
+    "bytes": 4768
+  }
+}

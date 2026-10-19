@@ -1,0 +1,7 @@
+current() 9fa6a6e3
+minBetAmount() fa968eea
+maxWinRate() c06eb2be
+promotionRate() 1c2e53ef
+getOraclizeAddr() 05ca3841
+getTronBetPoolAddr() e2a44aaa
+getReferralshipAddr() fa96a954
