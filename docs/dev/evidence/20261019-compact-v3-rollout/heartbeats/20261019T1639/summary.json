@@ -1,0 +1,59 @@
+{
+  "utc": "2026-10-19T16:41:04.622737+00:00",
+  "head": 6641646,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T15:56:08.888440+00:00",
+  "sample_window_end": "2026-10-19T16:40:12.109251+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.345417,
+    "blocks_per_second": 108.82470032828901,
+    "transactions_per_second": 6465.898562387586
+  },
+  "disk_sample_utc": "2026-10-19T16:36:11.847855+00:00",
+  "disk_sample_height": 6607474,
+  "disk_bytes": {
+    "ancient": 23456137216,
+    "chaindata": 15534673920,
+    "history": 11901046784,
+    "state-snapshots": 32829202432
+  },
+  "rss_sample_utc": "2026-10-19T16:40:12.109251+00:00",
+  "rss_kib": 10806516,
+  "rss_max_kib_in_window": 11499504,
+  "host_available_memory_bytes": 35469012992,
+  "cold_published_block": 6128943,
+  "cold_pruned_block": 6128943,
+  "eligible_backlog_blocks": 446407,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "last_tvm_probe_milliseconds": [
+    2469.5613011717796,
+    2146.0967287421227
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "report L0 pressure relief and observed positive cold catch-up over consecutive five-minute frontier samples: prior542712 eligible backlog down to446407. Still above earlier approximately26万 steady backlog. Same identity and old inventory, all historical probes correct, no resource risk, no runtime mutation; known seconds-scale query latency persists.",
+  "packet_sha256": "71ec94c59c7b21df23abf582fc9eba88600cf4d2007f6055574dfc081aecf72b",
+  "comparison_limit": "Same-process windows describe current workload only; no matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred.",
+  "disk_total_bytes": 83721060352,
+  "pressure_snapshot": {
+    "l0_sublevels": 3,
+    "reason_bits": 0,
+    "compaction_debt": 19903802138,
+    "hard": 0
+  },
+  "recent_frontier_window": {
+    "from_utc": "2026-10-19T16:35:11.763834+00:00",
+    "to_utc": "2026-10-19T16:40:12.109251+00:00",
+    "seconds": 300.345417,
+    "from_eligible_backlog_blocks": 470746,
+    "to_eligible_backlog_blocks": 447315,
+    "net_backlog_reduction_blocks": 23431,
+    "published_blocks": 56120
+  }
+}
