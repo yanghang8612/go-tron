@@ -1,0 +1,56 @@
+{
+  "retrieved_utc": "2026-10-19T15:43:40.670831+00:00",
+  "metrics": {
+    "state/snapshot/cold/last/published_block": {
+      "value": 5837047
+    },
+    "state/snapshot/cold/last/eligible_cutoff_block": {
+      "value": 6246558
+    },
+    "state/snapshot/cold/history/budget/reason_bits": {
+      "value": 8
+    },
+    "state/snapshot/cold/history/budget/l0_sublevels": {
+      "value": 42
+    },
+    "state/snapshot/cold/history/budget/compaction_debt": {
+      "value": 31979606156
+    },
+    "state/snapshot/cold/history/budget/hard": {
+      "value": 0
+    },
+    "state/snapshot/cold/errors": {
+      "value": 0
+    },
+    "compact/writedelay/counter": {
+      "15m.rate": 0,
+      "1m.rate": 0,
+      "5m.rate": 0,
+      "count": 0,
+      "mean.rate": 0
+    },
+    "compact/live/count": {
+      "value": 0
+    },
+    "compact/input": {
+      "15m.rate": 10391678.843379375,
+      "1m.rate": 3549849.582497136,
+      "5m.rate": 8181448.06121722,
+      "count": 450618818019,
+      "mean.rate": 12930354.93911536
+    },
+    "compact/output": {
+      "15m.rate": 8463533.251556324,
+      "1m.rate": 3291883.0387265068,
+      "5m.rate": 6878645.254393069,
+      "count": 346366946420,
+      "mean.rate": 9938882.657683633
+    },
+    "level/0/sublevels": {
+      "value": 42
+    },
+    "history/level/0/sublevels": {
+      "value": 1
+    }
+  }
+}

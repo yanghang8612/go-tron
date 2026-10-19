@@ -1,0 +1,63 @@
+{
+  "utc": "2026-10-19T15:41:07.043506+00:00",
+  "head": 6304642,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T14:56:04.534797+00:00",
+  "sample_window_end": "2026-10-19T15:40:07.840827+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.438183,
+    "blocks_per_second": 85.90119851710061,
+    "transactions_per_second": 6095.989470153333
+  },
+  "disk_sample_utc": "2026-10-19T15:36:07.496046+00:00",
+  "disk_sample_height": 6279327,
+  "disk_bytes": {
+    "ancient": 21087432704,
+    "chaindata": 17608519680,
+    "history": 14350888960,
+    "state-snapshots": 28983435264
+  },
+  "rss_sample_utc": "2026-10-19T15:40:07.840827+00:00",
+  "rss_kib": 10359144,
+  "rss_max_kib_in_window": 10841044,
+  "host_available_memory_bytes": 35990044672,
+  "cold_published_block": 5837047,
+  "cold_pruned_block": 5837047,
+  "eligible_backlog_blocks": 400414,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "last_tvm_probe_milliseconds": [
+    2345.9708243608475,
+    1958.83809030056
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "report materially increased L0 pressure and recurrent prolonged cold-publication pause. Latest L0=42 approaches optional-maintenance protection at48; hard=0 and write-stall count=0. History probes pass, identity and old inventory unchanged, no memory emergency. Do not infer device saturation or compaction deadlock from single instantaneous live-count=0; compaction completed-input counter continues increasing. No runtime changes.",
+  "packet_sha256": "d25822a5d41c0120f073b1a2b01d8bd47a02144972ac569b0b3d897b70691bc1",
+  "comparison_limit": "Same-process windows describe current workload only; no matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred.",
+  "disk_total_bytes": 82030276608,
+  "pressure_snapshot": {
+    "l0_sublevels": 37,
+    "reason_bits": 24,
+    "compaction_debt": 37758446626,
+    "hard": 0
+  },
+  "cold_pause": {
+    "first_same_frontier_minute_utc": "2026-10-19T15:25:06.588833+00:00",
+    "last_same_frontier_minute_utc": "2026-10-19T15:40:07.840827+00:00",
+    "same_frontier_sample_count": 16,
+    "confirm_utc": "2026-10-19T15:43:40.670831+00:00",
+    "confirm_frontier": 5837047,
+    "confirm_l0_sublevels": 42,
+    "confirm_eligible_backlog_blocks": 409511,
+    "optional_maintenance_hard_l0_threshold": 48,
+    "pebble_stop_writes_threshold": 64,
+    "write_stall_count": 0,
+    "compaction_completed_input_bytes_delta_followup_to_confirm": 319896737
+  }
+}

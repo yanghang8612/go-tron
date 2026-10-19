@@ -1,0 +1,10 @@
+{
+  "followup-metrics.json": {
+    "retrieved_utc": "2026-10-19T15:42:19.346157+00:00",
+    "bytes": 258242
+  },
+  "goroutines.txt": {
+    "retrieved_utc": "2026-10-19T15:42:20.823978+00:00",
+    "bytes": 109547
+  }
+}
