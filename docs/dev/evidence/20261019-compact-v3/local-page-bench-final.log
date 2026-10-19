@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/state/snapshots
+cpu: Apple M1 Max
+BenchmarkHistoryIndexPagedQueries/0-10  	  105067	      3206 ns/op	    414071 file-bytes	    9338 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/0-10  	  107911	      3202 ns/op	    414071 file-bytes	    9338 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/0-10  	  109603	      3210 ns/op	    414071 file-bytes	    9338 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/4096-10         	   64546	      5321 ns/op	     13907 file-bytes	    9341 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/4096-10         	   66128	      5323 ns/op	     13907 file-bytes	    9342 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/4096-10         	   65960	      5401 ns/op	     13907 file-bytes	    9341 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/16384-10        	   37670	      9661 ns/op	      9548 file-bytes	    9348 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/16384-10        	   36877	      9466 ns/op	      9548 file-bytes	    9349 B/op	       2 allocs/op
+BenchmarkHistoryIndexPagedQueries/16384-10        	   36933	      9400 ns/op	      9548 file-bytes	    9348 B/op	       2 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	4.849s

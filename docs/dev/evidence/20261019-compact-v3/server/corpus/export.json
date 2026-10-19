@@ -1,0 +1,20 @@
+{
+  "Complete": true,
+  "Block": 5715086,
+  "SourceRows": [
+    1349700,
+    89,
+    45366888
+  ],
+  "SourceSHA256": [
+    "26aaba3554f26e7be3a23de86e33af70743de1aa45c79e5776e774a444980d51",
+    "1b9c0f8bd7ffb02b9ff2a8f900052c6908fcd75bf842ad5df7cc99b934852706",
+    "22f5b286cc87f10f63b62c6009653f487d35a2eff69116029f45104b4e42f353"
+  ],
+  "Rows": [
+    1349700,
+    12478784
+  ],
+  "Bytes": 132443282,
+  "SHA256": "26f24fc928f55bb2284899ffd5294c2e0533fb533a921bc40764e7339bd82c9d"
+}

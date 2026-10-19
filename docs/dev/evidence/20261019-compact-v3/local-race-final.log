@@ -1,0 +1,7 @@
+ok  	github.com/tronprotocol/go-tron/core/rawdb	5.541s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/freezer	4.008s
+ok  	github.com/tronprotocol/go-tron/core/state	3.198s
+ok  	github.com/tronprotocol/go-tron/core/state/domains	1.823s
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	23.554s
+ok  	github.com/tronprotocol/go-tron/core/types	1.810s
+ok  	github.com/tronprotocol/go-tron/common/muhash3072	1.899s

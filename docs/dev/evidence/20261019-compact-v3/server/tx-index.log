@@ -1,0 +1,14 @@
+=== RUN   TestRelativeTransactionIndexPinnedCorpus
+    transaction_index_relative_test.go:168: runs 128
+    transaction_index_relative_test.go:168: runs 256
+    transaction_index_relative_test.go:168: runs 384
+    transaction_index_relative_test.go:168: runs 512
+    transaction_index_relative_test.go:168: runs 640
+    transaction_index_relative_test.go:168: runs 768
+    transaction_index_relative_test.go:168: runs 896
+    transaction_index_relative_test.go:168: runs 1024
+    transaction_index_relative_test.go:168: runs 1152
+    transaction_index_relative_test.go:168: runs 1280
+--- PASS: TestRelativeTransactionIndexPinnedCorpus (168.53s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb/freezer	168.535s

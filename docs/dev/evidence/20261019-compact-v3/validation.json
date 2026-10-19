@@ -1,0 +1,21 @@
+{
+  "toolchain": "go1.25.5",
+  "production_deployed": false,
+  "genesis_mainnet_replay_completed": false,
+  "full_pure_go_suite": {
+    "command": "GOTOOLCHAIN=go1.25.5 make test",
+    "exit_code": 0,
+    "timeout": "900s",
+    "core_seconds": 358.745,
+    "snapshots_seconds": 301.871
+  },
+  "targeted_race": true,
+  "targeted_vet": true,
+  "targeted_sapling_tests": true,
+  "production_sapling_build": true,
+  "linux_isolated_correctness_and_build": true,
+  "runtime_base_archive_commit": "5f04c573",
+  "runtime_production_file_hashes_match_recorded_archive_and_patches": true,
+  "cold_default": "4 KiB Snappy pages; 64 KiB decoded cache",
+  "limitations": "No full mainnet fresh-genesis replay or live/end-to-end API latency benchmark; see report"
+}

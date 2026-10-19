@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tronprotocol/go-tron/core/types
+cpu: Intel(R) Xeon(R) Platinum 8175M CPU @ 2.50GHz
+BenchmarkAccountOwnerCoreRead/full-address         	  821466	       612.0 ns/op	        80.00 stored-bytes	     720 B/op	       5 allocs/op
+BenchmarkAccountOwnerCoreRead/full-address         	  789742	       707.0 ns/op	        80.00 stored-bytes	     720 B/op	       5 allocs/op
+BenchmarkAccountOwnerCoreRead/full-address         	  933754	       644.4 ns/op	        80.00 stored-bytes	     720 B/op	       5 allocs/op
+BenchmarkAccountOwnerCoreRead/owner-address        	  962878	       590.9 ns/op	        58.00 stored-bytes	     720 B/op	       5 allocs/op
+BenchmarkAccountOwnerCoreRead/owner-address        	  959197	       600.9 ns/op	        58.00 stored-bytes	     720 B/op	       5 allocs/op
+BenchmarkAccountOwnerCoreRead/owner-address        	  873044	       698.0 ns/op	        58.00 stored-bytes	     720 B/op	       5 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/types	3.953s

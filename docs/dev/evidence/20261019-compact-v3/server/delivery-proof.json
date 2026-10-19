@@ -1,0 +1,7 @@
+{
+  "utc": "2026-10-19T04:46:32.358613+00:00",
+  "production_service": "MainPID=27786\nExecMainStartTimestamp=Mon 2026-10-19 03:17:57 UTC\nActiveState=active\nSubState=running\n",
+  "exe_sha256": "7ef3727950d0a3b19a2938140183f3022fe9b7b7d44b2f698c1559133a97b4fc",
+  "production_modified_by_validation": false,
+  "scope": "Private validation outputs only; no service, configuration or production data mutations"
+}

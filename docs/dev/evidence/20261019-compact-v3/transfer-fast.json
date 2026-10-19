@@ -1,0 +1,18 @@
+{
+  "sha256": "9bb57b6602e59404eed223a2b7142c171676901572102cb8c6fd9d3aab4ac114",
+  "bytes": 13447,
+  "files": [
+    "snappy-status.json",
+    "snappy-correctness.log",
+    "snappy-build.log",
+    "snappy-run.log",
+    "history-index-snappy/results.json",
+    "votes-final/results.json",
+    "history-index-snappy.log",
+    "votes-final.log",
+    "pages-patch.json",
+    "votes-api-patch.json",
+    "run-snappy.py",
+    "delivery-proof.json"
+  ]
+}

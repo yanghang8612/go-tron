@@ -221,8 +221,12 @@ func TestCompactStateHistoryUnwindSnapshotAndContinue(t *testing.T) {
 			if err != nil || !present || len(voters) != len(want) {
 				t.Fatalf("votes as-of %d: len=%d want=%d present=%v err=%v", cut, len(voters), len(want), present, err)
 			}
+			historicalVoters, err := reader.VotesIndexAt(cut)
+			if err != nil || len(historicalVoters) != len(want) {
+				t.Fatalf("VotesIndexAt %d: %v", cut, err)
+			}
 			for i := range want {
-				if voters[i] != want[i] {
+				if voters[i] != want[i] || historicalVoters[i] != want[i] {
 					t.Fatalf("votes as-of %d order at %d", cut, i)
 				}
 			}

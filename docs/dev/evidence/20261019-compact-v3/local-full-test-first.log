@@ -1,0 +1,1009 @@
+ok  	github.com/tronprotocol/go-tron/actuator	1.717s
+ok  	github.com/tronprotocol/go-tron/cmd/balance-trace	1.562s
+?   	github.com/tronprotocol/go-tron/cmd/compact-corpus-export	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/compact-corpus-measure	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/db-compare	1.564s
+ok  	github.com/tronprotocol/go-tron/cmd/fixture-capture	0.821s
+?   	github.com/tronprotocol/go-tron/cmd/fixture-closure	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/fixture-digest	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/generation-census	0.895s
+ok  	github.com/tronprotocol/go-tron/cmd/gtron	215.652s
+?   	github.com/tronprotocol/go-tron/cmd/gtron-replay	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/history-dictionary-benchmark	0.636s
+ok  	github.com/tronprotocol/go-tron/cmd/history-value-bench	1.233s
+ok  	github.com/tronprotocol/go-tron/cmd/hot-maintenance	118.991s
+ok  	github.com/tronprotocol/go-tron/cmd/other-cold-distribution	0.758s
+ok  	github.com/tronprotocol/go-tron/cmd/other-storage-distribution	1.189s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-census	1.184s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-reclaim-experiment	14.403s
+ok  	github.com/tronprotocol/go-tron/cmd/reward-trace	0.920s
+ok  	github.com/tronprotocol/go-tron/cmd/storage-distribution	2.010s
+--- FAIL: TestRelativeLocationsAndCorruption (0.05s)
+    main_test.go:44: bad compact result {File:sample.gtxi SHA256:fcd52c530f46c2a3003f38b99107f93f2afc79853bb1e151bf7c412dd12c7063 Start:1000 End:9192 Rows:10 Bytes:2461 Packed:10 Plain:0 MaxRelative:471922200 RelativeWidth:4 CandidateBytes:2464 Buckets:10}
+FAIL
+FAIL	github.com/tronprotocol/go-tron/cmd/tx-index-width-census	0.689s
+?   	github.com/tronprotocol/go-tron/cmd/txsign	[no test files]
+ok  	github.com/tronprotocol/go-tron/common	0.641s
+ok  	github.com/tronprotocol/go-tron/common/log	0.712s
+ok  	github.com/tronprotocol/go-tron/common/muhash3072	0.683s
+?   	github.com/tronprotocol/go-tron/consensus	[no test files]
+ok  	github.com/tronprotocol/go-tron/consensus/dpos	0.842s
+panic: test timed out after 5m0s
+	running tests:
+		TestMuHashDeepAsyncDurableCutAndPinnedView (2s)
+
+goroutine 2794 [running]:
+testing.(*M).startAlarm.func1()
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2682 +0x2b0
+created by time.goFunc
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/time/sleep.go:215 +0x38
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x14000103880, {0x105f621f7?, 0x17?}, 0x1068f6298)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2005 +0x378
+testing.runTests.func1(0x14000103880)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2477 +0x38
+testing.tRunner(0x14000103880, 0x1400033fc68)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:1934 +0xc8
+testing.runTests(0x140001393c8, {0x107595e80, 0x2c3, 0x2c3}, {0x14000349d40?, 0x7?, 0x1075a35c0?})
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2475 +0x3b8
+testing.(*M).Run(0x1400049c3c0)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2337 +0x530
+main.main()
+	_testmain.go:1505 +0x80
+
+goroutine 618 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 617
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 370 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 337
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 643 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 641
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 502 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 500
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 285 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 284
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 289 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 287
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 342 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 340
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 164 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 182
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 165 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 182
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 156 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 154
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 286 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 284
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 288 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 287
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 291 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 290
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 292 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 290
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 294 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 293
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 295 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 293
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 297 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 296
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 298 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 296
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 300 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 299
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 301 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 299
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 303 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 302
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 304 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 302
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 306 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 305
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 307 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 305
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 309 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 308
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 310 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 308
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 312 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 311
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 313 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 311
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 315 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 314
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 316 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 314
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 366 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 363
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 371 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 337
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 2223 [sync.Cond.Wait]:
+sync.runtime_notifyListWait(0x1400045f750, 0x0)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/runtime/sema.go:606 +0x140
+sync.(*Cond).Wait(0x1400045f740)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/sync/cond.go:71 +0xa4
+github.com/tronprotocol/go-tron/core.(*flushBarrier).wait(0x14003e4a4f8)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:567 +0x78
+github.com/tronprotocol/go-tron/core.(*BlockChain).WaitForFlushSettled(...)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2612
+github.com/tronprotocol/go-tron/core.(*BlockChain).Close(0x140048af508)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2642 +0x19c
+github.com/tronprotocol/go-tron/core.buildSyncBlockSequence(0x14002413500, {0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, ...}, ...)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit_test.go:107 +0x2c4
+github.com/tronprotocol/go-tron/core.TestMuHashDeepAsyncDurableCutAndPinnedView(0x14002413500)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/muhash_commitment_test.go:98 +0x70
+testing.tRunner(0x14002413500, 0x1068f6298)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:1997 +0x364
+
+goroutine 155 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 154
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 373 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 372
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 545 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 543
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 374 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 372
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 376 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 375
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 377 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 375
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 158 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 157
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 159 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 157
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 161 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 160
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 386 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 160
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 388 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 387
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 389 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 387
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 391 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 390
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 392 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 390
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 103 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 393
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 104 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 393
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 382 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 381
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 383 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 381
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 404 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 403
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 405 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 403
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 407 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 406
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 408 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 406
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 410 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 409
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 411 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 409
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 105 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 412
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 106 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 412
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 414 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 413
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 415 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 413
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 420 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 419
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 421 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 419
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 423 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 422
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 424 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 422
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 426 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 425
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 427 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 425
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 429 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 428
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 430 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 428
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 431 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 428
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 432 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 428
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 434 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 433
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 435 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 433
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 437 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 436
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 438 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 436
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 440 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 439
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 441 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 439
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 443 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 442
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 444 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 442
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 367 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 363
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 451 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 368
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 452 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 368
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 454 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 453
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 455 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 453
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 460 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 459
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 461 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 459
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 463 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 462
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 464 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 462
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 642 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 641
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 640 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 638
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 639 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 638
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 637 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 635
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 636 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 635
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 634 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 632
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 633 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 632
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 631 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 629
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 630 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 629
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 628 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 626
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 501 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 500
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 619 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 617
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 478 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 477
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 479 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 477
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 544 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 543
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 547 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 546
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 548 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 546
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 658 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 608
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 627 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 626
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 625 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 623
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 609 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 608
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 660 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 659
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 624 [chan receive, 3 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 623
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 661 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 659
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 561 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 560
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 674 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 560
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 676 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 675
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 677 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 675
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 679 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 678
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 680 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 678
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 682 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 681
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 683 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 681
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 685 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 684
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 686 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 684
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 688 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 687
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 689 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 687
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 691 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 690
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 692 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 690
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 694 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 693
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 695 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 693
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 697 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 696
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 698 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 696
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 700 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 699
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 701 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 699
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 703 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 702
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 704 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 702
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 706 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 705
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 707 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 705
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 709 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2448 +0x8c
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 708
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 710 [chan receive, 2 minutes]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 708
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+
+goroutine 2224 [select]:
+github.com/tronprotocol/go-tron/core.collectFlushCutoffs(0x1400290a0b0, 0x104fad508?, 0x0?)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2491 +0x7c
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2468 +0xe0
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 2223
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/blockchain.go:2441 +0x6c
+
+goroutine 2225 [chan receive]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:161 +0x78
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 2223
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/async_commit.go:159 +0x6c
+FAIL	github.com/tronprotocol/go-tron/core	301.007s
+ok  	github.com/tronprotocol/go-tron/core/blockbuffer	6.530s
+ok  	github.com/tronprotocol/go-tron/core/conformance	2.060s
+ok  	github.com/tronprotocol/go-tron/core/delegation	0.786s
+ok  	github.com/tronprotocol/go-tron/core/forks	0.814s
+ok  	github.com/tronprotocol/go-tron/core/freezer	89.289s
+ok  	github.com/tronprotocol/go-tron/core/maintenance	0.650s
+?   	github.com/tronprotocol/go-tron/core/pointread	[no test files]
+ok  	github.com/tronprotocol/go-tron/core/producer	1.047s
+ok  	github.com/tronprotocol/go-tron/core/rawdb	93.216s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/etl	7.054s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/freezer	68.550s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/pebbledb	22.176s
+ok  	github.com/tronprotocol/go-tron/core/reward	0.832s
+ok  	github.com/tronprotocol/go-tron/core/state	7.316s
+ok  	github.com/tronprotocol/go-tron/core/state/domains	0.759s
+ok  	github.com/tronprotocol/go-tron/core/state/kvdomains	0.654s
+ok  	github.com/tronprotocol/go-tron/core/state/pruning	89.323s
+panic: test timed out after 5m0s
+	running tests:
+		TestManifestProgressPreservesStringCapacityCharge (0s)
+
+goroutine 5297 [running]:
+testing.(*M).startAlarm.func1()
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2682 +0x2b0
+created by time.goFunc
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/time/sleep.go:215 +0x38
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x14000003880, {0x101008fab?, 0x14000215a78?}, 0x1016fe6c0)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2005 +0x378
+testing.runTests.func1(0x14000003880)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2477 +0x38
+testing.tRunner(0x14000003880, 0x14000215ba8)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:1934 +0xc8
+testing.runTests(0x14000010018, {0x102099e00, 0x414, 0x414}, {0x14000215c58?, 0x1002e866c?, 0x1020a67a0?})
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2475 +0x3b8
+testing.(*M).Run(0x140003af180)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:2337 +0x530
+github.com/tronprotocol/go-tron/core/state/snapshots.TestMain(0x140003af180)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/codec_synctest_test.go:28 +0x1bc
+main.main()
+	_testmain.go:2291 +0x88
+
+goroutine 5942 [runnable]:
+internal/poll.(*FD).Fsync(0x14002509380)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/internal/poll/fd_fsync_darwin.go:21 +0x194
+os.(*File).Sync(0x14015f60870)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/os/file_posix.go:166 +0x48
+github.com/tronprotocol/go-tron/core/state/snapshots.syncSnapshotDir({0x14001947c00?, 0x88?})
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/sync_dir_unix.go:17 +0x5c
+github.com/tronprotocol/go-tron/core/state/snapshots.writeManifestBytesWithSync({0x14001947c00, 0x70}, {0x14014376000, 0xaab02, 0xac000}, 0x1016ffd38)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/manifest.go:291 +0x120
+github.com/tronprotocol/go-tron/core/state/snapshots.updateManifestPruneProgressWithSync({0x14001947c00, 0x70}, 0x9, 0x9, 0x0, 0x1016ffd38)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/manifest_progress.go:64 +0x414
+github.com/tronprotocol/go-tron/core/state/snapshots.updateManifestPruneProgress(...)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/manifest_progress.go:14
+github.com/tronprotocol/go-tron/core/state/snapshots.UpdateHotPruneProgress(...)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/aggregator.go:670
+github.com/tronprotocol/go-tron/core/state/snapshots.TestManifestProgressPreservesStringCapacityCharge(0x14011c57c00)
+	/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/core/state/snapshots/manifest_full_ownership_test.go:179 +0x228
+testing.tRunner(0x14011c57c00, 0x1016fe6c0)
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/Users/asuka/.gopath/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.5.darwin-arm64/src/testing/testing.go:1997 +0x364
+FAIL	github.com/tronprotocol/go-tron/core/state/snapshots	300.729s
+ok  	github.com/tronprotocol/go-tron/core/state/statecodec	0.773s
+ok  	github.com/tronprotocol/go-tron/core/txpool	0.760s
+ok  	github.com/tronprotocol/go-tron/core/types	0.749s
+ok  	github.com/tronprotocol/go-tron/core/zksnark	0.864s
+ok  	github.com/tronprotocol/go-tron/crypto	0.728s
+ok  	github.com/tronprotocol/go-tron/crypto/pq	0.671s
+?   	github.com/tronprotocol/go-tron/crypto/pq/falcon	[no test files]
+ok  	github.com/tronprotocol/go-tron/internal/dbcompare	1.102s
+ok  	github.com/tronprotocol/go-tron/internal/debugapi	0.855s
+ok  	github.com/tronprotocol/go-tron/internal/grpcapi	0.862s
+ok  	github.com/tronprotocol/go-tron/internal/historychunk	1.291s
+ok  	github.com/tronprotocol/go-tron/internal/jsonrpc	1.261s
+ok  	github.com/tronprotocol/go-tron/internal/math/strictmath	0.771s
+ok  	github.com/tronprotocol/go-tron/internal/metricsapi	0.800s
+ok  	github.com/tronprotocol/go-tron/internal/rpc	0.838s
+ok  	github.com/tronprotocol/go-tron/internal/testutil/fixture	0.942s
+ok  	github.com/tronprotocol/go-tron/internal/tronapi	1.018s
+ok  	github.com/tronprotocol/go-tron/net	14.156s
+ok  	github.com/tronprotocol/go-tron/net/sync	0.920s
+ok  	github.com/tronprotocol/go-tron/net/sync/downloader	0.913s
+?   	github.com/tronprotocol/go-tron/net/sync/fetcher	[no test files]
+ok  	github.com/tronprotocol/go-tron/node	0.840s
+ok  	github.com/tronprotocol/go-tron/p2p	2.378s
+ok  	github.com/tronprotocol/go-tron/p2p/discover	0.695s
+ok  	github.com/tronprotocol/go-tron/params	0.641s
+?   	github.com/tronprotocol/go-tron/proto/api	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core/contract	[no test files]
+ok  	github.com/tronprotocol/go-tron/proto/p2p	0.691s
+?   	github.com/tronprotocol/go-tron/scripts/dev/abi_hash	[no test files]
+?   	github.com/tronprotocol/go-tron/scripts/fixtures/cmd/gen-smoke	[no test files]
+ok  	github.com/tronprotocol/go-tron/vm	3.058s
+ok  	github.com/tronprotocol/go-tron/vm/tracers	0.916s
+FAIL

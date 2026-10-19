@@ -37,7 +37,7 @@ func indexPageFixture(t testing.TB, count uint64) (*os.File, string, stateDomain
 	return f, name, h
 }
 
-func pageIndexCopy(t testing.TB, source string, h stateDomainChangeBinaryHeader, pageBytes uint64) (*os.File, string) {
+func pageIndexCopy(t testing.TB, source string, h stateDomainChangeBinaryHeader, pageBytes uint64, codec ...bool) (*os.File, string) {
 	t.Helper()
 	f, name, err := createStateDomainChangeBinaryTempFileInDir(t.TempDir(), "page-source")
 	if err != nil {
@@ -52,7 +52,11 @@ func pageIndexCopy(t testing.TB, source string, h stateDomainChangeBinaryHeader,
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, name, err = rewriteHistoryIndexPagesWithSize(context.Background(), f, name, h, pageBytes)
+	useSnappy := true
+	if len(codec) != 0 {
+		useSnappy = codec[0]
+	}
+	f, name, err = rewriteHistoryIndexPagesWithCodec(context.Background(), f, name, h, pageBytes, useSnappy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,60 +71,62 @@ func TestHistoryIndexPagesVirtualBytesQueriesAndCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, pageBytes := range []uint64{4096, 16384, 65536} {
-		t.Run(fmt.Sprint(pageBytes), func(t *testing.T) {
-			out, path := pageIndexCopy(t, name, h, pageBytes)
-			defer out.Close()
-			st, _ := out.Stat()
-			outer, err := readStateDomainChangeBinaryHeaderAt(out, stateDomainChangeBinaryIndexMagic)
-			if err != nil || outer.version != 8 {
-				t.Fatal(outer, err)
-			}
-			pages, err := openHistoryIndexPages(out, uint64(st.Size()), outer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := make([]byte, len(want)+1)
-			n, err := pages.ReadAt(got, 0)
-			if err != io.EOF || n != len(want) || !bytes.Equal(got[:n], want) {
-				t.Fatal("virtual stream differs", n, err)
-			}
-			if uint64(len(pages.cache))*pageBytes > 64<<10 {
-				t.Fatal("cache exceeded budget")
-			}
-			reader, err := openStateDomainChangeBinaryIndexV7Reader(out, uint64(st.Size()), outer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for i := uint64(0); i < h.count; i++ {
-				e, err := reader.entryAt(i)
-				if err != nil || e.txNum != i+1 || e.offset != 4096+i*113 || e.recordIndex != i*7 {
-					t.Fatal(i, e, err)
+		for _, useSnappy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/snappy=%v", pageBytes, useSnappy), func(t *testing.T) {
+				out, path := pageIndexCopy(t, name, h, pageBytes, useSnappy)
+				defer out.Close()
+				st, _ := out.Stat()
+				outer, err := readStateDomainChangeBinaryHeaderAt(out, stateDomainChangeBinaryIndexMagic)
+				if err != nil || outer.version != 8 {
+					t.Fatal(outer, err)
 				}
-			}
-			reader.Close()
-			// Corrupt an actual physical page, then open a fresh cache.
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			data[len(data)-1] ^= 1
-			if err = os.WriteFile(path, data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			bad, err := os.Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer bad.Close()
-			pr, err := openHistoryIndexPages(bad, uint64(len(data)), outer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = pr.ReadAt(make([]byte, 1), int64(len(want)-1)); err == nil {
-				t.Fatal("corrupt compressed page accepted")
-			}
-			pr.Close()
-		})
+				pages, err := openHistoryIndexPages(out, uint64(st.Size()), outer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := make([]byte, len(want)+1)
+				n, err := pages.ReadAt(got, 0)
+				if err != io.EOF || n != len(want) || !bytes.Equal(got[:n], want) {
+					t.Fatal("virtual stream differs", n, err)
+				}
+				if uint64(len(pages.cache))*pageBytes > 64<<10 {
+					t.Fatal("cache exceeded budget")
+				}
+				reader, err := openStateDomainChangeBinaryIndexV7Reader(out, uint64(st.Size()), outer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := uint64(0); i < h.count; i++ {
+					e, err := reader.entryAt(i)
+					if err != nil || e.txNum != i+1 || e.offset != 4096+i*113 || e.recordIndex != i*7 {
+						t.Fatal(i, e, err)
+					}
+				}
+				reader.Close()
+				// Corrupt an actual physical page, then open a fresh cache.
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data[len(data)-1] ^= 1
+				if err = os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				bad, err := os.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer bad.Close()
+				pr, err := openHistoryIndexPages(bad, uint64(len(data)), outer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = pr.ReadAt(make([]byte, 1), int64(len(want)-1)); err == nil {
+					t.Fatal("corrupt compressed page accepted")
+				}
+				pr.Close()
+			})
+		}
 	}
 }
 
@@ -185,6 +191,7 @@ func TestHistoryIndexPagesPinnedCorpus(t *testing.T) {
 	}
 	type result struct {
 		Path                     string
+		Codec                    string
 		PageBytes                uint64
 		Before, After, Rows      uint64
 		BaselineQueryNS, QueryNS int64
@@ -259,7 +266,7 @@ func TestHistoryIndexPagesPinnedCorpus(t *testing.T) {
 					}
 				}
 			}
-			results = append(results, result{ref.Path, pageBytes, ref.Size, uint64(newStat.Size()), h.count, baselineNS / int64(queries*3), candidateNS / int64(queries*3)})
+			results = append(results, result{ref.Path, "snappy", pageBytes, ref.Size, uint64(newStat.Size()), h.count, baselineNS / int64(queries*3), candidateNS / int64(queries*3)})
 			candidate.Close()
 			if err = os.Rename(newName, input); err != nil {
 				t.Fatal(err)

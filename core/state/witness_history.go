@@ -46,11 +46,13 @@ func (r *PersistentHistoryReader) WitnessAt(addr tcommon.Address, blockNum uint6
 // VotesIndexAt reconstructs the pending vote-state voter index at the end of
 // blockNum.
 func (r *PersistentHistoryReader) VotesIndexAt(blockNum uint64) ([]tcommon.Address, error) {
-	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, votesStoreIndexKey, blockNum)
-	if err != nil || !ok {
-		return nil, err
+	voters, _, err := readVotesIndexRows(func(key []byte) ([]byte, bool, error) {
+		return r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.WitnessVoteState, key, blockNum)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("decode votes index at block %d: %w", blockNum, err)
 	}
-	return decodeAddressListStrict(fmt.Sprintf("decode votes index at block %d", blockNum), raw)
+	return voters, nil
 }
 
 // VotesAt reconstructs a voter's pending vote-state record at the end of

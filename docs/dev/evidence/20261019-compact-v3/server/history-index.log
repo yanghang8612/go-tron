@@ -1,0 +1,4 @@
+=== RUN   TestHistoryIndexPagesPinnedCorpus
+--- PASS: TestHistoryIndexPagesPinnedCorpus (31.45s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	31.464s

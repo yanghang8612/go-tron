@@ -1,0 +1,4 @@
+=== RUN   TestVotesIndexSpaceMeasurement
+--- PASS: TestVotesIndexSpaceMeasurement (7.58s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state	7.601s

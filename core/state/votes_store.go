@@ -109,28 +109,26 @@ func (s *StateDB) ReadVotesIndex() []tcommon.Address {
 	return voters
 }
 
-// ReadVotesIndexStrict returns the rooted voter index and distinguishes an
-// absent row from unreadable or malformed rooted data.
+// votesIndexCount returns the exact count; present zero remains distinct from missing.
 func (s *StateDB) votesIndexCount() (uint64, bool, error) {
 	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, votesStoreIndexKey)
 	if err != nil || !ok {
 		return 0, ok, err
 	}
+	n, err := decodeVotesIndexCount(raw)
+	return n, true, err
+}
+func decodeVotesIndexCount(raw []byte) (uint64, error) {
 	if len(raw) != 8 {
-		return 0, true, fmt.Errorf("votes index: invalid count length %d", len(raw))
+		return 0, fmt.Errorf("votes index: invalid count length %d", len(raw))
 	}
 	n := binary.BigEndian.Uint64(raw)
 	if n > uint64(math.MaxInt/tcommon.AddressLength) {
-		return 0, true, fmt.Errorf("votes index: count overflow")
+		return 0, fmt.Errorf("votes index: count overflow")
 	}
-	return n, true, nil
+	return n, nil
 }
-
-func (s *StateDB) votesIndexPage(page, expected uint64) ([]tcommon.Address, error) {
-	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, rawdb.VotesIndexPageStateKey(page))
-	if err != nil {
-		return nil, err
-	}
+func decodeVotesIndexPage(raw []byte, ok bool, page, expected uint64) ([]tcommon.Address, error) {
 	if !ok {
 		return nil, fmt.Errorf("votes index: missing page %d", page)
 	}
@@ -143,21 +141,42 @@ func (s *StateDB) votesIndexPage(page, expected uint64) ([]tcommon.Address, erro
 	}
 	return entries, nil
 }
+func (s *StateDB) votesIndexPage(page, expected uint64) ([]tcommon.Address, error) {
+	raw, ok, err := s.SystemKVGet(kvdomains.WitnessVoteState, rawdb.VotesIndexPageStateKey(page))
+	if err != nil {
+		return nil, err
+	}
+	return decodeVotesIndexPage(raw, ok, page, expected)
+}
 
-func (s *StateDB) ReadVotesIndexStrict() ([]tcommon.Address, bool, error) {
-	n, ok, err := s.votesIndexCount()
+// readVotesIndexRows shares validation/order between current and historical APIs.
+func readVotesIndexRows(get func([]byte) ([]byte, bool, error)) ([]tcommon.Address, bool, error) {
+	raw, ok, err := get(votesStoreIndexKey)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
+	n, err := decodeVotesIndexCount(raw)
+	if err != nil {
+		return nil, true, err
+	}
 	var all []tcommon.Address
 	for page, offset := uint64(0), uint64(0); offset < n; page, offset = page+1, offset+votesIndexPageEntries {
-		entries, err := s.votesIndexPage(page, min(n-offset, votesIndexPageEntries))
+		raw, ok, err := get(rawdb.VotesIndexPageStateKey(page))
+		if err != nil {
+			return nil, true, err
+		}
+		entries, err := decodeVotesIndexPage(raw, ok, page, min(n-offset, votesIndexPageEntries))
 		if err != nil {
 			return nil, true, err
 		}
 		all = append(all, entries...)
 	}
 	return all, true, nil
+}
+
+// ReadVotesIndexStrict distinguishes absent metadata, present empty and corruption.
+func (s *StateDB) ReadVotesIndexStrict() ([]tcommon.Address, bool, error) {
+	return readVotesIndexRows(func(key []byte) ([]byte, bool, error) { return s.SystemKVGet(kvdomains.WitnessVoteState, key) })
 }
 
 // WriteVotesIndex preserves explicit list order/duplicates. Empty is present,

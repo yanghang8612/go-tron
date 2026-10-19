@@ -25,8 +25,8 @@ snapshot restore. No production reset/deployment is part of offline validation.
    locations for all-packed buckets and raw 64-bit fallback for mixed/plain
    buckets. Width derives from run span (not chain height); CRC covers encoding
    metadata and payload. Readers and merge return the original 64-bit location.
-6. History inverted indexes: independent bounded Zstd pages over the virtual
-   index stream, checksummed header/directory/pages and raw-page fallback. A
+6. History inverted indexes: independent bounded compressed pages over the virtual
+   index stream (Snappy default; compare Zstd as an alternative), checksummed header/directory/pages and raw-page fallback. A
    bounded cache serves ReaderAt without changing logical offsets/records.
    Keep the existing inner V7 reader and all historical validation semantics.
    Builders publish the new file atomically, manifests refer to physical bytes.

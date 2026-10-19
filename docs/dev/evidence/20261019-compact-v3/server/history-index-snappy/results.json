@@ -1,0 +1,322 @@
+[
+  {
+    "Path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 29293,
+    "After": 5764,
+    "Rows": 5714,
+    "BaselineQueryNS": 12079,
+    "QueryNS": 10838
+  },
+  {
+    "Path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 29293,
+    "After": 5178,
+    "Rows": 5714,
+    "BaselineQueryNS": 10367,
+    "QueryNS": 9306
+  },
+  {
+    "Path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 380854,
+    "After": 174455,
+    "Rows": 74271,
+    "BaselineQueryNS": 11180,
+    "QueryNS": 20080
+  },
+  {
+    "Path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 380854,
+    "After": 160553,
+    "Rows": 74271,
+    "BaselineQueryNS": 11791,
+    "QueryNS": 39327
+  },
+  {
+    "Path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 629404,
+    "After": 321184,
+    "Rows": 122555,
+    "BaselineQueryNS": 10525,
+    "QueryNS": 20026
+  },
+  {
+    "Path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 629404,
+    "After": 289252,
+    "Rows": 122555,
+    "BaselineQueryNS": 12048,
+    "QueryNS": 43198
+  },
+  {
+    "Path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 532755,
+    "After": 323887,
+    "Rows": 103744,
+    "BaselineQueryNS": 12283,
+    "QueryNS": 23787
+  },
+  {
+    "Path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 532755,
+    "After": 289141,
+    "Rows": 103744,
+    "BaselineQueryNS": 12190,
+    "QueryNS": 48230
+  },
+  {
+    "Path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 1019710,
+    "After": 651048,
+    "Rows": 198562,
+    "BaselineQueryNS": 10474,
+    "QueryNS": 21386
+  },
+  {
+    "Path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 1019710,
+    "After": 581679,
+    "Rows": 198562,
+    "BaselineQueryNS": 12208,
+    "QueryNS": 50948
+  },
+  {
+    "Path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 912958,
+    "After": 598578,
+    "Rows": 178360,
+    "BaselineQueryNS": 11287,
+    "QueryNS": 21995
+  },
+  {
+    "Path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 912958,
+    "After": 532500,
+    "Rows": 178360,
+    "BaselineQueryNS": 12820,
+    "QueryNS": 52698
+  },
+  {
+    "Path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 958999,
+    "After": 603775,
+    "Rows": 187918,
+    "BaselineQueryNS": 12146,
+    "QueryNS": 23543
+  },
+  {
+    "Path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 958999,
+    "After": 543167,
+    "Rows": 187918,
+    "BaselineQueryNS": 12271,
+    "QueryNS": 48048
+  },
+  {
+    "Path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 272233,
+    "After": 179161,
+    "Rows": 53002,
+    "BaselineQueryNS": 10991,
+    "QueryNS": 21483
+  },
+  {
+    "Path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 272233,
+    "After": 162307,
+    "Rows": 53002,
+    "BaselineQueryNS": 11813,
+    "QueryNS": 49145
+  },
+  {
+    "Path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 588265,
+    "After": 401514,
+    "Rows": 114602,
+    "BaselineQueryNS": 11729,
+    "QueryNS": 21625
+  },
+  {
+    "Path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 588265,
+    "After": 359683,
+    "Rows": 114602,
+    "BaselineQueryNS": 12391,
+    "QueryNS": 50737
+  },
+  {
+    "Path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 228897,
+    "After": 136820,
+    "Rows": 44691,
+    "BaselineQueryNS": 10911,
+    "QueryNS": 19816
+  },
+  {
+    "Path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 228897,
+    "After": 122954,
+    "Rows": 44691,
+    "BaselineQueryNS": 12873,
+    "QueryNS": 46895
+  },
+  {
+    "Path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 198946,
+    "After": 138805,
+    "Rows": 38794,
+    "BaselineQueryNS": 12526,
+    "QueryNS": 21203
+  },
+  {
+    "Path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 198946,
+    "After": 125300,
+    "Rows": 38794,
+    "BaselineQueryNS": 11804,
+    "QueryNS": 50667
+  },
+  {
+    "Path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 610842,
+    "After": 372421,
+    "Rows": 119016,
+    "BaselineQueryNS": 11319,
+    "QueryNS": 22108
+  },
+  {
+    "Path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 610842,
+    "After": 338402,
+    "Rows": 119016,
+    "BaselineQueryNS": 12722,
+    "QueryNS": 48962
+  },
+  {
+    "Path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 748573,
+    "After": 545507,
+    "Rows": 146168,
+    "BaselineQueryNS": 11576,
+    "QueryNS": 20973
+  },
+  {
+    "Path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 748573,
+    "After": 489718,
+    "Rows": 146168,
+    "BaselineQueryNS": 13773,
+    "QueryNS": 54722
+  },
+  {
+    "Path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 1047577,
+    "After": 691430,
+    "Rows": 206088,
+    "BaselineQueryNS": 12470,
+    "QueryNS": 22485
+  },
+  {
+    "Path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 1047577,
+    "After": 620257,
+    "Rows": 206088,
+    "BaselineQueryNS": 12262,
+    "QueryNS": 50395
+  },
+  {
+    "Path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 573866,
+    "After": 382784,
+    "Rows": 113289,
+    "BaselineQueryNS": 11822,
+    "QueryNS": 22186
+  },
+  {
+    "Path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 573866,
+    "After": 345066,
+    "Rows": 113289,
+    "BaselineQueryNS": 12385,
+    "QueryNS": 50640
+  },
+  {
+    "Path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.idx",
+    "Codec": "snappy",
+    "PageBytes": 4096,
+    "Before": 545411,
+    "After": 363658,
+    "Rows": 107234,
+    "BaselineQueryNS": 13090,
+    "QueryNS": 23939
+  },
+  {
+    "Path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.idx",
+    "Codec": "snappy",
+    "PageBytes": 16384,
+    "Before": 545411,
+    "After": 327584,
+    "Rows": 107234,
+    "BaselineQueryNS": 12669,
+    "QueryNS": 49240
+  }
+]

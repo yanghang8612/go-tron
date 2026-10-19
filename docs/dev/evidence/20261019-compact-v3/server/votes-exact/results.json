@@ -1,0 +1,22 @@
+[
+  {
+    "Paged": false,
+    "Voters": 2048,
+    "LatestBytes": 45468,
+    "HistoryBytes": 59865515,
+    "PreviousPayloadBytes": 44026876,
+    "AppendNS": 122101,
+    "EnumerateNS": 100284,
+    "FullMuHashVerified": true
+  },
+  {
+    "Paged": true,
+    "Voters": 2048,
+    "LatestBytes": 189096,
+    "HistoryBytes": 6493559,
+    "PreviousPayloadBytes": 2755512,
+    "AppendNS": 22789,
+    "EnumerateNS": 216702,
+    "FullMuHashVerified": true
+  }
+]

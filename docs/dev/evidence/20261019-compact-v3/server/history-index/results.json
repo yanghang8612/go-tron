@@ -1,0 +1,290 @@
+[
+  {
+    "Path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.idx",
+    "PageBytes": 4096,
+    "Before": 29293,
+    "After": 4633,
+    "Rows": 5714,
+    "BaselineQueryNS": 10536,
+    "QueryNS": 9458
+  },
+  {
+    "Path": "history/state-domain-change-1-5714-267c6e3af0a4d82a.idx",
+    "PageBytes": 16384,
+    "Before": 29293,
+    "After": 3894,
+    "Rows": 5714,
+    "BaselineQueryNS": 10289,
+    "QueryNS": 9351
+  },
+  {
+    "Path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.idx",
+    "PageBytes": 4096,
+    "Before": 380854,
+    "After": 119618,
+    "Rows": 74271,
+    "BaselineQueryNS": 12147,
+    "QueryNS": 46653
+  },
+  {
+    "Path": "history/state-domain-change-13955142-14029412-ce4358a89435bd0f.idx",
+    "PageBytes": 16384,
+    "Before": 380854,
+    "After": 108312,
+    "Rows": 74271,
+    "BaselineQueryNS": 12068,
+    "QueryNS": 85163
+  },
+  {
+    "Path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.idx",
+    "PageBytes": 4096,
+    "Before": 629404,
+    "After": 220236,
+    "Rows": 122555,
+    "BaselineQueryNS": 11925,
+    "QueryNS": 45123
+  },
+  {
+    "Path": "history/state-domain-change-35300559-35423113-e38fa058f065937d.idx",
+    "PageBytes": 16384,
+    "Before": 629404,
+    "After": 190499,
+    "Rows": 122555,
+    "BaselineQueryNS": 11791,
+    "QueryNS": 81810
+  },
+  {
+    "Path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.idx",
+    "PageBytes": 4096,
+    "Before": 532755,
+    "After": 223979,
+    "Rows": 103744,
+    "BaselineQueryNS": 12669,
+    "QueryNS": 47974
+  },
+  {
+    "Path": "history/state-domain-change-75063350-75167093-0effe9a794c4ef26.idx",
+    "PageBytes": 16384,
+    "Before": 532755,
+    "After": 193774,
+    "Rows": 103744,
+    "BaselineQueryNS": 12007,
+    "QueryNS": 89407
+  },
+  {
+    "Path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.idx",
+    "PageBytes": 4096,
+    "Before": 1019710,
+    "After": 436999,
+    "Rows": 198562,
+    "BaselineQueryNS": 12327,
+    "QueryNS": 46775
+  },
+  {
+    "Path": "history/state-domain-change-124682249-124880810-646b957b0d2f3949.idx",
+    "PageBytes": 16384,
+    "Before": 1019710,
+    "After": 380133,
+    "Rows": 198562,
+    "BaselineQueryNS": 12550,
+    "QueryNS": 92864
+  },
+  {
+    "Path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.idx",
+    "PageBytes": 4096,
+    "Before": 912958,
+    "After": 400721,
+    "Rows": 178360,
+    "BaselineQueryNS": 12139,
+    "QueryNS": 46071
+  },
+  {
+    "Path": "history/state-domain-change-148476911-148655270-1b79e40f98602950.idx",
+    "PageBytes": 16384,
+    "Before": 912958,
+    "After": 346878,
+    "Rows": 178360,
+    "BaselineQueryNS": 12368,
+    "QueryNS": 92135
+  },
+  {
+    "Path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.idx",
+    "PageBytes": 4096,
+    "Before": 958999,
+    "After": 413361,
+    "Rows": 187918,
+    "BaselineQueryNS": 12596,
+    "QueryNS": 46546
+  },
+  {
+    "Path": "history/state-domain-change-183657655-183845572-31f95f4456488c34.idx",
+    "PageBytes": 16384,
+    "Before": 958999,
+    "After": 360147,
+    "Rows": 187918,
+    "BaselineQueryNS": 12317,
+    "QueryNS": 92416
+  },
+  {
+    "Path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.idx",
+    "PageBytes": 4096,
+    "Before": 272233,
+    "After": 120025,
+    "Rows": 53002,
+    "BaselineQueryNS": 11821,
+    "QueryNS": 46806
+  },
+  {
+    "Path": "history/state-domain-change-211406107-211459108-b38e6669a86fd2be.idx",
+    "PageBytes": 16384,
+    "Before": 272233,
+    "After": 105875,
+    "Rows": 53002,
+    "BaselineQueryNS": 11922,
+    "QueryNS": 92015
+  },
+  {
+    "Path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.idx",
+    "PageBytes": 4096,
+    "Before": 588265,
+    "After": 270131,
+    "Rows": 114602,
+    "BaselineQueryNS": 11947,
+    "QueryNS": 44722
+  },
+  {
+    "Path": "history/state-domain-change-229132437-229247038-5fcec8e760111440.idx",
+    "PageBytes": 16384,
+    "Before": 588265,
+    "After": 232854,
+    "Rows": 114602,
+    "BaselineQueryNS": 12423,
+    "QueryNS": 94618
+  },
+  {
+    "Path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.idx",
+    "PageBytes": 4096,
+    "Before": 228897,
+    "After": 92627,
+    "Rows": 44691,
+    "BaselineQueryNS": 11526,
+    "QueryNS": 43166
+  },
+  {
+    "Path": "history/state-domain-change-246398687-246443377-209570ccbc8f29a3.idx",
+    "PageBytes": 16384,
+    "Before": 228897,
+    "After": 80851,
+    "Rows": 44691,
+    "BaselineQueryNS": 12802,
+    "QueryNS": 88474
+  },
+  {
+    "Path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.idx",
+    "PageBytes": 4096,
+    "Before": 198946,
+    "After": 93128,
+    "Rows": 38794,
+    "BaselineQueryNS": 11405,
+    "QueryNS": 36620
+  },
+  {
+    "Path": "history/state-domain-change-290375707-290414500-4c5169bc95a4898e.idx",
+    "PageBytes": 16384,
+    "Before": 198946,
+    "After": 82170,
+    "Rows": 38794,
+    "BaselineQueryNS": 12331,
+    "QueryNS": 93569
+  },
+  {
+    "Path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.idx",
+    "PageBytes": 4096,
+    "Before": 610842,
+    "After": 260568,
+    "Rows": 119016,
+    "BaselineQueryNS": 11582,
+    "QueryNS": 46630
+  },
+  {
+    "Path": "history/state-domain-change-332875444-332994459-6c517c01cb98fe7d.idx",
+    "PageBytes": 16384,
+    "Before": 610842,
+    "After": 231355,
+    "Rows": 119016,
+    "BaselineQueryNS": 12191,
+    "QueryNS": 97492
+  },
+  {
+    "Path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.idx",
+    "PageBytes": 4096,
+    "Before": 748573,
+    "After": 368243,
+    "Rows": 146168,
+    "BaselineQueryNS": 11473,
+    "QueryNS": 45840
+  },
+  {
+    "Path": "history/state-domain-change-376506998-376653165-4185cac27ff8fccc.idx",
+    "PageBytes": 16384,
+    "Before": 748573,
+    "After": 317486,
+    "Rows": 146168,
+    "BaselineQueryNS": 11968,
+    "QueryNS": 93749
+  },
+  {
+    "Path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.idx",
+    "PageBytes": 4096,
+    "Before": 1047577,
+    "After": 468836,
+    "Rows": 206088,
+    "BaselineQueryNS": 12044,
+    "QueryNS": 46285
+  },
+  {
+    "Path": "history/state-domain-change-413973965-414180052-8863a8f7ee124901.idx",
+    "PageBytes": 16384,
+    "Before": 1047577,
+    "After": 405886,
+    "Rows": 206088,
+    "BaselineQueryNS": 12065,
+    "QueryNS": 92591
+  },
+  {
+    "Path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.idx",
+    "PageBytes": 4096,
+    "Before": 573866,
+    "After": 256765,
+    "Rows": 113289,
+    "BaselineQueryNS": 11556,
+    "QueryNS": 45046
+  },
+  {
+    "Path": "history/state-domain-change-450870221-450983509-72350b54a1860cbc.idx",
+    "PageBytes": 16384,
+    "Before": 573866,
+    "After": 223317,
+    "Rows": 113289,
+    "BaselineQueryNS": 12265,
+    "QueryNS": 92495
+  },
+  {
+    "Path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.idx",
+    "PageBytes": 4096,
+    "Before": 545411,
+    "After": 245284,
+    "Rows": 107234,
+    "BaselineQueryNS": 11625,
+    "QueryNS": 44958
+  },
+  {
+    "Path": "history/state-domain-change-481659196-481766429-8dc3db74c84dda49.idx",
+    "PageBytes": 16384,
+    "Before": 545411,
+    "After": 213731,
+    "Rows": 107234,
+    "BaselineQueryNS": 11954,
+    "QueryNS": 91998
+  }
+]

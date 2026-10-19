@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tronprotocol/go-tron/core/rawdb
+cpu: Intel(R) Xeon(R) Platinum 8175M CPU @ 2.50GHz
+BenchmarkStateLatestUint64Read/decode         	19514361	        33.23 ns/op	         2.000 stored-bytes	       8 B/op	       1 allocs/op
+BenchmarkStateLatestUint64Read/decode         	18489565	        32.28 ns/op	         2.000 stored-bytes	       8 B/op	       1 allocs/op
+BenchmarkStateLatestUint64Read/decode         	19391131	        30.95 ns/op	         2.000 stored-bytes	       8 B/op	       1 allocs/op
+BenchmarkStateLatestUint64Read/point          	  687387	       842.7 ns/op	         2.000 stored-bytes	     280 B/op	       9 allocs/op
+BenchmarkStateLatestUint64Read/point          	  679666	       838.9 ns/op	         2.000 stored-bytes	     280 B/op	       9 allocs/op
+BenchmarkStateLatestUint64Read/point          	  697226	       813.3 ns/op	         2.000 stored-bytes	     280 B/op	       9 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	4.088s

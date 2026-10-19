@@ -40,7 +40,6 @@ func TestVotesIndexSpaceMeasurement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var voters []tcommon.Address
 		var appendNS int64
 		var parent tcommon.Hash
 		for i := uint64(1); i <= count; i++ {
@@ -50,7 +49,6 @@ func TestVotesIndexSpaceMeasurement(t *testing.T) {
 			var addr tcommon.Address
 			addr[0] = 0x41
 			copy(addr[1:], hash[12:])
-			voters = append(voters, addr)
 			blockHash := tcommon.Keccak256(seed[:])
 			s.BeginDomainChangeJournalCapture(disk, i, blockHash, i, i)
 			mark := s.DomainChangeJournalMark()
@@ -58,7 +56,7 @@ func TestVotesIndexSpaceMeasurement(t *testing.T) {
 			if paged {
 				err = s.AppendVotesIndex(addr)
 			} else {
-				err = s.SystemKVPut(kvdomains.WitnessVoteState, rawdb.LegacyVotesIndexStateKey(), encodeAddressList(voters))
+				err = appendLegacyVotesIndexForMeasurement(s, addr)
 			}
 			appendNS += time.Since(start).Nanoseconds()
 			if err != nil {
@@ -144,4 +142,26 @@ func TestVotesIndexSpaceMeasurement(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(out, "results.json"), b, 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Exact predecessor append algorithm: read/decode the complete list, linear
+// duplicate check, append, then write the complete list through normal state KV.
+func appendLegacyVotesIndexForMeasurement(s *StateDB, addr tcommon.Address) error {
+	raw, present, err := s.SystemKVGet(kvdomains.WitnessVoteState, rawdb.LegacyVotesIndexStateKey())
+	if err != nil {
+		return err
+	}
+	var existing []tcommon.Address
+	if present {
+		existing, err = decodeAddressListStrict("votes index", raw)
+		if err != nil {
+			return err
+		}
+	}
+	for _, a := range existing {
+		if a == addr {
+			return nil
+		}
+	}
+	return s.SystemKVPut(kvdomains.WitnessVoteState, rawdb.LegacyVotesIndexStateKey(), encodeAddressList(append(existing, addr)))
 }

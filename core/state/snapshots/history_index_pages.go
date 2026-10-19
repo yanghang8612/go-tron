@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -19,6 +20,7 @@ const (
 	historyIndexPageHeader     = 96
 	historyIndexPageEntry      = 24
 	historyIndexRawPage        = uint32(1 << 31)
+	historyIndexSnappyPages    = uint32(1 << 31)
 	historyIndexPageCacheBytes = 64 << 10
 )
 
@@ -31,6 +33,7 @@ type cachedIndexPage struct {
 	tick uint64
 }
 type historyIndexPages struct {
+	snappy    bool
 	encoded   []byte
 	file      historySegmentReader
 	logical   uint64
@@ -48,6 +51,10 @@ func rewriteHistoryIndexPagesContext(ctx context.Context, source *os.File, name 
 	return rewriteHistoryIndexPagesWithSize(ctx, source, name, header, historyIndexPageBytes)
 }
 func rewriteHistoryIndexPagesWithSize(ctx context.Context, source *os.File, name string, header stateDomainChangeBinaryHeader, pageBytes uint64) (*os.File, string, error) {
+	return rewriteHistoryIndexPagesWithCodec(ctx, source, name, header, pageBytes, true)
+}
+
+func rewriteHistoryIndexPagesWithCodec(ctx context.Context, source *os.File, name string, header stateDomainChangeBinaryHeader, pageBytes uint64, useSnappy bool) (*os.File, string, error) {
 	if pageBytes != 4096 && pageBytes != 16384 && pageBytes != 65536 {
 		return nil, "", errors.New("snapshots: unsupported index page size")
 	}
@@ -71,11 +78,14 @@ func rewriteHistoryIndexPagesWithSize(ctx context.Context, source *os.File, name
 			os.Remove(outName)
 		}
 	}()
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(true))
-	if err != nil {
-		return nil, "", err
+	var enc *zstd.Encoder
+	if !useSnappy {
+		enc, err = zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(true))
+		if err != nil {
+			return nil, "", err
+		}
+		defer enc.Close()
 	}
-	defer enc.Close()
 	directory := make([]byte, count*historyIndexPageEntry)
 	offset := uint64(historyIndexPageHeader) + uint64(len(directory))
 	if _, err = out.Seek(int64(offset), io.SeekStart); err != nil {
@@ -90,7 +100,12 @@ func rewriteHistoryIndexPagesWithSize(ctx context.Context, source *os.File, name
 		if _, err = source.ReadAt(buf[:n], int64(i*pageBytes)); err != nil {
 			return nil, "", err
 		}
-		data := enc.EncodeAll(buf[:n], nil)
+		var data []byte
+		if useSnappy {
+			data = snappy.Encode(nil, buf[:n])
+		} else {
+			data = enc.EncodeAll(buf[:n], nil)
+		}
 		stored := uint32(len(data))
 		if len(data) >= int(n) {
 			data = buf[:n]
@@ -112,7 +127,11 @@ func rewriteHistoryIndexPagesWithSize(ctx context.Context, source *os.File, name
 	binary.BigEndian.PutUint64(raw[12:], header.fromTxNum)
 	binary.BigEndian.PutUint64(raw[20:], header.toTxNum)
 	binary.BigEndian.PutUint64(raw[28:], header.count)
-	binary.BigEndian.PutUint32(raw[36:], uint32(pageBytes))
+	pageCode := uint32(pageBytes)
+	if useSnappy {
+		pageCode |= historyIndexSnappyPages
+	}
+	binary.BigEndian.PutUint32(raw[36:], pageCode)
 	binary.BigEndian.PutUint64(raw[40:], logical)
 	binary.BigEndian.PutUint64(raw[48:], count)
 	binary.BigEndian.PutUint64(raw[56:], uint64(len(directory)))
@@ -149,7 +168,9 @@ func openHistoryIndexPages(file historySegmentReader, size uint64, outer stateDo
 	if _, err := file.ReadAt(h[:], 0); err != nil {
 		return nil, err
 	}
-	pageBytes := uint64(binary.BigEndian.Uint32(h[36:]))
+	pageCode := binary.BigEndian.Uint32(h[36:])
+	useSnappy := pageCode&historyIndexSnappyPages != 0
+	pageBytes := uint64(pageCode &^ historyIndexSnappyPages)
 	if (pageBytes != 4096 && pageBytes != 16384 && pageBytes != 65536) || crc32.ChecksumIEEE(h[:76]) != binary.BigEndian.Uint32(h[76:]) {
 		return nil, errors.New("snapshots: paged index header checksum/size")
 	}
@@ -185,17 +206,23 @@ func openHistoryIndexPages(file historySegmentReader, size uint64, outer stateDo
 	if end != size {
 		return nil, errors.New("snapshots: paged index trailing bytes")
 	}
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(1<<20), zstd.WithDecoderMaxWindow(1<<20))
-	if err != nil {
-		return nil, err
+	var dec *zstd.Decoder
+	var err error
+	if !useSnappy {
+		dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(1<<20), zstd.WithDecoderMaxWindow(1<<20))
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &historyIndexPages{file: file, logical: logical, pageBytes: pageBytes, pages: pages, decoder: dec, cache: make(map[uint64]cachedIndexPage)}, nil
+	return &historyIndexPages{snappy: useSnappy, file: file, logical: logical, pageBytes: pageBytes, pages: pages, decoder: dec, cache: make(map[uint64]cachedIndexPage)}, nil
 }
 
 func (r *historyIndexPages) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.decoder.Close()
+	if r.decoder != nil {
+		r.decoder.Close()
+	}
 	r.cache = nil
 	r.encoded = nil
 	return r.file.Close()
@@ -231,7 +258,7 @@ func (r *historyIndexPages) ReadAt(dst []byte, off int64) (int, error) {
 				return n, errors.New("snapshots: paged index page checksum")
 			}
 			var reuse []byte
-			if uint64(len(r.cache)) >= (64<<10)/r.pageBytes {
+			if uint64(len(r.cache)) >= historyIndexPageCacheBytes/r.pageBytes {
 				var victim uint64
 				oldest := uint64(math.MaxUint64)
 				for key, e := range r.cache {
@@ -250,7 +277,15 @@ func (r *historyIndexPages) ReadAt(dst []byte, off int64) (int, error) {
 				data = append(reuse, encoded...)
 			} else {
 				var err error
-				data, err = r.decoder.DecodeAll(encoded, reuse)
+				if r.snappy {
+					decodedLen, decodeErr := snappy.DecodedLen(encoded)
+					if decodeErr != nil || decodedLen != int(p.decoded) {
+						return n, errors.New("snapshots: paged index Snappy decoded length")
+					}
+					data, err = snappy.Decode(reuse[:cap(reuse)], encoded)
+				} else {
+					data, err = r.decoder.DecodeAll(encoded, reuse)
+				}
 				if err != nil {
 					return n, err
 				}

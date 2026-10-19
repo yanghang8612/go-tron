@@ -1,0 +1,134 @@
+{
+  "verified": true,
+  "source_block": 5715086,
+  "actual_file_comparisons": {
+    "account-snappy": {
+      "before": 67897044,
+      "after": 61593097,
+      "saved": 6303947,
+      "saved_percent": 9.284567675729742
+    },
+    "account-none": {
+      "before": 118287909,
+      "after": 88052541,
+      "saved": 30235368,
+      "saved_percent": 25.560827184797052
+    },
+    "uint64-snappy": {
+      "before": 146875958,
+      "after": 134432259,
+      "saved": 12443699,
+      "saved_percent": 8.472250441423503
+    },
+    "uint64-none": {
+      "before": 403429457,
+      "after": 314129335,
+      "saved": 89300122,
+      "saved_percent": 22.13525077322254
+    },
+    "transaction-index": {
+      "before": 8146612152,
+      "after": 6182123469,
+      "saved": 1964488683,
+      "saved_percent": 24.11417956748704
+    },
+    "history-index-zstd-4096": {
+      "before": 9278583,
+      "after": 3995154,
+      "saved": 5283429,
+      "saved_percent": 56.94219688502005
+    },
+    "history-index-zstd-16384": {
+      "before": 9278583,
+      "after": 3477162,
+      "saved": 5801421,
+      "saved_percent": 62.52485966876623
+    },
+    "history-index-snappy-4096": {
+      "before": 9278583,
+      "after": 5890791,
+      "saved": 3387792,
+      "saved_percent": 36.511954465460946
+    },
+    "history-index-snappy-16384": {
+      "before": 9278583,
+      "after": 5292741,
+      "saved": 3985842,
+      "saved_percent": 42.957442963004155
+    },
+    "votes-LatestBytes": {
+      "before": 45468,
+      "after": 189096,
+      "saved": -143628,
+      "saved_percent": -315.8880971232515
+    },
+    "votes-HistoryBytes": {
+      "before": 59865515,
+      "after": 6493559,
+      "saved": 53371956,
+      "saved_percent": 89.15308922006267
+    },
+    "votes-PreviousPayloadBytes": {
+      "before": 44026876,
+      "after": 2755512,
+      "saved": 41271364,
+      "saved_percent": 93.74129565767964
+    }
+  },
+  "transaction_query": {
+    "baseline_file_mean_median_ns": 1627,
+    "candidate_file_mean_median_ns": 1522,
+    "median_paired_ratio": 0.9396551724137931
+  },
+  "history_query": {
+    "zstd-4096": {
+      "baseline_file_mean_median_ns": 11873.0,
+      "candidate_file_mean_median_ns": 45955.5,
+      "median_paired_ratio": 3.794902008924196
+    },
+    "zstd-16384": {
+      "baseline_file_mean_median_ns": 12129.5,
+      "candidate_file_mean_median_ns": 92275.5,
+      "median_paired_ratio": 7.52225183287487
+    },
+    "snappy-4096": {
+      "baseline_file_mean_median_ns": 11652.5,
+      "candidate_file_mean_median_ns": 21554.0,
+      "median_paired_ratio": 1.8601956532052109
+    },
+    "snappy-16384": {
+      "baseline_file_mean_median_ns": 12266.5,
+      "candidate_file_mean_median_ns": 49192.5,
+      "median_paired_ratio": 3.9648287923126215
+    }
+  },
+  "read_bench_medians_ns": {
+    "uint64-before.log": {
+      "BenchmarkStateLatestUint64Read/decode": 34.0,
+      "BenchmarkStateLatestUint64Read/point": 836.5
+    },
+    "uint64-after.log": {
+      "BenchmarkStateLatestUint64Read/decode": 32.28,
+      "BenchmarkStateLatestUint64Read/point": 838.9
+    },
+    "account-read.log": {
+      "BenchmarkAccountOwnerCoreRead/full-address": 644.4,
+      "BenchmarkAccountOwnerCoreRead/owner-address": 600.9
+    }
+  },
+  "votes_append_ns": [
+    121247,
+    21032
+  ],
+  "votes_enumerate_ns": [
+    58398,
+    233855
+  ],
+  "limits": [
+    "SST experiment on complete authenticated 5.715M corpus; not live LSM attribution",
+    "history indexes are 16 deterministic ordinal samples, not all cold indexes",
+    "VotesIndex is synthetic 2048 appends/commits, with exact predecessor append algorithm",
+    "per-file means/medians and warm OS cache, not API-level latency percentiles or cold-device IO",
+    "no production reset/deployment and no full mainnet genesis replay in this task"
+  ]
+}

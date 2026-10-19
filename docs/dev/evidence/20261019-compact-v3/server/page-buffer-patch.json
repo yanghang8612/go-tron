@@ -1,0 +1,1 @@
+{"file": "source-v3/core/state/snapshots/history_index_pages.go", "before": "7d1c0dcd6f1265e5b5b600fbbcfcb72225399d19c88a5457d2fbc5e4dbd20f9f", "after": "167b65ddbaf45b937d65aac451579c6c25c69d2f34611089318d1910db22cbe5", "change": "reuse compressed page read buffer; applied before history step compilation"}
