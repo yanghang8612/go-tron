@@ -1,0 +1,44 @@
+{
+  "utc": "2026-10-19T11:40:27.986602+00:00",
+  "head": 5093927,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T10:55:47.265876+00:00",
+  "sample_window_end": "2026-10-19T11:39:50.260805+00:00",
+  "sample_count": 45,
+  "sample_errors": [],
+  "recent_same_process_window": {
+    "seconds": 300.444738,
+    "blocks_per_second": 119.36970585252854,
+    "transactions_per_second": 6699.554844591754
+  },
+  "disk_sample_utc": "2026-10-19T11:39:50.260805+00:00",
+  "disk_sample_height": 5091803,
+  "disk_bytes": {
+    "ancient": 9702346752,
+    "chaindata": 10917691392,
+    "history": 9443307520,
+    "state-snapshots": 13025591296
+  },
+  "rss_sample_utc": "2026-10-19T11:39:50.260805+00:00",
+  "rss_kib": 6989028,
+  "rss_max_kib_in_window": 7706516,
+  "host_available_memory_bytes": 38869778432,
+  "cold_published_block": 4762221,
+  "cold_pruned_block": 4762221,
+  "eligible_backlog_blocks": 266100,
+  "cold_errors": 0,
+  "history_probe_batches_correct": 9,
+  "last_tvm_probe_milliseconds": [
+    1186.894953250885,
+    1182.9134598374367
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "quiet; no material new change. Height passed 5M within the existing TVM workload phase. Same binary/PID and old inventory; all periodic history probes correct, cold publication/pruning advances with roughly 26万 eligible backlog, no resource risk. Known seconds-scale latency and isolated first-seek defect remain unreleased. No implementation, restart, configuration or database changes.",
+  "packet_sha256": "b71d3298bf9dca03b1f56ba4b36e6b7b386e566208870eab3f6d753a594786cc",
+  "comparison_limit": "Same-process windows describe current workload only; no matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred.",
+  "disk_total_bytes": 43088936960
+}

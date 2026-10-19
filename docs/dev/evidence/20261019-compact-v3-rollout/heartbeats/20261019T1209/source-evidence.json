@@ -1,0 +1,72 @@
+{
+  "core/state/snapshots/history_load.go": {
+    "deployed_source_sha256": "8a38fd948963d985cd7058243e171b5fd0704046920e95bbab80d15191bad191",
+    "excerpts": [
+      {
+        "start_line": 24,
+        "end_line": 41,
+        "text": "\n// These bit values are exposed by history/budget/reason_bits. Keep existing\n// assignments stable when adding reasons. Pressure and recovery reasons are\n// separate: level 1 can persist after every instantaneous pressure has cleared.\nconst (\n\thistoryLoadReasonHard historyLoadReason = 1 << iota\n\thistoryLoadReasonNewStall\n\thistoryLoadReasonDevicePressure\n\thistoryLoadReasonL0Pressure\n\thistoryLoadReasonDebtGrowth\n\thistoryLoadReasonEngineUnavailable\n\thistoryLoadReasonEngineStale\n\thistoryLoadReasonRecoverySamples\n\thistoryLoadReasonPressureHysteresis\n\thistoryLoadReasonDeviceUnknown\n)\n\nvar historyLoadReasonMetrics = [...]struct {\n"
+      },
+      {
+        "start_line": 287,
+        "end_line": 292,
+        "text": "\t\t}\n\t\tdevicePressure := deviceKnown && p.DeviceBusyPPM >= 950_000 && p.DeviceQueueMilli >= 2_000 && p.DeviceAwait >= 5*time.Millisecond\n\t\tl0Pressure := p.L0CompactionThreshold > 0 && p.L0Sublevels >= p.L0CompactionThreshold && p.L0Sublevels-p.L0CompactionThreshold >= p.L0CompactionThreshold\n\t\ttrend := s.debtTrendPressure()\n\t\ts.updateModerateL0(now, newSample, comparable, reset, newStall, devicePressure, s.debtGrowthSevere(trend.recent))\n\t\tdebtPressure := trend.pressure\n"
+      },
+      {
+        "start_line": 446,
+        "end_line": 452,
+        "text": "func (s *historyLoadState) cpuBurstReady(now time.Time) bool {\n\tp := s.sample\n\treturn (s.level >= 2 || s.debtModerateReady(now)) && !s.hard && p.Available && freshHistoryLoad(p.SampledAt, now) &&\n\t\t!p.HardLimitReached(now) && p.DeviceAvailable && freshHistoryLoad(p.DeviceSampledAt, now) &&\n\t\tp.DeviceAwait >= 0 && p.DeviceAwait <= 2*time.Millisecond\n}\n\n"
+      }
+    ]
+  },
+  "core/state/snapshots/history_moderate_l0.go": {
+    "deployed_source_sha256": "d016aacdd7948ca02965e38d5b3dc096f694faf855aff7332dc843c5f0514fe5",
+    "excerpts": [
+      {
+        "start_line": 20,
+        "end_line": 65,
+        "text": "\ts.moderateL0.published = metrics.GetOrRegisterCounter(namespace+\"moderate_l0/publications\", nil)\n\ts.moderateL0.completed = metrics.GetOrRegisterCounter(namespace+\"moderate_l0/completed\", nil)\n}\n\nfunc (s *historyLoadState) moderateL0Evidence(now time.Time) bool {\n\tp := s.sample\n\tif s.hard || !p.Available || !freshHistoryLoad(p.SampledAt, now) || p.HardLimitReached(now) ||\n\t\t!p.DeviceAvailable || !freshHistoryLoad(p.DeviceSampledAt, now) || p.DeviceAwait < 0 || p.DeviceAwait > 2*time.Millisecond ||\n\t\tp.L0CompactionThreshold <= 0 || p.L0StopWritesThreshold <= 0 || p.L0Sublevels < 0 {\n\t\treturn false\n\t}\n\t// Healthy points below T count too, so T-1/T oscillation cannot create a\n\t// second starvation boundary. Selection itself still requires L0>=T.\n\treturn p.L0Sublevels < p.L0CompactionThreshold || p.L0Sublevels-p.L0CompactionThreshold < p.L0CompactionThreshold\n}\n\nfunc (s *historyLoadState) updateModerateL0(now time.Time, newSample, comparable, reset, newStall, devicePressure, severe bool) {\n\tm := &s.moderateL0\n\tp := s.sample\n\tsameThresholds := m.threshold == p.L0CompactionThreshold && m.stop == p.L0StopWritesThreshold\n\tif reset || newStall || devicePressure || severe || !s.moderateL0Evidence(now) {\n\t\tm.samples = 0\n\t\treturn\n\t}\n\tif !sameThresholds {\n\t\tm.samples = 0\n\t}\n\tif newSample {\n\t\tif !comparable {\n\t\t\tm.samples = 0\n\t\t}\n\t\tm.threshold, m.stop = p.L0CompactionThreshold, p.L0StopWritesThreshold\n\t\tm.samples = min(2, m.samples+1)\n\t}\n}\n\nfunc (s *historyLoadState) moderateL0Ready(now time.Time) bool {\n\treturn s.moderateL0.samples >= 2 && s.moderateL0Evidence(now) &&\n\t\ts.moderateL0.threshold == s.sample.L0CompactionThreshold && s.moderateL0.stop == s.sample.L0StopWritesThreshold &&\n\t\ts.sample.L0Sublevels >= s.sample.L0CompactionThreshold\n}\n\nfunc (s *historyLoadState) revokeExpiredModerateL0(now time.Time) {\n\tif !s.moderateL0Evidence(now) {\n\t\ts.moderateL0.samples = 0\n\t\ts.metric(\"moderate_l0_samples\", 0)\n"
+      }
+    ]
+  },
+  "core/state/snapshots/history_busy_resource.go": {
+    "deployed_source_sha256": "87f2715d402307bb459edafc34e359f60524396a51324025625c044e51636d81",
+    "excerpts": [
+      {
+        "start_line": 29,
+        "end_line": 50,
+        "text": "func (r *Runner) busyHistoryAdmission(now time.Time) (ready, moderateL0 bool) {\n\tif !r.busyHistoryObservationEnabled() {\n\t\treturn false, false\n\t}\n\tr.historyLoad.revokeExpiredModerateL0(now)\n\tburst, bounded := r.historyLoad.cpuBurstReady(now), r.historyLoad.moderateL0Ready(now)\n\tif !burst && !bounded {\n\t\treturn false, false\n\t}\n\tresourceReady := r.cfg.BusyHistoryBuildReady()\n\tr.historyLoad.revokeExpiredModerateL0(time.Now())\n\tif !resourceReady {\n\t\treturn false, false\n\t}\n\t// Preserve an already legal legacy opportunity, including its topology and\n\t// budget. The new lane only supplies capacity the old predicate denied.\n\tif burst {\n\t\treturn true, false\n\t}\n\t// Only the independent bounded tier is new. Its callback must not carry\n\t// expired evidence into admission; the existing burst predicate is unchanged.\n\tbounded = bounded && r.historyLoad.moderateL0Ready(time.Now())\n"
+      }
+    ]
+  },
+  "core/state/snapshots/cold_builder.go": {
+    "deployed_source_sha256": "0d0673e693f36ea6dbe0c4962a6280d50a6896b3eb9c500328fe01a422a824a7",
+    "excerpts": [
+      {
+        "start_line": 1467,
+        "end_line": 1498,
+        "text": "\t\t\t\t}\n\t\t\t\tmaxBusyDeferred := r.cfg.MaxBusyDeferredHistoryBlocks\n\t\t\t\tif maxBusyDeferred < maxDeferred {\n\t\t\t\t\tmaxBusyDeferred = maxDeferred\n\t\t\t\t}\n\t\t\t\tif r.cfg.SyncBuildReady != nil {\n\t\t\t\t\tresult.HistoryAdmissionChecked = true\n\t\t\t\t\tresult.HistoryAdmissionReady = r.cfg.SyncBuildReady()\n\t\t\t\t\tif !result.HistoryAdmissionReady {\n\t\t\t\t\t\t// Accelerated means an actually unthrottled ready build, not\n\t\t\t\t\t\t// merely a large lag candidate which a busy importer rejected.\n\t\t\t\t\t\tresult.HistoryAccelerated = false\n\t\t\t\t\t\tif readyBlocks <= maxBusyDeferred && !pressured {\n\t\t\t\t\t\t\tresult.HistoryBusyResourceReady, result.HistoryModerateL0 = r.busyHistoryAdmission(time.Now())\n\t\t\t\t\t\t\tif !result.HistoryBusyResourceReady {\n\t\t\t\t\t\t\t\tresult.HistoryDeferred = true\n\t\t\t\t\t\t\t\tr.armBusyHistoryObservation(&result, time.Now())\n\t\t\t\t\t\t\t\treturn result, nil\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}\n\t\t\t\t\t\t// Both the liveness fallback and a resource opportunity use\n\t\t\t\t\t\t// bounded busy work. In particular, the latter must retain the\n\t\t\t\t\t\t// measured recovery instead of using ready acceleration or\n\t\t\t\t\t\t// falling back to the fixed ordinary build interval.\n\t\t\t\t\t\tresult.HistoryForcedBusy = true\n\t\t\t\t\t\t// Above busy remains independently admitted even if this optional\n\t\t\t\t\t\t// tier is unavailable. Never turn that fallback into a wait.\n\t\t\t\t\t\tif !result.HistoryBusyResourceReady && r.historyLoad.moderateL0Ready(time.Now()) {\n\t\t\t\t\t\t\t_, result.HistoryModerateL0 = r.busyHistoryAdmission(time.Now())\n\t\t\t\t\t\t}\n\t\t\t\t\t\tresult.HistoryDebtBlocks = readyBlocks\n\t\t\t\t\t\tresult.HistoryDebtGrowth = coldSnapshotSignedDelta(readyBlocks, r.lastLagBlocks.Load())\n"
+      }
+    ]
+  },
+  "cmd/gtron/history_config.go": {
+    "deployed_source_sha256": "bbc0ded01ddfd3307f8c8f89478addba0c8678ebc4ff3d859bfbc4887bf5aa4d",
+    "excerpts": [
+      {
+        "start_line": 170,
+        "end_line": 184,
+        "text": "func maxDeferredColdHistoryBlocks(historyWindow uint64) uint64 {\n\tconst multiplier = uint64(4)\n\tif historyWindow > ^uint64(0)/multiplier {\n\t\treturn ^uint64(0)\n\t}\n\treturn historyWindow * multiplier\n}\n\nfunc maxBusyDeferredColdHistoryBlocks(maxDeferred uint64) uint64 {\n\tconst multiplier = uint64(2)\n\tif maxDeferred > ^uint64(0)/multiplier {\n\t\treturn ^uint64(0)\n\t}\n\treturn maxDeferred * multiplier\n}\n"
+      }
+    ]
+  },
+  "core/state/pruning/lifecycle.go": {
+    "deployed_source_sha256": "8e4db453096a25dd4983c0cc812bb871bc5ae6ae6923f08de3e5822c0eb9ad46",
+    "excerpts": [
+      {
+        "start_line": 636,
+        "end_line": 652,
+        "text": "\t\t// completed.\n\t\tselect {\n\t\tcase <-l.quit:\n\t\t\treturn\n\t\tdefault:\n\t\t}\n\t\tselect {\n\t\tcase <-ticks:\n\t\t\trunPass(\"interval\")\n\t\tcase <-l.wake:\n\t\t\trunPass(\"requested\")\n\t\tcase <-retry:\n\t\t\tretry = nil\n\t\t\trunPass(\"resource-retry\")\n\t\tcase <-observation:\n\t\t\tobservation = nil\n\t\t\twake, after := observer.ObserveBusyHistoryResources(l.ctx)\n"
+      }
+    ]
+  }
+}
