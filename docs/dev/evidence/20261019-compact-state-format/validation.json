@@ -1,0 +1,38 @@
+{
+  "created_utc": "2026-10-19T02:27:07.017587+00:00",
+  "source_base": "54e87f455b10d65164e4237b2710a777a0192499",
+  "production_modified": false,
+  "toolchain": "go1.25.5 darwin/arm64",
+  "full_test_command": "GOTOOLCHAIN=go1.25.5 CGO_ENABLED=0 go test -p 4 ./... -count=1 -timeout 900s",
+  "full_test_exit": 0,
+  "full_test_passed_packages": 61,
+  "race_exit": 0,
+  "vet_exit": 0,
+  "sapling_build_exit": 0,
+  "sapling_lifecycle_test_exit": 0,
+  "schema": {
+    "scheme": "state-flat-latest-muhash3072-compact-v2",
+    "head_version": 2,
+    "element_version": 2,
+    "manifest_version": 3,
+    "latest_binary_version": 2
+  },
+  "measured_input_block": 5715086,
+  "projected_representation": {
+    "storage_rows": 26940778,
+    "hot_before_bytes": 3071248692,
+    "hot_after_bytes": 1980288578,
+    "cold_latest_record_before_bytes": 2694077800,
+    "cold_latest_record_after_bytes": 2007229356,
+    "shielded_dense_rows_before": 5715086,
+    "shielded_change_points_after": 1
+  },
+  "disk_savings_measured_online": false,
+  "notes": [
+    "Initial Go 1.27 full run failed one async publication timing assertion. The unchanged failing test passed 10 consecutive reruns; the complete Go 1.25.5 run then passed.",
+    "Pre-existing archived standalone programs under ignored build/benchmarks were isolated with a local nested go.mod to keep them out of repository package discovery; tracked production packages were not skipped.",
+    "Final focused/race tests cover later zero/empty snapshot fixtures and diagnostic/namespace additions; final rawdb and storage-distribution packages are rerun separately after the full suite.",
+    "Space figures are exact representation calculations from the authenticated full census, excluding LSM compression and sidecar ownership."
+  ],
+  "final_rawdb_and_diagnostics_exit": 0
+}

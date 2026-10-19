@@ -1,0 +1,80 @@
+CGO_ENABLED=0 go test ./... -count=1 -timeout 900s
+ok  	github.com/tronprotocol/go-tron/actuator	0.688s
+ok  	github.com/tronprotocol/go-tron/cmd/balance-trace	0.568s
+ok  	github.com/tronprotocol/go-tron/cmd/db-compare	0.624s
+ok  	github.com/tronprotocol/go-tron/cmd/fixture-capture	0.647s
+?   	github.com/tronprotocol/go-tron/cmd/fixture-closure	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/fixture-digest	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/generation-census	1.091s
+ok  	github.com/tronprotocol/go-tron/cmd/gtron	283.953s
+?   	github.com/tronprotocol/go-tron/cmd/gtron-replay	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/history-dictionary-benchmark	0.582s
+ok  	github.com/tronprotocol/go-tron/cmd/history-value-bench	1.062s
+ok  	github.com/tronprotocol/go-tron/cmd/hot-maintenance	186.140s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-census	1.806s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-reclaim-experiment	23.625s
+ok  	github.com/tronprotocol/go-tron/cmd/reward-trace	0.786s
+ok  	github.com/tronprotocol/go-tron/cmd/storage-distribution	4.617s
+?   	github.com/tronprotocol/go-tron/cmd/txsign	[no test files]
+ok  	github.com/tronprotocol/go-tron/common	0.707s
+ok  	github.com/tronprotocol/go-tron/common/log	1.571s
+ok  	github.com/tronprotocol/go-tron/common/muhash3072	0.799s
+?   	github.com/tronprotocol/go-tron/consensus	[no test files]
+ok  	github.com/tronprotocol/go-tron/consensus/dpos	0.711s
+--- FAIL: TestProcessBlockPublishesAsyncSenderRetryOnOrdinaryBlock (0.02s)
+    state_processor_test.go:3767: async retry publication candidates = 0, want 1
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core	409.397s
+ok  	github.com/tronprotocol/go-tron/core/blockbuffer	13.186s
+ok  	github.com/tronprotocol/go-tron/core/conformance	3.955s
+ok  	github.com/tronprotocol/go-tron/core/delegation	0.625s
+ok  	github.com/tronprotocol/go-tron/core/forks	0.620s
+ok  	github.com/tronprotocol/go-tron/core/freezer	153.208s
+ok  	github.com/tronprotocol/go-tron/core/maintenance	0.514s
+?   	github.com/tronprotocol/go-tron/core/pointread	[no test files]
+ok  	github.com/tronprotocol/go-tron/core/producer	0.853s
+ok  	github.com/tronprotocol/go-tron/core/rawdb	145.053s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/etl	11.527s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/freezer	123.440s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/pebbledb	37.386s
+ok  	github.com/tronprotocol/go-tron/core/reward	0.861s
+ok  	github.com/tronprotocol/go-tron/core/state	12.179s
+ok  	github.com/tronprotocol/go-tron/core/state/domains	0.716s
+ok  	github.com/tronprotocol/go-tron/core/state/kvdomains	0.491s
+ok  	github.com/tronprotocol/go-tron/core/state/pruning	143.483s
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	335.641s
+ok  	github.com/tronprotocol/go-tron/core/state/statecodec	0.805s
+ok  	github.com/tronprotocol/go-tron/core/txpool	0.590s
+ok  	github.com/tronprotocol/go-tron/core/types	0.646s
+ok  	github.com/tronprotocol/go-tron/core/zksnark	0.724s
+ok  	github.com/tronprotocol/go-tron/crypto	0.580s
+ok  	github.com/tronprotocol/go-tron/crypto/pq	0.599s
+?   	github.com/tronprotocol/go-tron/crypto/pq/falcon	[no test files]
+ok  	github.com/tronprotocol/go-tron/internal/dbcompare	1.151s
+ok  	github.com/tronprotocol/go-tron/internal/debugapi	0.799s
+ok  	github.com/tronprotocol/go-tron/internal/grpcapi	0.752s
+ok  	github.com/tronprotocol/go-tron/internal/historychunk	1.107s
+ok  	github.com/tronprotocol/go-tron/internal/jsonrpc	1.310s
+ok  	github.com/tronprotocol/go-tron/internal/math/strictmath	0.481s
+ok  	github.com/tronprotocol/go-tron/internal/metricsapi	0.625s
+ok  	github.com/tronprotocol/go-tron/internal/rpc	0.737s
+ok  	github.com/tronprotocol/go-tron/internal/testutil/fixture	0.753s
+ok  	github.com/tronprotocol/go-tron/internal/tronapi	0.896s
+ok  	github.com/tronprotocol/go-tron/net	16.515s
+ok  	github.com/tronprotocol/go-tron/net/sync	0.914s
+ok  	github.com/tronprotocol/go-tron/net/sync/downloader	0.911s
+?   	github.com/tronprotocol/go-tron/net/sync/fetcher	[no test files]
+ok  	github.com/tronprotocol/go-tron/node	0.656s
+ok  	github.com/tronprotocol/go-tron/p2p	2.457s
+ok  	github.com/tronprotocol/go-tron/p2p/discover	0.607s
+ok  	github.com/tronprotocol/go-tron/params	0.526s
+?   	github.com/tronprotocol/go-tron/proto/api	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core/contract	[no test files]
+ok  	github.com/tronprotocol/go-tron/proto/p2p	0.616s
+?   	github.com/tronprotocol/go-tron/scripts/dev/abi_hash	[no test files]
+?   	github.com/tronprotocol/go-tron/scripts/fixtures/cmd/gen-smoke	[no test files]
+ok  	github.com/tronprotocol/go-tron/vm	3.428s
+ok  	github.com/tronprotocol/go-tron/vm/tracers	1.191s
+FAIL
+make: *** [test] Error 1

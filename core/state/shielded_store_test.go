@@ -108,7 +108,8 @@ func TestShieldedMerkleStoreRoundTripAtRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stateRoot, err := sdb.Commit()
+	sdb.dynProps.SetLatestBlockHeaderNumber(123)
+	stateRoot, _, err := sdb.CommitWithStatsOptions(CommitOptions{BlockNumber: 123})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,9 +222,10 @@ func TestShieldedStoreStrictReadersSurfaceCorruptRows(t *testing.T) {
 	}
 
 	sdb = newTestStateDB(t)
-	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.MerkleTreeIndexStateKey(9), []byte{0x01}); err != nil {
+	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.ShieldedRootChangeStateKey(9), []byte{0x01}); err != nil {
 		t.Fatal(err)
 	}
+	sdb.dynProps.SetLatestBlockHeaderNumber(9)
 	if got := sdb.ReadMerkleTreeRootByBlock(9); got != nil {
 		t.Fatalf("compat ReadMerkleTreeRootByBlock corrupt row = %x, want nil", got)
 	}
@@ -232,9 +234,10 @@ func TestShieldedStoreStrictReadersSurfaceCorruptRows(t *testing.T) {
 	}
 
 	sdb = newTestStateDB(t)
-	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.MerkleTreeIndexStateKey(10), blockRoot); err != nil {
+	if err := sdb.SystemKVPut(kvdomains.SystemShielded, rawdb.ShieldedRootChangeStateKey(10), blockRoot); err != nil {
 		t.Fatal(err)
 	}
+	sdb.dynProps.SetLatestBlockHeaderNumber(10)
 	if got, ok, err := sdb.ReadMerkleTreeRootByBlockStrict(10); err != nil || !ok || !bytes.Equal(got, blockRoot) {
 		t.Fatalf("ReadMerkleTreeRootByBlockStrict valid = %x/%v/%v, want root/true/nil", got, ok, err)
 	}

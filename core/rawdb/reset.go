@@ -69,6 +69,7 @@ var resetMutablePrefixes = [][]byte{
 	zkProofPrefix,
 	incrMerkleTreePrefix,
 	merkleTreeIndexPrefix,
+	shieldedRootChangePrefix,
 	forkStatsPrefix,
 	delegRewardPrefix,
 	abiPrefix,

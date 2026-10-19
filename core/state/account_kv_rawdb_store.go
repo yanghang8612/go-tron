@@ -122,3 +122,10 @@ func (s rawdbAccountKVPhysicalLatestStore) IterateKVLatest(owner tcommon.Address
 	}
 	return rawdb.IterateStateKVLatest(s.iterator, owner, generation, domain, prefix, fn)
 }
+
+func (s rawdbAccountKVPhysicalLatestStore) ReadKVLatestBefore(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix, upper []byte) ([]byte, []byte, bool, error) {
+	if s.iterator == nil {
+		return nil, nil, false, nil
+	}
+	return rawdb.ReadStateKVLatestBefore(s.iterator, owner, generation, domain, prefix, upper)
+}

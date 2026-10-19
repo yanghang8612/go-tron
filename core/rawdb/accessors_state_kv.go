@@ -9,10 +9,14 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
-const stateKVLatestPresencePrefix = 0x01
+const (
+	stateKVLatestPresencePrefix = 0x01
+	stateKVLatestWordPrefix     = 0x02
+)
 
 // StateKVLatestStore is the mutable flat-latest database surface needed by
 // state-domain history unwind and pruning helpers.
@@ -76,21 +80,36 @@ func WriteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generatio
 }
 
 func EncodeStateKVLatestValue(value []byte) []byte {
-	return AppendStateKVLatestValue(nil, value)
+	return AppendStateKVLatestValue(make([]byte, 0, StateKVLatestValueSize(value)), value)
+}
+
+// StateKVLatestValueSize returns the canonical envelope length without allocating.
+func StateKVLatestValueSize(value []byte) int {
+	if len(value) == common.HashLength && value[0] == 0 {
+		return 1 + len(bytes.TrimLeft(value, "\x00"))
+	}
+	return 1 + len(value)
 }
 
 // AppendStateKVLatestValue appends the latest-state presence envelope to dst.
 // Callers that repeatedly replace a captured value can pass dst[:0] to reuse
 // its backing allocation; EncodeStateKVLatestValue remains the owning helper.
 func AppendStateKVLatestValue(dst, value []byte) []byte {
+	if len(value) == common.HashLength && value[0] == 0 {
+		dst = append(dst, stateKVLatestWordPrefix)
+		return append(dst, bytes.TrimLeft(value, "\x00")...)
+	}
 	dst = append(dst, stateKVLatestPresencePrefix)
 	return append(dst, value...)
 }
 
 // WriteStateKVLatestEncoded writes a value that is already encoded with the
-// latest-state presence prefix. State commit uses it to share the same encoded
-// bytes with the account KV trie and avoid wrapping each update twice.
+// canonical latest-state envelope. State commit shares these exact bytes with
+// physical source capture and avoids encoding each update twice.
 func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
+	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+		return err
+	}
 	if writer, ok := db.(stateKVLatestStructuredWriter); ok {
 		return writer.PutStateKVLatest(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey, wrapped)
 	}
@@ -101,6 +120,9 @@ func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, ge
 // to writers that advertise an ownership-taking path. Fallback writers retain
 // the normal copying Put semantics.
 func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
+	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+		return err
+	}
 	if writer, ok := db.(stateKVLatestStructuredOwnedWriter); ok {
 		return writer.PutStateKVLatestOwnedValue(stateKVLatestPrefix, owner.AccountID(), generation, uint16(domain), logicalKey, wrapped)
 	}
@@ -114,6 +136,9 @@ func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Addres
 // encoded value to ownership-aware writers. Batched state commit uses it with
 // key slices packed into one immutable arena.
 func WriteStateKVLatestEncodedOwnedByKey(db ethdb.KeyValueWriter, physicalKey, wrapped []byte) error {
+	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+		return err
+	}
 	if writer, ok := db.(ownedKeyValueWriter); ok {
 		return writer.PutOwnedKeyValue(physicalKey, wrapped)
 	}
@@ -242,6 +267,9 @@ func IterateStateKVLatestRowsContext(ctx context.Context, db ethdb.Iteratee, fn 
 		if !it.Next() {
 			break
 		}
+		if isStateKVLatestForeignKey(it.Key()) {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -272,6 +300,12 @@ func IterateStateKVLatestRowsContext(ctx context.Context, db ethdb.Iteratee, fn 
 	}
 	return it.Error()
 }
+
+// Legacy hash-addressed trie nodes are exactly 32 bytes and share the same KV
+// backend. The compact namespace has a 34-byte minimum key, so these unrelated
+// hash keys are unambiguously outside this source even if their hash prefix
+// happens to match kv3-. Do not skip other malformed source keys.
+func isStateKVLatestForeignKey(key []byte) bool { return len(key) == common.HashLength }
 
 func IterateStateKVLatestDomainRows(db ethdb.Iteratee, domain kvdomains.KVDomain, fn func(StateKVLatestRow) (bool, error)) error {
 	return IterateStateKVLatestDomainRowsContext(context.Background(), db, domain, fn)
@@ -316,17 +350,50 @@ func DecodeStateKVLatestValue(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if raw[0] == stateKVLatestWordPrefix {
+		// Compact words were already materialized into owned storage.
+		return value, nil
+	}
 	return append([]byte(nil), value...), nil
 }
 
+// DecodeStateKVLatestValueNoCopy borrows ordinary payloads and materializes a
+// compact word. The caller must not mutate a borrowed database/cache value.
+func DecodeStateKVLatestValueNoCopy(raw []byte) ([]byte, error) {
+	return decodeStateKVLatestValueNoCopy(raw)
+}
+
 func decodeStateKVLatestValueNoCopy(raw []byte) ([]byte, error) {
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("state kv latest: empty encoded value")
+	if err := ValidateStateKVLatestValue(raw); err != nil {
+		return nil, err
 	}
-	if raw[0] != stateKVLatestPresencePrefix {
-		return nil, fmt.Errorf("state kv latest: bad presence prefix %#x", raw[0])
+	if raw[0] == stateKVLatestWordPrefix {
+		// Canonical word envelopes save at least one byte. The empty suffix
+		// is a present zero word; an ordinary present empty string has tag 1.
+		word := make([]byte, common.HashLength)
+		copy(word[common.HashLength-len(raw)+1:], raw[1:])
+		return word, nil
 	}
 	return raw[1:], nil
+}
+
+func ValidateStateKVLatestValue(raw []byte) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("state kv latest: empty encoded value")
+	}
+	switch raw[0] {
+	case stateKVLatestPresencePrefix:
+		if len(raw) == common.HashLength+1 && raw[1] == 0 {
+			return fmt.Errorf("state kv latest: noncanonical uncompressed word")
+		}
+	case stateKVLatestWordPrefix:
+		if len(raw) > common.HashLength || len(raw) > 1 && raw[1] == 0 {
+			return fmt.Errorf("state kv latest: noncanonical compact word")
+		}
+	default:
+		return fmt.Errorf("state kv latest: bad presence prefix %#x", raw[0])
+	}
+	return nil
 }
 
 func DeleteStateKVLatestPrefix(db stateKVLatestStore, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) error {
@@ -466,4 +533,23 @@ func deleteStateKVPrefixByPointScan(db stateKVLatestStore, prefix []byte) error 
 		}
 	}
 	return it.Error()
+}
+
+// ReadStateKVLatestBefore returns the last logical row below exclusive upper.
+// Both returned slices are owned. nil upper leaves the logical prefix unbounded.
+func ReadStateKVLatestBefore(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix, upper []byte) ([]byte, []byte, bool, error) {
+	physicalPrefix := stateKVLatestLogicalPrefix(owner, generation, domain, prefix)
+	var physicalUpper []byte
+	if upper != nil {
+		physicalUpper = stateKVLatestKey(owner, generation, domain, upper)
+	}
+	key, encoded, ok, err := pointread.SeekBefore(db, physicalPrefix, physicalUpper)
+	if err != nil || !ok {
+		return nil, nil, false, err
+	}
+	value, err := DecodeStateKVLatestValue(encoded)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return bytes.Clone(key[len(stateKVLatestDomainPrefix(owner, generation, domain)):]), value, true, nil
 }

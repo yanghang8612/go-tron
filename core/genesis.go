@@ -120,17 +120,8 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	} else if present {
 		return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
 	}
-	for _, prefix := range rawdb.StateCommitmentSourcePrefixes() {
-		it := db.NewIterator(prefix, nil)
-		has := it.Next()
-		err := it.Error()
-		it.Release()
-		if err != nil {
-			return nil, tcommon.Hash{}, err
-		}
-		if has {
-			return nil, tcommon.Hash{}, rawdb.ErrStateCommitmentHead
-		}
+	if err := rawdb.CheckEmptyStateCommitmentSources(db); err != nil {
+		return nil, tcommon.Hash{}, err
 	}
 	// Construct off-store; publish source, full HEAD and identity in one batch.
 	scratch := rawdb.NewMemoryDatabase()

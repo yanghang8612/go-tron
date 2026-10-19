@@ -13,7 +13,7 @@ func TestClassifyPhysicalKeyString(t *testing.T) {
 		{"state-commitment-branch-rotation-v1", PhysicalKeyFamilyCommitment},
 		{"state-commitment-domain-v1-root", PhysicalKeyFamilyCommitment},
 		{"state-account-latest-v1-owner", PhysicalKeyFamilyAccountLatest},
-		{"state-kv-latest-v2-owner", PhysicalKeyFamilyKVLatest},
+		{"kv3-owner", PhysicalKeyFamilyKVLatest},
 		{"state-kv-generation-v2-owner", PhysicalKeyFamilyKVGeneration},
 		{"state-code-v1-hash", PhysicalKeyFamilyStateCode},
 		{"state-tx-range-v1-row", PhysicalKeyFamilyStateTxRange},

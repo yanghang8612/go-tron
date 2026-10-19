@@ -138,7 +138,7 @@ func TestManifestCacheKeepsProductionValidation(t *testing.T) {
 }
 
 func TestManifestCachePreservesEmptyArrays(t *testing.T) {
-	for _, raw := range []string{`{"version":2,"commitmentScheme":"state-flat-latest-muhash3072-v1","elementVersion":1,"visibleTxStart":0,"visibleTxEnd":0,"segments":[]}`, `{"version":2,"commitmentScheme":"state-flat-latest-muhash3072-v1","elementVersion":1,"visibleTxStart":0,"visibleTxEnd":0,"segments":null,"retired":[]}`} {
+	for _, raw := range []string{`{"version":3,"commitmentScheme":"state-flat-latest-muhash3072-compact-v2","elementVersion":2,"visibleTxStart":0,"visibleTxEnd":0,"segments":[]}`, `{"version":3,"commitmentScheme":"state-flat-latest-muhash3072-compact-v2","elementVersion":2,"visibleTxStart":0,"visibleTxEnd":0,"segments":null,"retired":[]}`} {
 		var cache manifestDecodeCache
 		want, err := decodeManifest([]byte(raw))
 		if err != nil {

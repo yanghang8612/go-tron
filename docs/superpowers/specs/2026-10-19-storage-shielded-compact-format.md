@@ -1,9 +1,11 @@
 # Compact Storage and Shielded index: fresh-state design
 
-Status: distribution and controlled SST experiments only. No runtime format
-change or deployment is implemented by this task. The user explicitly allows
-an incompatible local format and a future genesis sync. The current service and
-its database are preserved while this analysis is performed.
+Status: the distribution/SST analysis is complete. The follow-up implementation
+is documented in [compact-state-format-v2.md](../../dev/compact-state-format-v2.md).
+It keeps all 32 logical slot bytes, shortens the physical table namespace and
+compacts values in both hot latest and cold latest segments. The experimental
+44-byte key representation below is not the implemented format. Production has
+not been reset or deployed by this implementation task.
 
 The design changes local representation, not TRON wire messages, TVM storage
 semantics, shielded anchor validation or consensus outputs.

@@ -19,10 +19,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// kvPresencePrefix wraps persisted KV values so an empty-but-present value
-// stays distinct from an absent key.
-const kvPresencePrefix = 0x01
-
 // kvEntry is one pending account-KV write in the dirty overlay. deleted=true is
 // a tombstone; deleted=false means val is present (val may be empty but != nil).
 type kvEntry struct {
@@ -1274,44 +1270,44 @@ func (s *StateDB) accountUint32Key(index uint32) []byte {
 }
 
 func newKVEntry(value []byte, deleted bool) kvEntry {
-	e := kvEntry{deleted: deleted}
-	if !deleted {
-		e.wrapped = make([]byte, 1+len(value))
-		e.wrapped[0] = kvPresencePrefix
-		copy(e.wrapped[1:], value)
-		e.val = e.wrapped[1:]
-	}
-	return e
+	return newKVEntryInArena(value, deleted, nil)
 }
 
 func newKVHashEntry(value tcommon.Hash, deleted bool) kvEntry {
-	e := kvEntry{deleted: deleted}
-	if !deleted {
-		e.wrapped = make([]byte, 1+len(value))
-		e.wrapped[0] = kvPresencePrefix
-		copy(e.wrapped[1:], value[:])
-		e.val = e.wrapped[1:]
-	}
-	return e
+	return newKVEntryInArena(value[:], deleted, nil)
 }
 
 func (s *StateDB) newKVEntry(value []byte, deleted bool) kvEntry {
-	e := kvEntry{deleted: deleted}
-	if !deleted {
-		e.wrapped = s.kvEntryArena.alloc(1 + len(value))
-		e.wrapped[0] = kvPresencePrefix
-		copy(e.wrapped[1:], value)
-		e.val = e.wrapped[1:]
-	}
-	return e
+	return newKVEntryInArena(value, deleted, &s.kvEntryArena)
 }
 
 func (s *StateDB) newKVHashEntry(value tcommon.Hash, deleted bool) kvEntry {
+	return newKVEntryInArena(value[:], deleted, &s.kvEntryArena)
+}
+
+func newKVEntryInArena(value []byte, deleted bool, arena *kvEntryArena) kvEntry {
 	e := kvEntry{deleted: deleted}
-	if !deleted {
-		e.wrapped = s.kvEntryArena.alloc(1 + len(value))
-		e.wrapped[0] = kvPresencePrefix
-		copy(e.wrapped[1:], value[:])
+	if deleted {
+		return e
+	}
+	encodedSize := rawdb.StateKVLatestValueSize(value)
+	size := encodedSize
+	compact := encodedSize != len(value)+1
+	if compact {
+		size += len(value)
+	}
+	var owned []byte
+	if arena == nil {
+		owned = make([]byte, size)
+	} else {
+		owned = arena.alloc(size)
+	}
+	if compact {
+		e.val = owned[:len(value):len(value)]
+		copy(e.val, value)
+		e.wrapped = rawdb.AppendStateKVLatestValue(owned[len(value):len(value)], value)
+	} else {
+		e.wrapped = rawdb.AppendStateKVLatestValue(owned[:0], value)
 		e.val = e.wrapped[1:]
 	}
 	return e
@@ -1321,17 +1317,11 @@ func (e kvEntry) encodedValue() []byte {
 	if len(e.wrapped) > 0 {
 		return e.wrapped
 	}
-	wrapped := make([]byte, 1+len(e.val))
-	wrapped[0] = kvPresencePrefix
-	copy(wrapped[1:], e.val)
-	return wrapped
+	return rawdb.EncodeStateKVLatestValue(e.val)
 }
 
 func wrapKVValue(value []byte) []byte {
-	wrapped := make([]byte, 1+len(value))
-	wrapped[0] = kvPresencePrefix
-	copy(wrapped[1:], value)
-	return wrapped
+	return rawdb.EncodeStateKVLatestValue(value)
 }
 
 func (s *StateDB) setKVEntryPrev(e *kvEntry, value []byte, exists bool) {
@@ -1771,17 +1761,18 @@ func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 }
 
 // setAccountKVWrappedOwned stages a value that is already encoded as
-// kvPresencePrefix||value in immutable caller-owned storage. It transfers that
+// the canonical latest-value envelope in immutable caller-owned storage. It transfers that
 // storage into the dirty overlay instead of copying value into kvEntryArena a
 // second time. Callers must not mutate wrapped after this call.
 func (s *StateDB) setAccountKVWrappedOwned(owner tcommon.Address, domain kvdomains.KVDomain, key, wrapped []byte) error {
 	if err := s.Error(); err != nil {
 		return err
 	}
-	if len(wrapped) == 0 || wrapped[0] != kvPresencePrefix {
-		return s.recordStateError("write rooted account kv owned value", fmt.Errorf("account kv: invalid owned value wrapper"))
+	value, err := rawdb.DecodeStateKVLatestValueNoCopy(wrapped)
+	if err != nil {
+		return s.recordStateError("write rooted account kv owned value", err)
 	}
-	if err := s.setAccountKVPrepared(owner, domain, key, wrapped[1:], wrapped, true); err != nil {
+	if err := s.setAccountKVPrepared(owner, domain, key, value, wrapped, true); err != nil {
 		return s.recordStateError(fmt.Sprintf("write rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
 	}
 	return nil
@@ -2211,8 +2202,8 @@ func (s *StateDB) commitAccountKVLatest(obj *stateObject, plan *accountKVCommitP
 			continue
 		}
 		if canTransferEncoded && len(entry.wrapped) != 0 {
-			// wrapped owns the persisted presence envelope and entry.val is its
-			// semantic suffix. Neither is mutated after this commit plan forms,
+			// wrapped owns the persisted canonical envelope; entry.val retains the
+			// exact logical bytes. Neither is mutated after this commit plan forms,
 			// so latest, pending reads and commitment capture can share it.
 			if err := encoded.DomainPutEncodedOwned(obj.address, item.domain, item.logicalKey, entry.val, entry.wrapped); err != nil {
 				return false, err

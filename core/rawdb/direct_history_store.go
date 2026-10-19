@@ -374,6 +374,23 @@ func (d *DirectHistoryStore) NewIterator(prefix, start []byte) ethdb.Iterator {
 func (d *DirectHistoryStore) SeekPrefix(prefix, start []byte) ([]byte, []byte, bool, error) {
 	return directHistorySeek(d, prefix, start)
 }
+
+func (d *DirectHistoryStore) SeekPrefixBefore(prefix, upper []byte) ([]byte, []byte, bool, error) {
+	// State namespaces belong exclusively to hot storage. An ambiguous prefix
+	// must retain the merged iterator's semantics rather than bypass history.
+	if history, exclusive := directHistoryPrefixPartition(prefix); exclusive {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if history {
+			return pointread.SeekBefore(d.history, prefix, upper)
+		}
+		return pointread.SeekBefore(d.hot, prefix, upper)
+	}
+	return pointread.SeekBefore(directPredecessorFallback{d}, prefix, upper)
+}
+
+type directPredecessorFallback struct{ ethdb.Iteratee }
+
 func directHistorySeek(source ethdb.Iteratee, prefix, start []byte) ([]byte, []byte, bool, error) {
 	it := source.NewIterator(prefix, start)
 	defer it.Release()
@@ -565,6 +582,21 @@ func (s *directHistorySnapshot) NewIterator(prefix, start []byte) ethdb.Iterator
 }
 func (s *directHistorySnapshot) SeekPrefix(prefix, start []byte) ([]byte, []byte, bool, error) {
 	return directHistorySeek(s, prefix, start)
+}
+func (s *directHistorySnapshot) SeekPrefixBefore(prefix, upper []byte) ([]byte, []byte, bool, error) {
+	if history, exclusive := directHistoryPrefixPartition(prefix); exclusive {
+		if history {
+			return pointread.SeekBefore(s.history, prefix, upper)
+		}
+		return pointread.SeekBefore(s.hot, prefix, upper)
+	}
+	return pointread.SeekBefore(directPredecessorFallback{s}, prefix, upper)
+}
+func (s *directHistoryReadSnapshot) SeekPrefixBefore(prefix, upper []byte) ([]byte, []byte, bool, error) {
+	if history, exclusive := directHistoryPrefixPartition(prefix); !history || !exclusive {
+		return nil, nil, false, ErrStateHistorySnapshotScope
+	}
+	return pointread.SeekBefore(s.source, prefix, upper)
 }
 func (s *directHistorySnapshot) Close() error             { return errors.Join(s.history.Close(), s.hot.Close()) }
 func (*directHistorySnapshot) IsPinnedKeyValueView() bool { return true }

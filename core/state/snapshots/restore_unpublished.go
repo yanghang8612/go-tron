@@ -51,18 +51,8 @@ func newUnpublishedRestore(db ethdb.KeyValueWriter) (*unpublishedRestore, error)
 	} else if ok {
 		return nil, errors.New("snapshots: restore target already has current chain anchor")
 	}
-	for _, prefix := range rawdb.StateCommitmentSourcePrefixes() {
-		it := store.NewIterator(prefix, nil)
-		exists := it.Next()
-		err := it.Error()
-		it.Release()
-		err = errors.Join(err, it.Error())
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			return nil, fmt.Errorf("snapshots: restore target has residual source rows for %x", prefix)
-		}
+	if err := rawdb.CheckEmptyStateCommitmentSources(store); err != nil {
+		return nil, fmt.Errorf("snapshots: nonempty restore target: %w", err)
 	}
 	if err := rawdb.WriteStateCommitmentRestoreMarker(store); err != nil {
 		return nil, err

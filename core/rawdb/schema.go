@@ -296,7 +296,7 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 		return PhysicalKeyFamilyCommitment
 	case strings.HasPrefix(key, "state-account-latest-v1-"):
 		return PhysicalKeyFamilyAccountLatest
-	case strings.HasPrefix(key, "state-kv-latest-v2-"):
+	case len(key) != common.HashLength && strings.HasPrefix(key, string(stateKVLatestPrefix)):
 		return PhysicalKeyFamilyKVLatest
 	case strings.HasPrefix(key, "state-kv-generation-v2-"):
 		return PhysicalKeyFamilyKVGeneration
@@ -462,6 +462,11 @@ var (
 	// Value: 32-byte commitment tree root
 	merkleTreeIndexPrefix = []byte("mti-")
 
+	// shieldedRootChangePrefix is the fresh-format sparse height index in
+	// SystemShielded. Each row starts a run ending at the next change or at
+	// the canonical state height. Root-keyed trees remain unchanged.
+	shieldedRootChangePrefix = []byte("mrc-")
+
 	// forkStatsPrefix stores per-block-version SR vote bitmaps.
 	// Key:   forkStatsPrefix || big-endian int32 version
 	// Value: byte slice of length == active witness count; index = slot,
@@ -528,10 +533,13 @@ var (
 	// the retained EmptyKVRoot compatibility field. The table is prefix-iterable
 	// for domain iteration and prefix deletion.
 	//
-	// Key:   state-kv-latest-v2- || owner AccountID20 || generation u64
+	// Key:   kv3- || owner AccountID20 || generation u64
 	//        || domain u16 || logical key
-	// Value: 0x01 || value, preserving empty-but-present values.
-	stateKVLatestPrefix = []byte("state-kv-latest-v2-")
+	// Value: canonical tag 1 bytes or tag 2 compact 32-byte word. Logical keys
+	// remain exact, including both halves of Java's storage row identity.
+	stateKVLatestPrefix = []byte("kv3-")
+	// Used only to reject residual incompatible state before initialization.
+	legacyStateKVLatestPrefix = []byte("state-kv-latest-v2-")
 
 	// stateAccountLatestPrefix is the Erigon-style flat account latest
 	// domain. Values are opaque to rawdb; state.StateDB stores its internal

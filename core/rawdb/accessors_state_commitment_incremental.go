@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -155,20 +156,17 @@ func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value 
 func IterateLatestDomainCommitmentSourcesWithSource(db ethdb.Iteratee, fn func(source LatestDomainCommitmentSource, key, value []byte) (bool, error)) error {
 	for _, source := range latestDomainCommitmentSources {
 		it := db.NewIterator(source.prefix, nil)
+		closeIterator := func() error { err := it.Error(); it.Release(); return errors.Join(err, it.Error()) }
 		for it.Next() {
-			cont, err := fn(source.name, it.Key(), it.Value())
-			if err != nil {
-				it.Release()
-				return err
+			if source.name == LatestDomainCommitmentSourceKVLatest && isStateKVLatestForeignKey(it.Key()) {
+				continue
 			}
-			if !cont {
-				it.Release()
-				return nil
+			cont, err := fn(source.name, it.Key(), it.Value())
+			if err != nil || !cont {
+				return errors.Join(err, closeIterator())
 			}
 		}
-		err := it.Error()
-		it.Release()
-		if err != nil {
+		if err := closeIterator(); err != nil {
 			return err
 		}
 	}

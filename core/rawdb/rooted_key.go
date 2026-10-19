@@ -74,7 +74,8 @@ func LookupRootedStateKey(key []byte) (RootedStateKey, bool) {
 		bytes.HasPrefix(key, incrMerkleTreePrefix),
 		bytes.Equal(key, incrMerkleLastTreeKey),
 		bytes.Equal(key, incrMerkleCurrentTreeKey),
-		bytes.HasPrefix(key, merkleTreeIndexPrefix):
+		bytes.HasPrefix(key, merkleTreeIndexPrefix),
+		bytes.HasPrefix(key, shieldedRootChangePrefix):
 		return rootedSystem(kvdomains.SystemShielded, key), true
 	}
 	return RootedStateKey{}, false

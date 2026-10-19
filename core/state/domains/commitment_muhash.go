@@ -161,24 +161,14 @@ func RebuildMuHashCommitment(db CommitmentDB) (common.Hash, error) {
 		rebuildSpyHook()
 	}
 	acc := muhash3072.NewAccumulator()
-	for _, prefix := range rawdb.StateCommitmentSourcePrefixes() {
-		it := db.NewIterator(prefix, nil)
-		for it.Next() {
-			element, err := rawdb.EncodeStateCommitmentElement(it.Key(), it.Value())
-			if err != nil {
-				it.Release()
-				return common.Hash{}, err
-			}
-			if err = acc.Insert(element); err != nil {
-				it.Release()
-				return common.Hash{}, err
-			}
-		}
-		err := it.Error()
-		it.Release()
+	if err := rawdb.IterateLatestDomainCommitmentSources(db, func(k, v []byte) (bool, error) {
+		element, err := rawdb.EncodeStateCommitmentElement(k, v)
 		if err != nil {
-			return common.Hash{}, err
+			return false, err
 		}
+		return true, acc.Insert(element)
+	}); err != nil {
+		return common.Hash{}, err
 	}
 	final, err := acc.Finalize()
 	if err != nil {

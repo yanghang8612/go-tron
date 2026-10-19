@@ -32,9 +32,13 @@ func (s *GenerationBytes) add(key, raw []byte) {
 	s.Rows++
 	s.KeyBytes += uint64(len(key))
 	s.ValueBytes += uint64(len(raw))
-	s.PayloadBytes += uint64(len(raw) - 1)
+	payload := len(raw) - 1
+	if len(raw) > 0 && raw[0] == stateKVLatestWordPrefix {
+		payload = 32
+	}
+	s.PayloadBytes += uint64(payload)
 	s.LogicalBytes += uint64(len(key) + len(raw))
-	s.MaxPayload = max(s.MaxPayload, uint64(len(raw)-1))
+	s.MaxPayload = max(s.MaxPayload, uint64(payload))
 }
 
 type GenerationOwner struct {
@@ -319,11 +323,16 @@ func InspectStateKVGenerations(ctx context.Context, db interface {
 	}
 	for ki.Next() {
 		key, raw := ki.Key(), ki.Value()
+		if isStateKVLatestForeignKey(key) {
+			continue
+		}
 		kvOwner, stored, domain, _, valid := DecodeStateKVLatestKey(key)
 		if !valid {
 			return r, fmt.Errorf("generation census: malformed/unregistered KV key %x", key)
 		}
-		if _, err = DecodeStateKVLatestValue(raw); err != nil {
+		payload, decodeErr := DecodeStateKVLatestValueNoCopy(raw)
+		if decodeErr != nil {
+			err = decodeErr
 			return r, err
 		}
 		if !haveOwner || owner.Owner != kvOwner {
@@ -365,7 +374,7 @@ func InspectStateKVGenerations(ctx context.Context, db interface {
 		r.Classes[class].add(key, raw)
 		hashCensusRow(classHashes[class], key, raw)
 		generationDimension(r.Domains, kvdomains.Name(domain), class, key, raw)
-		generationDimension(r.PayloadSizes, payloadBucket(len(raw)-1), class, key, raw)
+		generationDimension(r.PayloadSizes, payloadBucket(len(payload)), class, key, raw)
 		generationDimension(r.StoredGenerations, generationBucket(stored), class, key, raw)
 		if err = observe(2, key, raw); err != nil {
 			return r, err

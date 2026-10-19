@@ -58,6 +58,12 @@ func TestLookupRootedStateKeyConsensusMappings(t *testing.T) {
 			domain: kvdomains.SystemDelegation,
 		},
 		{
+			name:   "shielded root change",
+			key:    ShieldedRootChangeStateKey(7),
+			owner:  common.SystemAccountAddress,
+			domain: kvdomains.SystemShielded,
+		},
+		{
 			name:   "shielded nullifier",
 			key:    nullifierKey([]byte("nullifier")),
 			owner:  common.SystemAccountAddress,

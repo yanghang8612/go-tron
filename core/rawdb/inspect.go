@@ -110,7 +110,7 @@ var inspectPrefixes = []inspectKeyspace{
 	{name: "history-staging-old-cold-refs-done", pattern: "history-staging-old-cold-refs-done-v1-*", prefix: historyStagingOldColdRefsDonePrefix},
 	{name: "history-staging-old-hot-gc", pattern: "history-staging-old-hot-gc-v1-*", prefix: historyStagingOldHotGCPrefix},
 	{name: "history-staging-other", pattern: "history-staging-*", prefix: historyStagingMetadataPrefix},
-	{name: "state-kv-latest", pattern: "state-kv-latest-v2-*", prefix: stateKVLatestPrefix},
+	{name: "state-kv-latest", pattern: "kv3-*", prefix: stateKVLatestPrefix},
 	{name: "sync-staged-block", pattern: "sync-staged-block-v1-*", prefix: syncStagedBlockPrefix},
 	{name: "stage-progress", pattern: "stage-progress-v1-*", prefix: stageProgressPrefix},
 	{name: "state-tx-range", pattern: "state-tx-range-v1-*", prefix: stateTxRangePrefix},
@@ -141,6 +141,7 @@ var inspectPrefixes = []inspectKeyspace{
 	{name: "zk-proof", pattern: "zkp-*", prefix: zkProofPrefix},
 	{name: "incremental-merkle-tree", pattern: "imt-*", prefix: incrMerkleTreePrefix},
 	{name: "merkle-tree-index", pattern: "mti-*", prefix: merkleTreeIndexPrefix},
+	{name: "shielded-root-change", pattern: "mrc-*", prefix: shieldedRootChangePrefix},
 	{name: "fork-version", pattern: "fv-*", prefix: forkStatsPrefix},
 	{name: "delegation-reward", pattern: "dl-*", prefix: delegRewardPrefix},
 	{name: "contract-abi", pattern: "abi-*", prefix: abiPrefix},
@@ -231,6 +232,9 @@ func inspectKeyspaceFor(key []byte) inspectKeyspace {
 		}
 	}
 	for _, space := range inspectPrefixesByFirst[key[0]] {
+		if bytes.Equal(space.prefix, stateKVLatestPrefix) && isStateKVLatestForeignKey(key) {
+			continue
+		}
 		if bytes.HasPrefix(key, space.prefix) {
 			return space
 		}

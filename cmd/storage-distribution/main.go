@@ -38,17 +38,17 @@ type metric struct {
 	Payload uint64 `json:"payload_bytes"`
 }
 
-func (m *metric) add(k, v []byte) {
+func (m *metric) add(k, v, payload []byte) {
 	m.Rows++
 	m.Key += uint64(len(k))
 	m.Value += uint64(len(v))
-	m.Payload += uint64(len(v) - 1)
+	m.Payload += uint64(len(payload))
 }
-func add(m map[string]*metric, s string, k, v []byte) {
+func add(m map[string]*metric, s string, k, v, payload []byte) {
 	if m[s] == nil {
 		m[s] = new(metric)
 	}
-	m[s].add(k, v)
+	m[s].add(k, v, payload)
 }
 func framed(h hash.Hash, k, v []byte) {
 	var n [8]byte
@@ -348,6 +348,10 @@ func inspect(ctx context.Context, db interface {
 			return r, err
 		}
 		key, raw := it.Key(), it.Value()
+		// A raw trie hash cannot be a latest-KV row.
+		if len(key) == common.HashLength {
+			continue
+		}
 		framed(hashes[2], key, raw)
 		r.SourceRows[2]++
 		owner, generation, domain, logical, valid := rawdb.DecodeStateKVLatestKey(key)
@@ -366,10 +370,10 @@ func inspect(ctx context.Context, db interface {
 		}
 		inc := incarnation{owner, generation}
 		if domain == kvdomains.ContractStorage {
-			add(r.Storage, class, key, raw)
-			add(r.ValueLength, strconv.Itoa(len(value)), key, raw)
+			add(r.Storage, class, key, raw, value)
+			add(r.ValueLength, strconv.Itoa(len(value)), key, raw, value)
 			z := zeros(value)
-			add(r.ValueLeadingZeros, strconv.Itoa(z), key, raw)
+			add(r.ValueLeadingZeros, strconv.Itoa(z), key, raw, value)
 			trim := len(value) - z
 			r.TrimmedBytes += uint64(trim)
 			kind := "wide"
@@ -386,13 +390,13 @@ func inspect(ctx context.Context, db interface {
 			} else if trim <= 20 {
 				kind = "u160"
 			}
-			add(r.ValueKinds, kind, key, raw)
+			add(r.ValueKinds, kind, key, raw, value)
 			o := owners[inc]
 			if o == nil {
 				o = &ownerMetric{Owner: hex.EncodeToString(owner[:]), Generation: generation, Class: class}
 				owners[inc] = o
 			}
-			o.add(key, raw)
+			o.add(key, raw, value)
 			o.TrimmedBytes += uint64(trim)
 			if trim == 0 {
 				o.ZeroRows++
@@ -455,7 +459,7 @@ func inspect(ctx context.Context, db interface {
 			}
 		} else if domain == kvdomains.SystemShielded {
 			sub := shieldedKind(logical)
-			add(r.Shielded, sub+"/"+class, key, raw)
+			add(r.Shielded, sub+"/"+class, key, raw, value)
 			if sub == "block-root-index" {
 				if len(value) != 32 {
 					return r, errors.New("block-root value length")
@@ -575,6 +579,8 @@ func inspect(ctx context.Context, db interface {
 
 func shieldedKind(k []byte) string {
 	switch {
+	case len(k) == len(rawdb.ShieldedRootChangeStateKey(1)) && bytes.HasPrefix(k, rawdb.ShieldedRootChangePrefix()):
+		return "root-change-point"
 	case len(k) == len(rawdb.MerkleTreeIndexStateKey(0)) && bytes.Equal(k[:len(k)-8], rawdb.MerkleTreeIndexStateKey(0)[:len(k)-8]):
 		return "block-root-index"
 	case bytes.Equal(k, rawdb.IncrMerkleLastTreeStateKey()):

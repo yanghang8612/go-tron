@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/rawdb
+cpu: Apple M1 Max
+BenchmarkCompactPredecessor/1-10  	  300948	      1040 ns/op	     682 B/op	      14 allocs/op
+BenchmarkCompactPredecessor/100000-10         	  262316	      1542 ns/op	     736 B/op	      14 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	3.556s

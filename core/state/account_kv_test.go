@@ -2799,14 +2799,14 @@ func (s *countingKVIndexStore) Get(key []byte) ([]byte, error) {
 }
 
 func (s *countingKVIndexStore) Put(key, value []byte) error {
-	if bytes.HasPrefix(key, []byte("state-kv-latest-v2-")) {
+	if _, _, _, _, ok := rawdb.DecodeStateKVLatestKey(key); ok {
 		s.puts++
 	}
 	return s.KeyValueStore.Put(key, value)
 }
 
 func (s *countingKVIndexStore) Delete(key []byte) error {
-	if bytes.HasPrefix(key, []byte("state-kv-latest-v2-")) {
+	if _, _, _, _, ok := rawdb.DecodeStateKVLatestKey(key); ok {
 		s.deletes++
 	}
 	return s.KeyValueStore.Delete(key)

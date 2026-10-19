@@ -52,6 +52,10 @@ func sealed(t *testing.T, db ethdb.KeyValueStore) rawdb.GenerationCensus {
 
 func fixture(t *testing.T, db ethdb.KeyValueStore) rawdb.GenerationCensus {
 	t.Helper()
+	hashKey := append(rawdb.StateCommitmentSourcePrefixes()[2], make([]byte, 28)...)
+	if err := db.Put(hashKey, []byte("foreign trie hash")); err != nil {
+		t.Fatal(err)
+	}
 	for i := byte(1); i <= 2; i++ {
 		owner := common.Address{0x41, i}
 		if i == 2 {
@@ -113,6 +117,9 @@ func TestDistributionExactAndExperiments(t *testing.T) {
 	}
 	if r.Storage["current"].Rows != 10 || r.Storage["obsolete"].Rows != 5 || r.Storage["future"].Rows != 5 || r.TrimmedBytes != 4*(0+1+2+22+32) {
 		t.Fatalf("bad metrics: %+v", r)
+	}
+	if r.Storage["current"].Payload != 10*32 || r.Storage["obsolete"].Payload != 5*32 || r.Storage["future"].Payload != 5*32 {
+		t.Fatal("compact bytes confused with decoded payload size")
 	}
 	if r.RootRows != 6 || r.Runs != 3 || r.DistinctRoots != 2 || r.Gaps != 1 || r.MinHeight != 1 || r.MaxHeight != 7 || r.LargestRun != 2 {
 		t.Fatalf("bad roots: %+v", r)
@@ -241,7 +248,7 @@ func TestShieldedSubkeys(t *testing.T) {
 	rows := []struct {
 		k    []byte
 		kind string
-	}{{rawdb.MerkleTreeIndexStateKey(8), "block-root-index"}, {rawdb.IncrMerkleLastTreeStateKey(), "last-tree"}, {rawdb.IncrMerkleCurrentTreeStateKey(), "current-tree"}, {rawdb.IncrMerkleTreeStateKey(make([]byte, 32)), "root-tree"}, {rawdb.NoteCommitmentCountStateKey(), "note-count"}, {rawdb.NoteCommitmentStateKey(2), "note-commitment"}, {rawdb.NullifierStateKey(make([]byte, 32)), "nullifier"}, {rawdb.ZKProofStateKey(make([]byte, 32)), "proof-cache"}}
+	}{{rawdb.ShieldedRootChangeStateKey(8), "root-change-point"}, {rawdb.MerkleTreeIndexStateKey(8), "block-root-index"}, {rawdb.IncrMerkleLastTreeStateKey(), "last-tree"}, {rawdb.IncrMerkleCurrentTreeStateKey(), "current-tree"}, {rawdb.IncrMerkleTreeStateKey(make([]byte, 32)), "root-tree"}, {rawdb.NoteCommitmentCountStateKey(), "note-count"}, {rawdb.NoteCommitmentStateKey(2), "note-commitment"}, {rawdb.NullifierStateKey(make([]byte, 32)), "nullifier"}, {rawdb.ZKProofStateKey(make([]byte, 32)), "proof-cache"}}
 	for _, row := range rows {
 		if got := shieldedKind(row.k); got != row.kind {
 			t.Fatalf("%x = %s", row.k, got)

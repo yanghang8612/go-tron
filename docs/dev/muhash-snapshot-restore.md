@@ -1,13 +1,14 @@
 # MuHash latest-state snapshots
 
-The local latest-state commitment scheme is `state-flat-latest-muhash3072-v1`.
+The local latest-state commitment scheme is `state-flat-latest-muhash3072-compact-v2`.
 It does not replace Java/TRON's account-state trie root or any wire/consensus field.
 This release starts from genesis in a fresh database. Older state databases and
 snapshot manifests are rejected; there is no migration or compatibility mode.
+The current compact representation is documented in [compact-state-format-v2.md](compact-state-format-v2.md).
 
 ## Snapshot cuts
 
-Manifest version 2 identifies the element codec and commitment scheme. Only the
+Manifest version 3 identifies the element codec and commitment scheme. Only the
 current HEAD and actual snapshot cuts retain the complete normalized 384-byte
 MuHash state; historical per-block checkpoints retain identity and digest only.
 Every physical account-latest, generation and KV-latest row is included, including

@@ -136,27 +136,26 @@ func RebuildLatestMuHash(db AggregatorDB) (muhash3072.Finalized, error) {
 func rebuildLatestMuHashCounted(db AggregatorDB) (muhash3072.Finalized, [3]uint64, error) {
 	acc := muhash3072.NewAccumulator()
 	var counts [3]uint64
-	for family, prefix := range rawdb.StateCommitmentSourcePrefixes() {
-		it := db.NewIterator(prefix, nil)
-		var err error
-		for it.Next() {
-			element, e := rawdb.EncodeStateCommitmentElement(it.Key(), it.Value())
-			if e != nil {
-				err = e
-				break
-			}
-			if e = acc.Insert(element); e != nil {
-				err = e
-				break
-			}
-			counts[family]++
-		}
-		err = errors.Join(err, it.Error())
-		it.Release()
-		err = errors.Join(err, it.Error())
+	err := rawdb.IterateLatestDomainCommitmentSourcesWithSource(db, func(source rawdb.LatestDomainCommitmentSource, k, v []byte) (bool, error) {
+		element, err := rawdb.EncodeStateCommitmentElement(k, v)
 		if err != nil {
-			return muhash3072.Finalized{}, counts, err
+			return false, err
 		}
+		if err = acc.Insert(element); err != nil {
+			return false, err
+		}
+		switch source {
+		case rawdb.LatestDomainCommitmentSourceAccounts:
+			counts[0]++
+		case rawdb.LatestDomainCommitmentSourceKVGeneration:
+			counts[1]++
+		case rawdb.LatestDomainCommitmentSourceKVLatest:
+			counts[2]++
+		}
+		return true, nil
+	})
+	if err != nil {
+		return muhash3072.Finalized{}, counts, err
 	}
 	value, err := acc.Finalize()
 	return value, counts, err

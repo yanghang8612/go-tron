@@ -21,7 +21,7 @@ func TestDiskSpaceObservationRangesCoverFamilies(t *testing.T) {
 		key, family string
 	}{
 		{"state-account-latest-v1-\x00owner\xff", "account_latest"},
-		{"state-kv-latest-v2-\x00owner\xff", "account_kv_latest"},
+		{"kv3-\x00owner\xff", "account_kv_latest"},
 		{"state-kv-generation-v2-\x00owner\xff", "kv_generation"},
 		{"state-code-v1-\x00hash\xff", "state_code"},
 		{"state-commitment-branch-v1-\x00\xff", "commitment"},

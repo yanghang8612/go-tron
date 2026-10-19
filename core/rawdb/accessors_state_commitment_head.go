@@ -13,10 +13,10 @@ import (
 	"github.com/tronprotocol/go-tron/common/muhash3072"
 )
 
-const StateCommitmentHeadVersion uint16 = 1
-const StateCommitmentElementVersion uint16 = 1
+const StateCommitmentHeadVersion uint16 = 2
+const StateCommitmentElementVersion uint16 = 2
 
-var stateCommitmentHeadMagic = []byte{'G', 'M', 'H', 'H', 'E', 'A', 'D', 1}
+var stateCommitmentHeadMagic = []byte{'G', 'M', 'H', 'H', 'E', 'A', 'D', 2}
 var ErrStateCommitmentHead = errors.New("invalid MuHash latest-domain HEAD; fresh-genesis resync required")
 
 // StateCommitmentHead is a complete current source-cut commitment. Only HEAD
@@ -157,7 +157,12 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	const domain = "gtron/latest-domain/muhash3072/v1\x00"
+	if family == 3 {
+		if err := ValidateStateKVLatestValue(value); err != nil {
+			return nil, err
+		}
+	}
+	const domain = "gtron/latest-domain/muhash3072/compact-v2\x00"
 	out := make([]byte, 0, len(domain)+1+16+len(key)+len(value))
 	out = append(out, domain...)
 	out = append(out, family)
@@ -168,7 +173,7 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 }
 func StateCommitmentDeltaID(deltas []StateCommitmentDelta) common.Hash {
 	h := sha256.New()
-	h.Write([]byte("gtron/latest-domain/muhash-delta/v1\x00"))
+	h.Write([]byte("gtron/latest-domain/muhash-delta/compact-v2\x00"))
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(len(deltas)))
 	h.Write(b[:])
@@ -264,17 +269,8 @@ func InitializeStateCommitment(db interface {
 	} else if present {
 		return ErrStateCommitmentHead
 	}
-	for _, source := range latestDomainCommitmentSources {
-		it := db.NewIterator(source.prefix, nil)
-		has := it.Next()
-		err := it.Error()
-		it.Release()
-		if err != nil {
-			return err
-		}
-		if has {
-			return ErrStateCommitmentHead
-		}
+	if err := CheckEmptyStateCommitmentSources(db); err != nil {
+		return err
 	}
 	head := NewStateCommitmentHead()
 	batcher, ok := db.(ethdb.Batcher)
@@ -324,4 +320,27 @@ func WriteStateCommitmentUnwindCleanup(db ethdb.KeyValueWriter, from, to uint64)
 }
 func DeleteStateCommitmentUnwindCleanup(db ethdb.KeyValueWriter) error {
 	return db.Delete(stateCommitmentUnwindCleanupKey)
+}
+
+// CheckEmptyStateCommitmentSources rejects residual fresh or legacy state
+// before genesis/restore publication. Raw 32-byte trie hashes are not KV rows.
+func CheckEmptyStateCommitmentSources(db ethdb.Iteratee) error {
+	legacy := db.NewIterator(legacyStateKVLatestPrefix, nil)
+	has := false
+	for legacy.Next() {
+		if len(legacy.Key()) != 32 {
+			has = true
+			break
+		}
+	}
+	err := legacy.Error()
+	legacy.Release()
+	err = errors.Join(err, legacy.Error())
+	if err != nil {
+		return err
+	}
+	if has {
+		return ErrStateCommitmentHead
+	}
+	return IterateLatestDomainCommitmentSources(db, func([]byte, []byte) (bool, error) { return false, ErrStateCommitmentHead })
 }

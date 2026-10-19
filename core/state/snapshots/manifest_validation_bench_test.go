@@ -144,7 +144,7 @@ func BenchmarkManifestValidationMetadata(b *testing.B) {
 
 func TestManifestValidationPublicationMatchesFrozenBytes(t *testing.T) {
 	for _, fixture := range []*Manifest{cachedManifestFixture(9), {
-		Version: CurrentManifestVersion, CommitmentScheme:"state-flat-latest-muhash3072-v1", ElementVersion:1, Segments: []SegmentRef{}, Retired: nil, PublishedUnix: 1,
+		Version: CurrentManifestVersion, CommitmentScheme: "state-flat-latest-muhash3072-compact-v2", ElementVersion: 2, Segments: []SegmentRef{}, Retired: nil, PublishedUnix: 1,
 	}} {
 		old, candidate := cloneDecodedManifest(fixture), cloneDecodedManifest(fixture)
 		oldDir, candidateDir := t.TempDir(), t.TempDir()

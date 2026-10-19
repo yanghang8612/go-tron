@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -245,19 +246,91 @@ func (s *StateDB) ReadMerkleTreeRootByBlock(blockNum int64) []byte {
 	return data
 }
 
+// shieldedRootReadHeight bounds sparse runs by this view's canonical cut.
+// A predecessor alone must never invent a root for an unsynchronized height.
+func (s *StateDB) shieldedRootReadHeight() (uint64, error) {
+	if view, ok := s.accountKVLatestReader.(historicalLatestView); ok {
+		return view.blockNum, nil
+	}
+	var height uint64
+	if s.dynProps != nil && s.dynProps.LatestBlockHeaderNumber() > 0 {
+		height = uint64(s.dynProps.LatestBlockHeaderNumber())
+	}
+	if s.changeSet.enabled && s.changeSet.blockNum > height {
+		height = s.changeSet.blockNum
+	}
+	if height > 0 {
+		return height, nil
+	}
+	head, ok, err := rawdb.ReadStateCommitmentHead(s.accountKVIndex())
+	if err != nil {
+		return 0, err
+	}
+	if ok {
+		return head.BlockNum, nil
+	}
+	return 0, nil
+}
 func (s *StateDB) ReadMerkleTreeRootByBlockStrict(blockNum int64) ([]byte, bool, error) {
-	data, ok, err := s.readSystemShieldedWithError(rawdb.MerkleTreeIndexStateKey(blockNum))
+	if blockNum <= 0 {
+		return nil, false, nil
+	}
+	height, err := s.shieldedRootReadHeight()
+	if err != nil {
+		return nil, false, err
+	}
+	if uint64(blockNum) > height {
+		return nil, false, nil
+	}
+	_, data, ok, err := s.shieldedRootBefore(uint64(blockNum) + 1)
+	return data, ok, err
+}
+func (s *StateDB) shieldedRootBefore(upper uint64) (uint64, []byte, bool, error) {
+	key, data, ok, err := s.AccountKVBefore(tcommon.SystemAccountAddress, kvdomains.SystemShielded, rawdb.ShieldedRootChangePrefix(), rawdb.ShieldedRootChangeStateKey(upper))
 	if err != nil || !ok {
-		return nil, ok, err
+		return 0, nil, ok, err
+	}
+	height, err := rawdb.DecodeShieldedRootChangeStateKey(key)
+	if err != nil {
+		return 0, nil, true, err
 	}
 	if len(data) != 32 {
-		return nil, true, fmt.Errorf("decode merkle tree root by block %d: length %d, want 32", blockNum, len(data))
+		return 0, nil, true, fmt.Errorf("decode merkle tree root by block %d: length %d, want 32", height, len(data))
 	}
-	return data, true, nil
+	return height, data, true, nil
 }
 
+// WriteMerkleTreeRootByBlock starts a new run only when the root changes.
+// An equal root at a later block performs no KV write or history update.
 func (s *StateDB) WriteMerkleTreeRootByBlock(blockNum int64, root []byte) error {
-	return s.writeSystemShielded(rawdb.MerkleTreeIndexStateKey(blockNum), root)
+	if blockNum <= 0 || len(root) != 32 {
+		return fmt.Errorf("invalid shielded root change: block=%d root length=%d", blockNum, len(root))
+	}
+	cut, err := s.shieldedRootReadHeight()
+	if err != nil {
+		return err
+	}
+	if uint64(blockNum) < cut {
+		return fmt.Errorf("shielded root change at %d precedes execution cut %d", blockNum, cut)
+	}
+	height, previous, ok, err := s.shieldedRootBefore(uint64(blockNum) + 1)
+	if err != nil {
+		return err
+	}
+	if ok && bytes.Equal(previous, root) {
+		return nil
+	}
+	key := rawdb.ShieldedRootChangeStateKey(uint64(blockNum))
+	if ok && height == uint64(blockNum) {
+		_, before, exists, err := s.shieldedRootBefore(uint64(blockNum))
+		if err != nil {
+			return err
+		}
+		if exists && bytes.Equal(before, root) {
+			return s.deleteSystemShielded(key)
+		}
+	}
+	return s.writeSystemShielded(key, root)
 }
 
 func decodeShieldedMerkleTreeStrict(context string, data []byte, ok bool) (*shieldpb.IncrementalMerkleTree, bool, error) {

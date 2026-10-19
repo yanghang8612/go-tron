@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -352,4 +353,23 @@ func readShieldedMerkleTreeStrict(db ethdb.KeyValueReader, key []byte, context s
 		return nil, true, fmt.Errorf("rawdb: decode %s: %w", context, err)
 	}
 	return &tree, true, nil
+}
+
+// ShieldedRootChangePrefix returns the logical change-point namespace.
+func ShieldedRootChangePrefix() []byte { return bytes.Clone(shieldedRootChangePrefix) }
+func ShieldedRootChangeStateKey(blockNum uint64) []byte {
+	key := make([]byte, len(shieldedRootChangePrefix)+8)
+	copy(key, shieldedRootChangePrefix)
+	binary.BigEndian.PutUint64(key[len(shieldedRootChangePrefix):], blockNum)
+	return key
+}
+func DecodeShieldedRootChangeStateKey(key []byte) (uint64, error) {
+	if len(key) != len(shieldedRootChangePrefix)+8 || !bytes.HasPrefix(key, shieldedRootChangePrefix) {
+		return 0, fmt.Errorf("invalid shielded root change key %x", key)
+	}
+	height := binary.BigEndian.Uint64(key[len(shieldedRootChangePrefix):])
+	if height == 0 {
+		return 0, fmt.Errorf("invalid shielded root change at genesis")
+	}
+	return height, nil
 }
