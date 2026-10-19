@@ -31,8 +31,8 @@ with tempfile.TemporaryDirectory(prefix='gtron-cold-latency-') as scratch:
     assert history.count(old) == 1
     fixed_history = history.replace(old, new)
     replacements = {
-        str(repo/'core/rawdb/cold_latency_diagnostic_test.go'): str(evidence/'diagnostic_rawdb_test.go'),
-        str(repo/'core/state/cold_latency_diagnostic_test.go'): str(evidence/'diagnostic_state_test.go'),
+        str(repo/'core/rawdb/cold_latency_diagnostic_test.go'): str(evidence/'testdata/diagnostic_rawdb_test.go'),
+        str(repo/'core/state/cold_latency_diagnostic_test.go'): str(evidence/'testdata/diagnostic_state_test.go'),
     }
     def run(name, packages, expression):
         overlay = scratch/(name+'.json')
