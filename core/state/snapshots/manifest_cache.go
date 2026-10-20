@@ -385,7 +385,7 @@ func manifestStringsValidUTF8(m *Manifest) bool {
 	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
 		for _, ref := range refs {
 			if !utf8.ValidString(string(ref.Dataset)) || !utf8.ValidString(string(ref.Kind)) ||
-				!utf8.ValidString(ref.Path) || !utf8.ValidString(ref.Checksum) {
+				!utf8.ValidString(ref.Path) || !utf8.ValidString(ref.Checksum) || !utf8.ValidString(ref.LookupRoot) {
 				return false
 			}
 		}
@@ -401,30 +401,33 @@ func clonePublishedManifestStrings(m *Manifest) uint64 {
 	return clonePublishedRefStrings(m.Segments) + clonePublishedRefStrings(m.Retired)
 }
 
-// Pack private strings in bounded blocks instead of four allocations per ref.
+// Pack private strings in bounded blocks instead of separate allocations per ref.
 // Finish each block before exposing any of its substrings. A caller retaining
 // one field can keep at most a 64 KiB block alive; an oversized field gets its
 // own allocation. The resident charge still counts every string byte and
 // doubles it for allocation rounding/metadata, as it does for decoded strings.
 func clonePublishedRefStrings(refs []SegmentRef) uint64 {
 	const maxBlock = 64 << 10
+	const fieldsPerRef = 5
 	var slack uint64
 	field := func(index int) string {
-		ref := &refs[index/4]
-		switch index % 4 {
+		ref := &refs[index/fieldsPerRef]
+		switch index % fieldsPerRef {
 		case 0:
 			return string(ref.Dataset)
 		case 1:
 			return string(ref.Kind)
 		case 2:
 			return ref.Path
-		default:
+		case 3:
 			return ref.Checksum
+		default:
+			return ref.LookupRoot
 		}
 	}
-	for first := 0; first < len(refs)*4; {
+	for first := 0; first < len(refs)*fieldsPerRef; {
 		last, size := first, 0
-		for last < len(refs)*4 {
+		for last < len(refs)*fieldsPerRef {
 			n := len(field(last))
 			if last > first && size+n > maxBlock {
 				break
@@ -448,16 +451,18 @@ func clonePublishedRefStrings(refs []SegmentRef) uint64 {
 		for i := first; i < last; i++ {
 			n := len(field(i))
 			value := owned[offset : offset+n]
-			ref := &refs[i/4]
-			switch i % 4 {
+			ref := &refs[i/fieldsPerRef]
+			switch i % fieldsPerRef {
 			case 0:
 				ref.Dataset = SegmentDataset(value)
 			case 1:
 				ref.Kind = SegmentKind(value)
 			case 2:
 				ref.Path = value
-			default:
+			case 3:
 				ref.Checksum = value
+			default:
+				ref.LookupRoot = value
 			}
 			offset += n
 		}
@@ -527,7 +532,7 @@ func manifestCacheCharge(data []byte, m *Manifest) uint64 {
 	n += uint64(cap(m.Segments)+cap(m.Retired)) * uint64(unsafe.Sizeof(SegmentRef{}))
 	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
 		for _, ref := range refs {
-			n += uint64(len(ref.Dataset) + len(ref.Kind) + len(ref.Path) + len(ref.Checksum))
+			n += uint64(len(ref.Dataset) + len(ref.Kind) + len(ref.Path) + len(ref.Checksum) + len(ref.LookupRoot))
 		}
 	}
 	if m.Chain != nil {

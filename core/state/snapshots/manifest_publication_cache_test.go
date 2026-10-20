@@ -206,6 +206,35 @@ func TestManifestPublicationSeedBudgetOwnsStrings(t *testing.T) {
 	}
 }
 
+func TestManifestAccountRoutingRootOwnershipAndCharge(t *testing.T) {
+	m := cachedManifestFixture(2)
+	root := "sha256:" + strings.Repeat("a", 64)
+	backing := strings.Repeat("x", 1<<20) + root
+	m.Segments = append(m.Segments, SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccountHistoryRouting, FromTxNum: 1, ToTxNum: 2, Path: "history/account.route", Size: 4096, Checksum: root, LookupRoot: backing[1<<20:]})
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache manifestDecodeCache
+	cache.retainPublished(raw, m, manifestCacheDefaultBytes)
+	index := len(m.Segments) - 1
+	if cache.manifest == nil || cache.manifest.Segments[index].LookupRoot != root {
+		t.Fatal("root lost in publication cache")
+	}
+	if unsafe.StringData(cache.manifest.Segments[index].LookupRoot) == unsafe.StringData(m.Segments[index].LookupRoot) {
+		t.Fatal("root retained caller backing")
+	}
+	without := cloneDecodedManifest(m)
+	without.Segments[index].LookupRoot = ""
+	if manifestCacheCharge(raw, cloneDecodedManifest(m))-manifestCacheCharge(raw, without) != 2*uint64(len(root)) {
+		t.Fatal("root bytes omitted from cache charge")
+	}
+	m.Segments[index].LookupRoot = string([]byte{255})
+	if manifestStringsValidUTF8(m) {
+		t.Fatal("invalid root UTF-8 accepted for publication seed")
+	}
+}
+
 func TestManifestFailedPublicationDoesNotSeed(t *testing.T) {
 	t.Setenv("GTRON_SNAPSHOT_MANIFEST_CACHE", "1")
 	t.Setenv(manifestCacheBudgetEnv, "")
