@@ -1,0 +1,9 @@
+{
+  "packet_sha256": "9d05eae35e5b400ccf042f61d320d9df2f4106fb5de0054cc49d1d1f06b64153",
+  "aliases": {
+    "gofuzz-race-status.json": "server-aux/gofuzz-race-status.json",
+    "final-gofuzz-race.log": "server-aux/final-gofuzz-race.log",
+    "race-go-only.py": "server-aux/race-go-only.py",
+    "aux-race-proof.json": "server-aux/aux-race-proof.json"
+  }
+}

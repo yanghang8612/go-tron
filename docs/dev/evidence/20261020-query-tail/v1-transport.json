@@ -1,0 +1,27 @@
+{
+  "packet_sha256": "305f46bcfafb87d0aeb760063b96aee138e55d03492f9b44c0b41b20a25f6ac0",
+  "aliases": {
+    "status.json": "server-v1/status.json",
+    "event-result.json": "server-v1/event-result.json",
+    "balance-result.json": "server-v1/balance-result.json",
+    "census.json": "server-v1/census.json",
+    "sampling-summary.json": "server-v1/sampling-summary.json",
+    "source-identity.json": "server-v1/source-identity.json",
+    "source.patch": "server-v1/source.patch",
+    "baseline-event.log": "server-v1/baseline-event.log",
+    "candidate-event.log": "server-v1/candidate-event.log",
+    "candidate-balance.log": "server-v1/candidate-balance.log",
+    "candidate-tail.log": "server-v1/candidate-tail.log",
+    "dense-bench.log": "server-v1/dense-bench.log",
+    "census.log": "server-v1/census.log",
+    "native-correctness.log": "server-v1/native-correctness.log",
+    "native-build.log": "server-v1/native-build.log",
+    "baseline-event-environment-error.log": "server-v1/baseline-event-environment-error.log",
+    "attempt-1-status.json": "server-v1/attempt-1-status.json",
+    "worker.py": "server-v1/worker.py",
+    "baseline/core/state/snapshots/offline_counter_filter_test.go": "server-v1/baseline/core/state/snapshots/offline_counter_filter_test.go.txt",
+    "candidate/core/state/offline_checkpoint_query_tail_test.go": "server-v1/candidate/core/state/offline_checkpoint_query_tail_test.go.txt",
+    "event-copy/source-ref.json": "server-v1/event-copy/source-ref.json",
+    "event-copy/log/event-log-3142019-3147018-bc30c6f375adf39e.seg": "server-v1/event-copy/log/event-log-3142019-3147018-bc30c6f375adf39e.seg"
+  }
+}

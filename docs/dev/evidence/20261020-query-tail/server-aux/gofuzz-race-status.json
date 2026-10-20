@@ -1,0 +1,5 @@
+{
+  "tags": "gofuzz",
+  "purpose": "Auxiliary Linux race for changed Go history code; native Sapling correctness/build verified separately with production tags.",
+  "returncode": 0
+}

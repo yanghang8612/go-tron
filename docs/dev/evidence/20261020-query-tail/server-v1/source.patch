@@ -1,0 +1,150 @@
+diff --git a/core/rawdb/accessors_state_changeset.go b/core/rawdb/accessors_state_changeset.go
+index 3ffd1cb2..b441f307 100644
+--- a/core/rawdb/accessors_state_changeset.go
++++ b/core/rawdb/accessors_state_changeset.go
+@@ -1554,7 +1554,7 @@ func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db St
+ 			directFrom = indexedHead + 1
+ 		}
+ 		var first *StateDomainChange
+-		if err := IterateStateDomainChangesByBlockRangeContext(ctx, db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
++		if err := iterateStateHistoryTailByOwner(ctx, db, directFrom, headBlock, owner, func(change *StateDomainChange) (bool, error) {
+ 			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+ 				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
+ 				return true, nil
+@@ -1645,7 +1645,7 @@ func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db Stat
+ 		}
+ 		directFrom = indexedHead + 1
+ 	}
+-	if err := IterateStateDomainChangesByBlockRangeContext(ctx, db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
++	if err := iterateStateHistoryTailByOwner(ctx, db, directFrom, headBlock, owner, func(change *StateDomainChange) (bool, error) {
+ 		if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
+ 			change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
+ 			change.Generation != generation || change.Domain != domain {
+diff --git a/core/rawdb/chain_db.go b/core/rawdb/chain_db.go
+index 170445e3..89f9a7c5 100644
+--- a/core/rawdb/chain_db.go
++++ b/core/rawdb/chain_db.go
+@@ -469,7 +469,7 @@ func coveredEventLogRowMatchesFilter(row EventLog, filter EventLogFilter) bool {
+ 	if len(filter.Addresses) > 0 {
+ 		matched := false
+ 		for _, address := range filter.Addresses {
+-			if row.Address == address {
++			if row.Address.AccountID() == address.AccountID() {
+ 				matched = true
+ 				break
+ 			}
+diff --git a/core/state/history_point_bound_test.go b/core/state/history_point_bound_test.go
+index 8d03abc6..facba850 100644
+--- a/core/state/history_point_bound_test.go
++++ b/core/state/history_point_bound_test.go
+@@ -163,6 +163,13 @@ func TestHistoryStorageMetadataAcrossRecreateHotAndCold(t *testing.T) {
+ 				f.pruneHotStateDomainHistory()
+ 				r = NewPersistentHistoryReaderWithColdHistory(f.disk, f.state, f.head, m)
+ 			}
++			// The fixture is now immutable. Force the unindexed-tail path and
++			// query-scoped pinned reuse while checking recreate generations,
++			// cold overlap and the independent source-fold MuHash below.
++			if err := rawdb.WriteStageProgressWithHash(f.disk, rawdb.StageStateHistoryIndex, 0, common.Hash{}); err != nil {
++				t.Fatal(err)
++			}
++			r.db = rawdb.WithStateHistoryQueryTailCache(&pointReadCounter{readerDB: r.db})
+ 			for height, want := range map[uint64]byte{0: 0, 1: 11, 2: 22, 3: 0, 4: 44} {
+ 				if err := r.SetHotHistoryBlockRange(height, f.head); err != nil {
+ 					t.Fatal(err)
+diff --git a/core/state/snapshots/event_log_segment.go b/core/state/snapshots/event_log_segment.go
+index 48b05415..93e43f41 100644
+--- a/core/state/snapshots/event_log_segment.go
++++ b/core/state/snapshots/event_log_segment.go
+@@ -772,7 +772,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
+ 	haveCandidates := false
+ 	if len(filter.Addresses) > 0 {
+ 		var union []uint64
+-		for _, address := range filter.Addresses {
++		for _, address := range eventLogFilterLookupAddresses(filter.Addresses) {
+ 			rows, err := readEventLogIndexLookupRows(s, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKeySize, eventLogAddressLookupKey(address))
+ 			if err != nil {
+ 				return nil, true, err
+@@ -869,7 +869,7 @@ func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]
+ 			return nil, false, nil
+ 		}
+ 		var union []uint64
+-		for _, address := range filter.Addresses {
++		for _, address := range eventLogFilterLookupAddresses(filter.Addresses) {
+ 			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKey(address))
+ 			if err != nil {
+ 				return nil, true, err
+@@ -2514,7 +2514,7 @@ func eventLogAddressMatches(filter EventLogFilter, address common.Address) bool
+ 		return true
+ 	}
+ 	for _, candidate := range filter.Addresses {
+-		if candidate == address {
++		if candidate.AccountID() == address.AccountID() {
+ 			return true
+ 		}
+ 	}
+@@ -3394,3 +3394,22 @@ func readEventLogUint64At(file io.ReaderAt, offset uint64) (uint64, error) {
+ 	}
+ 	return binary.BigEndian.Uint64(raw[:]), nil
+ }
++
++// Event dictionaries retain the original protobuf width: TVM addresses have a
++// zero pad and native TRON addresses retain 0x41. RPC filters name the same
++// 20-byte identity, so read both existing dictionary keys without rewriting
++// segments or altering their canonical payloads.
++func eventLogFilterLookupAddresses(addresses []common.Address) []common.Address {
++	out := make([]common.Address, 0, 2*len(addresses))
++	seen := make(map[common.Address]bool, 2*len(addresses))
++	for _, address := range addresses {
++		for _, prefix := range []byte{address[0], 0, common.AddressPrefixMainnet} {
++			candidate := address.AccountID().Address(prefix)
++			if !seen[candidate] {
++				out = append(out, candidate)
++				seen[candidate] = true
++			}
++		}
++	}
++	return out
++}
+diff --git a/core/state/snapshots/event_log_segment_v3.go b/core/state/snapshots/event_log_segment_v3.go
+index 2a88a40c..02ad6236 100644
+--- a/core/state/snapshots/event_log_segment_v3.go
++++ b/core/state/snapshots/event_log_segment_v3.go
+@@ -1728,7 +1728,7 @@ func (s *EventLogSegment) lookupEventLogV3CandidateRows(filter EventLogFilter) (
+ 	have := false
+ 	if len(filter.Addresses) > 0 {
+ 		var union []uint64
+-		for _, address := range filter.Addresses {
++		for _, address := range eventLogFilterLookupAddresses(filter.Addresses) {
+ 			rows, err := readEventLogV3LookupRows(s.file, s.v3.header.addressIndexOffset, s.v3.header.addressIndexLength, s.size, eventLogAddressLookupKeySize, eventLogAddressLookupKey(address), s.header.rowCount)
+ 			if err != nil {
+ 				return nil, true, err
+diff --git a/core/tron_backend.go b/core/tron_backend.go
+index 0efb1171..cf602877 100644
+--- a/core/tron_backend.go
++++ b/core/tron_backend.go
+@@ -3699,6 +3699,7 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
+ 		b.chain.chainmu.Unlock()
+ 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("snapshot archive state: %w", snapshotErr)
+ 	}
++	historyDB = rawdb.WithStateHistoryQueryTailCache(historyDB)
+ 	reader := state.NewPersistentHistoryReaderWithColdHistory(historyDB, live, headNum, readerColdHistory)
+ 	reader.SetContext(ctx)
+ 	return reader, headNum, root, release, nil
+@@ -4215,7 +4216,7 @@ func scanHotLogsAtBlock(db *rawdb.ChainDB, num uint64, filter jsonrpc.LogFilter)
+ 				addr := logAddressFromRaw(l.Address)
+ 				match := false
+ 				for _, candidate := range filter.Addresses {
+-					if candidate == addr {
++					if candidate.AccountID() == addr.AccountID() {
+ 						match = true
+ 						break
+ 					}
+@@ -4293,7 +4294,7 @@ func coldEventLogPayloadMatchesFilter(log *corepb.TransactionInfo_Log, filter js
+ 		addr := logAddressFromRaw(log.GetAddress())
+ 		matched := false
+ 		for _, candidate := range filter.Addresses {
+-			if candidate == addr {
++			if candidate.AccountID() == addr.AccountID() {
+ 				matched = true
+ 				break
+ 			}

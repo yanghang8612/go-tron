@@ -1,0 +1,34 @@
+{
+  "utc": "2026-10-20T07:25:29.056533+00:00",
+  "wallet": {
+    "version": "0.2.0-dev",
+    "currentBlock": 11578339,
+    "lastInsertTime": 1792481129048,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87269355,
+      "appliedTip": 11578352,
+      "sessionBlocks": 359051,
+      "sessionTransactions": 47395849,
+      "remaining": 75691016,
+      "inflight": 0,
+      "bufferedBlocks": 1870,
+      "bufferedBytes": 71344548,
+      "fetchBackpressured": false,
+      "requestedBlocks": 0,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  },
+  "identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  },
+  "datadir_inode": 94642617,
+  "old_db_present": true
+}

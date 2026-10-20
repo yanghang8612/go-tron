@@ -1,0 +1,21 @@
+{
+  "block": 3144021,
+  "filtered_ms": 0.03179,
+  "global_index_candidates": [
+    3142019
+  ],
+  "original_payload_equal": true,
+  "protobuf_address_bytes": 20,
+  "row_sha256": "0bee4a00142679a44c96dc6c0ea5b2e6ba84fb3ec5e8d5e8611025ff390cd11d",
+  "rows": 1,
+  "source_ref": {
+    "dataset": "event-log",
+    "kind": "event-log",
+    "fromTxNum": 3142019,
+    "toTxNum": 3147018,
+    "path": "log/event-log-3142019-3147018-bc30c6f375adf39e.seg",
+    "size": 789,
+    "checksum": "sha256:bc30c6f375adf39eece060b71c2ac0af4cb0fbeeac59bbf265be340e211a9d46"
+  },
+  "unfiltered_ms": 0.039322
+}

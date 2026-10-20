@@ -1,0 +1,8 @@
+{
+  "samples": 102,
+  "first_utc": "2026-10-20T05:43:46.136341+00:00",
+  "last_utc": "2026-10-20T07:24:52.929885+00:00",
+  "new_error_lines": [],
+  "log_read_errors": [],
+  "note": "Recorded incremental log evidence, maximum 2 MiB per minute; not a full current-head MuHash recomputation."
+}

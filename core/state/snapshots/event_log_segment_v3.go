@@ -1728,7 +1728,7 @@ func (s *EventLogSegment) lookupEventLogV3CandidateRows(filter EventLogFilter) (
 	have := false
 	if len(filter.Addresses) > 0 {
 		var union []uint64
-		for _, address := range filter.Addresses {
+		for _, address := range eventLogFilterLookupAddresses(filter.Addresses) {
 			rows, err := readEventLogV3LookupRows(s.file, s.v3.header.addressIndexOffset, s.v3.header.addressIndexLength, s.size, eventLogAddressLookupKeySize, eventLogAddressLookupKey(address), s.header.rowCount)
 			if err != nil {
 				return nil, true, err

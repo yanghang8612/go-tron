@@ -1,0 +1,15 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tronprotocol/go-tron/core/rawdb
+cpu: Intel(R) Xeon(R) Platinum 8175M CPU @ 2.50GHz
+BenchmarkQueryTailDensePointReads/owning-oracle-2         	       1	2970495636 ns/op	2786973072 B/op	12627281 allocs/op
+BenchmarkQueryTailDensePointReads/owning-oracle-2         	       1	2847830051 ns/op	2783137552 B/op	12627214 allocs/op
+BenchmarkQueryTailDensePointReads/owning-oracle-2         	       1	2895787972 ns/op	2782842616 B/op	12627224 allocs/op
+BenchmarkQueryTailDensePointReads/borrowed-2              	       1	 765226138 ns/op	  120520 B/op	    2098 allocs/op
+BenchmarkQueryTailDensePointReads/borrowed-2              	       1	 764907500 ns/op	  120568 B/op	    2099 allocs/op
+BenchmarkQueryTailDensePointReads/borrowed-2              	       1	 772166720 ns/op	  710368 B/op	    2101 allocs/op
+BenchmarkQueryTailDensePointReads/query-cache-2           	       1	 109935879 ns/op	   15816 B/op	     269 allocs/op
+BenchmarkQueryTailDensePointReads/query-cache-2           	       1	  93013934 ns/op	  605664 B/op	     272 allocs/op
+BenchmarkQueryTailDensePointReads/query-cache-2           	       1	  92773724 ns/op	   15816 B/op	     269 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	11.792s

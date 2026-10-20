@@ -1554,7 +1554,7 @@ func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db St
 			directFrom = indexedHead + 1
 		}
 		var first *StateDomainChange
-		if err := IterateStateDomainChangesByBlockRangeContext(ctx, db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
+		if err := iterateStateHistoryTailByOwner(ctx, db, directFrom, headBlock, owner, func(change *StateDomainChange) (bool, error) {
 			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
 				return true, nil
@@ -1645,7 +1645,7 @@ func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db Stat
 		}
 		directFrom = indexedHead + 1
 	}
-	if err := IterateStateDomainChangesByBlockRangeContext(ctx, db, directFrom, headBlock, func(change *StateDomainChange) (bool, error) {
+	if err := iterateStateHistoryTailByOwner(ctx, db, directFrom, headBlock, owner, func(change *StateDomainChange) (bool, error) {
 		if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 			change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
 			change.Generation != generation || change.Domain != domain {

@@ -1,0 +1,4 @@
+=== RUN   TestOfflineCounterLogAddressFilter
+--- PASS: TestOfflineCounterLogAddressFilter (0.01s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	0.025s

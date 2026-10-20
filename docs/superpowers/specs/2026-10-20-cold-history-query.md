@@ -32,3 +32,25 @@ Benchmark baseline and candidate on identical immutable data, including cold
 and warm process caches, missing/existing keys, repeated and varied addresses.
 Keep source-copy identities and test limits with results; don't equate a
 component speedup with whole-RPC latency or change production query timeouts.
+
+## Follow-up: filtered logs and the unindexed tail
+
+Read RPC event addresses by 20-byte identity, querying both existing 00-padded
+TVM and 41-prefixed dictionary keys. Preserve persisted bytes, payload width,
+canonical validation, topic intersections and deduplicated row order.
+
+For hot point/batch fallbacks, use the existing validating borrowed block decoder
+and copy only the requested owner. Apply positive sequence repairs before using
+matches, including replacement by another owner. Legacy standalone rows remain
+readable; corrupt/shared-pack failures and cancellation propagate.
+
+Wrap only an explicitly pinned RPC history view in a query-owned tail cache.
+Cache complete owner/block-range scans, including empty results, and reuse a
+covering scan for narrower bounds. Keep all transaction, generation, domain,
+key and sequence filtering in existing accessors. Bound retained data to 8 MiB,
+16,384 rows and 16 owners; continue the same filtered scan on budget exhaustion
+and avoid future cache attempts for that owner. Positive queries stop immediately
+and incomplete scans never publish coverage. The byte limit accounts retained
+cache payload and estimated row overhead, not all RPC RSS or per-block decode scratch.
+Never publish partial, canceled or failed scans; no global negative cache,
+new persistence, MuHash changes or online scheduler parameter changes.

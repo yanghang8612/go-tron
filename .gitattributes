@@ -7,3 +7,6 @@ test/fixtures/mainnet-blocks/range-*/oracle.ndjson filter=lfs diff=lfs merge=lfs
 docs/dev/evidence/20261020-cold-query-rollout/*.log -whitespace
 docs/dev/evidence/20261020-cold-query-rollout/*.patch -whitespace
 docs/dev/evidence/20261020-cold-query-rollout/*.txt -whitespace
+docs/dev/evidence/20261020-query-tail/**/*.log -whitespace
+docs/dev/evidence/20261020-query-tail/**/*.patch -whitespace
+docs/dev/evidence/20261020-query-tail/**/*.txt -whitespace

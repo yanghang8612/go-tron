@@ -3699,6 +3699,7 @@ func (b *TronBackend) historyReaderAtContext(ctx context.Context, requiredBlocks
 		b.chain.chainmu.Unlock()
 		return nil, 0, tcommon.Hash{}, nil, fmt.Errorf("snapshot archive state: %w", snapshotErr)
 	}
+	historyDB = rawdb.WithStateHistoryQueryTailCache(historyDB)
 	reader := state.NewPersistentHistoryReaderWithColdHistory(historyDB, live, headNum, readerColdHistory)
 	reader.SetContext(ctx)
 	return reader, headNum, root, release, nil
@@ -4215,7 +4216,7 @@ func scanHotLogsAtBlock(db *rawdb.ChainDB, num uint64, filter jsonrpc.LogFilter)
 				addr := logAddressFromRaw(l.Address)
 				match := false
 				for _, candidate := range filter.Addresses {
-					if candidate == addr {
+					if candidate.AccountID() == addr.AccountID() {
 						match = true
 						break
 					}
@@ -4293,7 +4294,7 @@ func coldEventLogPayloadMatchesFilter(log *corepb.TransactionInfo_Log, filter js
 		addr := logAddressFromRaw(log.GetAddress())
 		matched := false
 		for _, candidate := range filter.Addresses {
-			if candidate == addr {
+			if candidate.AccountID() == addr.AccountID() {
 				matched = true
 				break
 			}

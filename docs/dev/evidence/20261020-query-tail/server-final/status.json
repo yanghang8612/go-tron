@@ -1,0 +1,35 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "before_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  },
+  "utc": "2026-10-20T07:22:20.755245+00:00",
+  "event_copy": {
+    "ref": {
+      "dataset": "event-log",
+      "kind": "event-log",
+      "fromTxNum": 3142019,
+      "toTxNum": 3147018,
+      "path": "log/event-log-3142019-3147018-bc30c6f375adf39e.seg",
+      "size": 789,
+      "checksum": "sha256:bc30c6f375adf39eece060b71c2ac0af4cb0fbeeac59bbf265be340e211a9d46"
+    },
+    "inode": 94646450,
+    "bytes": 789,
+    "mtime_ns": 1792397392151595337,
+    "manifest_sha256": "ef1cf11fc025f08a28fede06773edae444d196184ec642dd3a0d22a7206cd60c"
+  },
+  "phase": "verified-final",
+  "candidate_binary_sha256": "22c2e92bf9e331f77d807f7dffa13b6286fa20941e9574ebb814d12d6b49219b",
+  "after_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  },
+  "server_race_verified": false,
+  "server_race_note": "900s build timeout before test execution; bounded -x probe reached go-ethereum crypto/secp256k1 cgo compilation. Local Go 1.25.5 race passed. Preserve raw diagnostics; do not count server race as passed.",
+  "early_positive_stop_verified": true
+}

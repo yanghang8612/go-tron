@@ -469,7 +469,7 @@ func coveredEventLogRowMatchesFilter(row EventLog, filter EventLogFilter) bool {
 	if len(filter.Addresses) > 0 {
 		matched := false
 		for _, address := range filter.Addresses {
-			if row.Address == address {
+			if row.Address.AccountID() == address.AccountID() {
 				matched = true
 				break
 			}

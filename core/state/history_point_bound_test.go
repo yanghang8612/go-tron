@@ -163,6 +163,13 @@ func TestHistoryStorageMetadataAcrossRecreateHotAndCold(t *testing.T) {
 				f.pruneHotStateDomainHistory()
 				r = NewPersistentHistoryReaderWithColdHistory(f.disk, f.state, f.head, m)
 			}
+			// The fixture is now immutable. Force the unindexed-tail path and
+			// query-scoped pinned reuse while checking recreate generations,
+			// cold overlap and the independent source-fold MuHash below.
+			if err := rawdb.WriteStageProgressWithHash(f.disk, rawdb.StageStateHistoryIndex, 0, common.Hash{}); err != nil {
+				t.Fatal(err)
+			}
+			r.db = rawdb.WithStateHistoryQueryTailCache(&pointReadCounter{readerDB: r.db})
 			for height, want := range map[uint64]byte{0: 0, 1: 11, 2: 22, 3: 0, 4: 44} {
 				if err := r.SetHotHistoryBlockRange(height, f.head); err != nil {
 					t.Fatal(err)

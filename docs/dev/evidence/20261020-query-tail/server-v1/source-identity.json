@@ -1,0 +1,24 @@
+{
+  "base": "9030ce7a31016491ece014ac76e5656ec149417e",
+  "files_sha256": {
+    "baseline/core/state/snapshots/offline_counter_filter_test.go": "5a9b25d3c586368f286da27755d1c865c716534cae3139e395560a2a51567b9a",
+    "candidate/core/log_address_filter_regression_test.go": "2397be3f95fc79e84a32c54e54cd4758d9d56fe71373e9bf2227c7b63bd8aea1",
+    "candidate/core/rawdb/accessors_state_changeset.go": "c48576a6a222b2993921ad604ebfa7c5bdaf3fd911b604c4d997b760ea182b23",
+    "candidate/core/rawdb/chain_db.go": "51539440eddbd62fb9f08f59e294c75dfaf00e74ef7e919647f0e07e5df89e8c",
+    "candidate/core/rawdb/state_history_query_tail.go": "204b1c7a20e198fd9d670956c09601c57b7398bb125a8e86db21aa5805e04ef9",
+    "candidate/core/rawdb/state_history_query_tail_test.go": "886e6dc261e1bb09b429a1b98dcf0d073e84d540d66de8bd879534fe750b045c",
+    "candidate/core/state/history_point_bound_test.go": "04faf1cc1afbc6788501f3b75714f9fd4a3001228959223df41e730491c86ffe",
+    "candidate/core/state/offline_checkpoint_query_tail_test.go": "9c4418fc7b1887871015e61393dc5cae25aaa19bb8f9fc4f2c76bffce78449ee",
+    "candidate/core/state/snapshots/event_log_segment.go": "9dc4fb3d55f97294b21012e7417cfb5069f5ec8187bfa6544001258be05dda71",
+    "candidate/core/state/snapshots/event_log_segment_v3.go": "dc89234bcff129bc6a62acd3c1d4e39e2c8b802bf66bb4328724eaa4525f2eab",
+    "candidate/core/state/snapshots/offline_counter_filter_test.go": "5a9b25d3c586368f286da27755d1c865c716534cae3139e395560a2a51567b9a",
+    "candidate/core/tron_backend.go": "61e6f38e2a29cf253c098f1b156ea093fdb3984641fb2b364c3af02d63d347ef",
+    "worker.py": "6fee634750b26ca2abbc6a2ec9a2e40c7048e1e543b152ecaed9f5610ddb9d22"
+  },
+  "go_version": "go version go1.25.5 linux/amd64",
+  "production_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  }
+}

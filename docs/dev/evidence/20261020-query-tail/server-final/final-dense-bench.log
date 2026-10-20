@@ -1,0 +1,24 @@
+goos: linux
+goarch: amd64
+pkg: github.com/tronprotocol/go-tron/core/rawdb
+cpu: Intel(R) Xeon(R) Platinum 8175M CPU @ 2.50GHz
+BenchmarkQueryTailDensePointReads/owning-oracle-2         	       1	2897709596 ns/op	2782546800 B/op	12627205 allocs/op
+BenchmarkQueryTailDensePointReads/owning-oracle-2         	       1	2922056986 ns/op	2784316864 B/op	12627237 allocs/op
+BenchmarkQueryTailDensePointReads/owning-oracle-2         	       1	2909198696 ns/op	2784316448 B/op	12627228 allocs/op
+BenchmarkQueryTailDensePointReads/borrowed-2              	       1	 790616086 ns/op	  120520 B/op	    2098 allocs/op
+BenchmarkQueryTailDensePointReads/borrowed-2              	       1	 754988191 ns/op	  710432 B/op	    2102 allocs/op
+BenchmarkQueryTailDensePointReads/borrowed-2              	       1	 764045522 ns/op	  120520 B/op	    2098 allocs/op
+BenchmarkQueryTailDensePointReads/query-cache-2           	       1	  99402017 ns/op	  605664 B/op	     272 allocs/op
+BenchmarkQueryTailDensePointReads/query-cache-2           	       1	  93039260 ns/op	  605664 B/op	     272 allocs/op
+BenchmarkQueryTailDensePointReads/query-cache-2           	       1	  92821265 ns/op	   15816 B/op	     269 allocs/op
+BenchmarkQueryTailDensePointReads/early-owning-oracle-2   	       1	  26084386 ns/op	21652528 B/op	   98700 allocs/op
+BenchmarkQueryTailDensePointReads/early-owning-oracle-2   	       1	  20437424 ns/op	21652352 B/op	   98696 allocs/op
+BenchmarkQueryTailDensePointReads/early-owning-oracle-2   	       1	  20140263 ns/op	21947640 B/op	   98706 allocs/op
+BenchmarkQueryTailDensePointReads/early-borrowed-2        	       1	   5990459 ns/op	   95880 B/op	     634 allocs/op
+BenchmarkQueryTailDensePointReads/early-borrowed-2        	       1	   6206322 ns/op	   95880 B/op	     634 allocs/op
+BenchmarkQueryTailDensePointReads/early-borrowed-2        	       1	   6337738 ns/op	  390816 B/op	     636 allocs/op
+BenchmarkQueryTailDensePointReads/early-query-cache-2     	       1	   6049386 ns/op	   98360 B/op	     677 allocs/op
+BenchmarkQueryTailDensePointReads/early-query-cache-2     	       1	   5975791 ns/op	   98360 B/op	     677 allocs/op
+BenchmarkQueryTailDensePointReads/early-query-cache-2     	       1	   6011135 ns/op	   98360 B/op	     677 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	11.949s

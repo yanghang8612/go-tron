@@ -1,0 +1,122 @@
+{
+  "owning-oracle": {
+    "median_ms": 1251.948209,
+    "rows": [
+      {
+        "ms": 1251.948209,
+        "allocated_bytes": 2781275016,
+        "allocations": 12627175
+      },
+      {
+        "ms": 1254.963208,
+        "allocated_bytes": 2780680752,
+        "allocations": 12627136
+      },
+      {
+        "ms": 1236.516917,
+        "allocated_bytes": 2776846328,
+        "allocations": 12627081
+      }
+    ]
+  },
+  "borrowed": {
+    "median_ms": 362.838125,
+    "rows": [
+      {
+        "ms": 364.783959,
+        "allocated_bytes": 711520,
+        "allocations": 2101
+      },
+      {
+        "ms": 362.838125,
+        "allocated_bytes": 121688,
+        "allocations": 2098
+      },
+      {
+        "ms": 362.777041,
+        "allocated_bytes": 121688,
+        "allocations": 2098
+      }
+    ]
+  },
+  "query-cache": {
+    "median_ms": 45.628625,
+    "rows": [
+      {
+        "ms": 45.628625,
+        "allocated_bytes": 606816,
+        "allocations": 272
+      },
+      {
+        "ms": 53.867959,
+        "allocated_bytes": 606816,
+        "allocations": 272
+      },
+      {
+        "ms": 45.380209,
+        "allocated_bytes": 606816,
+        "allocations": 272
+      }
+    ]
+  },
+  "early-owning-oracle": {
+    "median_ms": 9.4245,
+    "rows": [
+      {
+        "ms": 10.224833,
+        "allocated_bytes": 21952152,
+        "allocations": 98703
+      },
+      {
+        "ms": 9.4245,
+        "allocated_bytes": 21952168,
+        "allocations": 98703
+      },
+      {
+        "ms": 9.381125,
+        "allocated_bytes": 21656976,
+        "allocations": 98696
+      }
+    ]
+  },
+  "early-borrowed": {
+    "median_ms": 2.947542,
+    "rows": [
+      {
+        "ms": 2.975041,
+        "allocated_bytes": 391968,
+        "allocations": 636
+      },
+      {
+        "ms": 2.947542,
+        "allocated_bytes": 97032,
+        "allocations": 634
+      },
+      {
+        "ms": 2.929917,
+        "allocated_bytes": 97032,
+        "allocations": 634
+      }
+    ]
+  },
+  "early-query-cache": {
+    "median_ms": 2.943042,
+    "rows": [
+      {
+        "ms": 2.943042,
+        "allocated_bytes": 394448,
+        "allocations": 679
+      },
+      {
+        "ms": 2.968208,
+        "allocated_bytes": 394448,
+        "allocations": 679
+      },
+      {
+        "ms": 2.88775,
+        "allocated_bytes": 394448,
+        "allocations": 679
+      }
+    ]
+  }
+}

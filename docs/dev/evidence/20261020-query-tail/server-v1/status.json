@@ -1,0 +1,32 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "before_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  },
+  "utc": "2026-10-20T06:45:44.118094+00:00",
+  "event_copy": {
+    "ref": {
+      "dataset": "event-log",
+      "kind": "event-log",
+      "fromTxNum": 3142019,
+      "toTxNum": 3147018,
+      "path": "log/event-log-3142019-3147018-bc30c6f375adf39e.seg",
+      "size": 789,
+      "checksum": "sha256:bc30c6f375adf39eece060b71c2ac0af4cb0fbeeac59bbf265be340e211a9d46"
+    },
+    "inode": 94646450,
+    "bytes": 789,
+    "mtime_ns": 1792397392151595337,
+    "manifest_sha256": "ef1cf11fc025f08a28fede06773edae444d196184ec642dd3a0d22a7206cd60c"
+  },
+  "phase": "verified",
+  "candidate_binary_sha256": "54c2e5e25217b5dd2e7f3b40011a0bf2c940de866526e17caad988afbe02a32c",
+  "after_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  }
+}

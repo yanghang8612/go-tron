@@ -1,0 +1,17 @@
+{
+  "production_base": "9030ce7a31016491ece014ac76e5656ec149417e",
+  "pushed": false,
+  "deployed": false,
+  "restarted": false,
+  "local_critical_toolchain": "go1.25.5 darwin/arm64",
+  "local_product_suite_toolchain": "go1.27.2 darwin/arm64",
+  "local_product_suite_note": "79 explicit product packages (64 tested, 15 without tests); run on initial candidate, then affected packages/race/vet/native archive/MuHash/restore repeated after the early-positive-stop amendment. Ignore build scratch, testdata, evidence harnesses and nested third_party modules. Failed initial directory discovery attempts and their interrupted duplicate runs are not product test failures.",
+  "component_benchmark_note": "Memory database, synthetic 128 x 4096 persisted changes, eight sequential reads per iteration; negative full tail or first-block positive; three 1x measurements, no p95 or whole-RPC claim.",
+  "linux_auxiliary_race": {
+    "passed": true,
+    "tags": "gofuzz",
+    "scope": "TestQueryTail: changed Go history code, pure-Go secp",
+    "native_cgo_race_completed": false,
+    "native_sapling_correctness_and_build_passed": true
+  }
+}

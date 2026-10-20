@@ -772,7 +772,7 @@ func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]
 	haveCandidates := false
 	if len(filter.Addresses) > 0 {
 		var union []uint64
-		for _, address := range filter.Addresses {
+		for _, address := range eventLogFilterLookupAddresses(filter.Addresses) {
 			rows, err := readEventLogIndexLookupRows(s, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKeySize, eventLogAddressLookupKey(address))
 			if err != nil {
 				return nil, true, err
@@ -869,7 +869,7 @@ func (s *EventLogSegment) lookupEventLogCandidateRows(filter EventLogFilter) ([]
 			return nil, false, nil
 		}
 		var union []uint64
-		for _, address := range filter.Addresses {
+		for _, address := range eventLogFilterLookupAddresses(filter.Addresses) {
 			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, s.size, eventLogAddressLookupKey(address))
 			if err != nil {
 				return nil, true, err
@@ -2514,7 +2514,7 @@ func eventLogAddressMatches(filter EventLogFilter, address common.Address) bool 
 		return true
 	}
 	for _, candidate := range filter.Addresses {
-		if candidate == address {
+		if candidate.AccountID() == address.AccountID() {
 			return true
 		}
 	}
@@ -3393,4 +3393,23 @@ func readEventLogUint64At(file io.ReaderAt, offset uint64) (uint64, error) {
 		return 0, err
 	}
 	return binary.BigEndian.Uint64(raw[:]), nil
+}
+
+// Event dictionaries retain the original protobuf width: TVM addresses have a
+// zero pad and native TRON addresses retain 0x41. RPC filters name the same
+// 20-byte identity, so read both existing dictionary keys without rewriting
+// segments or altering their canonical payloads.
+func eventLogFilterLookupAddresses(addresses []common.Address) []common.Address {
+	out := make([]common.Address, 0, 2*len(addresses))
+	seen := make(map[common.Address]bool, 2*len(addresses))
+	for _, address := range addresses {
+		for _, prefix := range []byte{address[0], 0, common.AddressPrefixMainnet} {
+			candidate := address.AccountID().Address(prefix)
+			if !seen[candidate] {
+				out = append(out, candidate)
+				seen[candidate] = true
+			}
+		}
+	}
+	return out
 }

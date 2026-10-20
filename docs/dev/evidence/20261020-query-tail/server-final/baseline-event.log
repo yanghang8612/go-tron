@@ -1,0 +1,6 @@
+=== RUN   TestOfflineCounterLogAddressFilter
+    offline_counter_filter_test.go:61: filtered 0 vs expected 1
+--- FAIL: TestOfflineCounterLogAddressFilter (0.00s)
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core/state/snapshots	0.013s
+FAIL

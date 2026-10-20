@@ -1,0 +1,34 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "before_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  },
+  "utc": "2026-10-20T07:12:59.331959+00:00",
+  "event_copy": {
+    "ref": {
+      "dataset": "event-log",
+      "kind": "event-log",
+      "fromTxNum": 3142019,
+      "toTxNum": 3147018,
+      "path": "log/event-log-3142019-3147018-bc30c6f375adf39e.seg",
+      "size": 789,
+      "checksum": "sha256:bc30c6f375adf39eece060b71c2ac0af4cb0fbeeac59bbf265be340e211a9d46"
+    },
+    "inode": 94646450,
+    "bytes": 789,
+    "mtime_ns": 1792397392151595337,
+    "manifest_sha256": "ef1cf11fc025f08a28fede06773edae444d196184ec642dd3a0d22a7206cd60c"
+  },
+  "phase": "failed-final",
+  "candidate_binary_sha256": "54c2e5e25217b5dd2e7f3b40011a0bf2c940de866526e17caad988afbe02a32c",
+  "after_identity": {
+    "pid": 28737,
+    "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+    "service": "ActiveState=active"
+  },
+  "error": "TimeoutExpired(['nice', '-n', '15', 'ionice', '-c3', '/data/go/bin/go', 'test', '-p=2', '-race', './core/rawdb', '-run', '^TestQueryTail', '-count=1', '-timeout', '180s'], 900)",
+  "traceback": "Traceback (most recent call last):\n  File \"/usr/lib64/python3.6/subprocess.py\", line 425, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 863, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 1560, in _communicate\n    self.wait(timeout=self._remaining_time(endtime))\n  File \"/usr/lib64/python3.6/subprocess.py\", line 1469, in wait\n    raise TimeoutExpired(self.args, timeout)\nsubprocess.TimeoutExpired: Command '['nice', '-n', '15', 'ionice', '-c3', '/data/go/bin/go', 'test', '-p=2', '-race', './core/rawdb', '-run', '^TestQueryTail', '-count=1', '-timeout', '180s']' timed out after 899.999934501946 seconds\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/data/gtron/cold-query-tail-20261020/followup.py\", line 23, in <module>\n    run(['/data/go/bin/go','test','-p=2','-race','./core/rawdb','-run','^TestQueryTail','-count=1','-timeout','180s'],'final-race.log',env)\n  File \"/data/gtron/cold-query-tail-20261020/followup.py\", line 12, in run\n    with (p/name).open('wb') as f:r=subprocess.run(['nice','-n','15','ionice','-c3']+cmd,cwd=str(p/'candidate'),env=env,stdout=f,stderr=subprocess.STDOUT,timeout=900)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 430, in run\n    stderr=stderr)\nsubprocess.TimeoutExpired: Command '['nice', '-n', '15', 'ionice', '-c3', '/data/go/bin/go', 'test', '-p=2', '-race', './core/rawdb', '-run', '^TestQueryTail', '-count=1', '-timeout', '180s']' timed out after 900 seconds\n"
+}

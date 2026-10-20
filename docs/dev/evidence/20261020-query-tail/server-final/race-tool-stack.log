@@ -1,0 +1,735 @@
+WORK=/tmp/go-build3794096523
+mkdir -p $WORK/b001/
+mkdir -p $WORK/b009/
+mkdir -p $WORK/b007/
+mkdir -p $WORK/b012/
+mkdir -p $WORK/b006/
+mkdir -p $WORK/b011/
+mkdir -p $WORK/b013/
+mkdir -p $WORK/b015/
+mkdir -p $WORK/b014/
+mkdir -p $WORK/b016/
+mkdir -p $WORK/b018/
+mkdir -p $WORK/b019/
+mkdir -p $WORK/b017/
+mkdir -p $WORK/b020/
+mkdir -p $WORK/b023/
+mkdir -p $WORK/b022/
+mkdir -p $WORK/b025/
+mkdir -p $WORK/b024/
+mkdir -p $WORK/b026/
+mkdir -p $WORK/b021/
+mkdir -p $WORK/b028/
+mkdir -p $WORK/b029/
+mkdir -p $WORK/b030/
+mkdir -p $WORK/b032/
+mkdir -p $WORK/b031/
+mkdir -p $WORK/b033/
+mkdir -p $WORK/b040/
+mkdir -p $WORK/b039/
+mkdir -p $WORK/b041/
+mkdir -p $WORK/b043/
+mkdir -p $WORK/b045/
+mkdir -p $WORK/b047/
+mkdir -p $WORK/b052/
+mkdir -p $WORK/b027/
+mkdir -p $WORK/b058/
+mkdir -p $WORK/b060/
+mkdir -p $WORK/b065/
+mkdir -p $WORK/b085/
+mkdir -p $WORK/b089/
+mkdir -p $WORK/b090/
+mkdir -p $WORK/b093/
+mkdir -p $WORK/b103/
+mkdir -p $WORK/b107/
+mkdir -p $WORK/b138/
+mkdir -p $WORK/b158/
+mkdir -p $WORK/b168/
+mkdir -p $WORK/b172/
+mkdir -p $WORK/b193/
+mkdir -p $WORK/b206/
+mkdir -p $WORK/b223/
+mkdir -p $WORK/b248/
+mkdir -p $WORK/b265/
+mkdir -p $WORK/b266/
+mkdir -p $WORK/b267/
+mkdir -p $WORK/b279/
+mkdir -p $WORK/b282/
+mkdir -p $WORK/b283/
+mkdir -p $WORK/b287/
+mkdir -p $WORK/b286/
+mkdir -p $WORK/b315/
+mkdir -p $WORK/b319/
+mkdir -p $WORK/b360/
+mkdir -p $WORK/b388/
+mkdir -p $WORK/b010/
+mkdir -p $WORK/b005/
+mkdir -p $WORK/b004/
+mkdir -p $WORK/b038/
+mkdir -p $WORK/b036/
+mkdir -p $WORK/b037/
+mkdir -p $WORK/b046/
+mkdir -p $WORK/b044/
+mkdir -p $WORK/b042/
+mkdir -p $WORK/b050/
+mkdir -p $WORK/b049/
+mkdir -p $WORK/b056/
+mkdir -p $WORK/b059/
+mkdir -p $WORK/b051/
+mkdir -p $WORK/b057/
+mkdir -p $WORK/b048/
+mkdir -p $WORK/b054/
+mkdir -p $WORK/b035/
+mkdir -p $WORK/b034/
+mkdir -p $WORK/b055/
+mkdir -p $WORK/b053/
+mkdir -p $WORK/b062/
+mkdir -p $WORK/b063/
+mkdir -p $WORK/b067/
+mkdir -p $WORK/b003/
+mkdir -p $WORK/b068/
+mkdir -p $WORK/b066/
+mkdir -p $WORK/b070/
+mkdir -p $WORK/b069/
+mkdir -p $WORK/b064/
+mkdir -p $WORK/b071/
+mkdir -p $WORK/b072/
+mkdir -p $WORK/b073/
+mkdir -p $WORK/b074/
+mkdir -p $WORK/b079/
+mkdir -p $WORK/b078/
+mkdir -p $WORK/b061/
+mkdir -p $WORK/b084/
+mkdir -p $WORK/b091/
+mkdir -p $WORK/b083/
+mkdir -p $WORK/b098/
+mkdir -p $WORK/b088/
+mkdir -p $WORK/b092/
+mkdir -p $WORK/b094/
+mkdir -p $WORK/b097/
+mkdir -p $WORK/b087/
+mkdir -p $WORK/b100/
+mkdir -p $WORK/b086/
+mkdir -p $WORK/b099/
+mkdir -p $WORK/b082/
+mkdir -p $WORK/b102/
+mkdir -p $WORK/b096/
+mkdir -p $WORK/b104/
+mkdir -p $WORK/b095/
+mkdir -p $WORK/b101/
+mkdir -p $WORK/b106/
+mkdir -p $WORK/b081/
+mkdir -p $WORK/b105/
+mkdir -p $WORK/b080/
+mkdir -p $WORK/b077/
+mkdir -p $WORK/b110/
+mkdir -p $WORK/b111/
+mkdir -p $WORK/b113/
+mkdir -p $WORK/b114/
+mkdir -p $WORK/b109/
+mkdir -p $WORK/b108/
+mkdir -p $WORK/b117/
+mkdir -p $WORK/b112/
+mkdir -p $WORK/b116/
+mkdir -p $WORK/b120/
+mkdir -p $WORK/b121/
+mkdir -p $WORK/b122/
+mkdir -p $WORK/b119/
+mkdir -p $WORK/b118/
+mkdir -p $WORK/b128/
+mkdir -p $WORK/b127/
+mkdir -p $WORK/b129/
+mkdir -p $WORK/b137/
+mkdir -p $WORK/b125/
+cp /root/.cache/go-build/35/35ecbc01c116bd35989833b4c19548bb631e16537a61f6cf6fc2841cdb0db557-d $WORK/b125/_cgo_gotypes.go
+cp /root/.cache/go-build/01/01a89906737df628421cca36e9e8877ce79da26b469be79199a032610ca3d0e3-d $WORK/b125/cgo.cgo1.go
+cp /root/.cache/go-build/df/df29aead1db03c69922e4a0c0dfa5e7ab2dd79293a0e3b5088ab3ba0fa16346c-d $WORK/b125/_cgo_import.go
+mkdir -p $WORK/b136/
+mkdir -p $WORK/b140/
+mkdir -p $WORK/b142/
+mkdir -p $WORK/b139/
+mkdir -p $WORK/b141/
+mkdir -p $WORK/b135/
+mkdir -p $WORK/b145/
+mkdir -p $WORK/b134/
+mkdir -p $WORK/b148/
+mkdir -p $WORK/b151/
+mkdir -p $WORK/b147/
+mkdir -p $WORK/b150/
+mkdir -p $WORK/b146/
+mkdir -p $WORK/b152/
+mkdir -p $WORK/b154/
+mkdir -p $WORK/b149/
+mkdir -p $WORK/b155/
+mkdir -p $WORK/b144/
+mkdir -p $WORK/b153/
+mkdir -p $WORK/b143/
+mkdir -p $WORK/b156/
+mkdir -p $WORK/b161/
+mkdir -p $WORK/b133/
+mkdir -p $WORK/b157/
+mkdir -p $WORK/b132/
+mkdir -p $WORK/b159/
+mkdir -p $WORK/b160/
+mkdir -p $WORK/b162/
+mkdir -p $WORK/b164/
+mkdir -p $WORK/b165/
+mkdir -p $WORK/b173/
+mkdir -p $WORK/b170/
+mkdir -p $WORK/b169/
+mkdir -p $WORK/b174/
+mkdir -p $WORK/b179/
+mkdir -p $WORK/b182/
+mkdir -p $WORK/b178/
+mkdir -p $WORK/b184/
+mkdir -p $WORK/b186/
+mkdir -p $WORK/b185/
+mkdir -p $WORK/b188/
+mkdir -p $WORK/b177/
+mkdir -p $WORK/b187/
+mkdir -p $WORK/b176/
+mkdir -p $WORK/b175/
+mkdir -p $WORK/b181/
+mkdir -p $WORK/b189/
+mkdir -p $WORK/b183/
+mkdir -p $WORK/b192/
+mkdir -p $WORK/b196/
+mkdir -p $WORK/b195/
+mkdir -p $WORK/b194/
+mkdir -p $WORK/b198/
+mkdir -p $WORK/b191/
+mkdir -p $WORK/b197/
+mkdir -p $WORK/b199/
+mkdir -p $WORK/b190/
+mkdir -p $WORK/b200/
+mkdir -p $WORK/b201/
+mkdir -p $WORK/b202/
+mkdir -p $WORK/b180/
+mkdir -p $WORK/b205/
+mkdir -p $WORK/b207/
+mkdir -p $WORK/b209/
+mkdir -p $WORK/b208/
+mkdir -p $WORK/b210/
+mkdir -p $WORK/b212/
+mkdir -p $WORK/b211/
+mkdir -p $WORK/b204/
+mkdir -p $WORK/b203/
+mkdir -p $WORK/b213/
+mkdir -p $WORK/b215/
+mkdir -p $WORK/b217/
+mkdir -p $WORK/b214/
+mkdir -p $WORK/b218/
+mkdir -p $WORK/b219/
+mkdir -p $WORK/b220/
+mkdir -p $WORK/b224/
+mkdir -p $WORK/b222/
+mkdir -p $WORK/b226/
+mkdir -p $WORK/b233/
+mkdir -p $WORK/b225/
+mkdir -p $WORK/b234/
+mkdir -p $WORK/b227/
+mkdir -p $WORK/b232/
+mkdir -p $WORK/b221/
+cp /root/.cache/go-build/1c/1c315fb54dd1fee3cd91300cf670884ee961786c4b5d9162483397e875c9d355-d $WORK/b221/_cgo_gotypes.go
+cp /root/.cache/go-build/a6/a6252e0775f7819cdaef42629fd1ef3688209dd61be1683eb01fdfafced489d8-d $WORK/b221/cgo_linux.cgo1.go
+cp /root/.cache/go-build/d9/d951a31e904dd0105f66b3ad94f1f14cb5e54bf8ce9e19d4ee19c4d2bca99914-d $WORK/b221/cgo_resnew.cgo1.go
+cp /root/.cache/go-build/6e/6e90c771300a54d03c0f1d0a4591c17e051f2eb7d658c620a8a029617bf80e57-d $WORK/b221/cgo_socknew.cgo1.go
+cp /root/.cache/go-build/d4/d4f3436653022ae6b3e4ef14b62b9718c653123e00a2f740170c560faa00b7e9-d $WORK/b221/cgo_unix_cgo.cgo1.go
+cp /root/.cache/go-build/2c/2cf16c3a1638f574ee9d909909462278eca641234f645a73f821a2c68aa79749-d $WORK/b221/cgo_unix_cgo_res.cgo1.go
+cp /root/.cache/go-build/8a/8ad5e285f61a93981fbb73709d97438e2e66d81ebde4cefbb76df30099884c12-d $WORK/b221/_cgo_import.go
+mkdir -p $WORK/b235/
+mkdir -p $WORK/b216/
+mkdir -p $WORK/b231/
+mkdir -p $WORK/b236/
+mkdir -p $WORK/b230/
+mkdir -p $WORK/b237/
+mkdir -p $WORK/b171/
+mkdir -p $WORK/b238/
+mkdir -p $WORK/b239/
+mkdir -p $WORK/b241/
+mkdir -p $WORK/b242/
+mkdir -p $WORK/b243/
+mkdir -p $WORK/b240/
+mkdir -p $WORK/b244/
+mkdir -p $WORK/b245/
+mkdir -p $WORK/b247/
+mkdir -p $WORK/b254/
+mkdir -p $WORK/b253/
+mkdir -p $WORK/b255/
+mkdir -p $WORK/b252/
+mkdir -p $WORK/b251/
+mkdir -p $WORK/b256/
+mkdir -p $WORK/b229/
+mkdir -p $WORK/b246/
+mkdir -p $WORK/b228/
+mkdir -p $WORK/b258/
+mkdir -p $WORK/b257/
+mkdir -p $WORK/b261/
+mkdir -p $WORK/b262/
+mkdir -p $WORK/b250/
+mkdir -p $WORK/b260/
+mkdir -p $WORK/b249/
+mkdir -p $WORK/b263/
+mkdir -p $WORK/b264/
+mkdir -p $WORK/b268/
+mkdir -p $WORK/b269/
+mkdir -p $WORK/b259/
+mkdir -p $WORK/b270/
+mkdir -p $WORK/b272/
+mkdir -p $WORK/b273/
+mkdir -p $WORK/b275/
+mkdir -p $WORK/b278/
+mkdir -p $WORK/b167/
+mkdir -p $WORK/b166/
+mkdir -p $WORK/b163/
+mkdir -p $WORK/b271/
+mkdir -p $WORK/b131/
+mkdir -p $WORK/b274/
+mkdir -p $WORK/b285/
+mkdir -p $WORK/b289/
+cp /root/.cache/go-build/55/5526d05fa47abf610476922708c7d8c707e4128d1fafd7b0d2be85e61ef55495-d $WORK/b289/_cgo_gotypes.go
+cp /root/.cache/go-build/21/216900c3da345443e65315b1fcf766e1e49cb547d9ce115f7ac5dc075123ba46-d $WORK/b289/manual.cgo1.go
+cp /root/.cache/go-build/dc/dc6d67a460b6f44043de348c12dbe0943aafba41ee3883668e4810ed079afd73-d $WORK/b289/_cgo_import.go
+mkdir -p $WORK/b300/
+mkdir -p $WORK/b301/
+mkdir -p $WORK/b302/
+mkdir -p $WORK/b281/
+mkdir -p $WORK/b310/
+mkdir -p $WORK/b309/
+mkdir -p $WORK/b280/
+mkdir -p $WORK/b308/
+mkdir -p $WORK/b298/
+mkdir -p $WORK/b307/
+mkdir -p $WORK/b313/
+mkdir -p $WORK/b277/
+mkdir -p $WORK/b276/
+mkdir -p $WORK/b312/
+mkdir -p $WORK/b284/
+mkdir -p $WORK/b290/
+mkdir -p $WORK/b288/
+mkdir -p $WORK/b311/
+mkdir -p $WORK/b316/
+mkdir -p $WORK/b314/
+mkdir -p $WORK/b317/
+mkdir -p $WORK/b318/
+mkdir -p $WORK/b321/
+mkdir -p $WORK/b292/
+mkdir -p $WORK/b322/
+mkdir -p $WORK/b320/
+mkdir -p $WORK/b291/
+mkdir -p $WORK/b293/
+mkdir -p $WORK/b306/
+mkdir -p $WORK/b294/
+mkdir -p $WORK/b295/
+mkdir -p $WORK/b325/
+mkdir -p $WORK/b330/
+mkdir -p $WORK/b324/
+mkdir -p $WORK/b331/
+mkdir -p $WORK/b332/
+mkdir -p $WORK/b336/
+mkdir -p $WORK/b337/
+mkdir -p $WORK/b329/
+mkdir -p $WORK/b335/
+mkdir -p $WORK/b341/
+mkdir -p $WORK/b342/
+mkdir -p $WORK/b345/
+mkdir -p $WORK/b347/
+mkdir -p $WORK/b348/
+mkdir -p $WORK/b334/
+mkdir -p $WORK/b346/
+mkdir -p $WORK/b333/
+mkdir -p $WORK/b353/
+mkdir -p $WORK/b328/
+mkdir -p $WORK/b354/
+mkdir -p $WORK/b340/
+mkdir -p $WORK/b339/
+mkdir -p $WORK/b327/
+mkdir -p $WORK/b326/
+mkdir -p $WORK/b338/
+mkdir -p $WORK/b323/
+mkdir -p $WORK/b305/
+mkdir -p $WORK/b304/
+mkdir -p $WORK/b303/
+mkdir -p $WORK/b344/
+mkdir -p $WORK/b343/
+mkdir -p $WORK/b299/
+mkdir -p $WORK/b297/
+mkdir -p $WORK/b296/
+mkdir -p $WORK/b350/
+mkdir -p $WORK/b352/
+mkdir -p $WORK/b351/
+mkdir -p $WORK/b349/
+mkdir -p $WORK/b358/
+mkdir -p $WORK/b359/
+mkdir -p $WORK/b357/
+cp /root/.cache/go-build/ca/ca5576975bd0a65762bc73a6d6f525771a28617c8dc202ccb5a5da99a8749ba3-d $WORK/b357/_cgo_gotypes.go
+cp /root/.cache/go-build/12/12df3c1b2c24b41469457b5badf4ad8a20c386992cd8ca7507b270d71563fce7-d $WORK/b357/errors.cgo1.go
+cp /root/.cache/go-build/38/38ac8982fe27d976169244a0ba345bb8658d0a60e094736df8effae4b3cc8f55-d $WORK/b357/zstd.cgo1.go
+mkdir -p $WORK/b361/
+cp /root/.cache/go-build/92/92d9fe38b3bc56db8475ce4cdc699d7f41e30776d101b84c681aaa9616e5154b-d $WORK/b357/zstd_stream.cgo1.go
+cp /root/.cache/go-build/4b/4b0449c795c43ff7df0ae4c884565485dcd6c3afa4377c0f449204f46ef99353-d $WORK/b357/_cgo_import.go
+mkdir -p $WORK/b362/
+mkdir -p $WORK/b365/
+mkdir -p $WORK/b368/
+mkdir -p $WORK/b367/
+mkdir -p $WORK/b366/
+mkdir -p $WORK/b356/
+mkdir -p $WORK/b370/
+mkdir -p $WORK/b355/
+mkdir -p $WORK/b369/
+mkdir -p $WORK/b364/
+mkdir -p $WORK/b372/
+mkdir -p $WORK/b373/
+mkdir -p $WORK/b371/
+mkdir -p $WORK/b376/
+mkdir -p $WORK/b377/
+mkdir -p $WORK/b379/
+cd /root/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/crypto/secp256k1
+TERM='dumb' CGO_LDFLAGS='' /data/go/pkg/tool/linux_amd64/cgo -objdir $WORK/b379/ -importpath github.com/ethereum/go-ethereum/crypto/secp256k1 "-ldflags=\"-O2\" \"-g\"" -- -I $WORK/b379/ -O2 -g -I/root/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/crypto/secp256k1/libsecp256k1 -I/root/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/crypto/secp256k1/libsecp256k1/src ./panic_cb.go ./scalar_mult_cgo.go ./secp256.go
+mkdir -p $WORK/b130/
+mkdir -p $WORK/b381/
+mkdir -p $WORK/b380/
+mkdir -p $WORK/b385/
+mkdir -p $WORK/b387/
+mkdir -p $WORK/b389/
+mkdir -p $WORK/b390/
+mkdir -p $WORK/b391/
+mkdir -p $WORK/b386/
+mkdir -p $WORK/b393/
+mkdir -p $WORK/b392/
+mkdir -p $WORK/b395/
+mkdir -p $WORK/b394/
+mkdir -p $WORK/b396/
+mkdir -p $WORK/b384/
+mkdir -p $WORK/b398/
+mkdir -p $WORK/b397/
+mkdir -p $WORK/b400/
+mkdir -p $WORK/b399/
+mkdir -p $WORK/b402/
+mkdir -p $WORK/b401/
+mkdir -p $WORK/b404/
+mkdir -p $WORK/b403/
+mkdir -p $WORK/b405/
+mkdir -p $WORK/b383/
+mkdir -p $WORK/b382/
+mkdir -p $WORK/b408/
+mkdir -p $WORK/b409/
+mkdir -p $WORK/b407/
+mkdir -p $WORK/b406/
+mkdir -p $WORK/b411/
+mkdir -p $WORK/b410/
+mkdir -p $WORK/b413/
+mkdir -p $WORK/b417/
+mkdir -p $WORK/b416/
+mkdir -p $WORK/b419/
+mkdir -p $WORK/b418/
+mkdir -p $WORK/b420/
+mkdir -p $WORK/b421/
+mkdir -p $WORK/b415/
+mkdir -p $WORK/b423/
+mkdir -p $WORK/b424/
+mkdir -p $WORK/b425/
+mkdir -p $WORK/b426/
+mkdir -p $WORK/b429/
+mkdir -p $WORK/b431/
+mkdir -p $WORK/b430/
+mkdir -p $WORK/b428/
+mkdir -p $WORK/b432/
+mkdir -p $WORK/b427/
+mkdir -p $WORK/b433/
+mkdir -p $WORK/b435/
+mkdir -p $WORK/b434/
+mkdir -p $WORK/b438/
+mkdir -p $WORK/b437/
+mkdir -p $WORK/b436/
+mkdir -p $WORK/b439/
+mkdir -p $WORK/b440/
+mkdir -p $WORK/b441/
+mkdir -p $WORK/b444/
+mkdir -p $WORK/b446/
+mkdir -p $WORK/b447/
+mkdir -p $WORK/b445/
+mkdir -p $WORK/b448/
+mkdir -p $WORK/b449/
+mkdir -p $WORK/b443/
+mkdir -p $WORK/b451/
+mkdir -p $WORK/b450/
+mkdir -p $WORK/b442/
+mkdir -p $WORK/b453/
+mkdir -p $WORK/b452/
+mkdir -p $WORK/b454/
+mkdir -p $WORK/b458/
+mkdir -p $WORK/b457/
+mkdir -p $WORK/b459/
+mkdir -p $WORK/b460/
+mkdir -p $WORK/b461/
+mkdir -p $WORK/b463/
+mkdir -p $WORK/b462/
+mkdir -p $WORK/b464/
+mkdir -p $WORK/b465/
+mkdir -p $WORK/b468/
+mkdir -p $WORK/b469/
+SIGQUIT: quit
+PC=0x487301 m=0 sigcode=0
+
+goroutine 0 gp=0x11287e0 m=0 mp=0x112a620 [idle]:
+runtime.futex(0x112a770, 0x80, 0x0, 0x0, 0x0, 0x0)
+	runtime/sys_linux_amd64.s:557 +0x21 fp=0x7ffc15e430e0 sp=0x7ffc15e430d8 pc=0x487301
+runtime.futexsleep(0x7ffc15e43168?, 0x486eed?, 0x2dfb3f1?)
+	runtime/os_linux.go:76 +0x30 fp=0x7ffc15e43130 sp=0x7ffc15e430e0 pc=0x440e50
+runtime.notesleep(0x112a770)
+	runtime/lock_futex.go:47 +0x87 fp=0x7ffc15e43168 sp=0x7ffc15e43130 pc=0x41a467
+runtime.mPark(...)
+	runtime/proc.go:1974
+runtime.stopm()
+	runtime/proc.go:3013 +0x8c fp=0x7ffc15e43198 sp=0x7ffc15e43168 pc=0x44c6ec
+runtime.findRunnable()
+	runtime/proc.go:3784 +0x10b7 fp=0x7ffc15e43368 sp=0x7ffc15e43198 pc=0x44e4b7
+runtime.schedule()
+	runtime/proc.go:4152 +0xb1 fp=0x7ffc15e433a0 sp=0x7ffc15e43368 pc=0x44f511
+runtime.park_m(0xc000002e00)
+	runtime/proc.go:4280 +0x285 fp=0x7ffc15e43400 sp=0x7ffc15e433a0 pc=0x44f985
+runtime.mcall()
+	runtime/asm_amd64.s:458 +0x55 fp=0x7ffc15e43418 sp=0x7ffc15e43400 pc=0x483635
+
+goroutine 1 gp=0xc000002380 m=nil [sync.WaitGroup.Wait]:
+runtime.gopark(0xc000b6f160?, 0x41c9d4?, 0x80?, 0x19?, 0xc000b6f148?)
+	runtime/proc.go:460 +0xce fp=0xc00147b100 sp=0xc00147b0e0 pc=0x47d5ae
+runtime.goparkunlock(...)
+	runtime/proc.go:466
+runtime.semacquire1(0xc001031d98, 0x0, 0x1, 0x0, 0x19)
+	runtime/sema.go:192 +0x21d fp=0xc00147b168 sp=0xc00147b100 pc=0x45b85d
+sync.runtime_SemacquireWaitGroup(0xc00092d230?, 0x80?)
+	runtime/sema.go:114 +0x2e fp=0xc00147b1a0 sp=0xc00147b168 pc=0x47ed6e
+sync.(*WaitGroup).Wait(0xc001031d90)
+	sync/waitgroup.go:206 +0x85 fp=0xc00147b1c8 sp=0xc00147b1a0 pc=0x490f45
+cmd/go/internal/work.(*Builder).Do(0xc000ac83c0, {0xceacc0, 0x114a540}, 0xc000d9c600)
+	cmd/go/internal/work/exec.go:234 +0x44a fp=0xc00147b2e0 sp=0xc00147b1c8 pc=0x952c2a
+cmd/go/internal/test.runTest({0xceacc0, 0x114a540}, 0x111a3c0, {0xc0000ac020?, 0xace320?, 0xace4e0?})
+	cmd/go/internal/test/test.go:1082 +0x1b79 fp=0xc00147b9c8 sp=0xc00147b2e0 pc=0xa01eb9
+main.invoke(0x111a3c0, {0xc0000ac010, 0x7, 0x7})
+	cmd/go/main.go:341 +0x84a fp=0xc00147bcd0 sp=0xc00147b9c8 pc=0xa2596a
+main.main()
+	cmd/go/main.go:220 +0xe8b fp=0xc00147bf50 sp=0xc00147bcd0 pc=0xa24a8b
+runtime.main()
+	runtime/proc.go:285 +0x29d fp=0xc00147bfe0 sp=0xc00147bf50 pc=0x4477fd
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00147bfe8 sp=0xc00147bfe0 pc=0x4854e1
+
+goroutine 2 gp=0xc0000028c0 m=nil [force gc (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc00004efa8 sp=0xc00004ef88 pc=0x47d5ae
+runtime.goparkunlock(...)
+	runtime/proc.go:466
+runtime.forcegchelper()
+	runtime/proc.go:373 +0xb3 fp=0xc00004efe0 sp=0xc00004efa8 pc=0x447b33
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00004efe8 sp=0xc00004efe0 pc=0x4854e1
+created by runtime.init.7 in goroutine 1
+	runtime/proc.go:361 +0x1a
+
+goroutine 3 gp=0xc000002e00 m=nil [GC sweep wait]:
+runtime.gopark(0x1?, 0x0?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc00004f780 sp=0xc00004f760 pc=0x47d5ae
+runtime.goparkunlock(...)
+	runtime/proc.go:466
+runtime.bgsweep(0xc000032080)
+	runtime/mgcsweep.go:323 +0xdf fp=0xc00004f7c8 sp=0xc00004f780 pc=0x431a9f
+runtime.gcenable.gowrap1()
+	runtime/mgc.go:212 +0x25 fp=0xc00004f7e0 sp=0xc00004f7c8 pc=0x425aa5
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00004f7e8 sp=0xc00004f7e0 pc=0x4854e1
+created by runtime.gcenable in goroutine 1
+	runtime/mgc.go:212 +0x66
+
+goroutine 4 gp=0xc000002fc0 m=nil [GC scavenge wait]:
+runtime.gopark(0x103f2fc?, 0x3b9aca00?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc00004ff78 sp=0xc00004ff58 pc=0x47d5ae
+runtime.goparkunlock(...)
+	runtime/proc.go:466
+runtime.(*scavengerState).park(0x1127ea0)
+	runtime/mgcscavenge.go:425 +0x49 fp=0xc00004ffa8 sp=0xc00004ff78 pc=0x42f529
+runtime.bgscavenge(0xc000032080)
+	runtime/mgcscavenge.go:658 +0x59 fp=0xc00004ffc8 sp=0xc00004ffa8 pc=0x42fad9
+runtime.gcenable.gowrap2()
+	runtime/mgc.go:213 +0x25 fp=0xc00004ffe0 sp=0xc00004ffc8 pc=0x425a45
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00004ffe8 sp=0xc00004ffe0 pc=0x4854e1
+created by runtime.gcenable in goroutine 1
+	runtime/mgc.go:213 +0xa5
+
+goroutine 17 gp=0xc000082000 m=nil [GOMAXPROCS updater (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc00004a788 sp=0xc00004a768 pc=0x47d5ae
+runtime.goparkunlock(...)
+	runtime/proc.go:466
+runtime.updateMaxProcsGoroutine()
+	runtime/proc.go:6720 +0xe7 fp=0xc00004a7e0 sp=0xc00004a788 pc=0x455a67
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00004a7e8 sp=0xc00004a7e0 pc=0x4854e1
+created by runtime.defaultGOMAXPROCSUpdateEnable in goroutine 1
+	runtime/proc.go:6708 +0x37
+
+goroutine 18 gp=0xc0000821c0 m=nil [finalizer wait]:
+runtime.gopark(0x456a35?, 0x42ea1c?, 0xc0?, 0xba?, 0x490013?)
+	runtime/proc.go:460 +0xce fp=0xc00004e620 sp=0xc00004e600 pc=0x47d5ae
+runtime.runFinalizers()
+	runtime/mfinal.go:210 +0x107 fp=0xc00004e7e0 sp=0xc00004e620 pc=0x4249a7
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00004e7e8 sp=0xc00004e7e0 pc=0x4854e1
+created by runtime.createfing in goroutine 1
+	runtime/mfinal.go:172 +0x3d
+
+goroutine 19 gp=0xc000082380 m=nil [cleanup wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc00004af68 sp=0xc00004af48 pc=0x47d5ae
+runtime.goparkunlock(...)
+	runtime/proc.go:466
+runtime.(*cleanupQueue).dequeue(0x11283c0)
+	runtime/mcleanup.go:439 +0xc5 fp=0xc00004afa0 sp=0xc00004af68 pc=0x421bc5
+runtime.runCleanups()
+	runtime/mcleanup.go:635 +0x45 fp=0xc00004afe0 sp=0xc00004afa0 pc=0x422285
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc00004afe8 sp=0xc00004afe0 pc=0x4854e1
+created by runtime.(*cleanupQueue).createGs in goroutine 1
+	runtime/mcleanup.go:589 +0xa5
+
+goroutine 3392 gp=0xc0003f0c40 m=nil [select]:
+runtime.gopark(0xc0005abf90?, 0x2?, 0x70?, 0xbe?, 0xc0005abf5c?)
+	runtime/proc.go:460 +0xce fp=0xc0005abde0 sp=0xc0005abdc0 pc=0x47d5ae
+runtime.selectgo(0xc0005abf90, 0xc0005abf58, 0xc000d9c180?, 0x0, 0x0?, 0x1)
+	runtime/select.go:351 +0x8b7 fp=0xc0005abf20 sp=0xc0005abde0 pc=0x45a737
+cmd/go/internal/work.(*Builder).Do.func4()
+	cmd/go/internal/work/exec.go:215 +0x105 fp=0xc0005abfe0 sp=0xc0005abf20 pc=0x952ec5
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc0005abfe8 sp=0xc0005abfe0 pc=0x4854e1
+created by cmd/go/internal/work.(*Builder).Do in goroutine 1
+	cmd/go/internal/work/exec.go:211 +0x39e
+
+goroutine 22 gp=0xc0003f1180 m=nil [GC worker (idle)]:
+runtime.gopark(0xab4b4f5a48aebd?, 0x0?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc000051f38 sp=0xc000051f18 pc=0x47d5ae
+runtime.gcBgMarkWorker(0xc0003c2150)
+	runtime/mgc.go:1463 +0xeb fp=0xc000051fc8 sp=0xc000051f38 pc=0x42818b
+runtime.gcBgMarkStartWorkers.gowrap1()
+	runtime/mgc.go:1373 +0x25 fp=0xc000051fe0 sp=0xc000051fc8 pc=0x428065
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc000051fe8 sp=0xc000051fe0 pc=0x4854e1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	runtime/mgc.go:1373 +0x105
+
+goroutine 23 gp=0xc0003f1340 m=nil [GC worker (idle)]:
+runtime.gopark(0xab4b4f5a48ba6c?, 0x0?, 0x0?, 0x0?, 0x0?)
+	runtime/proc.go:460 +0xce fp=0xc001834f38 sp=0xc001834f18 pc=0x47d5ae
+runtime.gcBgMarkWorker(0xc0003c2150)
+	runtime/mgc.go:1463 +0xeb fp=0xc001834fc8 sp=0xc001834f38 pc=0x42818b
+runtime.gcBgMarkStartWorkers.gowrap1()
+	runtime/mgc.go:1373 +0x25 fp=0xc001834fe0 sp=0xc001834fc8 pc=0x428065
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc001834fe8 sp=0xc001834fe0 pc=0x4854e1
+created by runtime.gcBgMarkStartWorkers in goroutine 20
+	runtime/mgc.go:1373 +0x105
+
+goroutine 3391 gp=0xc0001f0700 m=3 mp=0xc000055008 [syscall]:
+syscall.Syscall6(0xf7, 0x1, 0x7b80, 0xc001566790, 0x1000004, 0x0, 0x0)
+	syscall/syscall_linux.go:96 +0x39 fp=0xc001566710 sp=0xc0015666b0 pc=0x4a4079
+internal/syscall/unix.Waitid(0xc000ead270?, 0xc0015667ce?, 0xc0015668f8?, 0x5497d5?, 0xc0003a18c0?)
+	internal/syscall/unix/waitid_linux.go:18 +0x39 fp=0xc001566768 sp=0xc001566710 pc=0x4fd399
+os.(*Process).blockUntilWaitable.func1(...)
+	os/wait_waitid.go:24
+os.ignoringEINTR(...)
+	os/file_posix.go:256
+os.(*Process).blockUntilWaitable(0xc000e58980)
+	os/wait_waitid.go:23 +0x5f fp=0xc001566830 sp=0xc001566768 pc=0x513c1f
+os.(*Process).pidWait(0xc000e58980)
+	os/exec_unix.go:45 +0x31 fp=0xc001566890 sp=0xc001566830 pc=0x50b631
+os.(*Process).wait(0x549b00?)
+	os/exec_unix.go:28 +0x26 fp=0xc0015668a8 sp=0xc001566890 pc=0x50b5e6
+os.(*Process).Wait(...)
+	os/exec.go:340
+os/exec.(*Cmd).Wait(0xc000d9c780)
+	os/exec/exec.go:922 +0x45 fp=0xc001566908 sp=0xc0015668a8 pc=0x54a1c5
+os/exec.(*Cmd).Run(0xc000d9c780)
+	os/exec/exec.go:626 +0x2d fp=0xc001566920 sp=0xc001566908 pc=0x548e8d
+cmd/go/internal/work.(*Shell).runOut(0xc000200c30, {0xc00058f900, 0x49}, {0xc000eacf80, 0x2, 0xc000296df8?}, {0xc001567250?, 0x47b0c5?, 0x18?})
+	cmd/go/internal/work/shell.go:650 +0x66a fp=0xc001566b00 sp=0xc001566920 pc=0x987a6a
+cmd/go/internal/work.(*Shell).run(0xc000200c30, {0xc00058f900, 0x49}, {0x7f8e441b16d1, 0x30}, {0xc000eacf80?, 0xc00090c608?, 0x1000051d89e?}, {0xc001567250, 0xc, ...})
+	cmd/go/internal/work/shell.go:577 +0x70 fp=0xc001566b98 sp=0xc001566b00 pc=0x987270
+cmd/go/internal/work.(*Builder).cgo(0xc000ac83c0, 0xc000eed380, {0xc0003a18c0, 0x21}, {0xc000b0c660, 0x1d}, {0x0, 0x0, 0x0?}, {0x0, ...}, ...)
+	cmd/go/internal/work/exec.go:2811 +0x21f0 fp=0xc001567320 sp=0xc001566b98 pc=0x96b2b0
+cmd/go/internal/work.(*Builder).build(0xc000ac83c0, {0x48?, 0x0?}, 0xc000eed380)
+	cmd/go/internal/work/exec.go:755 +0x4b0b fp=0xc001567da0 sp=0xc001567320 pc=0x95a92b
+cmd/go/internal/work.(*buildActor).Act(0xceacc0?, 0x114a540?, {0xceacc0?, 0x114a540?}, 0xc000b5fe70?)
+	cmd/go/internal/work/action.go:473 +0x29 fp=0xc001567dd0 sp=0xc001567da0 pc=0x944269
+cmd/go/internal/work.(*Builder).Do.func3({0xceacc0, 0x114a540}, 0xc000eed380)
+	cmd/go/internal/work/exec.go:153 +0x8d1 fp=0xc001567f20 sp=0xc001567dd0 pc=0x953911
+cmd/go/internal/work.(*Builder).Do.func4()
+	cmd/go/internal/work/exec.go:225 +0xae fp=0xc001567fe0 sp=0xc001567f20 pc=0x952e6e
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc001567fe8 sp=0xc001567fe0 pc=0x4854e1
+created by cmd/go/internal/work.(*Builder).Do in goroutine 1
+	cmd/go/internal/work/exec.go:211 +0x39e
+
+goroutine 3430 gp=0xc000448c40 m=nil [IO wait]:
+runtime.gopark(0xc001837bf8?, 0xc001837c48?, 0x3e?, 0x2?, 0xb?)
+	runtime/proc.go:460 +0xce fp=0xc001837bd0 sp=0xc001837bb0 pc=0x47d5ae
+runtime.netpollblock(0x4a2298?, 0x412d66?, 0x0?)
+	runtime/netpoll.go:575 +0xf7 fp=0xc001837c08 sp=0xc001837bd0 pc=0x4400f7
+internal/poll.runtime_pollWait(0x7f8e442c0c00, 0x72)
+	runtime/netpoll.go:351 +0x85 fp=0xc001837c28 sp=0xc001837c08 pc=0x47c785
+internal/poll.(*pollDesc).wait(0xc000eb2960?, 0xc000b7be00?, 0x1)
+	internal/poll/fd_poll_runtime.go:84 +0x27 fp=0xc001837c50 sp=0xc001837c28 pc=0x4fe7a7
+internal/poll.(*pollDesc).waitRead(...)
+	internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc000eb2960, {0xc000b7be00, 0x200, 0x200})
+	internal/poll/fd_unix.go:165 +0x279 fp=0xc001837ce8 sp=0xc001837c50 pc=0x4ffa99
+os.(*File).read(...)
+	os/file_posix.go:29
+os.(*File).Read(0xc000f1c988, {0xc000b7be00?, 0x419a5f?, 0xb04f60?})
+	os/file.go:144 +0x4f fp=0xc001837d28 sp=0xc001837ce8 pc=0x50bdcf
+bytes.(*Buffer).ReadFrom(0xc0007e3c50, {0xce4860, 0xc000f1c9a8})
+	bytes/buffer.go:217 +0x98 fp=0xc001837d80 sp=0xc001837d28 pc=0x542ff8
+io.copyBuffer({0xce4ac0, 0xc0007e3c50}, {0xce4860, 0xc000f1c9a8}, {0x0, 0x0, 0x0})
+	io/io.go:415 +0x151 fp=0xc001837df8 sp=0xc001837d80 pc=0x4f5cb1
+io.Copy(...)
+	io/io.go:388
+os.genericWriteTo(0xc000f1c988?, {0xce4ac0, 0xc0007e3c50})
+	os/file.go:295 +0x4f fp=0xc001837e48 sp=0xc001837df8 pc=0x50c70f
+os.(*File).WriteTo(0xc000f1c988, {0xce4ac0, 0xc0007e3c50})
+	os/file.go:273 +0x9c fp=0xc001837e88 sp=0xc001837e48 pc=0x50c63c
+io.copyBuffer({0xce4ac0, 0xc0007e3c50}, {0xce4760, 0xc000f1c988}, {0x0, 0x0, 0x0})
+	io/io.go:411 +0x9d fp=0xc001837f00 sp=0xc001837e88 pc=0x4f5bfd
+io.Copy(...)
+	io/io.go:388
+os/exec.(*Cmd).writerDescriptor.func1()
+	os/exec/exec.go:596 +0x34 fp=0xc001837f60 sp=0xc001837f00 pc=0x548e14
+os/exec.(*Cmd).Start.func2(0x0?)
+	os/exec/exec.go:749 +0x2c fp=0xc001837fc8 sp=0xc001837f60 pc=0x549a4c
+os/exec.(*Cmd).Start.gowrap1()
+	os/exec/exec.go:761 +0x24 fp=0xc001837fe0 sp=0xc001837fc8 pc=0x5499e4
+runtime.goexit({})
+	runtime/asm_amd64.s:1693 +0x1 fp=0xc001837fe8 sp=0xc001837fe0 pc=0x4854e1
+created by os/exec.(*Cmd).Start in goroutine 3391
+	os/exec/exec.go:748 +0x935
+
+rax    0xca
+rbx    0x0
+rcx    0xffffffffffffffff
+rdx    0x0
+rdi    0x112a770
+rsi    0x80
+rbp    0x7ffc15e43120
+rsp    0x7ffc15e430d8
+r8     0x0
+r9     0x0
+r10    0x0
+r11    0x286
+r12    0x7ffc15e43158
+r13    0x10bd901
+r14    0x11287e0
+r15    0x1
+rip    0x487301
+rflags 0x286
+cs     0x33
+fs     0x0
+gs     0x0

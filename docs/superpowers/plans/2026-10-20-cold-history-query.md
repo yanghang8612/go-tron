@@ -24,3 +24,24 @@ remain separate follow-up work; no stat-only negative shortcut was introduced.
 
 Acceptance and exact commands/results:
 [offline report](../../dev/cold-history-query-optimization-20261020.md).
+
+## Follow-up: log identity and pinned query tail reuse
+
+- [x] Reproduce the public 20-byte address filter miss on hot, legacy cold and
+      V4 cold paths; fix payload predicates and both segment/global lookups.
+- [x] Differential-test the borrowed owner scan against the owning logical
+      oracle, including shared packs, standalone zero rows and owner-changing
+      positive-sequence repairs.
+- [x] Bound pinned query reuse by bytes/rows/owners; cover transaction cuts,
+      recreation, subset ranges, input/output ownership, concurrency,
+      cancellation, corruption and cross-snapshot negative isolation.
+- [x] Preserve immediate early hits; on budget exhaustion continue the same
+      scan rather than restarting it. Benchmark both negative and early hits.
+- [x] Real immutable event-file baseline/candidate comparison and canonical
+      balances, full source-fold MuHash, Sapling restore and continued execution.
+- [x] Diagnose index wake cadence (4096-block session barrier, minimum 256,
+      maximum 4096 per pass) from same-process samples. Keep scheduling changes
+      out of this reader patch pending a throughput/write-amplification study.
+
+This follow-up remains local/offline. Deployment authorization for 9030ce7a
+already completed does not cause another automatic push or production restart.

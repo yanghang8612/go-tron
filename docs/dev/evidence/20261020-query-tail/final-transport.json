@@ -1,0 +1,29 @@
+{
+  "packet_sha256": "b4c26c78ea77d67fd12e6a89129f47f9b3e7a16ad54326b84723bc85e13d5562",
+  "aliases": {
+    "status.json": "server-final/status.json",
+    "source-identity-final.json": "server-final/source-identity-final.json",
+    "event-result.json": "server-final/event-result.json",
+    "baseline-event.log": "server-final/baseline-event.log",
+    "candidate-event.log": "server-final/candidate-event.log",
+    "final-balance-result.json": "server-final/final-balance-result.json",
+    "final-census.json": "server-final/final-census.json",
+    "final-packages.log": "server-final/final-packages.log",
+    "final-dense-bench.log": "server-final/final-dense-bench.log",
+    "final-balance.log": "server-final/final-balance.log",
+    "final-census.log": "server-final/final-census.log",
+    "final-native-correctness.log": "server-final/final-native-correctness.log",
+    "final-native-build.log": "server-final/final-native-build.log",
+    "server-race-timeout-status.json": "server-final/server-race-timeout-status.json",
+    "final-race.log": "server-final/final-race.log",
+    "race-diagnostic.log": "server-final/race-diagnostic.log",
+    "race-tool-stack.log": "server-final/race-tool-stack.log",
+    "log-error-summary.json": "server-final/log-error-summary.json",
+    "sampling-summary.json": "server-final/sampling-summary.json",
+    "live-final.json": "server-final/live-final.json",
+    "followup.py": "server-final/followup.py",
+    "finish.py": "server-final/finish.py",
+    "event-copy/source-ref.json": "server-final/event-copy/source-ref.json",
+    "event-copy/log/event-log-3142019-3147018-bc30c6f375adf39e.seg": "server-final/event-copy/log/event-log-3142019-3147018-bc30c6f375adf39e.seg"
+  }
+}
