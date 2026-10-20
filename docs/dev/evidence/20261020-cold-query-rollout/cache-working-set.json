@@ -1,0 +1,17 @@
+{
+  "utc": "2026-10-20T05:59:43.341303+00:00",
+  "generation": 4784,
+  "dataset_kinds": {
+    "('event-log', 'event-log')": 4615,
+    "('event-log', 'event-log-index')": 4615,
+    "('state-domain-change', 'accessor')": 4292,
+    "('state-domain-change', 'history')": 4292,
+    "('state-domain-change', 'inverted')": 4292
+  },
+  "state_change_history_segments": 4292,
+  "query_cut_tx_from_profile": 20587119,
+  "history_refs_intersecting_after_cut": 3906,
+  "shared_prefix_cache_entries": 8192,
+  "potential_segment_plus_accessor_prefixes": 7812,
+  "note": "Potential distinct prefix count, not a measured production cache-hit ratio; identical compressed prefixes may coalesce."
+}

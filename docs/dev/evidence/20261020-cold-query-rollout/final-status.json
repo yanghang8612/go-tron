@@ -1,0 +1,727 @@
+{
+  "utc": "2026-10-20T05:59:43.761312+00:00",
+  "pid": 28737,
+  "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+  "same_process": true,
+  "datadir_inode": 94642617,
+  "services": {
+    "gtron": {
+      "rc": 0,
+      "out": "MainPID=28737\nResult=success\nActiveState=active\nSubState=running\n"
+    },
+    "gtron-deploy.timer": {
+      "rc": 1,
+      "out": "Result=success\nActiveState=active\nSubState=waiting\n"
+    },
+    "gtron-deploy.service": {
+      "rc": 0,
+      "out": "MainPID=0\nResult=success\nActiveState=inactive\nSubState=dead\n"
+    },
+    "gtron-cold-query-observe-20261020.service": {
+      "rc": 0,
+      "out": "MainPID=1599\nResult=success\nActiveState=active\nSubState=running\n"
+    }
+  },
+  "memory": {
+    "rc": 0,
+    "out": "              total        used        free      shared  buff/cache   available\nMem:    65842163712 22442119168   430133248  4201742336 42969911296 38658928640\nSwap:             0           0           0\n"
+  },
+  "transaction": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "blockHash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+      "blockNumber": "0x156",
+      "from": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "gas": "0x0",
+      "gasPrice": "0x1",
+      "hash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+      "input": "0x",
+      "nonce": "0x0",
+      "r": "0x0",
+      "s": "0x0",
+      "to": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "transactionIndex": "0x0",
+      "type": "0x0",
+      "v": "0x0",
+      "value": "0x762257bf9b9100"
+    }
+  },
+  "receipt": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "blockHash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+      "blockNumber": "0x156",
+      "contractAddress": null,
+      "cumulativeGasUsed": "0x0",
+      "from": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+      "gasUsed": "0x0",
+      "logs": [],
+      "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "status": "0x1",
+      "to": "0x0000000000000000000000000000000000000000",
+      "transactionHash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+      "transactionIndex": "0x0",
+      "type": "0x0"
+    }
+  },
+  "block342": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "difficulty": "0x0",
+      "extraData": "0x",
+      "gasLimit": "0x0",
+      "gasUsed": "0x0",
+      "hash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+      "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "miner": "0x41ffd564656556a8b6b79311a932e3d216f4fc030b",
+      "nonce": "0x0000000000000000",
+      "number": "0x156",
+      "parentHash": "0x00000000000001554dc2e18a184605d848f0df73cf4482986b27c29414379a25",
+      "receiptsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+      "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+      "size": "0x0",
+      "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "timestamp": "0x5b304ed4",
+      "totalDifficulty": "0x0",
+      "transactions": [
+        "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2"
+      ],
+      "transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+      "uncles": []
+    }
+  },
+  "transaction_location_correct": true,
+  "counter_receipt": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "blockHash": "0x00000000002ff955a78e2d6e40e97da7b33a2787a53c976fc1c664c8f710e19b",
+      "blockNumber": "0x2ff955",
+      "contractAddress": "0xa4997124a328a4615eab437cede31da47a31b375",
+      "cumulativeGasUsed": "0x12ef7",
+      "from": "0x3788b055f8cc6950d8454f90bb1059fb3d96597c",
+      "gasUsed": "0x12ef7",
+      "logs": [
+        {
+          "address": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "blockHash": "0x00000000002ff955a78e2d6e40e97da7b33a2787a53c976fc1c664c8f710e19b",
+          "blockNumber": "0x2ff955",
+          "blockTimestamp": "0x5bc108c8",
+          "data": "0x0000000000000000000000000000000000000000000000000000000000000006",
+          "logIndex": "0x0",
+          "removed": false,
+          "topics": [
+            "0xa0d1e73d61e6eb8b3dafafe7c97e9471ec8e405c1ae705ac6aafaf4dd9abd6ae"
+          ],
+          "transactionHash": "0xbbda20c284266036e65d2b91de12bc974262ac9d051f9cac08c63c5ead029363",
+          "transactionIndex": "0x0"
+        }
+      ],
+      "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "status": "0x1",
+      "to": "0x0000000000000000000000000000000000000000",
+      "transactionHash": "0xbbda20c284266036e65d2b91de12bc974262ac9d051f9cac08c63c5ead029363",
+      "transactionIndex": "0x0",
+      "type": "0x0"
+    }
+  },
+  "counter_logs": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": []
+  },
+  "counter_logs_unfiltered": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": [
+      {
+        "address": "0xa4997124a328a4615eab437cede31da47a31b375",
+        "topics": [
+          "0xa0d1e73d61e6eb8b3dafafe7c97e9471ec8e405c1ae705ac6aafaf4dd9abd6ae"
+        ],
+        "data": "0x0000000000000000000000000000000000000000000000000000000000000006",
+        "blockNumber": "0x2ff955",
+        "blockTimestamp": "",
+        "transactionHash": "0xbbda20c284266036e65d2b91de12bc974262ac9d051f9cac08c63c5ead029363",
+        "transactionIndex": "0x0",
+        "blockHash": "0x00000000002ff955a78e2d6e40e97da7b33a2787a53c976fc1c664c8f710e19b",
+        "logIndex": "0x0",
+        "removed": false
+      }
+    ]
+  },
+  "counter_receipt_logs_unfiltered_correct": true,
+  "counter_address_filter_correct": false,
+  "counter_address_filter_issue": "filtered eth_getLogs returns empty while unfiltered query and receipt agree",
+  "journal_after_lines": 249,
+  "critical_lines": [],
+  "before-local": {
+    "queries": 24,
+    "returned_value_mismatches": 0,
+    "timeouts": 1,
+    "correct": 23,
+    "medians_ms": {
+      "storage6": 6065.506778657436,
+      "storage7": 5289.686717092991,
+      "genesis": 1604.559451341629,
+      "balance341": 33.56875479221344,
+      "balance342": 54.41699922084808,
+      "latest": 5.240641534328461,
+      "call6": 10686.913758516312,
+      "call7": 10824.579529464245
+    }
+  },
+  "after-local": {
+    "queries": 24,
+    "returned_value_mismatches": 0,
+    "timeouts": 4,
+    "correct": 20,
+    "medians_ms": {
+      "storage6": 4303.341701626778,
+      "storage7": 4628.932736814022,
+      "genesis": 35.44113039970398,
+      "balance341": 33.28636288642883,
+      "balance342": 36.171913146972656,
+      "latest": 5.773261189460754,
+      "call6": 15006.648324429989,
+      "call7": 15006.681881844997
+    }
+  },
+  "runtime_samples": 15,
+  "runtime_errors": [],
+  "latest_runtime": {
+    "utc": "2026-10-20T05:58:49.729292+00:00",
+    "iteration": 4,
+    "source": "9030ce7a31016491ece014ac76e5656ec149417e",
+    "errors": [],
+    "service": {
+      "MainPID": "28737",
+      "ActiveState": "active"
+    },
+    "identity": {
+      "pid": 28737,
+      "exe": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron",
+      "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+    },
+    "wallet": {
+      "version": "0.2.0-dev",
+      "currentBlock": 11286120,
+      "lastInsertTime": 1792475929705,
+      "syncInfo": {
+        "active": true,
+        "paused": false,
+        "peerCount": 30,
+        "syncPeerCount": 8,
+        "targetHead": 87267624,
+        "appliedTip": 11286128,
+        "sessionBlocks": 66827,
+        "sessionTransactions": 10871013,
+        "remaining": 75981504,
+        "inflight": 0,
+        "bufferedBlocks": 1908,
+        "bufferedBytes": 93474986,
+        "fetchBackpressured": false,
+        "requestedBlocks": 57,
+        "retryBlocks": 0,
+        "retainedDecodedBlocks": 0,
+        "retainedDecodedBytes": 0
+      }
+    },
+    "rss_kib": 9500940,
+    "metrics": {
+      "history/storage/keyspace/account_kv_latest/attempted_at": 1792475678,
+      "history/storage/keyspace/account_kv_latest/attempts/total": 4,
+      "history/storage/keyspace/account_kv_latest/duration_ns": 140131,
+      "history/storage/keyspace/account_kv_latest/errors/total": 0,
+      "history/storage/keyspace/account_kv_latest/known": 1,
+      "history/storage/keyspace/account_kv_latest/sampled_at": 1792475678,
+      "history/storage/keyspace/account_kv_latest/sst_bytes": 1704,
+      "history/storage/keyspace/account_latest/attempted_at": 1792475648,
+      "history/storage/keyspace/account_latest/attempts/total": 4,
+      "history/storage/keyspace/account_latest/duration_ns": 191401,
+      "history/storage/keyspace/account_latest/errors/total": 0,
+      "history/storage/keyspace/account_latest/known": 1,
+      "history/storage/keyspace/account_latest/sampled_at": 1792475648,
+      "history/storage/keyspace/account_latest/sst_bytes": 9795,
+      "history/storage/keyspace/block_body/attempted_at": 1792475918,
+      "history/storage/keyspace/block_body/attempts/total": 4,
+      "history/storage/keyspace/block_body/duration_ns": 145256,
+      "history/storage/keyspace/block_body/errors/total": 0,
+      "history/storage/keyspace/block_body/known": 1,
+      "history/storage/keyspace/block_body/sampled_at": 1792475918,
+      "history/storage/keyspace/block_body/sst_bytes": 0,
+      "history/storage/keyspace/commitment/attempted_at": 1792475768,
+      "history/storage/keyspace/commitment/attempts/total": 4,
+      "history/storage/keyspace/commitment/duration_ns": 135329,
+      "history/storage/keyspace/commitment/errors/total": 0,
+      "history/storage/keyspace/commitment/known": 1,
+      "history/storage/keyspace/commitment/sampled_at": 1792475768,
+      "history/storage/keyspace/commitment/sst_bytes": 18233,
+      "history/storage/keyspace/enabled": 1,
+      "history/storage/keyspace/inflight": 0,
+      "history/storage/keyspace/kv_generation/attempted_at": 1792475708,
+      "history/storage/keyspace/kv_generation/attempts/total": 4,
+      "history/storage/keyspace/kv_generation/duration_ns": 251751,
+      "history/storage/keyspace/kv_generation/errors/total": 0,
+      "history/storage/keyspace/kv_generation/known": 1,
+      "history/storage/keyspace/kv_generation/sampled_at": 1792475708,
+      "history/storage/keyspace/kv_generation/sst_bytes": 7121,
+      "history/storage/keyspace/owner": 2,
+      "history/storage/keyspace/range_count": 12,
+      "history/storage/keyspace/staged_body/attempted_at": 1792475888,
+      "history/storage/keyspace/staged_body/attempts/total": 4,
+      "history/storage/keyspace/staged_body/duration_ns": 151279,
+      "history/storage/keyspace/staged_body/errors/total": 0,
+      "history/storage/keyspace/staged_body/known": 1,
+      "history/storage/keyspace/staged_body/sampled_at": 1792475888,
+      "history/storage/keyspace/staged_body/sst_bytes": 0,
+      "history/storage/keyspace/state_change_index/attempted_at": 1792475828,
+      "history/storage/keyspace/state_change_index/attempts/total": 4,
+      "history/storage/keyspace/state_change_index/duration_ns": 454217,
+      "history/storage/keyspace/state_change_index/errors/total": 0,
+      "history/storage/keyspace/state_change_index/known": 1,
+      "history/storage/keyspace/state_change_index/sampled_at": 1792475828,
+      "history/storage/keyspace/state_change_index/sst_bytes": 4491155014,
+      "history/storage/keyspace/state_changeset/attempted_at": 1792475798,
+      "history/storage/keyspace/state_changeset/attempts/total": 4,
+      "history/storage/keyspace/state_changeset/duration_ns": 329705,
+      "history/storage/keyspace/state_changeset/errors/total": 0,
+      "history/storage/keyspace/state_changeset/known": 1,
+      "history/storage/keyspace/state_changeset/sampled_at": 1792475798,
+      "history/storage/keyspace/state_changeset/sst_bytes": 9598039754,
+      "history/storage/keyspace/state_code/attempted_at": 1792475738,
+      "history/storage/keyspace/state_code/attempts/total": 4,
+      "history/storage/keyspace/state_code/duration_ns": 157029,
+      "history/storage/keyspace/state_code/errors/total": 0,
+      "history/storage/keyspace/state_code/known": 1,
+      "history/storage/keyspace/state_code/sampled_at": 1792475738,
+      "history/storage/keyspace/state_code/sst_bytes": 39176,
+      "history/storage/keyspace/state_tx_range/attempted_at": 1792475858,
+      "history/storage/keyspace/state_tx_range/attempts/total": 4,
+      "history/storage/keyspace/state_tx_range/duration_ns": 313172,
+      "history/storage/keyspace/state_tx_range/errors/total": 0,
+      "history/storage/keyspace/state_tx_range/known": 1,
+      "history/storage/keyspace/state_tx_range/sampled_at": 1792475858,
+      "history/storage/keyspace/state_tx_range/sst_bytes": 684168480,
+      "history/storage/keyspace/transaction_index/attempted_at": 1792475588,
+      "history/storage/keyspace/transaction_index/attempts/total": 3,
+      "history/storage/keyspace/transaction_index/duration_ns": 134279,
+      "history/storage/keyspace/transaction_index/errors/total": 0,
+      "history/storage/keyspace/transaction_index/known": 1,
+      "history/storage/keyspace/transaction_index/sampled_at": 1792475588,
+      "history/storage/keyspace/transaction_index/sst_bytes": 0,
+      "history/storage/keyspace/transaction_receipts/attempted_at": 1792475618,
+      "history/storage/keyspace/transaction_receipts/attempts/total": 3,
+      "history/storage/keyspace/transaction_receipts/duration_ns": 117114,
+      "history/storage/keyspace/transaction_receipts/errors/total": 0,
+      "history/storage/keyspace/transaction_receipts/known": 1,
+      "history/storage/keyspace/transaction_receipts/sampled_at": 1792475618,
+      "history/storage/keyspace/transaction_receipts/sst_bytes": 0,
+      "state/prune/last/domain_change/pruned_through_block": 10958725,
+      "state/prune/last/domain_change/pruned_through_tx": 510863250,
+      "state/snapshot/cold/last/eligible_cutoff_block": 11219784,
+      "state/snapshot/cold/last/from_tx": 510764540,
+      "state/snapshot/cold/last/latest_build_block": 11219251,
+      "state/snapshot/cold/last/published_block": 10958725,
+      "state/snapshot/cold/last/selected_cutoff_block": 11219784,
+      "state/snapshot/cold/last/solidified_block": 11285320,
+      "state/snapshot/cold/last/to_tx": 510863250,
+      "state/snapshot/cold/last/visible_tx_end": 510863250,
+      "sync/import/window/blocks_per_second": 47.52104284933285,
+      "sync/import/window/buffer_wait_ratio": 0,
+      "sync/import/window/energy_per_second": 193031882.54485548,
+      "sync/import/window/exec_busy_ratio": 0.9953596502255195,
+      "sync/import/window/transactions_per_second": 7063.772014483922,
+      "sync/import/window/updated_unix": 1792475907
+    },
+    "stage_status_utc": "2026-10-20T05:58:49.748525+00:00",
+    "stage_status": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "status": "ok",
+        "complete": false,
+        "pending": 10,
+        "stages": [
+          {
+            "stage": "Headers",
+            "group": "canonical",
+            "present": true,
+            "blockNum": 11286027,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508"
+          },
+          {
+            "stage": "Bodies",
+            "group": "canonical",
+            "present": true,
+            "blockNum": 11286027,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508"
+          },
+          {
+            "stage": "Execution",
+            "group": "canonical",
+            "present": true,
+            "blockNum": 11286027,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508"
+          },
+          {
+            "stage": "Commitment",
+            "group": "canonical",
+            "present": true,
+            "blockNum": 11286027,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508"
+          },
+          {
+            "stage": "Finish",
+            "group": "canonical",
+            "present": true,
+            "blockNum": 11286027,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508"
+          },
+          {
+            "stage": "TxLookup",
+            "group": "derived",
+            "present": true,
+            "blockNum": 11285104,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac3270830e87d70dc888013fc3145fc18ed85b89d2ac2587d9eb0a",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac3270830e87d70dc888013fc3145fc18ed85b89d2ac2587d9eb0a"
+          },
+          {
+            "stage": "StateHistoryIndex",
+            "group": "derived",
+            "present": true,
+            "blockNum": 11285050,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac323ab663d7f415bae1ed55bab3ffc54556979b23ec89cfe6caa9",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac323ab663d7f415bae1ed55bab3ffc54556979b23ec89cfe6caa9"
+          },
+          {
+            "stage": "SyncInventory",
+            "group": "sync",
+            "present": true,
+            "blockNum": 11288093,
+            "hashBound": false,
+            "verified": "unbound"
+          },
+          {
+            "stage": "SyncBodies",
+            "group": "sync",
+            "present": true,
+            "blockNum": 11288036,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac3de48fd2631dc290fda13202d8dba0ad39733eaf813b79507f4a",
+            "verified": "hash-bound"
+          },
+          {
+            "stage": "SyncBodiesReady",
+            "group": "sync",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SyncImport",
+            "group": "sync",
+            "present": true,
+            "blockNum": 11286096,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac3650943434d50396ecf927546f505f471469dfbf7ad7b7be665d",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac3650943434d50396ecf927546f505f471469dfbf7ad7b7be665d"
+          },
+          {
+            "stage": "SyncExecution",
+            "group": "sync",
+            "present": true,
+            "blockNum": 11286096,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac3650943434d50396ecf927546f505f471469dfbf7ad7b7be665d",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac3650943434d50396ecf927546f505f471469dfbf7ad7b7be665d"
+          },
+          {
+            "stage": "SyncCommitment",
+            "group": "sync",
+            "present": true,
+            "blockNum": 11286095,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac364fcca46521ac6557e6e782668b6473becb773a3c9e0695e34b",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac364fcca46521ac6557e6e782668b6473becb773a3c9e0695e34b"
+          },
+          {
+            "stage": "SyncFinish",
+            "group": "sync",
+            "present": true,
+            "blockNum": 11285104,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac3270830e87d70dc888013fc3145fc18ed85b89d2ac2587d9eb0a",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000ac3270830e87d70dc888013fc3145fc18ed85b89d2ac2587d9eb0a"
+          },
+          {
+            "stage": "SnapshotInstall",
+            "group": "snapshot",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotBuild",
+            "group": "snapshot",
+            "present": true,
+            "blockNum": 10958725,
+            "hashBound": true,
+            "blockHash": "0x0000000000a7378518d82c6f6aa6c67eb5887fb8accd92507508c1c89d5d1856",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000a7378518d82c6f6aa6c67eb5887fb8accd92507508c1c89d5d1856"
+          },
+          {
+            "stage": "SnapshotLatestBuild",
+            "group": "snapshot",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotEventLogBuild",
+            "group": "snapshot",
+            "present": true,
+            "blockNum": 10958725,
+            "hashBound": true,
+            "blockHash": "0x0000000000a7378518d82c6f6aa6c67eb5887fb8accd92507508c1c89d5d1856",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000a7378518d82c6f6aa6c67eb5887fb8accd92507508c1c89d5d1856"
+          },
+          {
+            "stage": "SnapshotLatest",
+            "group": "snapshot",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotHistory",
+            "group": "snapshot",
+            "present": true,
+            "blockNum": 510863250,
+            "hashBound": false,
+            "verified": "unbound"
+          },
+          {
+            "stage": "SnapshotAccessor",
+            "group": "snapshot",
+            "present": true,
+            "blockNum": 510863250,
+            "hashBound": false,
+            "verified": "unbound"
+          },
+          {
+            "stage": "SnapshotCommitmentFlush",
+            "group": "snapshot",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotHotPrune",
+            "group": "prune",
+            "present": true,
+            "blockNum": 510863250,
+            "hashBound": false,
+            "verified": "unbound"
+          },
+          {
+            "stage": "SnapshotPrune",
+            "group": "prune",
+            "present": true,
+            "blockNum": 11285211,
+            "hashBound": true,
+            "blockHash": "0x0000000000ac32db7ac45374b40fc7b85ad0cdd8828d5e0487a0919479c587a5",
+            "verified": "hash-bound"
+          },
+          {
+            "stage": "ChainFreezer",
+            "group": "freezer",
+            "present": true,
+            "blockNum": 10944511,
+            "hashBound": true,
+            "blockHash": "0x0000000000a6fffff6a412f88606f129372d26f59b2f5f350bcae34a6018705a",
+            "verified": "canonical",
+            "canonicalHash": "0x0000000000a6fffff6a412f88606f129372d26f59b2f5f350bcae34a6018705a"
+          },
+          {
+            "stage": "ChainFreezerStateRootPrune",
+            "group": "unknown",
+            "present": true,
+            "blockNum": 10944511,
+            "hashBound": true,
+            "blockHash": "0x0000000000a6fffff6a412f88606f129372d26f59b2f5f350bcae34a6018705a",
+            "verified": "hash-bound"
+          },
+          {
+            "stage": "FreezerTxIndexPrune",
+            "group": "unknown",
+            "present": true,
+            "blockNum": 10944512,
+            "hashBound": false,
+            "verified": "unbound"
+          },
+          {
+            "stage": "SnapshotChainLookupPrune",
+            "group": "prune",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotSectionBloomPrune",
+            "group": "prune",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotBalanceTracePrune",
+            "group": "prune",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          },
+          {
+            "stage": "SnapshotChainFreezerTailPrune",
+            "group": "prune",
+            "present": false,
+            "hashBound": false,
+            "verified": "absent"
+          }
+        ],
+        "pipeline": {
+          "complete": false,
+          "pending": 10,
+          "issues": 0,
+          "tasks": [
+            {
+              "stage": "TxLookup",
+              "upstream": "Finish",
+              "status": "behind",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentValue": 11285104,
+              "currentHash": "0x0000000000ac3270830e87d70dc888013fc3145fc18ed85b89d2ac2587d9eb0a",
+              "currentPresent": true
+            },
+            {
+              "stage": "StateHistoryIndex",
+              "upstream": "Finish",
+              "status": "behind",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentValue": 11285050,
+              "currentHash": "0x0000000000ac323ab663d7f415bae1ed55bab3ffc54556979b23ec89cfe6caa9",
+              "currentPresent": true
+            },
+            {
+              "stage": "SnapshotBuild",
+              "upstream": "Finish",
+              "status": "behind",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentValue": 10958725,
+              "currentHash": "0x0000000000a7378518d82c6f6aa6c67eb5887fb8accd92507508c1c89d5d1856",
+              "currentPresent": true
+            },
+            {
+              "stage": "SnapshotLatestBuild",
+              "upstream": "Finish",
+              "status": "missing",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentPresent": false
+            },
+            {
+              "stage": "SnapshotEventLogBuild",
+              "upstream": "Finish",
+              "status": "behind",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentValue": 10958725,
+              "currentHash": "0x0000000000a7378518d82c6f6aa6c67eb5887fb8accd92507508c1c89d5d1856",
+              "currentPresent": true
+            },
+            {
+              "stage": "SnapshotPrune",
+              "upstream": "Finish",
+              "status": "behind",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentValue": 11285211,
+              "currentHash": "0x0000000000ac32db7ac45374b40fc7b85ad0cdd8828d5e0487a0919479c587a5",
+              "currentPresent": true
+            },
+            {
+              "stage": "ChainFreezer",
+              "upstream": "Finish",
+              "status": "behind",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentValue": 10944511,
+              "currentHash": "0x0000000000a6fffff6a412f88606f129372d26f59b2f5f350bcae34a6018705a",
+              "currentPresent": true
+            },
+            {
+              "stage": "SnapshotSectionBloomPrune",
+              "upstream": "Finish",
+              "status": "missing",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentPresent": false
+            },
+            {
+              "stage": "SnapshotBalanceTracePrune",
+              "upstream": "Finish",
+              "status": "missing",
+              "targetValue": 11286027,
+              "targetHash": "0x0000000000ac360bba56f12428c57b3a0d59be2e13c36a9afcfeea41fea36508",
+              "currentPresent": false
+            },
+            {
+              "stage": "SnapshotChainLookupPrune",
+              "upstream": "ChainFreezer",
+              "status": "missing",
+              "targetValue": 10944511,
+              "targetHash": "0x0000000000a6fffff6a412f88606f129372d26f59b2f5f350bcae34a6018705a",
+              "currentPresent": false
+            }
+          ]
+        }
+      }
+    },
+    "unindexed_tail_blocks_at_sample": 977,
+    "window_seconds": 60.032567486166954,
+    "observed_blocks_per_second": 47.09110601760309,
+    "observed_transactions_per_second": 6978.478808132496,
+    "filesystem_free_bytes": 2616420995072
+  }
+}

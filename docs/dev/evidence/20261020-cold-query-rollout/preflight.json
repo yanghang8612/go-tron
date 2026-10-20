@@ -1,0 +1,50 @@
+{
+  "utc": "2026-10-20T05:24:21.753337+00:00",
+  "deploy_unit": {
+    "rc": 0,
+    "out": "# /etc/systemd/system/gtron-deploy.service\n[Service]\nType=oneshot\nUser=java-tron\nGroup=java-tron\nWorkingDirectory=/data/gtron\nEnvironment=\"HOME=/home/java-tron\"\nEnvironment=\"PATH=/data/go/bin:/home/java-tron/.cargo/bin:/usr/local/bin:/usr/bin:/bin\"\nEnvironment=\"SERVICE_NAME=gtron.service\"\nEnvironment=\"RUN_TESTS=1\"\nExecStart=/data/gtron/start.sh\nTimeoutStartSec=45min\n\n# /etc/systemd/system/gtron-deploy.service.d/99-offline-disk-20260907.conf\n[Unit]\n# /etc/systemd/system/gtron-deploy.service.d/zz-history-staging-deploy-timeout.conf\n[Service]\n# A staged reader authenticates its cold history before opening the Wallet API.\n# Cover the default 12 h new-release audit, a second 12 h rollback audit,\n# and 2 h for tests/build/guard work. A shorter unit can kill recovery.\n# For an explicitly longer (up to 24 h) health wait, install a later root-owned\n# override and verify the effective TimeoutStartUSec before running deploy.\nTimeoutStartSec=26h\n\n# /etc/systemd/system/gtron-deploy.timer\n[Unit]\nDescription=Check go-tron master every minute\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=1min\nUnit=gtron-deploy.service\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n\n# /etc/systemd/system/gtron-deploy.timer.d/99-offline-disk-20260907.conf\n[Unit]\n"
+  },
+  "services": {
+    "rc": 0,
+    "out": "MainPID=10692\nExecStart={ path=/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron ; argv[]=/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron --history.reference-container=false --history.shared-read-workers=0 --history.shared-chunk-cache=true --history.cross-block-dedup=true --datadir /data/gtron/main/datadir --prune.mode snap --history.enabled=true --history.block-dedup=true --history.compression-format=auto --history.catchup-mode=throughput --sync.async-commit --sync.import-batch 64 --p2p.port 18890 --discover.port 18890 --external.ip 3.12.206.71 --http.port 8090 --jsonrpc.port 8545 --grpc.port 50051 --pprof.port 6062 --pprof.addr 127.0.0.1 --metrics --metrics.addr 127.0.0.1 --metrics.port 6071 --maxpeers 30 --db.cache 12288 --db.handles 8192 --state.trie.cache 128 --log.file /data/gtron/main/gtron.log --log.file.format terminal --state.latest.cache 128 ; ignore_errors=no ; start_time=[Mon 2026-10-19 06:02:47 UTC] ; stop_time=[n/a] ; pid=10692 ; code=(null) ; status=0/0 }\nMemoryLimit=42949672960\nActiveState=active\n"
+  },
+  "repo_status": {
+    "rc": 0,
+    "out": ""
+  },
+  "repo_head": {
+    "rc": 0,
+    "out": "9030ce7a31016491ece014ac76e5656ec149417e\n"
+  },
+  "rust_expected": {
+    "rc": 0,
+    "out": "160000 commit 45f80494b0760e9993e178b06fd0781caca70c69\tthird_party/librustzcash\n"
+  },
+  "rust_head": {
+    "rc": 0,
+    "out": "45f80494b0760e9993e178b06fd0781caca70c69\n"
+  },
+  "rust_diff": {
+    "rc": 0,
+    "out": " Cargo.lock | 487 +++++++++++++++++++++++++++++++------------------------------\n 1 file changed, 244 insertions(+), 243 deletions(-)\n"
+  },
+  "deploy_state": {
+    "rc": 0,
+    "out": "MainPID=0\nResult=exit-code\nActiveState=failed\n"
+  },
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "datadir_inode": 94642617,
+  "private_build_dirs": [
+    {
+      "path": "/data/gtron/go-tron/build/deploy.6y7fjwyf",
+      "mtime": 1792317693.7598867,
+      "lsof": {
+        "rc": 1,
+        "out": ""
+      },
+      "files": [
+        "gtron"
+      ]
+    }
+  ]
+}

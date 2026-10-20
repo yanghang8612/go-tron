@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-20T06:11:39.557916+00:00",
+  "source": "9030ce7a31016491ece014ac76e5656ec149417e",
+  "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+  "pid": 28737,
+  "head": 11322015,
+  "paused": false,
+  "datadir_inode": 94642617,
+  "published_block": 10991638,
+  "pruned_block": 10991638,
+  "cold_errors": 0,
+  "sampler": "MainPID=1599\nActiveState=active\n"
+}

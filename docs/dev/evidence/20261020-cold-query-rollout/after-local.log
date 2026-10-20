@@ -1,0 +1,25 @@
+storage6 6742.37 ok
+storage7 6113.33 ok
+genesis 29.21 ok
+balance341 70.81 ok
+balance342 40.62 ok
+latest 5.77 ok
+call6 15006.65 FAIL
+call7 15006.68 FAIL
+storage6 2817.41 ok
+storage7 2754.32 ok
+genesis 43.01 ok
+balance341 26.76 ok
+balance342 36.17 ok
+latest 10.32 ok
+call6 9413.38 ok
+call7 11136.89 ok
+storage6 4303.34 ok
+storage7 4628.93 ok
+genesis 35.44 ok
+balance341 33.29 ok
+balance342 32.83 ok
+latest 5.58 ok
+call6 15006.72 FAIL
+call7 15007.2 FAIL
+COMPLETE after-local

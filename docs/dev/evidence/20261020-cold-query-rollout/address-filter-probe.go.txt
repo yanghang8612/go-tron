@@ -1,0 +1,15 @@
+package core
+import (
+ "encoding/hex"
+ "testing"
+ "github.com/tronprotocol/go-tron/common"
+ "github.com/tronprotocol/go-tron/internal/jsonrpc"
+ corepb "github.com/tronprotocol/go-tron/proto/core"
+)
+func TestRolloutExistingColdLogAddressFilter(t *testing.T) {
+ raw,err:=hex.DecodeString("a4997124a328a4615eab437cede31da47a31b375");if err!=nil {t.Fatal(err)}
+ owner:=common.BytesToAddress(append([]byte{common.AddressPrefixMainnet},raw...))
+ if !coldEventLogPayloadMatchesFilter(&corepb.TransactionInfo_Log{Address:raw},jsonrpc.LogFilter{Addresses:[]common.Address{owner}}) {
+  t.Fatalf("20-byte TVM log address should match Ethereum log filter: filter=%x payload-normalized=%x",owner,logAddressFromRaw(raw))
+ }
+}

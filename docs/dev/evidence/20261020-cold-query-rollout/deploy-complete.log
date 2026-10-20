@@ -1,0 +1,606 @@
+{"ok": true, "direct_history": true}
+[2026-10-20 05:27:45] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:27:46] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:27:46] deployed revision: 659ab0780e7c50db694d909cd357495c2d1d3473
+mainnet release: running source 659ab0780e7c50db694d909cd357495c2d1d3473 differs from requested 9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:27:46] running source differs; building 9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:27:46] fast-forwarding source to 9030ce7a31016491ece014ac76e5656ec149417e
+Already up-to-date.
+Synchronizing submodule url for 'third_party/librustzcash'
+[2026-10-20 05:27:47] building librustzcash with CARGO_BUILD_JOBS=1
+cd third_party/librustzcash && cargo build --release --manifest-path librustzcash/Cargo.toml
+warning: /data/gtron/go-tron/third_party/librustzcash/zip32/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/librustzcash/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/zcash_primitives/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/zcash_wallet/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/pairing/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/zcash_proofs/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/bellman/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: /data/gtron/go-tron/third_party/librustzcash/sapling-crypto/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> pairing/src/bls12_381/fq.rs:522:9
+    |
+522 |         try!(write!(f, "0x"));
+    |         ^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> pairing/src/bls12_381/fq.rs:524:13
+    |
+524 |             try!(write!(f, "{:016x}", *i));
+    |             ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+  --> pairing/src/bls12_381/fr.rs:69:9
+   |
+69 |         try!(write!(f, "0x"));
+   |         ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+  --> pairing/src/bls12_381/fr.rs:71:13
+   |
+71 |             try!(write!(f, "{:016x}", *i));
+   |             ^^^
+
+warning: anonymous parameters are deprecated and will be removed in the next edition
+  --> pairing/src/lib.rs:98:29
+   |
+98 |     fn final_exponentiation(&Self::Fqk) -> Option<Self::Fqk>;
+   |                             ^^^^^^^^^^ help: try naming the parameter or explicitly ignoring it: `_: &Self::Fqk`
+   |
+   = warning: this is accepted in the current edition (Rust 2015) but is a hard error in Rust 2018!
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2018/trait-fn-parameters.html>
+   = note: `#[warn(anonymous_parameters)]` (part of `#[warn(rust_2018_compatibility)]`) on by default
+
+warning: anonymous parameters are deprecated and will be removed in the next edition
+   --> pairing/src/lib.rs:555:18
+    |
+555 |     fn from_repr(Self::Repr) -> Result<Self, PrimeFieldDecodingError>;
+    |                  ^^^^^^^^^^ help: try naming the parameter or explicitly ignoring it: `_: Self::Repr`
+    |
+    = warning: this is accepted in the current edition (Rust 2015) but is a hard error in Rust 2018!
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2018/trait-fn-parameters.html>
+
+warning: use of deprecated method `std::error::Error::description`: use the Display impl or to_string()
+   --> pairing/src/lib.rs:503:39
+    |
+503 |             _ => write!(f, "{}", self.description()),
+    |                                       ^^^^^^^^^^^
+
+warning: this method call resolves to `<&[T; N] as IntoIterator>::into_iter` (due to backwards compatibility), but will resolve to `<[T; N] as IntoIterator>::into_iter` in Rust 2021
+   --> pairing/src/lib.rs:107:62
+    |
+107 |             [(&(p.into().prepare()), &(q.into().prepare()))].into_iter(),
+    |                                                              ^^^^^^^^^
+    |
+    = warning: this changes meaning in Rust 2021
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2021/IntoIterator-for-arrays.html>
+    = note: `#[warn(array_into_iter)]` (part of `#[warn(rust_2021_compatibility)]`) on by default
+help: use `.iter()` instead of `.into_iter()` to avoid ambiguity
+    |
+107 -             [(&(p.into().prepare()), &(q.into().prepare()))].into_iter(),
+107 +             [(&(p.into().prepare()), &(q.into().prepare()))].iter(),
+    |
+help: or use `IntoIterator::into_iter(..)` instead of `.into_iter()` to explicitly iterate by value
+    |
+107 -             [(&(p.into().prepare()), &(q.into().prepare()))].into_iter(),
+107 +             IntoIterator::into_iter([(&(p.into().prepare()), &(q.into().prepare()))]),
+    |
+
+warning: `pairing` (lib) generated 8 warnings (run `cargo fix --lib -p pairing` to apply 3 suggestions)
+warning: trait objects without an explicit `dyn` are deprecated
+   --> bellman/src/multiexp.rs:148:10
+    |
+148 | ) -> Box<Future<Item=<G as CurveAffine>::Projective, Error=SynthesisError>>
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this is accepted in the current edition (Rust 2015) but is a hard error in Rust 2021!
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2021/warnings-promoted-to-error.html>
+    = note: `#[warn(bare_trait_objects)]` (part of `#[warn(rust_2021_compatibility)]`) on by default
+help: if this is a dyn-compatible trait, use `dyn`
+    |
+148 | ) -> Box<dyn Future<Item=<G as CurveAffine>::Projective, Error=SynthesisError>>
+    |          +++
+
+warning: trait objects without an explicit `dyn` are deprecated
+   --> bellman/src/multiexp.rs:242:10
+    |
+242 | ) -> Box<Future<Item=<G as CurveAffine>::Projective, Error=SynthesisError>>
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this is accepted in the current edition (Rust 2015) but is a hard error in Rust 2021!
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2021/warnings-promoted-to-error.html>
+help: if this is a dyn-compatible trait, use `dyn`
+    |
+242 | ) -> Box<dyn Future<Item=<G as CurveAffine>::Projective, Error=SynthesisError>>
+    |          +++
+
+warning: use of deprecated method `std::error::Error::description`: use the Display impl or to_string()
+   --> bellman/src/lib.rs:215:34
+    |
+215 |             write!(f, "{}", self.description())
+    |                                  ^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: this method call resolves to `<&[T; N] as IntoIterator>::into_iter` (due to backwards compatibility), but will resolve to `<[T; N] as IntoIterator>::into_iter` in Rust 2021
+  --> bellman/src/groth16/verifier.rs:64:11
+   |
+64 |         ].into_iter())
+   |           ^^^^^^^^^
+   |
+   = warning: this changes meaning in Rust 2021
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2021/IntoIterator-for-arrays.html>
+   = note: `#[warn(array_into_iter)]` (part of `#[warn(rust_2021_compatibility)]`) on by default
+help: use `.iter()` instead of `.into_iter()` to avoid ambiguity
+   |
+64 -         ].into_iter())
+64 +         ].iter())
+   |
+help: or use `IntoIterator::into_iter(..)` instead of `.into_iter()` to explicitly iterate by value
+   |
+60 ~         &E::miller_loop(IntoIterator::into_iter([
+61 |             (&proof.a.prepare(), &proof.b.prepare()),
+62 |             (&acc.into_affine().prepare(), &pvk.neg_gamma_g2),
+63 |             (&proof.c.prepare(), &pvk.neg_delta_g2)
+64 ~         ]))
+   |
+
+warning: `bellman` (lib) generated 4 warnings (run `cargo fix --lib -p bellman` to apply 3 suggestions)
+warning: use of deprecated macro `try`: use the `?` operator instead
+  --> sapling-crypto/src/jubjub/fs.rs:53:9
+   |
+53 |         try!(write!(f, "0x"));
+   |         ^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+  --> sapling-crypto/src/jubjub/fs.rs:55:13
+   |
+55 |             try!(write!(f, "{:016x}", *i));
+   |             ^^^
+
+warning: anonymous parameters are deprecated and will be removed in the next edition
+   --> sapling-crypto/src/jubjub/mod.rs:130:34
+    |
+130 |     fn circuit_generators(&self, FixedGenerators) -> &[Vec<(E::Fr, E::Fr)>];
+    |                                  ^^^^^^^^^^^^^^^ help: try naming the parameter or explicitly ignoring it: `_: FixedGenerators`
+    |
+    = warning: this is accepted in the current edition (Rust 2015) but is a hard error in Rust 2018!
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2018/trait-fn-parameters.html>
+    = note: `#[warn(anonymous_parameters)]` (part of `#[warn(rust_2018_compatibility)]`) on by default
+
+warning: variable does not need to be mutable
+   --> sapling-crypto/src/jubjub/mod.rs:354:17
+    |
+354 |             for mut gen in tmp_params.pedersen_hash_generators.iter().cloned() {
+    |                 ----^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: this method call resolves to `<&[T; N] as IntoIterator>::into_iter` (due to backwards compatibility), but will resolve to `<[T; N] as IntoIterator>::into_iter` in Rust 2021
+  --> sapling-crypto/src/circuit/sprout/input.rs:78:37
+   |
+78 |         for (i, layer) in auth_path.into_iter().enumerate() {
+   |                                     ^^^^^^^^^
+   |
+   = warning: this changes meaning in Rust 2021
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2021/IntoIterator-for-arrays.html>
+   = note: `#[warn(array_into_iter)]` (part of `#[warn(rust_2021_compatibility)]`) on by default
+help: use `.iter()` instead of `.into_iter()` to avoid ambiguity
+   |
+78 -         for (i, layer) in auth_path.into_iter().enumerate() {
+78 +         for (i, layer) in auth_path.iter().enumerate() {
+   |
+help: or use `IntoIterator::into_iter(..)` instead of `.into_iter()` to explicitly iterate by value
+   |
+78 -         for (i, layer) in auth_path.into_iter().enumerate() {
+78 +         for (i, layer) in IntoIterator::into_iter(auth_path).enumerate() {
+   |
+
+warning: `sapling-crypto` (lib) generated 5 warnings (run `cargo fix --lib -p sapling-crypto` to apply 3 suggestions)
+warning: unnecessary braces around block return value
+  --> zip32/src/lib.rs:24:38
+   |
+24 |     static ref JUBJUB: JubjubBls12 = { JubjubBls12::new() };
+   |                                      ^^                  ^^
+   |
+   = note: `#[warn(unused_braces)]` (part of `#[warn(unused)]`) on by default
+help: remove these braces
+   |
+24 -     static ref JUBJUB: JubjubBls12 = { JubjubBls12::new() };
+24 +     static ref JUBJUB: JubjubBls12 = JubjubBls12::new() ;
+   |
+
+warning: use of deprecated constant `std::sync::ONCE_INIT`: the `Once::new()` function is now preferred
+  --> zip32/src/lib.rs:23:1
+   |
+23 | / lazy_static! {
+24 | |     static ref JUBJUB: JubjubBls12 = { JubjubBls12::new() };
+25 | | }
+   | |_^
+   |
+   = note: `#[warn(deprecated)]` on by default
+   = note: this warning originates in the macro `__lazy_static_create` which comes from the expansion of the macro `lazy_static` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `zip32` (lib) generated 2 warnings (run `cargo fix --lib -p zip32` to apply 1 suggestion)
+warning: unnecessary braces around block return value
+  --> librustzcash/src/rustzcash.rs:72:38
+   |
+72 |     static ref JUBJUB: JubjubBls12 = { JubjubBls12::new() };
+   |                                      ^^                  ^^
+   |
+   = note: `#[warn(unused_braces)]` (part of `#[warn(unused)]`) on by default
+help: remove these braces
+   |
+72 -     static ref JUBJUB: JubjubBls12 = { JubjubBls12::new() };
+72 +     static ref JUBJUB: JubjubBls12 = JubjubBls12::new() ;
+   |
+
+warning: unnecessary parentheses around `if` condition
+    --> librustzcash/src/rustzcash.rs:1088:8
+     |
+1088 |     if (spend_cv_len <= 0 || spend_cv_len % 32 != 0 || output_cv_len <= 0 || output_cv_len % 32 != 0) {
+     |        ^                                                                                            ^
+     |
+     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+     |
+1088 -     if (spend_cv_len <= 0 || spend_cv_len % 32 != 0 || output_cv_len <= 0 || output_cv_len % 32 != 0) {
+1088 +     if spend_cv_len <= 0 || spend_cv_len % 32 != 0 || output_cv_len <= 0 || output_cv_len % 32 != 0  {
+     |
+
+warning: use of deprecated constant `std::sync::ONCE_INIT`: the `Once::new()` function is now preferred
+  --> librustzcash/src/rustzcash.rs:71:1
+   |
+71 | / lazy_static! {
+72 | |     static ref JUBJUB: JubjubBls12 = { JubjubBls12::new() };
+73 | | }
+   | |_^
+   |
+   = note: `#[warn(deprecated)]` on by default
+   = note: this warning originates in the macro `__lazy_static_create` which comes from the expansion of the macro `lazy_static` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unnecessary `unsafe` block
+    --> librustzcash/src/rustzcash.rs:1096:73
+     |
+1096 |     let spend_cv_point = match edwards::Point::<Bls12, Unknown>::read(&(unsafe { &*rs_spend_cv })[0..32], &JUBJUB) {
+     |                                                                         ^^^^^^ unnecessary `unsafe` block
+     |
+     = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+    --> librustzcash/src/rustzcash.rs:1102:77
+     |
+1102 |         let spend_cv_point = match edwards::Point::<Bls12, Unknown>::read(&(unsafe { &*rs_spend_cv })[i*32..(i+1)*32], &JUBJUB) {
+     |                                                                             ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> librustzcash/src/rustzcash.rs:1110:78
+     |
+1110 |         let output_cv_point = match edwards::Point::<Bls12, Unknown>::read(&(unsafe { &*rs_output_cv })[i*32..(i+1)*32], &JUBJUB) {
+     |                                                                              ^^^^^^ unnecessary `unsafe` block
+
+warning: creating a shared reference to mutable static
+   --> librustzcash/src/rustzcash.rs:740:18
+    |
+740 |         unsafe { SAPLING_SPEND_VK.as_ref() }.unwrap(),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+    = note: `#[warn(static_mut_refs)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning: creating a shared reference to mutable static
+   --> librustzcash/src/rustzcash.rs:846:18
+    |
+846 |         unsafe { SAPLING_SPEND_VK.as_ref() }.unwrap(),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: creating a shared reference to mutable static
+   --> librustzcash/src/rustzcash.rs:925:18
+    |
+925 |         unsafe { SAPLING_OUTPUT_VK.as_ref() }.unwrap(),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: creating a shared reference to mutable static
+   --> librustzcash/src/rustzcash.rs:993:18
+    |
+993 |         unsafe { SAPLING_OUTPUT_VK.as_ref() }.unwrap(),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: creating a shared reference to mutable static
+    --> librustzcash/src/rustzcash.rs:1281:18
+     |
+1281 |         unsafe { &SPROUT_GROTH16_PARAMS_PATH }
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+     |
+     = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+help: use `&raw const` instead to create a raw pointer
+     |
+1281 |         unsafe { &raw const SPROUT_GROTH16_PARAMS_PATH }
+     |                   +++++++++
+
+warning: creating a shared reference to mutable static
+    --> librustzcash/src/rustzcash.rs:1340:18
+     |
+1340 |         unsafe { SPROUT_GROTH16_VK.as_ref() }.expect("parameters should have been initialized"),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+     |
+     = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: creating a shared reference to mutable static
+    --> librustzcash/src/rustzcash.rs:1437:18
+     |
+1437 |         unsafe { SAPLING_OUTPUT_PARAMS.as_ref() }.unwrap(),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+     |
+     = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: creating a shared reference to mutable static
+    --> librustzcash/src/rustzcash.rs:1758:18
+     |
+1758 |         unsafe { SAPLING_SPEND_PARAMS.as_ref() }.unwrap(),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+     |
+     = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: creating a shared reference to mutable static
+    --> librustzcash/src/rustzcash.rs:1790:18
+     |
+1790 |         unsafe { SAPLING_SPEND_VK.as_ref() }.unwrap(),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+     |
+     = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+warning: `librustzcash` (lib) generated 15 warnings (run `cargo fix --lib -p librustzcash` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.04s
+Built third_party/librustzcash/target/release/librustzcash.{a,so,dylib}
+[2026-10-20 05:27:47] running Sapling-enabled tests
+CGO_ENABLED=1 go test -tags='sapling' ./... -count=1 -timeout 900s
+ok  	github.com/tronprotocol/go-tron/actuator	0.181s
+ok  	github.com/tronprotocol/go-tron/cmd/balance-trace	0.012s
+?   	github.com/tronprotocol/go-tron/cmd/compact-corpus-export	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/compact-corpus-measure	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/db-compare	0.012s
+ok  	github.com/tronprotocol/go-tron/cmd/fixture-capture	0.014s
+?   	github.com/tronprotocol/go-tron/cmd/fixture-closure	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/fixture-digest	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/generation-census	0.048s
+ok  	github.com/tronprotocol/go-tron/cmd/gtron	106.036s
+?   	github.com/tronprotocol/go-tron/cmd/gtron-replay	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/history-dictionary-benchmark	0.020s
+ok  	github.com/tronprotocol/go-tron/cmd/history-value-bench	0.501s
+ok  	github.com/tronprotocol/go-tron/cmd/hot-maintenance	27.128s
+ok  	github.com/tronprotocol/go-tron/cmd/other-cold-distribution	0.019s
+ok  	github.com/tronprotocol/go-tron/cmd/other-storage-distribution	0.043s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-census	0.102s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-reclaim-experiment	3.673s
+ok  	github.com/tronprotocol/go-tron/cmd/reward-trace	0.021s
+ok  	github.com/tronprotocol/go-tron/cmd/storage-distribution	0.207s
+ok  	github.com/tronprotocol/go-tron/cmd/tx-index-width-census	0.019s
+?   	github.com/tronprotocol/go-tron/cmd/txsign	[no test files]
+ok  	github.com/tronprotocol/go-tron/common	0.004s
+ok  	github.com/tronprotocol/go-tron/common/log	0.007s
+ok  	github.com/tronprotocol/go-tron/common/muhash3072	0.312s
+?   	github.com/tronprotocol/go-tron/consensus	[no test files]
+ok  	github.com/tronprotocol/go-tron/consensus/dpos	0.054s
+ok  	github.com/tronprotocol/go-tron/core	458.096s
+ok  	github.com/tronprotocol/go-tron/core/blockbuffer	3.576s
+ok  	github.com/tronprotocol/go-tron/core/conformance	0.067s
+ok  	github.com/tronprotocol/go-tron/core/delegation	0.016s
+ok  	github.com/tronprotocol/go-tron/core/forks	0.025s
+ok  	github.com/tronprotocol/go-tron/core/freezer	20.673s
+ok  	github.com/tronprotocol/go-tron/core/maintenance	0.008s
+?   	github.com/tronprotocol/go-tron/core/pointread	[no test files]
+ok  	github.com/tronprotocol/go-tron/core/producer	0.313s
+ok  	github.com/tronprotocol/go-tron/core/rawdb	35.028s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/etl	4.431s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/freezer	17.969s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/pebbledb	7.169s
+ok  	github.com/tronprotocol/go-tron/core/reward	0.021s
+ok  	github.com/tronprotocol/go-tron/core/state	5.411s
+ok  	github.com/tronprotocol/go-tron/core/state/domains	0.014s
+ok  	github.com/tronprotocol/go-tron/core/state/kvdomains	0.006s
+ok  	github.com/tronprotocol/go-tron/core/state/pruning	19.405s
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	156.783s
+ok  	github.com/tronprotocol/go-tron/core/state/statecodec	0.825s
+ok  	github.com/tronprotocol/go-tron/core/txpool	0.011s
+ok  	github.com/tronprotocol/go-tron/core/types	0.224s
+ok  	github.com/tronprotocol/go-tron/core/zksnark	0.132s
+ok  	github.com/tronprotocol/go-tron/crypto	0.040s
+ok  	github.com/tronprotocol/go-tron/crypto/pq	0.006s
+?   	github.com/tronprotocol/go-tron/crypto/pq/falcon	[no test files]
+?   	github.com/tronprotocol/go-tron/docs/dev/evidence/20261019-compact-v3-rollout	[no test files]
+?   	github.com/tronprotocol/go-tron/docs/dev/evidence/20261019-compact-v3-rollout/heartbeats/20261019T0806	[no test files]
+ok  	github.com/tronprotocol/go-tron/internal/dbcompare	0.171s
+ok  	github.com/tronprotocol/go-tron/internal/debugapi	0.049s
+ok  	github.com/tronprotocol/go-tron/internal/grpcapi	0.136s
+ok  	github.com/tronprotocol/go-tron/internal/historychunk	1.380s
+ok  	github.com/tronprotocol/go-tron/internal/jsonrpc	0.535s
+ok  	github.com/tronprotocol/go-tron/internal/math/strictmath	0.035s
+ok  	github.com/tronprotocol/go-tron/internal/metricsapi	0.012s
+ok  	github.com/tronprotocol/go-tron/internal/rpc	0.067s
+ok  	github.com/tronprotocol/go-tron/internal/testutil/fixture	0.022s
+ok  	github.com/tronprotocol/go-tron/internal/tronapi	0.365s
+ok  	github.com/tronprotocol/go-tron/net	8.565s
+ok  	github.com/tronprotocol/go-tron/net/sync	0.026s
+ok  	github.com/tronprotocol/go-tron/net/sync/downloader	0.050s
+?   	github.com/tronprotocol/go-tron/net/sync/fetcher	[no test files]
+ok  	github.com/tronprotocol/go-tron/node	0.004s
+ok  	github.com/tronprotocol/go-tron/p2p	1.585s
+ok  	github.com/tronprotocol/go-tron/p2p/discover	0.007s
+ok  	github.com/tronprotocol/go-tron/params	0.004s
+?   	github.com/tronprotocol/go-tron/proto/api	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core/contract	[no test files]
+ok  	github.com/tronprotocol/go-tron/proto/p2p	0.003s
+?   	github.com/tronprotocol/go-tron/scripts/dev/abi_hash	[no test files]
+?   	github.com/tronprotocol/go-tron/scripts/fixtures/cmd/gen-smoke	[no test files]
+ok  	github.com/tronprotocol/go-tron/vm	3.298s
+ok  	github.com/tronprotocol/go-tron/vm/tracers	0.015s
+[2026-10-20 05:35:52] building Sapling-enabled gtron
+CGO_ENABLED=1 go build -tags='sapling'  -o /data/gtron/go-tron/build/deploy.3ou1RM/gtron ./cmd/gtron
+Done building gtron with Sapling support.
+[2026-10-20 05:35:59] publishing root-owned mainnet release for 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "deployed": true, "pid": 28737, "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e"}
+[2026-10-20 05:36:15] successfully deployed root-owned mainnet release 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:40:00] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:40:00] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:40:00] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:40:01] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:41:00] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:41:01] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:41:01] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:41:02] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:42:01] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:42:01] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:42:01] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:42:02] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:43:01] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:43:01] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:43:01] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:43:02] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:44:01] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:44:02] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:44:02] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:44:02] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:45:01] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:45:02] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:45:02] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:45:03] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:46:02] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:46:02] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:46:02] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:46:03] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:47:02] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:47:03] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:47:03] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:47:04] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:48:03] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:48:03] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:48:03] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:48:04] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:49:03] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:49:04] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:49:04] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:49:05] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:50:03] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:50:04] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:50:04] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:50:05] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:51:04] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:51:05] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:51:05] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:51:05] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:52:05] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:52:05] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:52:05] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:52:06] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:53:05] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:53:05] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:53:05] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:53:06] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:54:05] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:54:06] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:54:06] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:54:06] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:55:05] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:55:06] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:55:06] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:55:07] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:56:06] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:56:06] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:56:06] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:56:07] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:57:06] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:57:07] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:57:07] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:57:07] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:58:07] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:58:07] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:58:07] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:58:08] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e
+{"ok": true, "direct_history": true}
+[2026-10-20 05:59:07] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-20 05:59:08] remote revision:   9030ce7a31016491ece014ac76e5656ec149417e
+[2026-10-20 05:59:08] deployed revision: 9030ce7a31016491ece014ac76e5656ec149417e
+{"binary": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron", "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4", "source_commit": "9030ce7a31016491ece014ac76e5656ec149417e", "verified": true}
+[2026-10-20 05:59:08] gtron.service already runs verified 9030ce7a31016491ece014ac76e5656ec149417e

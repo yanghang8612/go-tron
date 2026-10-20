@@ -1,0 +1,49 @@
+File: gtron
+Build ID: 4d88b77ca760d1d886370935e698442d08930e62
+Type: cpu
+Time: 2026-10-20 05:41:48 UTC
+Duration: 15.17s, Total samples = 74.37s (490.12%)
+Showing nodes accounting for 48.41s, 65.09% of 74.37s total
+Dropped 1957 nodes (cum <= 0.37s)
+Showing top 40 nodes out of 402
+      flat  flat%   sum%        cum   cum%
+    14.93s 20.08% 20.08%     14.95s 20.10%  runtime.cgocall
+     3.29s  4.42% 24.50%      3.29s  4.42%  internal/runtime/syscall.Syscall6
+     2.86s  3.85% 28.34%      2.86s  3.85%  crypto/internal/fips140/sha256.blockAVX2
+     2.53s  3.40% 31.75%      5.98s  8.04%  runtime.scanobject
+     2.25s  3.03% 34.77%      2.25s  3.03%  runtime.memclrNoHeapPointers
+     1.97s  2.65% 37.42%      1.97s  2.65%  runtime.memmove
+     1.82s  2.45% 39.87%      2.44s  3.28%  github.com/tronprotocol/go-tron/core/rawdb/etl.radixSortEntryOrderWorkers
+     1.40s  1.88% 41.75%      1.83s  2.46%  runtime.findObject
+     1.33s  1.79% 43.54%      6.56s  8.82%  github.com/tronprotocol/go-tron/vm.(*Interpreter).runBaseEnergy
+     1.31s  1.76% 45.30%      1.36s  1.83%  github.com/golang/snappy.decode
+     1.03s  1.38% 46.69%      1.03s  1.38%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     0.97s  1.30% 47.99%      0.97s  1.30%  github.com/ethereum/go-ethereum/crypto/keccak.keccakF1600
+     0.84s  1.13% 49.12%      0.97s  1.30%  github.com/klauspost/compress/zstd.(*doubleFastEncoder).EncodeNoHist
+     0.81s  1.09% 50.21%      0.81s  1.09%  aeshashbody
+     0.79s  1.06% 51.27%      0.79s  1.06%  memeqbody
+     0.76s  1.02% 52.29%      0.76s  1.02%  cmpbody
+     0.74s     1% 53.29%      0.74s     1%  math/big.addMulVVWW
+     0.72s  0.97% 54.26%      2.11s  2.84%  github.com/ethereum/go-ethereum/rlp.(*Stream).Kind
+     0.72s  0.97% 55.22%      8.57s 11.52%  github.com/ethereum/go-ethereum/rlp.makeStructDecoder.func1
+     0.68s  0.91% 56.14%      0.68s  0.91%  runtime.duffcopy
+     0.54s  0.73% 56.86%      0.54s  0.73%  runtime.(*mspan).base (inline)
+     0.52s   0.7% 57.56%      0.52s   0.7%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.45s  0.61% 58.17%      0.45s  0.61%  golang.org/x/crypto/chacha20.quarterRound
+     0.44s  0.59% 58.76%      0.44s  0.59%  runtime.(*gcBits).bitp (inline)
+     0.43s  0.58% 59.34%      1.28s  1.72%  github.com/ethereum/go-ethereum/rlp.(*Stream).readKind
+     0.42s  0.56% 59.90%      1.50s  2.02%  runtime.mallocgcSmallNoscan
+     0.42s  0.56% 60.47%      0.42s  0.56%  runtime.nextFreeFast (inline)
+     0.40s  0.54% 61.01%      0.45s  0.61%  reflect.Value.Field
+     0.32s  0.43% 61.44%      0.82s  1.10%  github.com/ethereum/go-ethereum/rlp.(*Stream).readByte
+     0.31s  0.42% 61.85%      1.27s  1.71%  runtime.greyobject
+     0.31s  0.42% 62.27%      5.41s  7.27%  runtime.mallocgc
+     0.30s   0.4% 62.67%      0.61s  0.82%  github.com/ethereum/go-ethereum/rlp.Split
+     0.28s  0.38% 63.05%      0.96s  1.29%  github.com/ethereum/go-ethereum/rlp.(*Stream).readFull
+     0.24s  0.32% 63.37%      1.72s  2.31%  github.com/ethereum/go-ethereum/rlp.(*Stream).uint
+     0.24s  0.32% 63.70%      0.49s  0.66%  github.com/ethereum/go-ethereum/rlp.(*sliceReader).Read
+     0.24s  0.32% 64.02%      0.70s  0.94%  runtime.mapaccess2_faststr
+     0.21s  0.28% 64.30%      0.97s  1.30%  math/big.basicMul
+     0.20s  0.27% 64.57%      0.59s  0.79%  github.com/ethereum/go-ethereum/rlp.(*Stream).readUint
+     0.20s  0.27% 64.84%      0.40s  0.54%  google.golang.org/protobuf/internal/impl.(*MessageInfo).sizePointerSlow
+     0.19s  0.26% 65.09%      0.44s  0.59%  github.com/ethereum/go-ethereum/rlp.SplitUint64

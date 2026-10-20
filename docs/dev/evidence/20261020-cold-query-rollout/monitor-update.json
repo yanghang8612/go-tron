@@ -1,0 +1,10 @@
+{
+  "only_sampler_restarted": true,
+  "sha256": "be74431b1f48710d5c9d3e5ac730c221e8874083c1cd3c07914379e5ce81ef59",
+  "new_fields": [
+    "stage_status",
+    "stage_status_utc",
+    "unindexed_tail_blocks_at_sample"
+  ],
+  "preserve_partial_probes": true
+}

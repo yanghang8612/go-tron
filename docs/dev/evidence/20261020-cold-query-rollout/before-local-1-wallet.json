@@ -1,0 +1,28 @@
+{
+  "rc": 0,
+  "milliseconds": 5.64170628786087,
+  "response": {
+    "version": "0.2.0-dev",
+    "currentBlock": 11194916,
+    "lastInsertTime": 1792473993941,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87266982,
+      "appliedTip": 11194917,
+      "sessionBlocks": 10967694,
+      "sessionTransactions": 512938506,
+      "remaining": 76072066,
+      "inflight": 88,
+      "bufferedBlocks": 5,
+      "bufferedBytes": 301810,
+      "fetchBackpressured": false,
+      "requestedBlocks": 383,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  }
+}

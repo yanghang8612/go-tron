@@ -1,0 +1,43 @@
+{
+  "utc": "2026-10-20T05:59:43.761312+00:00",
+  "pid": 28737,
+  "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+  "transaction_location_correct": true,
+  "counter_receipt_logs_unfiltered_correct": true,
+  "counter_address_filter_correct": false,
+  "critical_lines": [],
+  "before-local": {
+    "queries": 24,
+    "returned_value_mismatches": 0,
+    "timeouts": 1,
+    "correct": 23,
+    "medians_ms": {
+      "storage6": 6065.506778657436,
+      "storage7": 5289.686717092991,
+      "genesis": 1604.559451341629,
+      "balance341": 33.56875479221344,
+      "balance342": 54.41699922084808,
+      "latest": 5.240641534328461,
+      "call6": 10686.913758516312,
+      "call7": 10824.579529464245
+    }
+  },
+  "after-local": {
+    "queries": 24,
+    "returned_value_mismatches": 0,
+    "timeouts": 4,
+    "correct": 20,
+    "medians_ms": {
+      "storage6": 4303.341701626778,
+      "storage7": 4628.932736814022,
+      "genesis": 35.44113039970398,
+      "balance341": 33.28636288642883,
+      "balance342": 36.171913146972656,
+      "latest": 5.773261189460754,
+      "call6": 15006.648324429989,
+      "call7": 15006.681881844997
+    }
+  },
+  "runtime_samples": 15,
+  "runtime_errors": []
+}

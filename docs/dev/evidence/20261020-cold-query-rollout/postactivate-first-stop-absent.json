@@ -1,0 +1,5 @@
+{
+  "utc": "2026-10-20T05:36:18.855364+00:00",
+  "phase": "failed",
+  "error": "AssertionError((['systemctl', 'stop', 'gtron-compact-v3-observe-20261019.service'], 5, 'Failed to stop gtron-compact-v3-observe-20261019.service: Unit gtron-compact-v3-observe-20261019.service not loaded.\\n'),)"
+}

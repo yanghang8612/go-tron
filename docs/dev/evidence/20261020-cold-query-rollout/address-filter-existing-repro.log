@@ -1,0 +1,5 @@
+--- FAIL: TestRolloutExistingColdLogAddressFilter (0.00s)
+    rollout_log_filter_probe_test.go:13: 20-byte TVM log address should match Ethereum log filter: filter=343161343939373132346133323861343631356561623433376365646533316461343761333162333735 payload-normalized=303061343939373132346133323861343631356561623433376365646533316461343761333162333735
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core	2.563s
+FAIL

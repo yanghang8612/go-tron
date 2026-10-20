@@ -1,0 +1,46 @@
+File: gtron
+Build ID: 4d88b77ca760d1d886370935e698442d08930e62
+Type: cpu
+Time: 2026-10-20 13:43:12 CST
+Duration: 15.11s, Total samples = 56.18s (371.87%)
+Active filters:
+   focus=PersistentHistoryReader|materializeHistorical
+Showing nodes accounting for 0.89s, 1.58% of 56.18s total
+Dropped 221 nodes (cum <= 0.28s)
+Showing top 35 nodes out of 165
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*callback).call
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCall
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCallMsg
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleMsg.func1.1
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleNonBatchCall
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).runMethod
+         0     0%     0%     14.74s 26.24%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).startCallProc.func1
+         0     0%     0%     14.74s 26.24%  reflect.Value.Call
+         0     0%     0%     14.74s 26.24%  reflect.Value.call
+         0     0%     0%     13.65s 24.30%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).firstStateDomainChangeByKey
+         0     0%     0%     11.58s 20.61%  github.com/tronprotocol/go-tron/core/rawdb.IterateStateDomainChangesByBlockRangeContext
+     0.13s  0.23%  0.23%     11.29s 20.10%  github.com/tronprotocol/go-tron/core/rawdb.decodePersistedStateDomainChangeBlock
+         0     0%  0.23%     10.61s 18.89%  github.com/tronprotocol/go-tron/core/rawdb.ReadFirstStateDomainChangeByKeyBlockRangeContext
+         0     0%  0.23%     10.55s 18.78%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readFirstHotStateDomainChangeByKeyThroughBlock
+         0     0%  0.23%      9.80s 17.44%  github.com/tronprotocol/go-tron/core.(*TronBackend).GetStorageAtBlockContext
+         0     0%  0.23%      9.80s 17.44%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).StorageAt
+         0     0%  0.23%      9.80s 17.44%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).storageFromStateDomain
+         0     0%  0.23%      9.80s 17.44%  github.com/tronprotocol/go-tron/internal/jsonrpc.(*EthAPI).GetStorageAt
+         0     0%  0.23%      9.20s 16.38%  github.com/ethereum/go-ethereum/rlp.DecodeBytes
+     0.01s 0.018%  0.25%      9.18s 16.34%  github.com/ethereum/go-ethereum/rlp.(*Stream).Decode
+         0     0%  0.25%      9.17s 16.32%  github.com/ethereum/go-ethereum/rlp.decodeListSlice
+     0.09s  0.16%  0.41%      9.17s 16.32%  github.com/ethereum/go-ethereum/rlp.decodeSliceElems
+         0     0%  0.41%      9.17s 16.32%  github.com/ethereum/go-ethereum/rlp.makeListDecoder.func3
+     0.66s  1.17%  1.58%      9.17s 16.32%  github.com/ethereum/go-ethereum/rlp.makeStructDecoder.func1
+         0     0%  1.58%      7.36s 13.10%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateAccountLatestAsOf
+         0     0%  1.58%      6.29s 11.20%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateKVAsOf
+         0     0%  1.58%      6.29s 11.20%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateKVAsOfTxNum
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core.(*TronBackend).CallAtContext
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core.(*TronBackend).TriggerConstantContractAtContext
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core.(*TronBackend).dynamicPropertiesFromStateStrict
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core.(*TronBackend).executionDynamicPropertiesStrict
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core.(*TronBackend).triggerConstantContractAtRoot
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core/state.(*StateDB).GetAccountKVBatch
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core/state.(*StateDB).SystemKVGetBatch (inline)
+         0     0%  1.58%      4.94s  8.79%  github.com/tronprotocol/go-tron/core/state.LoadDynamicPropertiesStrict
