@@ -496,6 +496,16 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		}
 		entry.indices = append(entry.indices, i)
 	}
+	var routing *systemHistoryRouting
+	for _, entry := range entries {
+		if systemHistoryRoutingQuery(entry.query) {
+			routing, err = loadSystemHistoryRouting(ctx, m.dir, manifest)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
 	consider := func(lookup []byte, change *rawdb.StateDomainChange) (bool, error) {
 		entry := byLookup[string(lookup)]
 		if entry == nil {
@@ -517,14 +527,32 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory || ref.ToTxNum < fromTxNum || ref.FromTxNum > toTxNum {
 			continue
 		}
-		lookupKeys := make([][]byte, 0, len(entries))
+		var lookupKeys [][]byte
+		if routing == nil {
+			lookupKeys = make([][]byte, 0, len(entries))
+		}
+		column, covered := 0, false
+		if routing != nil {
+			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
+				column, covered = routing.columns[systemHistoryRoutingPairID(ref, accessor)]
+			}
+		}
 		for _, entry := range entries {
-			if entry.first == nil {
+			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
 				lookupKeys = append(lookupKeys, entry.lookup)
 			}
 		}
 		if len(lookupKeys) == 0 {
-			break
+			// A negative route covers this pair only. Later uncovered segments
+			// still require authoritative reads; never terminate the whole range.
+			allFound := true
+			for _, entry := range entries {
+				allFound = allFound && entry.first != nil
+			}
+			if allFound {
+				break
+			}
+			continue
 		}
 		cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
 		if !ok {

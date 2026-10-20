@@ -559,6 +559,8 @@ func (cfg DomainCfg) AllowsKind(kind SegmentKind) bool {
 		return cfg.HasHistory
 	case SegmentInverted:
 		return cfg.HasHistoryInvertedIndex
+	case SegmentSystemHistoryRouting:
+		return cfg.Dataset == SegmentDatasetStateDomainChange
 	default:
 		return false
 	}
@@ -697,6 +699,9 @@ func IsLatestBTreeRef(ref SegmentRef) bool {
 }
 
 func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
+	if ref.Kind == SegmentSystemHistoryRouting {
+		return true, CheckSystemHistoryRouting(dir, ref)
+	}
 	if ref.Kind == SegmentChainFreezer {
 		return true, CheckChainFreezerSegment(dir, ref)
 	}

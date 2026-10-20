@@ -43,8 +43,40 @@ MuHash and executable snapshot restore regressions. Compare full HTTP eth_call
 on the same head and oracle, separating warm and first/OS-cold measurements.
 No assumption that compression format work alone solves cross-segment routing.
 
-If compacting still leaves substantial cross-run negative lookup cost, the next
-candidate is a key-oriented global routing index bound to exact covered
-segment/accessor identities. A routing absence may only skip completely covered
-immutable pairs; new or stale ranges must fall back. This is a design candidate,
-not an implemented or authenticated absence proof in this change.
+The bulk canonical rewrite experiment was stopped after 33 committed passes
+because of its construction cost. No complete coarsened-corpus query result is
+claimed. Keep those partial outputs and receipts; prioritize exact routing.
+
+## Exact routing for singleton system keys
+
+The measured mixed batch includes dynamic properties and software fork votes.
+Missing keys scan every future segment. Add a bounded exact routing sidecar for
+the system account's SystemDynamicProperty and SystemForkVote namespaces,
+ContractMetadata for all owners, and the system/zero account envelope and
+generation keys. These are the measured preflight bottlenecks. Other keys retain
+their existing readers. This is a first-class manifest segment; snapshots carry
+and verify it with the other active objects. This is not a universal index for
+arbitrary absent accounts or contract storage keys.
+
+Each column binds the full immutable history/accessor pair identity (including
+checksums, paths, ranges and aggregation steps), and each full encoded key maps
+to a presence bitmap or a smaller sorted sparse column list. Only a matching covered identity may
+use a negative bit. New segments, replaced inputs, absent indexes and keys
+outside these namespaces fall back to the original authenticated reader.
+Queries read and SHA256-authenticate current sidecar bytes every time; no
+stat-only negative cache. Retain at most one bounded decoded index after current
+physical SHA verification. Bound sources, keys and file bytes before allocation.
+Build from physically authenticated accessors, cross-check the canonical history
+dictionary commitment, and walk unique dictionary keys instead of canonical
+posting rows. Reuse prior coverage only after authenticating its current bytes.
+Strict snapshot checking independently reconstructs covered key memberships.
+
+Inspect at most 64 newly uncovered pairs per optional maintenance pass, under
+the existing heavy-work lease. Publish the new sidecar atomically, without
+changing canonical history, cold/prune frontiers, MuHash state, or the current
+small streaming compaction budgets. Cancellation must not publish partial
+absence coverage. Large/unsupported dictionaries defer routing and preserve the
+normal path. Cap accessor input at 128 MiB per pair, retained new key data at
+32 MiB per pass (16 MiB per pair), and the output at 64 MiB. Publish a busy batch
+only after 64 pairs are waiting; an idle pass can finish the remaining tail of
+an existing index. All production actions remain outside this experiment.

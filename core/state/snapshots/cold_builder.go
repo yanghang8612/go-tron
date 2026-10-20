@@ -2982,7 +2982,7 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
 		r.compactionMerges.Add(uint64(result.Compaction.MergePasses))
 	}
-	if result.HistoryNeedsCatchup() && !result.Compaction.Merged {
+	if result.HistoryNeedsCatchup() && !result.Compaction.Merged && !result.Compaction.RoutingBuilt {
 		r.compactionCatchupDefers.Add(1)
 	}
 	if result.DerivedSidecarsDeferred {
@@ -3382,6 +3382,7 @@ func (r *Runner) loop() {
 			"compactionSteps", result.Compaction.AggregationSteps,
 			"compactionSegments", result.Compaction.SegmentsMerged,
 			"compactionDeferred", result.Compaction.Deferred,
+			"historyRoutingBuilt", result.Compaction.RoutingBuilt,
 			"compactionDeferReason", result.Compaction.DeferReason,
 			"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
 			"compactionInputSources", result.Compaction.InputSources,
@@ -3400,6 +3401,8 @@ func (r *Runner) loop() {
 			"compactionDeferReason", result.Compaction.DeferReason,
 			"compactionInputLogicalBytes", result.Compaction.InputLogicalBytes,
 			"compactionInputSources", result.Compaction.InputSources)
+	} else if result.Compaction.RoutingBuilt {
+		coldSnapshotLog.Debug("History lookup routing index refreshed", "dataset", result.Compaction.Dataset)
 	} else if result.LatestBuilt {
 		coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 	}

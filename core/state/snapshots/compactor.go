@@ -43,6 +43,9 @@ type CompactionConfig struct {
 // HistoryCompactionResult describes a registered history-domain compaction pass.
 type HistoryCompactionResult struct {
 	Merged bool
+	// RoutingBuilt publishes only an exact auxiliary absence index; canonical
+	// rows and pruning frontiers are unchanged.
+	RoutingBuilt bool
 	// MergePasses is one for CompactHistoryDomain. Runner summaries may drain
 	// multiple ready ranges and aggregate every emitted output for work metrics.
 	MergePasses       int

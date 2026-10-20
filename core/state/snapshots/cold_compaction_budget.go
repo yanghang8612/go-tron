@@ -168,9 +168,9 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 	defer release()
 	started := time.Now()
 	defer func() {
-		if busy && (total.Merged || err != nil || total.Deferred) {
+		if busy && (total.Merged || total.RoutingBuilt || err != nil || total.Deferred) {
 			total.Recovery = historyCompactionRecovery(time.Since(started), err != nil)
-			if err == nil && !total.Merged {
+			if err == nil && !total.Merged && !total.RoutingBuilt {
 				// The cheap manifest hint cannot see oversized logical values or
 				// record counts. Do not prioritize the same empty selection after
 				// every newly published leaf when the detailed budget rejects it.
@@ -181,6 +181,17 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			total.RetryDeadline = r.compactionBudget.notBefore
 		}
 	}()
+	// The small singleton routing index removes cross-segment negative reads
+	// without rewriting canonical rows or enlarging streaming merge budgets.
+	if r.cfg.HistoryDataset == SegmentDatasetStateDomainChange {
+		built, routeErr := refreshSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		if routeErr != nil {
+			return total, routeErr
+		}
+		if built {
+			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+		}
+	}
 	if r.compactionBudget.outerMetrics == nil {
 		r.compactionBudget.outerMetrics = newHistoryCompactionOuterMetrics(r.cfg.MetricsNamespace)
 	}
