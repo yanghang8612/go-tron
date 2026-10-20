@@ -1,0 +1,97 @@
+{
+  "utc": "2026-10-20T00:44:34.608114+00:00",
+  "head": 9076844,
+  "pid": 10692,
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "identity_unchanged": true,
+  "old_inventory_unchanged": true,
+  "sample_window_start": "2026-10-19T23:59:44.221967+00:00",
+  "sample_window_end": "2026-10-20T00:43:46.944190+00:00",
+  "sample_count": 45,
+  "sample_errors": [
+    {
+      "utc": "2026-10-20T00:14:45.070389+00:00",
+      "errors": [
+        "timeout('timed out',)"
+      ],
+      "log_errors": null
+    },
+    {
+      "utc": "2026-10-20T00:29:46.091206+00:00",
+      "errors": [
+        "timeout('timed out',)"
+      ],
+      "log_errors": null
+    },
+    {
+      "utc": "2026-10-20T00:35:46.370883+00:00",
+      "errors": [
+        "timeout('timed out',)"
+      ],
+      "log_errors": null
+    },
+    {
+      "utc": "2026-10-20T00:40:46.746048+00:00",
+      "errors": [
+        "timeout('timed out',)"
+      ],
+      "log_errors": null
+    }
+  ],
+  "recent_same_process_window": {
+    "seconds": 300.374179,
+    "blocks_per_second": 82.75012214015905,
+    "transactions_per_second": 5616.3049887187535
+  },
+  "disk_sample_utc": "2026-10-20T00:40:46.746048+00:00",
+  "disk_sample_height": 9057751,
+  "disk_bytes": {
+    "ancient": 44981821440,
+    "chaindata": 13532753920,
+    "history": 14531743744,
+    "state-snapshots": 68024188928
+  },
+  "disk_total_bytes": 141070508032,
+  "rss_sample_utc": "2026-10-20T00:43:46.944190+00:00",
+  "rss_kib": 11753196,
+  "rss_max_kib_in_window": 12316392,
+  "host_available_memory_bytes": 27791941632,
+  "cold_published_block": 8748336,
+  "cold_pruned_block": 8748336,
+  "eligible_backlog_blocks": 261307,
+  "cold_errors": 0,
+  "periodic_probe_batches": 8,
+  "complete_history_probe_batches_correct": 4,
+  "incomplete_probe_batches": 4,
+  "returned_historical_probes_all_correct": true,
+  "timeout_batch_utc": [
+    "2026-10-20T00:14:45.070389+00:00",
+    "2026-10-20T00:29:46.091206+00:00",
+    "2026-10-20T00:35:46.370883+00:00",
+    "2026-10-20T00:40:46.746048+00:00"
+  ],
+  "tvm_stage_timeout_batches": [
+    "2026-10-20T00:14:45.070389+00:00",
+    "2026-10-20T00:35:46.370883+00:00",
+    "2026-10-20T00:40:46.746048+00:00"
+  ],
+  "genesis_stage_timeout_batches": [
+    "2026-10-20T00:29:46.091206+00:00"
+  ],
+  "last_complete_tvm_probe_utc": "2026-10-20T00:24:45.727680+00:00",
+  "last_complete_tvm_probe_milliseconds": [
+    6825.508385896683,
+    5357.442334294319
+  ],
+  "last_independent_muhash_recompute_block": 227222,
+  "known_issue_reference": "docs/dev/evidence/20261019-compact-v3-rollout/latency-20261019/analysis.json",
+  "report_decision": "report new query availability degradation: four periodic batches exceeded the observer request timeout, including three within the historical storage loop and one within the first genesis-balance request. Returned values and bounded loopback reprobe remain correct. No state mismatch or new MuHash error observed; no runtime mutation.",
+  "packet_sha256": "a3807d92682372607a97c409eecec8b861d3fe282767749e89ba6c4514c9b904",
+  "comparison_limit": "No matched historical height/load comparison, therefore no optimization speedup or compression ratio inferred. Only two cold reprobe observations; not a p95 estimate.",
+  "gateway_pressure_snapshot": {
+    "l0_sublevels": 3,
+    "reason_bits": 128,
+    "compaction_debt": 19774301868,
+    "hard": 0
+  }
+}
