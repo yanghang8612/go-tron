@@ -1,0 +1,5 @@
+{
+  "Replace": {
+    "/data/gtron/cold-query-tail-20261020/candidate/core/state/snapshots/history_header_cache.go": "/data/gtron/eth-call-fixed-20261020-01/capacity-overlay/history_header_cache.go"
+  }
+}

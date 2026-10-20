@@ -1,0 +1,119 @@
+Total: 20.70s
+ROUTINE ======================== github.com/tronprotocol/go-tron/core.(*TronBackend).executionDynamicPropertiesStrict in /data/gtron/cold-query-tail-20261020/candidate/core/tron_backend.go
+         0      7.62s (flat, cum) 36.81% of Total
+         .          .   1058:func (b *TronBackend) executionDynamicPropertiesStrict(statedb *state.StateDB, block *types.Block) (*state.DynamicProperties, error) {
+         .      7.62s   1059:	dp, err := b.dynamicPropertiesFromStateStrict(statedb)
+         .          .   1060:	if err != nil {
+         .          .   1061:		return nil, err
+         .          .   1062:	}
+         .          .   1063:	if block != nil {
+         .          .   1064:		dp.SetLatestBlockHeaderNumber(int64(block.Number()))
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.(*stateHistoryQueryTailView).iterateOwner in /data/gtron/cold-query-tail-20261020/candidate/core/rawdb/state_history_query_tail.go
+      20ms      660ms (flat, cum)  3.19% of Total
+         .          .     54:func (v *stateHistoryQueryTailView) iterateOwner(ctx context.Context, from, to uint64, owner common.Address, fn func(*StateDomainChange) (bool, error)) error {
+         .          .     55:	v.mu.Lock()
+         .          .     56:	defer v.mu.Unlock()
+         .          .     57:	if err := ctx.Err(); err != nil {
+         .          .     58:		return err
+         .          .     59:	}
+         .          .     60:	if v.rejected[owner] {
+         .          .     61:		return iterateStateHistoryOwnerTail(ctx, v.StateKVHistoryReader, from, to, owner, fn)
+         .          .     62:	}
+         .          .     63:	entry := v.entries[owner]
+         .          .     64:	if entry == nil || entry.from > from || entry.to < to {
+         .          .     65:		if len(v.entries)+len(v.rejected) >= stateHistoryQueryTailOwners && entry == nil {
+         .          .     66:			return iterateStateHistoryOwnerTail(ctx, v.StateKVHistoryReader, from, to, owner, fn)
+         .          .     67:		}
+         .          .     68:		oldBytes, oldRows := 0, 0
+         .          .     69:		if entry != nil {
+         .          .     70:			oldBytes, oldRows = entry.bytes, len(entry.rows)
+         .          .     71:		}
+         .          .     72:		next := &stateHistoryQueryTailEntry{from: from, to: to, bytes: 128}
+         .          .     73:		stopped, overflow := false, false
+         .          .     74:		reject := func() {
+         .          .     75:			overflow = true
+         .          .     76:			next.rows = nil
+         .          .     77:			v.rejected[owner] = true
+         .          .     78:			if entry != nil {
+         .          .     79:				delete(v.entries, owner)
+         .          .     80:				v.used -= entry.bytes
+         .          .     81:				v.rows -= len(entry.rows)
+         .          .     82:			}
+         .          .     83:		}
+         .          .     84:		if v.used-oldBytes+next.bytes > v.budget {
+         .          .     85:			reject()
+         .          .     86:		}
+         .          .     87:
+         .      620ms     88:		err := iterateStateHistoryOwnerTail(ctx, v.StateKVHistoryReader, from, to, owner, func(row *StateDomainChange) (bool, error) {
+         .          .     89:			if !overflow {
+         .          .     90:				size := 256 + len(row.Key) + len(row.Prev) + len(row.Next)
+         .          .     91:				if v.used-oldBytes+next.bytes+size > v.budget || v.rows-oldRows+len(next.rows)+1 > v.maxRows {
+         .          .     92:					// Continue this same scan without a cache. Never restart
+         .          .     93:					// an over-budget owner or retry it on subsequent reads.
+         .          .     94:					reject()
+         .          .     95:				} else {
+         .          .     96:					next.rows = append(next.rows, cloneStateDomainChange(row))
+         .          .     97:					next.bytes += size
+         .          .     98:				}
+         .          .     99:			}
+         .          .    100:			cont, err := fn(row)
+         .          .    101:			if !cont {
+         .          .    102:				stopped = true
+         .          .    103:			}
+         .          .    104:			return cont, err
+         .          .    105:		})
+         .          .    106:		if err != nil {
+         .          .    107:			return err
+         .          .    108:		}
+         .          .    109:		// A point/batch hit returns immediately, just like the uncached
+         .          .    110:		// iterator. Only a completed range proves coverage for later keys.
+         .          .    111:		if stopped || overflow {
+         .          .    112:			return nil
+         .          .    113:		}
+         .          .    114:
+         .          .    115:		v.used += next.bytes - oldBytes
+         .          .    116:		v.rows += len(next.rows) - oldRows
+         .          .    117:		v.entries[owner] = next
+         .          .    118:		return nil
+         .          .    119:	}
+      10ms       10ms    120:	for _, row := range entry.rows {
+         .          .    121:		if err := ctx.Err(); err != nil {
+         .          .    122:			return err
+         .          .    123:		}
+      10ms       10ms    124:		if row.BlockNum < from || row.BlockNum > to {
+         .          .    125:			continue
+         .          .    126:		}
+         .          .    127:		// Accessor callbacks may retain or modify their row. Do not expose
+         .          .    128:		// cache-owned slices to them.
+         .       20ms    129:		cont, err := fn(cloneStateDomainChange(row))
+         .          .    130:		if err != nil || !cont {
+         .          .    131:			return err
+         .          .    132:		}
+         .          .    133:	}
+         .          .    134:	return nil
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readHeaderPrefix in /data/gtron/cold-query-tail-20261020/candidate/core/state/snapshots/history_header_cache.go
+      10ms      8.12s (flat, cum) 39.23% of Total
+         .          .     64:func (r *compressedBlockReader) readHeaderPrefix(p []byte, off uint64) (int, error) {
+         .          .     65:	// Match the existing reader-local decoded-block lifetime: validate once
+         .          .     66:	// on first use in this open reader, then reuse for its following header
+         .          .     67:	// and dictionary reads. Cross-open reuse still rereads physical bytes.
+         .          .     68:	if v := r.headerPrefix; v != nil && off+uint64(len(p)) <= uint64(v.size) {
+         .          .     69:		return copy(p, v.bytes[off:]), nil
+         .          .     70:	}
+         .          .     71:	for _, e := range r.cache {
+         .          .     72:		if e.idx == 0 && off+uint64(len(p)) <= uint64(len(e.bytes)) {
+         .          .     73:			return copy(p, e.bytes[off:]), nil
+         .          .     74:		}
+         .          .     75:	}
+         .      2.11s     76:	comp, expected, err := r.readCompressedBlock(0)
+         .          .     77:	if err != nil {
+         .          .     78:		return 0, err
+         .          .     79:	}
+         .      5.96s     80:	key := historyHeaderKey{digest: blake2b.Sum256(comp), decodedSize: expected}
+         .       40ms     81:	if v, ok := r.prefixCache.get(key); ok && off+uint64(len(p)) <= uint64(v.size) {
+      10ms       10ms     82:		r.headerPrefix = &v
+         .          .     83:		return copy(p, v.bytes[off:]), nil
+         .          .     84:	}
+         .          .     85:	decoded, err := r.decodeBlock(0, comp, expected)
+         .          .     86:	if err != nil {
+         .          .     87:		return 0, err

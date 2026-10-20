@@ -10,3 +10,4 @@ docs/dev/evidence/20261020-cold-query-rollout/*.txt -whitespace
 docs/dev/evidence/20261020-query-tail/**/*.log -whitespace
 docs/dev/evidence/20261020-query-tail/**/*.patch -whitespace
 docs/dev/evidence/20261020-query-tail/**/*.txt -whitespace
+docs/dev/evidence/20261020-eth-call-fixed/**/*.log -whitespace

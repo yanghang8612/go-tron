@@ -1,0 +1,10 @@
+{
+  "sha256": "f6b559cd6a3716f6818138c12a751ebe66247c81600618ae2649b116ed34c770",
+  "bytes": 5049249,
+  "aliases": {
+    "diagnostic-overlay/core-offline_fixed_http_test.go": "diagnostic-overlay/core-offline_fixed_http_test.go.txt",
+    "diagnostic-overlay/rawdb-state_history_query_tail.go": "diagnostic-overlay/rawdb-state_history_query_tail.go.txt",
+    "diagnostic-overlay/snapshots-history_header_cache.go": "diagnostic-overlay/snapshots-history_header_cache.go.txt",
+    "capacity-overlay/history_header_cache.go": "capacity-overlay/history_header_cache.go.txt"
+  }
+}

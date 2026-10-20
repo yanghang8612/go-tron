@@ -1,0 +1,404 @@
+[
+  {
+    "repeat": 0,
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 1689745562,
+        "distinct_keys": 4223,
+        "evictions": 0,
+        "hits": 21116,
+        "limit": 8192,
+        "misses": 4223
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 0,
+    "height": 3144021,
+    "tag": "0x2ff955",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 1689745562,
+        "distinct_keys": 4223,
+        "evictions": 0,
+        "hits": 25339,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 0,
+    "height": 5000000,
+    "tag": "0x4c4b40",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x000000000000000000000000000000000000000000000000000000000000003f"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 1358391551,
+        "distinct_keys": 3344,
+        "evictions": 0,
+        "hits": 20077,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 0,
+    "height": 9000000,
+    "tag": "0x895440",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 490725138,
+        "distinct_keys": 1135,
+        "evictions": 0,
+        "hits": 7010,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 0,
+    "height": 11817936,
+    "tag": "0xb453d0",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 0,
+        "distinct_keys": 0,
+        "evictions": 0,
+        "hits": 0,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 2,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 3,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 0,
+    "height": 11818191,
+    "tag": "0xb454cf",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 0,
+        "distinct_keys": 0,
+        "evictions": 0,
+        "hits": 0,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 2,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 3,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 0,
+    "height": 11818192,
+    "tag": "latest",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 0,
+        "distinct_keys": 0,
+        "evictions": 0,
+        "hits": 0,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {}
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 1689745562,
+        "distinct_keys": 4223,
+        "evictions": 0,
+        "hits": 25339,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 3144021,
+    "tag": "0x2ff955",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 1689745562,
+        "distinct_keys": 4223,
+        "evictions": 0,
+        "hits": 25339,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 5000000,
+    "tag": "0x4c4b40",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x000000000000000000000000000000000000000000000000000000000000003f"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 1358391551,
+        "distinct_keys": 3344,
+        "evictions": 0,
+        "hits": 20077,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 9000000,
+    "tag": "0x895440",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 490725138,
+        "distinct_keys": 1135,
+        "evictions": 0,
+        "hits": 7010,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 1,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 129,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 11817936,
+    "tag": "0xb453d0",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 0,
+        "distinct_keys": 0,
+        "evictions": 0,
+        "hits": 0,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 2,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 3,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 11818191,
+    "tag": "0xb454cf",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 0,
+        "distinct_keys": 0,
+        "evictions": 0,
+        "hits": 0,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {
+        "41a4997124a328a4615eab437cede31da47a31b375": {
+          "cache_hit": 2,
+          "complete_scan_cached": 1
+        },
+        "41fffffffffffffffffffffffffffffffffffffffe": {
+          "cache_hit": 3,
+          "complete_scan_cached": 1
+        }
+      }
+    }
+  },
+  {
+    "repeat": 1,
+    "height": 11818192,
+    "tag": "latest",
+    "result": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "stats": {
+      "header": {
+        "compressed_bytes_revalidated": 0,
+        "distinct_keys": 0,
+        "evictions": 0,
+        "hits": 0,
+        "limit": 8192,
+        "misses": 0
+      },
+      "tail": {}
+    }
+  }
+]

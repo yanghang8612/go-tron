@@ -1,0 +1,100 @@
+package snapshots
+
+import (
+	"sync"
+
+	"golang.org/x/crypto/blake2b"
+)
+
+// Only decoded header bytes are retained, not 128KiB history blocks. Every hit
+// first reads and hashes the CURRENT complete compressed bytes. This avoids a
+// stat-only trust shortcut and still detects same-inode/size/mtime corruption.
+const historyHeaderPrefixBytes = 128
+const historyHeaderCacheEntries = 32768
+
+type historyHeaderKey struct {
+	digest      [blake2b.Size256]byte
+	decodedSize uint64
+}
+type historyHeaderPrefix struct {
+	bytes [historyHeaderPrefixBytes]byte
+	size  int
+}
+type historyHeaderCache struct {
+	mu      sync.Mutex
+	entries map[historyHeaderKey]historyHeaderPrefix
+	fifo    []historyHeaderKey
+	next    int
+	limit   int
+}
+
+var sharedHistoryHeaderCache = &historyHeaderCache{limit: historyHeaderCacheEntries}
+
+func (c *historyHeaderCache) get(key historyHeaderKey) (historyHeaderPrefix, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.entries[key]
+	return v, ok
+}
+func (c *historyHeaderCache) put(key historyHeaderKey, decoded []byte) {
+	if c == nil || c.limit <= 0 {
+		return
+	}
+	var v historyHeaderPrefix
+	v.size = copy(v.bytes[:], decoded)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[historyHeaderKey]historyHeaderPrefix)
+	}
+	if _, ok := c.entries[key]; ok {
+		return
+	}
+	if len(c.fifo) < c.limit {
+		c.fifo = append(c.fifo, key)
+	} else {
+		delete(c.entries, c.fifo[c.next])
+		c.fifo[c.next] = key
+		c.next = (c.next + 1) % c.limit
+	}
+	c.entries[key] = v
+}
+
+// Caller holds r.mu. Cache values and returned reader data never alias.
+func (r *compressedBlockReader) readHeaderPrefix(p []byte, off uint64) (int, error) {
+	// Match the existing reader-local decoded-block lifetime: validate once
+	// on first use in this open reader, then reuse for its following header
+	// and dictionary reads. Cross-open reuse still rereads physical bytes.
+	if v := r.headerPrefix; v != nil && off+uint64(len(p)) <= uint64(v.size) {
+		return copy(p, v.bytes[off:]), nil
+	}
+	for _, e := range r.cache {
+		if e.idx == 0 && off+uint64(len(p)) <= uint64(len(e.bytes)) {
+			return copy(p, e.bytes[off:]), nil
+		}
+	}
+	comp, expected, err := r.readCompressedBlock(0)
+	if err != nil {
+		return 0, err
+	}
+	key := historyHeaderKey{digest: blake2b.Sum256(comp), decodedSize: expected}
+	if v, ok := r.prefixCache.get(key); ok && off+uint64(len(p)) <= uint64(v.size) {
+		r.headerPrefix = &v
+		return copy(p, v.bytes[off:]), nil
+	}
+	decoded, err := r.decodeBlock(0, comp, expected)
+	if err != nil {
+		return 0, err
+	}
+	r.prefixCache.put(key, decoded)
+	// A small block may end before the requested header prefix. Preserve the
+	// ordinary multi-block ReaderAt behavior in that case.
+	if off+uint64(len(p)) > uint64(len(decoded)) {
+		cache := r.prefixCache
+		r.prefixCache = nil
+		n, err := r.readAtLocked(p, off)
+		r.prefixCache = cache
+		return n, err
+	}
+	return copy(p, decoded[off:]), nil
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "path": "capture-1/chaindata/MANIFEST-082697",
+    "bytes": 1660416,
+    "source_inode": 94668546,
+    "sha256": "7a49fc2f3bd2df0dc36deab9ff9fc2deaadea8ce6ac54e00d70a39ba97a50c13"
+  },
+  {
+    "path": "capture-1/chaindata/OPTIONS-082698",
+    "bytes": 2578,
+    "source_inode": 94668561,
+    "sha256": "c696bcf0905c1c3fb9fb8cdcc17b71176ba9429760cc246907871340cdfaf379"
+  },
+  {
+    "path": "capture-1/chaindata/096529.log",
+    "bytes": 266041663,
+    "source_inode": 94667094,
+    "sha256": "f646341042eecf8c620a8d09860d592892f3b57353668638c31929c12a5a1f5c"
+  },
+  {
+    "path": "capture-1/chaindata/096497.log",
+    "bytes": 265401243,
+    "source_inode": 94666427,
+    "sha256": "ab88aefd454081db9abfb7035ea78bdb5d9015060372579bdf9dcf7d1d2c7ab1"
+  },
+  {
+    "path": "capture-1/chaindata/096458.log",
+    "bytes": 265959102,
+    "source_inode": 94642707,
+    "sha256": "fff2dff0030c4a8b27223606d46214d601e25d75a414105aba52f9bae76c7056"
+  }
+]

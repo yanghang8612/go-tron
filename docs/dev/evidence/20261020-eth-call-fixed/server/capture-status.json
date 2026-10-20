@@ -1,0 +1,32 @@
+{
+  "complete": true,
+  "admitted": false,
+  "production_mutations": false,
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "utc": "2026-10-20T08:26:15.996184+00:00",
+  "phase": "captured-not-admitted",
+  "chaindata": {
+    "tables": 797,
+    "logical_file_bytes": 20198894024
+  },
+  "history": {
+    "tables": 1071,
+    "logical_file_bytes": 11987166545
+  },
+  "cold": {
+    "generation": 5101,
+    "visible_tx_end": 568104018,
+    "files": 23691,
+    "source_manifest_sha256": "19699e40c58206feea7eaabb1bef480cc47ec0c25b5b9f2bf72781d342ec26f0"
+  },
+  "ancient": {
+    "files": 2100
+  },
+  "after_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  }
+}

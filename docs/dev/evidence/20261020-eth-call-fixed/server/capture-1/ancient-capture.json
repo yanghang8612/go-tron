@@ -1,0 +1,1112 @@
+[
+  {
+    "path": "capture-1/ancient/bodies.0000.cdat",
+    "bytes": 0,
+    "source_inode": 94642641,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "capture-1/ancient/bodies.cidx",
+    "bytes": 6,
+    "source_inode": 94642639,
+    "sha256": "b0f66adc83641586656866813fd9dd0b8ebb63796075661ba45d1aa8089e1d44"
+  },
+  {
+    "path": "capture-1/ancient/bodies.meta",
+    "bytes": 4,
+    "source_inode": 94642640,
+    "sha256": "1d08acbb1cc10805518cfa4e15f2a182b2f5b0179f3c67fb03c07e0e8283e00f"
+  },
+  {
+    "path": "capture-1/ancient/state_roots.0000.rdat",
+    "bytes": 0,
+    "source_inode": 94642647,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "capture-1/ancient/state_roots.meta",
+    "bytes": 4,
+    "source_inode": 94642646,
+    "sha256": "1d08acbb1cc10805518cfa4e15f2a182b2f5b0179f3c67fb03c07e0e8283e00f"
+  },
+  {
+    "path": "capture-1/ancient/state_roots.ridx",
+    "bytes": 6,
+    "source_inode": 94642645,
+    "sha256": "b0f66adc83641586656866813fd9dd0b8ebb63796075661ba45d1aa8089e1d44"
+  },
+  {
+    "path": "capture-1/ancient/tx_infos.0000.cdat",
+    "bytes": 0,
+    "source_inode": 94642644,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "capture-1/ancient/tx_infos.cidx",
+    "bytes": 6,
+    "source_inode": 94642642,
+    "sha256": "b0f66adc83641586656866813fd9dd0b8ebb63796075661ba45d1aa8089e1d44"
+  },
+  {
+    "path": "capture-1/ancient/tx_infos.meta",
+    "bytes": 4,
+    "source_inode": 94642643,
+    "sha256": "1d08acbb1cc10805518cfa4e15f2a182b2f5b0179f3c67fb03c07e0e8283e00f"
+  },
+  {
+    "path": "capture-1/ancient/tx-index/manifest.json",
+    "bytes": 266593,
+    "source_inode": 94670524,
+    "sha256": "3a8ed4981066c25b92d4c95479cab70f2377236ad1fb4dec0546a5a51e55fdbe"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000000000-00000000000000065536.json",
+    "bytes": 323,
+    "source_inode": 94642852,
+    "sha256": "d32c2f0e4fe573afc247f85882410f4b3b6c8bf948e995fc302b794c5b5d086e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000065536-00000000000000131072.json",
+    "bytes": 327,
+    "source_inode": 94642923,
+    "sha256": "09f3bf9996a53ddad7dfd19a96c99b082c64f17a624730be2075bd8c07016c94"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000131072-00000000000000196608.json",
+    "bytes": 328,
+    "source_inode": 94642988,
+    "sha256": "5944268ba24de7eb42071157c51b61195fa1f38afc0cc133dd830668617c5c40"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000196608-00000000000000262144.json",
+    "bytes": 328,
+    "source_inode": 94643032,
+    "sha256": "ad32ce1a307557e3a39284c80b62f0e770b8e34405365cacf057bac0a32d4f4a"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000262144-00000000000000327680.json",
+    "bytes": 328,
+    "source_inode": 94643085,
+    "sha256": "9e04761368e314d1b32919da0c3989db9390d414e6fe7359ffb09f71af6c1433"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000327680-00000000000000393216.json",
+    "bytes": 328,
+    "source_inode": 94643153,
+    "sha256": "47eed30c054106a43808451d930dc2c4658df0c21d9d664053e6f29b603f67a3"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000393216-00000000000000458752.json",
+    "bytes": 328,
+    "source_inode": 94642753,
+    "sha256": "ad6eaa5e2a43bda678146cc2b57d5a1406ac0de8624a9a5b68e04247b265ec17"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000458752-00000000000000524288.json",
+    "bytes": 328,
+    "source_inode": 94643197,
+    "sha256": "39f60c44917521696b12ce61f00d69464e446055bec09fb8ce66fc206e9c2edd"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000524288-00000000000000589824.json",
+    "bytes": 328,
+    "source_inode": 94643290,
+    "sha256": "65ac0b3a9548ce07606606b48f1d096410943c3fd19287507a04bdc3f466b171"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000589824-00000000000000655360.json",
+    "bytes": 328,
+    "source_inode": 94643308,
+    "sha256": "0c79c2f272c584371ac97a1dd93dd4cfbc09b3830b5d2735d71c7bb9917d677f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000655360-00000000000000720896.json",
+    "bytes": 328,
+    "source_inode": 94643476,
+    "sha256": "843eabbc4664ec5f9fd9ca7d9c96471dc9ea17caa281ed12fa575e1cf7238b3a"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000720896-00000000000000786432.json",
+    "bytes": 328,
+    "source_inode": 94643537,
+    "sha256": "3ad0d2b52184259721c7a111e042369070fd5834a729986eecaafb63bb0b80d9"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000786432-00000000000000851968.json",
+    "bytes": 328,
+    "source_inode": 94643571,
+    "sha256": "f78e3cfcc6b5b8e154ade0c8e9b66ae2f497ddbd999824c23d01646e552dd24e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000851968-00000000000000917504.json",
+    "bytes": 328,
+    "source_inode": 94643493,
+    "sha256": "0163d31616c8b21ef7e10ead23bbe9a18d9a2f9f806a4dc5b9ef216dfa61a65e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000917504-00000000000000983040.json",
+    "bytes": 328,
+    "source_inode": 94643631,
+    "sha256": "e29a45e2651d51d781e47ad3361188589c7da044d877d0743b68812d2b6679cd"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000000983040-00000000000001048576.json",
+    "bytes": 328,
+    "source_inode": 94643712,
+    "sha256": "b61618de03ff7b77d39f7b8e94caee8da0c41f14cca0f780ea51e894e984223a"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001048576-00000000000001114112.json",
+    "bytes": 329,
+    "source_inode": 94643377,
+    "sha256": "e405ce14668f28c64649ddfaed813a3a21a2ba1a5cda01613166907c23b39f0e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001114112-00000000000001179648.json",
+    "bytes": 329,
+    "source_inode": 94643836,
+    "sha256": "0f839300e6fa9fed94c13dfd6a11a63389dc9c5ec89baea434a054bad5009296"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001179648-00000000000001245184.json",
+    "bytes": 329,
+    "source_inode": 94643930,
+    "sha256": "21eae5853686990ea61d08fd15fc22778f08c7b18ac89dad46c7aacf6ac98275"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001245184-00000000000001310720.json",
+    "bytes": 329,
+    "source_inode": 94644038,
+    "sha256": "4da1573d106fc40dbb6df18ef1b60464685d93527f368ac8ec73c0e572e5269f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001310720-00000000000001376256.json",
+    "bytes": 329,
+    "source_inode": 94644110,
+    "sha256": "e05df88dbc5559c2e41069ffde2c8a08717932826b9fdaaa93409e01b3db909e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001376256-00000000000001441792.json",
+    "bytes": 329,
+    "source_inode": 94644212,
+    "sha256": "9cf8718ec13f97ed979f0d24b3623865276d314ce6ad3002a4299f2535082a93"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001441792-00000000000001507328.json",
+    "bytes": 329,
+    "source_inode": 94644197,
+    "sha256": "065f57b188eb2c7a0814dbc7c62b1d799d4454715ab3214179a287dc4d9504c5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001507328-00000000000001572864.json",
+    "bytes": 329,
+    "source_inode": 94644268,
+    "sha256": "998b0e0e27787ea06b479e83ae98863930c422b69d4c8cb6a1d479abf028708b"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001572864-00000000000001638400.json",
+    "bytes": 329,
+    "source_inode": 94644523,
+    "sha256": "9a1c16054a9ee242ee8d1521cb588d9233430b23e5269f3676f70afa205b1cd7"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001638400-00000000000001703936.json",
+    "bytes": 329,
+    "source_inode": 94644570,
+    "sha256": "e5db4f51fcb2b8b2f753b1e495c71052c1752a9f53fdc05a915ce566f95df854"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001703936-00000000000001769472.json",
+    "bytes": 329,
+    "source_inode": 94644667,
+    "sha256": "4e0f970d55f53ab5bde117b9938e8867b2d4eb11d3ecd25bb7fe4c08bea8db9d"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001769472-00000000000001835008.json",
+    "bytes": 329,
+    "source_inode": 94644757,
+    "sha256": "ea1ddd3f8342a7a298da4685cf4517c677db14b5b06269f582315a0bc88f4ffb"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001835008-00000000000001900544.json",
+    "bytes": 329,
+    "source_inode": 94644737,
+    "sha256": "b6fd6e3aaa746b3aea4ba7bd11ce5de286c0daa8992b4cf0e9a39ce660f78138"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001900544-00000000000001966080.json",
+    "bytes": 329,
+    "source_inode": 94644945,
+    "sha256": "b5e1952b0144667aa646a57e75b3724a9b6deea1ced37110a2821997fceaf968"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000001966080-00000000000002031616.json",
+    "bytes": 329,
+    "source_inode": 94645049,
+    "sha256": "d0c6d55cf04eb60e4fc19677ea2718a2c3543ff74b1a8b13309d91bd07d551ba"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002031616-00000000000002097152.json",
+    "bytes": 329,
+    "source_inode": 94644916,
+    "sha256": "183d193ffc08174e91f4a627af5b53bc73b0fc1312c7ee0788deab8fd2f9a07e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002097152-00000000000002162688.json",
+    "bytes": 329,
+    "source_inode": 94645097,
+    "sha256": "e3f1e464da35b16514cef81a03f0da113b8cf33b20ee7e529b7af01cbb6932b5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002162688-00000000000002228224.json",
+    "bytes": 329,
+    "source_inode": 94643864,
+    "sha256": "a40c188dd53492e1a66bae9118481f518af10b73012b69dce212909fb392e312"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002228224-00000000000002293760.json",
+    "bytes": 329,
+    "source_inode": 94645344,
+    "sha256": "dc5dcc8bdc8397c452b7196c343c001deb7d42c08eab80ea49cbf190171204f8"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002293760-00000000000002359296.json",
+    "bytes": 329,
+    "source_inode": 94645397,
+    "sha256": "26f885f6c652ac86494ff9d9ba5f4d2e798509bb4022587f8050adae09b4fcf5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002359296-00000000000002424832.json",
+    "bytes": 329,
+    "source_inode": 94645299,
+    "sha256": "52a97716965d0a8204c84a25c88f5d80e547b23e54438bb75e3b445603d7a945"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002424832-00000000000002490368.json",
+    "bytes": 329,
+    "source_inode": 94645393,
+    "sha256": "1800b30d3032630640528512e98d3832284ce47a19e4cdddbfb2f0fdc91784d1"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002490368-00000000000002555904.json",
+    "bytes": 329,
+    "source_inode": 94645541,
+    "sha256": "77c2108bcdf8a41c4bb717e135ff48702c965748610e11a76cb5e7a3de8e7444"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002555904-00000000000002621440.json",
+    "bytes": 329,
+    "source_inode": 94645641,
+    "sha256": "1920bb0bb41d7fbc303a4acc1b875e38e27a40b4791de6154f996ab5bf6795f0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002621440-00000000000002686976.json",
+    "bytes": 329,
+    "source_inode": 94645833,
+    "sha256": "3f621d73b09c92298fd191373c2a954c73fda31b9c0d8450f5dba7b1724288de"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002686976-00000000000002752512.json",
+    "bytes": 329,
+    "source_inode": 94645659,
+    "sha256": "322cd3053e31e4e937fc9dbcaa4fac00795820f15feac3db9a9b5e91150d7aae"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002752512-00000000000002818048.json",
+    "bytes": 329,
+    "source_inode": 94645528,
+    "sha256": "e4c32e82cc5de086852f96c045a9811cd0ee40a5637f4c02f74eb630f129a6b0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002818048-00000000000002883584.json",
+    "bytes": 329,
+    "source_inode": 94645839,
+    "sha256": "e8fab292712917ac3ed79acef9b2e6f99e668024fb9adff5f8c190fad52bdd70"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002883584-00000000000002949120.json",
+    "bytes": 329,
+    "source_inode": 94646159,
+    "sha256": "5287416d16fdca72d37fc7c7f7ab17b4857f45913c47fa3183763c43f808f829"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000002949120-00000000000003014656.json",
+    "bytes": 329,
+    "source_inode": 94645857,
+    "sha256": "d20307c92bf2d3acf1a294e41d75709249fdd2bfa38725add5aee94bb0a0d214"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003014656-00000000000003080192.json",
+    "bytes": 329,
+    "source_inode": 94646254,
+    "sha256": "322e3fdb9792870fdbb2362f5c84b134e27c3f6296803053fb53261e9d554760"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003080192-00000000000003145728.json",
+    "bytes": 329,
+    "source_inode": 94646245,
+    "sha256": "97cbabe2bab4442aa897ea00accd05670a4dc418e1b2e1fe6b89cc610cce7c14"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003145728-00000000000003211264.json",
+    "bytes": 329,
+    "source_inode": 94646500,
+    "sha256": "3c7c0fe30caaffb9d391f9cf511f981d8c8b8bfe15d063c8524067fc39ef4ab2"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003211264-00000000000003276800.json",
+    "bytes": 329,
+    "source_inode": 94645912,
+    "sha256": "ab09c8d8715fd9b6bfc79307237b7ca699cac593e93dc1a5c3e24eae71e84577"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003276800-00000000000003342336.json",
+    "bytes": 329,
+    "source_inode": 94646803,
+    "sha256": "b18368ee30a533a536a6e2940bbbe53439eff97cf6b690abb9f4519207deb05b"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003342336-00000000000003407872.json",
+    "bytes": 329,
+    "source_inode": 94646939,
+    "sha256": "0ed1b5c3ba8ec2aadb290e24077c719b8284f47b398aa7956cb2e0e070b9dfd9"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003407872-00000000000003473408.json",
+    "bytes": 329,
+    "source_inode": 94647078,
+    "sha256": "0d06abe5439d1596ea157d6ce3552cffc90eb4532e7fb2c87934342818ee50c0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003473408-00000000000003538944.json",
+    "bytes": 329,
+    "source_inode": 94646668,
+    "sha256": "bf5bdc4165848b04cfa5af1cd5b913faec70f5c1a55844f6f72e3b27b3a82022"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003538944-00000000000003604480.json",
+    "bytes": 329,
+    "source_inode": 94645420,
+    "sha256": "d3d0ccec236cb4d815f5b90aa7caa6d7d0f9169957fe7f695c7c50e95e76ea83"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003604480-00000000000003670016.json",
+    "bytes": 329,
+    "source_inode": 94647316,
+    "sha256": "fd8d61ffe343e757df7d6addada02b6d36fde08735d4b4507ac45e97663f5bf0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003670016-00000000000003735552.json",
+    "bytes": 329,
+    "source_inode": 94647379,
+    "sha256": "3a85fe0a11b8e181f8b4404b7a539ddff229b0f7f166567908ca6fa961162a68"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003735552-00000000000003801088.json",
+    "bytes": 329,
+    "source_inode": 94647475,
+    "sha256": "f00d77f961562bec791ea19ab50c7b7ad89ccf9239cf1de343a962ddb4771b85"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003801088-00000000000003866624.json",
+    "bytes": 329,
+    "source_inode": 94647158,
+    "sha256": "026d37f07a79577a63551ccdb0eb681574fad487b917c3432ec3d0d0464875bb"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003866624-00000000000003932160.json",
+    "bytes": 329,
+    "source_inode": 94647533,
+    "sha256": "7e75ea1abada94f32e7a93598e45cbf0b1bc8c7ee40ce8920a0a1d9757f0f752"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003932160-00000000000003997696.json",
+    "bytes": 329,
+    "source_inode": 94647880,
+    "sha256": "33d1822d2f420571d798cafc7d7275a12416209ee2a137341dc5e5ffb2499ce6"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000003997696-00000000000004063232.json",
+    "bytes": 329,
+    "source_inode": 94648164,
+    "sha256": "669351122ba809f23052180660f898fe30423f141ad55e395c249f77d87f1fe2"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004063232-00000000000004128768.json",
+    "bytes": 329,
+    "source_inode": 94648362,
+    "sha256": "05a7e56cbb91b868b8c8b022a6ba1bd3b77d92e57765c320862dc2ba80565572"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004128768-00000000000004194304.json",
+    "bytes": 329,
+    "source_inode": 94648033,
+    "sha256": "7eb0a55780e3d4e9c9a8d0ee095a2cd32d463c2d4f46ac06c889ffd1503e51c1"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004194304-00000000000004259840.json",
+    "bytes": 329,
+    "source_inode": 94647485,
+    "sha256": "807390c02ef268fecc299f5cdefd39fff6f01e8084a118b4572ef7ea8b480985"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004259840-00000000000004325376.json",
+    "bytes": 329,
+    "source_inode": 94647988,
+    "sha256": "2f28ec099c129fb0f1fe3035346781d75608146fe3f5be9c6129e145a2b41122"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004325376-00000000000004390912.json",
+    "bytes": 329,
+    "source_inode": 94647286,
+    "sha256": "458cb5561d9b077202ccd072d174f269befafa4c8beee1ef868cc485afcdd8b6"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004390912-00000000000004456448.json",
+    "bytes": 329,
+    "source_inode": 94647963,
+    "sha256": "1691f03d157ee3210d6e8a9afd222d6a8b1bf73024c78870c9f91abcf69091e8"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004456448-00000000000004521984.json",
+    "bytes": 329,
+    "source_inode": 94647772,
+    "sha256": "b7064dce118882aa00f216deb7f718c62cd41482b6453ccc2887123bba5bfeab"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004521984-00000000000004587520.json",
+    "bytes": 329,
+    "source_inode": 94649714,
+    "sha256": "4a0e62ea7d58339703c60879f361112fbfb85e2f7ec1d73128633ad8783c77a2"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004587520-00000000000004653056.json",
+    "bytes": 329,
+    "source_inode": 94650452,
+    "sha256": "94d25b8d4b0ca1986e7302c886c1c64f0038ad11acea591f01031d9c4817614e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004653056-00000000000004718592.json",
+    "bytes": 329,
+    "source_inode": 94650157,
+    "sha256": "31b02e5668be608a853d2a55462e68f2e74fa80edcb00bf8cbd54bc1cd99ffb0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004718592-00000000000004784128.json",
+    "bytes": 329,
+    "source_inode": 94651077,
+    "sha256": "b80afaf2ce91444878a277d26e6f5c0eea912d226f1f26eba0b19f99d6f739e5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004784128-00000000000004849664.json",
+    "bytes": 329,
+    "source_inode": 94648751,
+    "sha256": "799a75eb96c75868c47af2bbb8c1857285658e9a949fa0a50f43d896ff0c2499"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004849664-00000000000004915200.json",
+    "bytes": 329,
+    "source_inode": 94650922,
+    "sha256": "5abd10c0f58d0e5efa19e3fe22c34c55af4678d0037580d9ed6ee73cc961f109"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004915200-00000000000004980736.json",
+    "bytes": 329,
+    "source_inode": 94648875,
+    "sha256": "f4ce6f13f0204f75db723ddf8cc7012057a0f0e9ec3735527db5ee482cf59d69"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000004980736-00000000000005046272.json",
+    "bytes": 329,
+    "source_inode": 94652759,
+    "sha256": "a1b47f74dc9619914e42d9228cdca47763b82d924d9361dae3eda7b6e01eeb54"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005046272-00000000000005111808.json",
+    "bytes": 329,
+    "source_inode": 94650602,
+    "sha256": "66e8f6f3e9dbc133aba728952e273c0818d6121262faebeab2c7096e4698b685"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005111808-00000000000005177344.json",
+    "bytes": 329,
+    "source_inode": 94652443,
+    "sha256": "999a373aaa7084ef931a9450bcc980a7eb37d0a802a9253b377ba64408a42d23"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005177344-00000000000005242880.json",
+    "bytes": 329,
+    "source_inode": 94650503,
+    "sha256": "b461089d1f61765d7526e5a82743c0dce15d78a1e09c37f0a1a6e5c382d7555e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005242880-00000000000005308416.json",
+    "bytes": 329,
+    "source_inode": 94653003,
+    "sha256": "2045e0c55aca62464eb3a41c7660602aec36852dc7854fa95ef50f464e0212bb"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005308416-00000000000005373952.json",
+    "bytes": 329,
+    "source_inode": 94652073,
+    "sha256": "ac0dca3e7b8b81504f45dec8a09d32eae97b108243026bbe3b41c51f798e2e66"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005373952-00000000000005439488.json",
+    "bytes": 329,
+    "source_inode": 94650797,
+    "sha256": "de537b649c88754a9de4fd6e5be2d4c716d668d21785bbcffedab80762016272"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005439488-00000000000005505024.json",
+    "bytes": 329,
+    "source_inode": 94652273,
+    "sha256": "50fbf789f1ecaf704e7a80d517d1c3c7f098fe6448f0a0880f08c7033a91c312"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005505024-00000000000005570560.json",
+    "bytes": 329,
+    "source_inode": 94653897,
+    "sha256": "4f944383c93f8fa17e01cb03062a9388be1c6e3af7431812464d7ff94c2ffd66"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005570560-00000000000005636096.json",
+    "bytes": 329,
+    "source_inode": 94653960,
+    "sha256": "bc878716c067e539606229a6a04d28f0c78a516b3143f9acfc15cb885cfc0fec"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005636096-00000000000005701632.json",
+    "bytes": 329,
+    "source_inode": 94650219,
+    "sha256": "c07c4bea47ac86d39aa497c6c23a787fc9b62de768b51715b339ef8eda77fce7"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005701632-00000000000005767168.json",
+    "bytes": 329,
+    "source_inode": 94654941,
+    "sha256": "7080b76329865c1c094f99a4cb52d1fe3a81ee1709fbb0bca12b7bed25a5d5fb"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005767168-00000000000005832704.json",
+    "bytes": 329,
+    "source_inode": 94654850,
+    "sha256": "b2df63e616c30d9a0ca6e7e3166919a67eed144e230b780de4507b1806c4d176"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005832704-00000000000005898240.json",
+    "bytes": 329,
+    "source_inode": 94655508,
+    "sha256": "98d90c657cf0e6500063b6f4ce8017eaf92916140d46af970d4878cdc780bde5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005898240-00000000000005963776.json",
+    "bytes": 329,
+    "source_inode": 94653648,
+    "sha256": "5a8a4c6939ddde02fbcc268b768d7d46d7fb2ed2c3330a1bfa15d554ea56329b"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000005963776-00000000000006029312.json",
+    "bytes": 329,
+    "source_inode": 94653224,
+    "sha256": "bcf15878e86d2fc46f4458db69bea958a95cd00a1a7d8a3d7f3dbe0222b9d063"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006029312-00000000000006094848.json",
+    "bytes": 329,
+    "source_inode": 94655792,
+    "sha256": "314d0122f22f6ea61b1450d47b46a991d5be52c5ed23c15ae90c2adb0b5e29ba"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006094848-00000000000006160384.json",
+    "bytes": 329,
+    "source_inode": 94656129,
+    "sha256": "6b52da442bf3364d2b45a3379329a30b88e03e162040a436b7bd8bda35a283b0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006160384-00000000000006225920.json",
+    "bytes": 329,
+    "source_inode": 94656080,
+    "sha256": "4a283c2fd2492ac1e1ba96e38d0c9f8e6c858756922bbcdf798f13ab5f05d683"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006225920-00000000000006291456.json",
+    "bytes": 329,
+    "source_inode": 94656252,
+    "sha256": "278828d679b9340e40eb0d2f42b227791bb08efebc3373e4180a3d7824ff94ca"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006291456-00000000000006356992.json",
+    "bytes": 329,
+    "source_inode": 94655868,
+    "sha256": "30a8a78044e5c5a193dfbc817ef47791c1c6cd5278bba6995eea70be231db93f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006356992-00000000000006422528.json",
+    "bytes": 329,
+    "source_inode": 94656501,
+    "sha256": "896d663ff076571dc7e4071a703552e79ea9bc5a16123371850179c3a72727d7"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006422528-00000000000006488064.json",
+    "bytes": 329,
+    "source_inode": 94656719,
+    "sha256": "9150c82810b0def42e1a213a9ff82a596a684ca099afaa97868c5b8a3de0ba30"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006488064-00000000000006553600.json",
+    "bytes": 329,
+    "source_inode": 94655828,
+    "sha256": "40245243e82b3670d0933f44d03ade211466bec09a87e8c36918c6f99358c539"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006553600-00000000000006619136.json",
+    "bytes": 329,
+    "source_inode": 94657326,
+    "sha256": "792cdb31d7768bf1b016fe8e58412549b995e3de1730b70664acbf2aa1d37df8"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006619136-00000000000006684672.json",
+    "bytes": 329,
+    "source_inode": 94657437,
+    "sha256": "cfe0e871158116bbb0d796c357f77c955bbda286ca387691bcd1e23c24d9aa92"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006684672-00000000000006750208.json",
+    "bytes": 329,
+    "source_inode": 94657465,
+    "sha256": "df743ef367a535efb2c4b92e906cfbaf8e1dfadf4818f831b6ccc59a657a904a"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006750208-00000000000006815744.json",
+    "bytes": 329,
+    "source_inode": 94657485,
+    "sha256": "053214d3b637d2e949a60196b32cb209cd087d216a16062f82eb2307472611f5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006815744-00000000000006881280.json",
+    "bytes": 329,
+    "source_inode": 94657453,
+    "sha256": "7c0f6d807bd95e0b0b21b19ed279e175d453fcbad21d18fb440dc1e3844614a0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006881280-00000000000006946816.json",
+    "bytes": 329,
+    "source_inode": 94655944,
+    "sha256": "aea5526bd4d87f77da7d20dc58948455831ae9f96afd9e1e3e0c098524be1fae"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000006946816-00000000000007012352.json",
+    "bytes": 329,
+    "source_inode": 94658048,
+    "sha256": "56afb4567f0e1ea3b3b55a3bf42e9a8ced92382237f3dbc29f329494f0149d5f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007012352-00000000000007077888.json",
+    "bytes": 329,
+    "source_inode": 94657546,
+    "sha256": "f08cbae8acbe8b4afe9312eca5a8b2e7075048f65872703b124a32c9758154dd"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007077888-00000000000007143424.json",
+    "bytes": 329,
+    "source_inode": 94658676,
+    "sha256": "51f1c63a453277ea9e17c2418a37a77b042107998e242e48570ebe508ed2128e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007143424-00000000000007208960.json",
+    "bytes": 329,
+    "source_inode": 94658090,
+    "sha256": "aeb9576fe777412f58ea6e11f12327e0031ed438321483b090012181426884dd"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007208960-00000000000007274496.json",
+    "bytes": 329,
+    "source_inode": 94658567,
+    "sha256": "5fa6249999ea1ff9ba354bd63686c92d1c0248de425f5b64cc32b63efd45c3fc"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007274496-00000000000007340032.json",
+    "bytes": 329,
+    "source_inode": 94655763,
+    "sha256": "c3e0dd796bafda33aedaa64860bb8f50fa9981a8452cbd517a8473955f4a8c7b"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007340032-00000000000007405568.json",
+    "bytes": 329,
+    "source_inode": 94659310,
+    "sha256": "015869a36d7bfc16c74f8ea03be8cb012ead4dbf6418ae0938cd6fda06a175da"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007405568-00000000000007471104.json",
+    "bytes": 329,
+    "source_inode": 94656318,
+    "sha256": "e430738aa90de03a12bc0f85ae4a5d8b54e19a13de3d9357e94f00f6533854a2"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007471104-00000000000007536640.json",
+    "bytes": 329,
+    "source_inode": 94660244,
+    "sha256": "999413ff80736bd57c56f19edb4e363192653443715112d2a3fe82c3848755fe"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007536640-00000000000007602176.json",
+    "bytes": 329,
+    "source_inode": 94657155,
+    "sha256": "2d4de559d043a5a4483d3fb71f1d45728c85b510086e2c1f30aabd86f0d4a43c"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007602176-00000000000007667712.json",
+    "bytes": 329,
+    "source_inode": 94659850,
+    "sha256": "21d1476342f987cd859a2b6cdb6502336b313a6be3315e1658715618be1a9fab"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007667712-00000000000007733248.json",
+    "bytes": 329,
+    "source_inode": 94660651,
+    "sha256": "4a0c31559f82881350b0f57467225c7481926907b4bd7a2d47d2147bf0bc7408"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007733248-00000000000007798784.json",
+    "bytes": 329,
+    "source_inode": 94658328,
+    "sha256": "c7a4f86445181bf7eb15c18e832cbc71d0e092e33eff10367c59c78ebf3fafa9"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007798784-00000000000007864320.json",
+    "bytes": 329,
+    "source_inode": 94660970,
+    "sha256": "40cdf8d280c10a6340c4e7bfebe83595193e181d047a7a0651b4a5326522f10d"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007864320-00000000000007929856.json",
+    "bytes": 329,
+    "source_inode": 94661508,
+    "sha256": "5e5490ccc0d0bcf52242f943052367f74f3026a1e8444a5ce17fad8f0619972a"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007929856-00000000000007995392.json",
+    "bytes": 329,
+    "source_inode": 94657256,
+    "sha256": "660a0c69b0c1082176f187ccdc8bc83f1d50e68ff29e2a73a36c71eb386ce792"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000007995392-00000000000008060928.json",
+    "bytes": 329,
+    "source_inode": 94653785,
+    "sha256": "128637cafc467579d5772a09731f10be24a2de0673ba44879cef03f6c834bab1"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008060928-00000000000008126464.json",
+    "bytes": 329,
+    "source_inode": 94661743,
+    "sha256": "78743c0d47b273eb804b38ccc26424b46688529795b14df8caaabb6b6ac51cf3"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008126464-00000000000008192000.json",
+    "bytes": 329,
+    "source_inode": 94661768,
+    "sha256": "67aee51fc4dfddec8d567d3ac4689d9dd78ee36b56c535ff54bc121fd99f9325"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008192000-00000000000008257536.json",
+    "bytes": 329,
+    "source_inode": 94662117,
+    "sha256": "9cc1edd54fe498ddb80963461110cd17cd2cccfc957c2ce5da4d4f4ae45cf99c"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008257536-00000000000008323072.json",
+    "bytes": 329,
+    "source_inode": 94660787,
+    "sha256": "b635c510f37939a4120735c129697aa45afb8c328352d365dda08dd5da9d6ea6"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008323072-00000000000008388608.json",
+    "bytes": 329,
+    "source_inode": 94662449,
+    "sha256": "21ef7910cc7ec72ec72852aa59c3d6631b56f1cd347b030acba687ba04c55f79"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008388608-00000000000008454144.json",
+    "bytes": 329,
+    "source_inode": 94661245,
+    "sha256": "ee61a37e4fb8cd21229c80b535192a709a81d9a4c41a2446a22562bfc98312fa"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008454144-00000000000008519680.json",
+    "bytes": 329,
+    "source_inode": 94657852,
+    "sha256": "f129024dfa2317804c9ed0fa8469d844bddb8fce559928da84e53aa25d949203"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008519680-00000000000008585216.json",
+    "bytes": 329,
+    "source_inode": 94662114,
+    "sha256": "13e083a380b6791f1be5ebe3bb1ddd6ddb47a737a65aa7a6f5415cc16c2b67b5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008585216-00000000000008650752.json",
+    "bytes": 329,
+    "source_inode": 94658722,
+    "sha256": "d12ac6e8667744880f17ccfbfbb84cd11b0e064c94a6ec87bffd6e90150d3b55"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008650752-00000000000008716288.json",
+    "bytes": 329,
+    "source_inode": 94662197,
+    "sha256": "02f5522aca20f79c9f723ba4b7e759a63464e7d26cce265ce377db877548b9ea"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008716288-00000000000008781824.json",
+    "bytes": 329,
+    "source_inode": 94657767,
+    "sha256": "e88aa629be9cf43e6b64402e43bc78a7f06d4bfa779b3e450891ec39d7252e5f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008781824-00000000000008847360.json",
+    "bytes": 329,
+    "source_inode": 94661636,
+    "sha256": "b89f943ad9bd6a144ce185cfc25ebe1f862a25cd2f25370e991da673b5adf348"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008847360-00000000000008912896.json",
+    "bytes": 329,
+    "source_inode": 94663499,
+    "sha256": "51f420ea2e904c00da9be3162a92948c52c42fea8d94d040acb8387bec821a82"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008912896-00000000000008978432.json",
+    "bytes": 329,
+    "source_inode": 94663329,
+    "sha256": "5d4333d0fa5eab7288ced9ea7b351dd6c3cca7197b06fad51440142668bb5c6c"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000008978432-00000000000009043968.json",
+    "bytes": 329,
+    "source_inode": 94662872,
+    "sha256": "40f977f2b775facd80765a91a72e6d14f963309d084950ea50301ea98cfe5cc7"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009043968-00000000000009109504.json",
+    "bytes": 329,
+    "source_inode": 94663892,
+    "sha256": "86e562cd0d885c5f07a0cd2ee11565434856d57c755ffe48bedc0e09d37eb1d8"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009109504-00000000000009175040.json",
+    "bytes": 329,
+    "source_inode": 94664990,
+    "sha256": "172a826a350cb7f9181bb67aa454c22dfea8df7ae6b481edab0e947c9b2b4112"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009175040-00000000000009240576.json",
+    "bytes": 329,
+    "source_inode": 94657890,
+    "sha256": "c01aa2d6624c55a80f98792ae6160eb241a6702f7a10dce05c9393d3509e8de3"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009240576-00000000000009306112.json",
+    "bytes": 329,
+    "source_inode": 94665340,
+    "sha256": "8f4c1d9db0e05d761b92871a50164bc94e9e483e0a138028aa0c1958793f7510"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009306112-00000000000009371648.json",
+    "bytes": 329,
+    "source_inode": 94664353,
+    "sha256": "4af691c8a898456a40f01a01504936a4a8ffe25df114bdfa368606cc2b6b7184"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009371648-00000000000009437184.json",
+    "bytes": 329,
+    "source_inode": 94663685,
+    "sha256": "625b78947234369303dec5952ad177a4c9579e3346f1cb6a50319c69d68a0383"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009437184-00000000000009502720.json",
+    "bytes": 329,
+    "source_inode": 94665762,
+    "sha256": "fbe270c66d17368bf4b13e0e6c1c991602d95f3a6c0aad00d1c08e1bf792fc15"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009502720-00000000000009568256.json",
+    "bytes": 329,
+    "source_inode": 94663061,
+    "sha256": "67bee0d49b910755d9fe5e18828eb3715b3517f6c24b975efa1ae5a44fe2198f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009568256-00000000000009633792.json",
+    "bytes": 329,
+    "source_inode": 94665957,
+    "sha256": "f6155d48d165e1621313972567ab27fda12c9ef4ba615b3625c66764bb9109e3"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009633792-00000000000009699328.json",
+    "bytes": 329,
+    "source_inode": 94662728,
+    "sha256": "be8884d6cc272c7c948ab332ede1e1f8ec1d8d32f26b95a239bee2794ab8195f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009699328-00000000000009764864.json",
+    "bytes": 329,
+    "source_inode": 94666155,
+    "sha256": "c098102eeae32c513c634485e5a307ac7c4d9afa42a7496763cd76cacbd058e8"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009764864-00000000000009830400.json",
+    "bytes": 329,
+    "source_inode": 94666275,
+    "sha256": "786a7a70be60fc78dcc360ec5c67100fc863d316068dcc82299672d55db69678"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009830400-00000000000009895936.json",
+    "bytes": 329,
+    "source_inode": 94665365,
+    "sha256": "3b4d353059752c5ebfd5b64d3e80ec4c6f6bf26530564af27081ab439d9e145a"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009895936-00000000000009961472.json",
+    "bytes": 329,
+    "source_inode": 94666570,
+    "sha256": "6a3eb3098d3cd86c7cfb78b71ed65d2008d433fabd2df318bd91930d9fb985d3"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000009961472-00000000000010027008.json",
+    "bytes": 329,
+    "source_inode": 94666045,
+    "sha256": "0d72d34a339fa05ce076af68a739ac774247b76efc391b426f1c6588207be1b6"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010027008-00000000000010092544.json",
+    "bytes": 330,
+    "source_inode": 94665913,
+    "sha256": "96353aa58fa7557455e744baaff67aa51302b28d619adce513fd1a764c18b630"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010092544-00000000000010158080.json",
+    "bytes": 330,
+    "source_inode": 94666041,
+    "sha256": "e019972c37f1150e7c7cd29d53875ff4a169c5482c4bfeb597bb42aa819c8d5b"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010158080-00000000000010223616.json",
+    "bytes": 330,
+    "source_inode": 94666042,
+    "sha256": "3f1014635dbde03df706fc7ab278b8f608f9fde5e25e9886c52c2905affb14fa"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010223616-00000000000010289152.json",
+    "bytes": 330,
+    "source_inode": 94666641,
+    "sha256": "eff96a258a6ad3532b12574819ad9facf29fe81e5f3d38a2cd2256f8a3b4c3cf"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010289152-00000000000010354688.json",
+    "bytes": 330,
+    "source_inode": 94665194,
+    "sha256": "0f02ad01800ca6dba1323cae53ea655514ea8467b981e15bc593a9600fdeb0d0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010354688-00000000000010420224.json",
+    "bytes": 330,
+    "source_inode": 94666350,
+    "sha256": "ae3d37f3040dc00d75f11cdcf8706ed97669b623b83019a4869eb23ffbaea1fd"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010420224-00000000000010485760.json",
+    "bytes": 330,
+    "source_inode": 94665872,
+    "sha256": "e0a6d28d7bcac33edb4b20ff60bb55d55a5effaf71938dbb85a5a3003d92d10f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010485760-00000000000010551296.json",
+    "bytes": 330,
+    "source_inode": 94666850,
+    "sha256": "9d27e072d43dd6e04570eeb3dcd982a43a7a043ea65229514c937928301aef38"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010551296-00000000000010616832.json",
+    "bytes": 330,
+    "source_inode": 94666597,
+    "sha256": "1c6ea0d7b437389b829315132c6f72e9745380d694fb084ea1bb72f3b974eaa6"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010616832-00000000000010682368.json",
+    "bytes": 330,
+    "source_inode": 94667637,
+    "sha256": "c79b44f5d8e5894745646e57fa93a4f54d4cba66dc9392d335da47a3537a6512"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010682368-00000000000010747904.json",
+    "bytes": 330,
+    "source_inode": 94666420,
+    "sha256": "48926e167155e7018433ed735e2f53ce9e0b583b346b851efbf47a0becb2854e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010747904-00000000000010813440.json",
+    "bytes": 330,
+    "source_inode": 94668051,
+    "sha256": "032a0c0f9fb5225802a871aef639c4c4ab05dfee0c28a5d7a76246a499db4d97"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010813440-00000000000010878976.json",
+    "bytes": 330,
+    "source_inode": 94668608,
+    "sha256": "cd3dc1440923bc3131b69ec6d39a11ed9c377bb0923f52c46a5c233f9100abe0"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010878976-00000000000010944512.json",
+    "bytes": 330,
+    "source_inode": 94668937,
+    "sha256": "329e61601554a0e6b0e1b5e0796e66e496db86439a889158e2a3be36c925c4aa"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000010944512-00000000000011010048.json",
+    "bytes": 330,
+    "source_inode": 94666279,
+    "sha256": "c47e4bcf007c6e433c43c7afbfb32b9d872f99a64c3342755169736dc46b7b1f"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011010048-00000000000011075584.json",
+    "bytes": 330,
+    "source_inode": 94669204,
+    "sha256": "c6fdc790ff641a3dfee7ea8a96334504179cc2764891fb8f745eadc322a08e5e"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011075584-00000000000011141120.json",
+    "bytes": 330,
+    "source_inode": 94669176,
+    "sha256": "3345ee67db22e0ae02b0b8af8b9e94aec15d2883fa8d173deb2b10316380de04"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011141120-00000000000011206656.json",
+    "bytes": 330,
+    "source_inode": 94668308,
+    "sha256": "a5246e681bf543be020d3659559f111e8abef39a687a23f4f21273bf0090731c"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011206656-00000000000011272192.json",
+    "bytes": 330,
+    "source_inode": 94668130,
+    "sha256": "2ad6fedf9518e99bf1b770cfcc319ca231aa5ec4d4c97410b486b52c448f9e62"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011272192-00000000000011337728.json",
+    "bytes": 330,
+    "source_inode": 94666572,
+    "sha256": "0bca914a9f44f1358f69ad51dffad5db877d477917dd9339866da1cd5b756268"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011337728-00000000000011403264.json",
+    "bytes": 330,
+    "source_inode": 94669976,
+    "sha256": "4fa1d00e858d87dd511f8cf79d47e3f3c9b9c09669291238ccf750bbc86806e5"
+  },
+  {
+    "path": "capture-1/ancient/v2/manifests/00000000000011403264-00000000000011468800.json",
+    "bytes": 330,
+    "source_inode": 94670362,
+    "sha256": "6544b9e749299397555fa488467234446851ed8f13cda1cd5a7ec08ccecc1ca1"
+  }
+]

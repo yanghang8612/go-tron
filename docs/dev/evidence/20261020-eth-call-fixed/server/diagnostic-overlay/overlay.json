@@ -1,0 +1,7 @@
+{
+  "Replace": {
+    "/data/gtron/cold-query-tail-20261020/candidate/core/state/snapshots/history_header_cache.go": "/data/gtron/eth-call-fixed-20261020-01/diagnostic-overlay/snapshots-history_header_cache.go",
+    "/data/gtron/cold-query-tail-20261020/candidate/core/rawdb/state_history_query_tail.go": "/data/gtron/eth-call-fixed-20261020-01/diagnostic-overlay/rawdb-state_history_query_tail.go",
+    "/data/gtron/cold-query-tail-20261020/candidate/core/offline_fixed_http_test.go": "/data/gtron/eth-call-fixed-20261020-01/diagnostic-overlay/core-offline_fixed_http_test.go"
+  }
+}

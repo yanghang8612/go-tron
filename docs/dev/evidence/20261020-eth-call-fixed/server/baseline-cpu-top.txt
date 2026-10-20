@@ -1,0 +1,59 @@
+File: baseline.test
+Build ID: 1549f6e27dfa1159da62c2d2ebf34a9b4282aeaf
+Type: cpu
+Time: 2026-10-20 09:40:56 UTC
+Duration: 20.13s, Total samples = 20.83s (103.46%)
+Showing nodes accounting for 16.80s, 80.65% of 20.83s total
+Dropped 391 nodes (cum <= 0.10s)
+Showing top 50 nodes out of 215
+      flat  flat%   sum%        cum   cum%
+     4.74s 22.76% 22.76%      4.74s 22.76%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     4.67s 22.42% 45.18%      4.67s 22.42%  internal/runtime/syscall.Syscall6
+     1.52s  7.30% 52.47%      1.52s  7.30%  runtime.memclrNoHeapPointers
+     0.39s  1.87% 54.34%      0.41s  1.97%  github.com/golang/snappy.decode
+     0.34s  1.63% 55.98%      0.34s  1.63%  runtime.memmove
+     0.25s  1.20% 57.18%      0.25s  1.20%  cmpbody
+     0.24s  1.15% 58.33%      0.82s  3.94%  github.com/ethereum/go-ethereum/rlp.(*Stream).Kind
+     0.23s  1.10% 59.43%      0.23s  1.10%  runtime.nextFreeFast (inline)
+     0.20s  0.96% 60.39%      0.20s  0.96%  github.com/ethereum/go-ethereum/rlp.(*sliceReader).ReadByte
+     0.20s  0.96% 61.35%      3.35s 16.08%  github.com/ethereum/go-ethereum/rlp.makeStructDecoder.func1
+     0.20s  0.96% 62.31%      0.76s  3.65%  io.ReadAtLeast
+     0.19s  0.91% 63.23%      0.37s  1.78%  encoding/binary.ReadUvarint
+     0.18s  0.86% 64.09%      0.18s  0.86%  bytes.(*Reader).ReadByte
+     0.17s  0.82% 64.91%      0.19s  0.91%  github.com/ethereum/go-ethereum/rlp.(*Stream).willRead (inline)
+     0.16s  0.77% 65.67%      0.75s  3.60%  runtime.mallocgcSmallNoscan
+     0.15s  0.72% 66.39%      0.42s  2.02%  github.com/ethereum/go-ethereum/rlp.(*Stream).readByte
+     0.15s  0.72% 67.11%      0.51s  2.45%  runtime.scanobject
+     0.14s  0.67% 67.79%      0.40s  1.92%  bufio.(*Reader).Read
+     0.14s  0.67% 68.46%      0.19s  0.91%  reflect.Value.Field
+     0.13s  0.62% 69.08%      0.55s  2.64%  github.com/ethereum/go-ethereum/rlp.(*Stream).readKind
+     0.13s  0.62% 69.71%      0.13s  0.62%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.13s  0.62% 70.33%      1.46s  7.01%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlock
+     0.12s  0.58% 70.91%      4.82s 23.14%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext
+     0.12s  0.58% 71.48%      0.19s  0.91%  github.com/tronprotocol/go-tron/core/state/snapshots.validateCompressedBlockPhysicalTableContext
+     0.12s  0.58% 72.06%      0.12s  0.58%  runtime.(*fixalloc).alloc
+     0.12s  0.58% 72.64%      0.14s  0.67%  runtime.findObject
+     0.11s  0.53% 73.16%      0.14s  0.67%  github.com/ethereum/go-ethereum/rlp.(*sliceReader).Read
+     0.11s  0.53% 73.69%      3.12s 14.98%  runtime.mallocgc
+     0.10s  0.48% 74.17%      0.15s  0.72%  reflect.Value.SetBytes
+     0.09s  0.43% 74.60%      0.11s  0.53%  runtime.mapaccess2_fast64
+     0.08s  0.38% 74.99%      0.34s  1.63%  github.com/ethereum/go-ethereum/rlp.(*Stream).readFull
+     0.08s  0.38% 75.37%      0.19s  0.91%  github.com/ethereum/go-ethereum/rlp.(*Stream).readUint
+     0.08s  0.38% 75.76%      9.44s 45.32%  github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt
+     0.08s  0.38% 76.14%      0.51s  2.45%  runtime.mallocgcSmallScanNoHeader
+     0.07s  0.34% 76.48%      0.77s  3.70%  github.com/ethereum/go-ethereum/rlp.(*Stream).Bytes
+     0.07s  0.34% 76.81%      1.58s  7.59%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.07s  0.34% 77.15%      0.15s  0.72%  runtime.(*mheap).initSpan
+     0.07s  0.34% 77.48%      0.12s  0.58%  runtime.casgstatus
+     0.07s  0.34% 77.82%      0.13s  0.62%  runtime.exitsyscallfast
+     0.06s  0.29% 78.11%      4.28s 20.55%  github.com/tronprotocol/go-tron/core/rawdb.decodePersistedStateDomainChangeBlock
+     0.06s  0.29% 78.40%      0.21s  1.01%  runtime.exitsyscall
+     0.06s  0.29% 78.68%      0.25s  1.20%  runtime.reentersyscall
+     0.06s  0.29% 78.97%      4.61s 22.13%  syscall.RawSyscall6
+     0.06s  0.29% 79.26%      4.17s 20.02%  syscall.Syscall6
+     0.05s  0.24% 79.50%      2.30s 11.04%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry
+     0.05s  0.24% 79.74%      3.85s 18.48%  os.(*File).ReadAt
+     0.05s  0.24% 79.98%      2.05s  9.84%  runtime.makeslice
+     0.05s  0.24% 80.22%      0.14s  0.67%  runtime.pcvalue
+     0.05s  0.24% 80.46%      3.73s 17.91%  syscall.Pread (inline)
+     0.04s  0.19% 80.65%      0.72s  3.46%  github.com/ethereum/go-ethereum/rlp.decodeUint

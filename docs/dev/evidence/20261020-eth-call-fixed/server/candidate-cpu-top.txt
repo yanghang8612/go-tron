@@ -1,0 +1,59 @@
+File: candidate.test
+Build ID: df8660afe943479d08cfc55fa8aac9ce9c1c2e7a
+Type: cpu
+Time: 2026-10-20 09:42:44 UTC
+Duration: 20.15s, Total samples = 20.70s (102.75%)
+Showing nodes accounting for 17.41s, 84.11% of 20.70s total
+Dropped 348 nodes (cum <= 0.10s)
+Showing top 50 nodes out of 207
+      flat  flat%   sum%        cum   cum%
+     5.94s 28.70% 28.70%      5.94s 28.70%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     5.57s 26.91% 55.60%      5.57s 26.91%  internal/runtime/syscall.Syscall6
+     1.39s  6.71% 62.32%      1.39s  6.71%  runtime.memclrNoHeapPointers
+     0.41s  1.98% 64.30%      0.41s  1.98%  cmpbody
+     0.28s  1.35% 65.65%      0.39s  1.88%  encoding/binary.ReadUvarint
+     0.25s  1.21% 66.86%      0.25s  1.21%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.25s  1.21% 68.07%      0.25s  1.21%  runtime.memmove
+     0.21s  1.01% 69.08%      0.21s  1.01%  github.com/golang/snappy.decode
+     0.20s  0.97% 70.05%      0.90s  4.35%  io.ReadAtLeast
+     0.18s  0.87% 70.92%      2.11s 10.19%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlock
+     0.17s  0.82% 71.74%      0.18s  0.87%  runtime.step
+     0.16s  0.77% 72.51%      0.44s  2.13%  runtime.scanobject
+     0.15s  0.72% 73.24%      0.15s  0.72%  runtime.nextFreeFast (inline)
+     0.14s  0.68% 73.91%      0.14s  0.68%  context.value
+     0.13s  0.63% 74.54%      0.48s  2.32%  bufio.(*Reader).Read
+     0.11s  0.53% 75.07%      0.11s  0.53%  bytes.(*Reader).ReadByte
+     0.11s  0.53% 75.60%      0.71s  3.43%  runtime.mallocgcSmallNoscan
+     0.11s  0.53% 76.14%      5.56s 26.86%  syscall.RawSyscall6
+     0.10s  0.48% 76.62%      0.26s  1.26%  github.com/ethereum/go-ethereum/rlp.SplitString
+     0.10s  0.48% 77.10%      0.17s  0.82%  github.com/tronprotocol/go-tron/core/state/snapshots.validateCompressedBlockPhysicalTableContext
+     0.10s  0.48% 77.58%      0.18s  0.87%  runtime.mapaccess2_fast64
+     0.09s  0.43% 78.02%      0.18s  0.87%  github.com/ethereum/go-ethereum/rlp.Split
+     0.08s  0.39% 78.41%      1.81s  8.74%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.08s  0.39% 78.79%      2.77s 13.38%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry
+     0.07s  0.34% 79.13%      6.13s 29.61%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext
+     0.07s  0.34% 79.47%      0.17s  0.82%  runtime.casgstatus
+     0.07s  0.34% 79.81%      0.11s  0.53%  runtime.findObject
+     0.07s  0.34% 80.14%      0.27s  1.30%  runtime.pcvalue
+     0.07s  0.34% 80.48%      0.24s  1.16%  runtime.reentersyscall
+     0.06s  0.29% 80.77%      0.16s  0.77%  runtime.greyobject
+     0.05s  0.24% 81.01%      0.20s  0.97%  runtime.exitsyscall
+     0.05s  0.24% 81.26%      2.43s 11.74%  runtime.makeslice
+     0.05s  0.24% 81.50%      0.11s  0.53%  runtime.typedmemmove
+     0.05s  0.24% 81.74%      4.41s 21.30%  syscall.Pread (inline)
+     0.04s  0.19% 81.93%      2.63s 12.71%  runtime.mallocgc
+     0.04s  0.19% 82.13%      0.15s  0.72%  sort.partition_func
+     0.03s  0.14% 82.27%      0.43s  2.08%  bytes.Compare (inline)
+     0.03s  0.14% 82.42%      0.21s  1.01%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint
+     0.03s  0.14% 82.56%     19.15s 92.51%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesByKeysContext
+     0.03s  0.14% 82.71%     11.69s 56.47%  github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt
+     0.03s  0.14% 82.85%      0.18s  0.87%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func1
+     0.03s  0.14% 83.00%      3.03s 14.64%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func2 (inline)
+     0.03s  0.14% 83.14%      0.93s  4.49%  io.ReadFull (inline)
+     0.03s  0.14% 83.29%      0.33s  1.59%  os.(*File).Close
+     0.03s  0.14% 83.43%      4.58s 22.13%  os.(*File).ReadAt
+     0.03s  0.14% 83.57%      0.25s  1.21%  runtime.(*mheap).allocSpan
+     0.03s  0.14% 83.72%      0.24s  1.16%  runtime.sweepone
+     0.03s  0.14% 83.86%      0.13s  0.63%  sort.Search (inline)
+     0.03s  0.14% 84.01%      0.19s  0.92%  sort.insertionSort_func
+     0.02s 0.097% 84.11%      0.18s  0.87%  github.com/ethereum/go-ethereum/rlp.SplitUint64

@@ -1,0 +1,35 @@
+Total: 20.83s
+ROUTINE ======================== github.com/tronprotocol/go-tron/core.(*TronBackend).executionDynamicPropertiesStrict in /data/gtron/cold-query-tail-20261020/baseline/core/tron_backend.go
+         0      8.25s (flat, cum) 39.61% of Total
+         .          .   1058:func (b *TronBackend) executionDynamicPropertiesStrict(statedb *state.StateDB, block *types.Block) (*state.DynamicProperties, error) {
+         .      8.25s   1059:	dp, err := b.dynamicPropertiesFromStateStrict(statedb)
+         .          .   1060:	if err != nil {
+         .          .   1061:		return nil, err
+         .          .   1062:	}
+         .          .   1063:	if block != nil {
+         .          .   1064:		dp.SetLatestBlockHeaderNumber(int64(block.Number()))
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readHeaderPrefix in /data/gtron/cold-query-tail-20261020/baseline/core/state/snapshots/history_header_cache.go
+         0      6.41s (flat, cum) 30.77% of Total
+         .          .     64:func (r *compressedBlockReader) readHeaderPrefix(p []byte, off uint64) (int, error) {
+         .          .     65:	// Match the existing reader-local decoded-block lifetime: validate once
+         .          .     66:	// on first use in this open reader, then reuse for its following header
+         .          .     67:	// and dictionary reads. Cross-open reuse still rereads physical bytes.
+         .          .     68:	if v := r.headerPrefix; v != nil && off+uint64(len(p)) <= uint64(v.size) {
+         .          .     69:		return copy(p, v.bytes[off:]), nil
+         .          .     70:	}
+         .          .     71:	for _, e := range r.cache {
+         .          .     72:		if e.idx == 0 && off+uint64(len(p)) <= uint64(len(e.bytes)) {
+         .          .     73:			return copy(p, e.bytes[off:]), nil
+         .          .     74:		}
+         .          .     75:	}
+         .      1.60s     76:	comp, expected, err := r.readCompressedBlock(0)
+         .          .     77:	if err != nil {
+         .          .     78:		return 0, err
+         .          .     79:	}
+         .      4.75s     80:	key := historyHeaderKey{digest: blake2b.Sum256(comp), decodedSize: expected}
+         .       60ms     81:	if v, ok := r.prefixCache.get(key); ok && off+uint64(len(p)) <= uint64(v.size) {
+         .          .     82:		r.headerPrefix = &v
+         .          .     83:		return copy(p, v.bytes[off:]), nil
+         .          .     84:	}
+         .          .     85:	decoded, err := r.decodeBlock(0, comp, expected)
+         .          .     86:	if err != nil {
