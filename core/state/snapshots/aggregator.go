@@ -991,7 +991,7 @@ func segmentOverlapsAnyFamily(ref SegmentRef, refs []SegmentRef) bool {
 			!(IsLatestAccessorRef(candidate) && (ref.Kind == SegmentLatest || ref.Kind == SegmentBTree)) {
 			continue
 		}
-		if ref.Kind == SegmentSystemHistoryRouting && candidate.Kind == SegmentSystemHistoryRouting {
+		if (ref.Kind == SegmentSystemHistoryRouting || ref.Kind == SegmentAccountHistoryRouting) && candidate.Kind == ref.Kind {
 			return true // one global exact index, including after source replacement
 		}
 		if ref.FromTxNum <= candidate.ToTxNum && candidate.FromTxNum <= ref.ToTxNum {

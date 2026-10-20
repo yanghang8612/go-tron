@@ -389,3 +389,30 @@ func TestSystemHistoryRoutingRefreshHonorsBusyBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSystemHistoryRoutingDoesNotReadAnUnrelatedIndex(t *testing.T) {
+	dir, m, queries := routingFixture(t)
+	m = addRoutingFixture(t, dir, m, 64)
+	ref := mustRoutingRef(t, m)
+	// Make the unused auxiliary object unavailable. A pure hot/future range
+	// must not read it; an overlapping read must still fail closed.
+	if err := os.Rename(filepath.Join(dir, ref.Path), filepath.Join(dir, ref.Path+".unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenPinnedManager(dir, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.FirstStateDomainChangesContext(context.Background(), 4, 5, queries)
+	if err != nil {
+		t.Fatalf("unrelated index opened: %v", err)
+	}
+	for _, row := range got {
+		if row != nil {
+			t.Fatal("unexpected future history")
+		}
+	}
+	if _, err := r.FirstStateDomainChangesContext(context.Background(), 1, 3, queries); err == nil {
+		t.Fatal("missing used index ignored")
+	}
+}

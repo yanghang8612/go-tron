@@ -462,10 +462,12 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		return out, err
 	}
 	type queryEntry struct {
-		query   StateHistoryQuery
-		lookup  []byte
-		indices []int
-		first   *rawdb.StateDomainChange
+		query             StateHistoryQuery
+		lookup            []byte
+		indices           []int
+		first             *rawdb.StateDomainChange
+		accountBound      uint64
+		accountBoundFound bool
 	}
 	entries := make([]*queryEntry, 0, len(queries))
 	byLookup := make(map[string]*queryEntry, len(queries))
@@ -499,11 +501,36 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 	var routing *systemHistoryRouting
 	for _, entry := range entries {
 		if systemHistoryRoutingQuery(entry.query) {
-			routing, err = loadSystemHistoryRouting(ctx, m.dir, manifest)
+			routing, err = loadSystemHistoryRouting(ctx, m.dir, manifest, TxRange{From: fromTxNum, To: toTxNum})
 			if err != nil {
 				return nil, err
 			}
 			break
+		}
+	}
+	var accountRouting *accountHistoryRoutingReader
+	for _, entry := range entries {
+		if !accountRoutingQuery(entry.query) {
+			continue
+		}
+		if ref, ok := accountRoutingRef(manifest, fromTxNum, toTxNum); ok {
+			accountRouting, err = openAccountHistoryRouting(ctx, m.dir, ref)
+			if err != nil {
+				return nil, err
+			}
+			defer accountRouting.Close()
+		}
+		break
+	}
+	if accountRouting != nil {
+		for _, entry := range entries {
+			if !accountRoutingQuery(entry.query) {
+				continue
+			}
+			entry.accountBound, entry.accountBoundFound, err = accountRouting.lookup(ctx, entry.lookup)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	consider := func(lookup []byte, change *rawdb.StateDomainChange) (bool, error) {
@@ -528,16 +555,26 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			continue
 		}
 		var lookupKeys [][]byte
-		if routing == nil {
+		if routing == nil && accountRouting == nil {
 			lookupKeys = make([][]byte, 0, len(entries))
 		}
 		column, covered := 0, false
-		if routing != nil {
+		accountCovered := false
+		if routing != nil || accountRouting != nil {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
-				column, covered = routing.columns[systemHistoryRoutingPairID(ref, accessor)]
+				id := systemHistoryRoutingPairID(ref, accessor)
+				if routing != nil {
+					column, covered = routing.columns[id]
+				}
+				if accountRouting != nil {
+					_, accountCovered = accountRouting.metadata.covered[id]
+				}
 			}
 		}
 		for _, entry := range entries {
+			if accountCovered && accountRoutingQuery(entry.query) && (!entry.accountBoundFound || fromTxNum > entry.accountBound || ref.FromTxNum > entry.accountBound) {
+				continue
+			}
 			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
 				lookupKeys = append(lookupKeys, entry.lookup)
 			}

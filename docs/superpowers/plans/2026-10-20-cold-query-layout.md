@@ -7,7 +7,7 @@
 - [x] Build prefix-only derived fixed corpus preserving compressed body frames.
 - [x] Compare identical HTTP host/binary on original and prefix-only copies.
 - [x] Measure bounded canonical merge construction costs on another derived
-  corpus. Stop after 33 committed passes; no full coarsened query claim.
+  corpus. Stop after 34 committed passes; no full coarsened query claim.
 - [x] Implement exact bounded routing for measured preflight namespaces, with
   sparse/dense membership, pair identity binding and ordinary-reader fallback.
 - [ ] Validate snapshot semantic checking, maintenance admission, corruption,

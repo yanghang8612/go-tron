@@ -397,7 +397,11 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 		if opts.RequireChecksums && strings.TrimSpace(ref.Checksum) == "" {
 			return nil, fmt.Errorf("snapshots: segment %q missing required checksum", ref.Path)
 		}
-		if ref.Kind == SegmentSystemHistoryRouting {
+		if ref.Kind == SegmentAccountHistoryRouting {
+			if err := checkAccountHistoryRoutingContext(ctx, dir, manifest, ref); err != nil {
+				return nil, err
+			}
+		} else if ref.Kind == SegmentSystemHistoryRouting {
 			if err := checkSystemHistoryRoutingContext(ctx, dir, manifest, ref); err != nil {
 				return nil, err
 			}

@@ -191,6 +191,13 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		if built {
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
+		built, routeErr = refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		if routeErr != nil {
+			return total, routeErr
+		}
+		if built {
+			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+		}
 	}
 	if r.compactionBudget.outerMetrics == nil {
 		r.compactionBudget.outerMetrics = newHistoryCompactionOuterMetrics(r.cfg.MetricsNamespace)

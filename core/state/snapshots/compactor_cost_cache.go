@@ -133,12 +133,12 @@ func historyCompactionCacheKey(candidate historyCompactionCandidate) (historyCom
 	return digestHistoryCompactionRefs(refs), true
 }
 
-// Encode all nine raw SegmentRef fields with lengths/fixed-width numbers and a
+// Encode every raw SegmentRef field with lengths/fixed-width numbers and a
 // dedicated domain. Do not reuse staging IDs (different identity/ownership).
 // The field-inventory test deliberately fails when SegmentRef gains a field.
 func digestHistoryCompactionRefs(refs historyCompactionInputRefs) historyCompactionCostKey {
 	h := sha256.New()
-	_, _ = h.Write([]byte("go-tron/history-compaction-cost-hint/v2\x00"))
+	_, _ = h.Write([]byte("go-tron/history-compaction-cost-hint/v3\x00"))
 	var number [8]byte
 	writeNumber := func(n uint64) { binary.LittleEndian.PutUint64(number[:], n); _, _ = h.Write(number[:]) }
 	for _, ref := range refs {
@@ -152,6 +152,7 @@ func digestHistoryCompactionRefs(refs historyCompactionInputRefs) historyCompact
 		writeHistoryCostHintString(h, ref.Path, number[:])
 		writeNumber(ref.Size)
 		writeHistoryCostHintString(h, ref.Checksum, number[:])
+		writeHistoryCostHintString(h, ref.LookupRoot, number[:])
 	}
 	var key historyCompactionCostKey
 	h.Sum(key[:0])

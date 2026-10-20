@@ -31,7 +31,8 @@ const (
 	SegmentHistory  SegmentKind = "history"
 	SegmentInverted SegmentKind = "inverted"
 	// Exact routing for small singleton system namespaces; never canonical state.
-	SegmentSystemHistoryRouting SegmentKind = "system-history-routing"
+	SegmentSystemHistoryRouting  SegmentKind = "system-history-routing"
+	SegmentAccountHistoryRouting SegmentKind = "account-history-routing"
 	// SegmentChainFreezer is a block-numbered chain-freezer snapshot family.
 	// SegmentRef.FromTxNum/ToTxNum carry freezer block numbers for this kind.
 	SegmentChainFreezer SegmentKind = "chain-freezer"
@@ -126,6 +127,9 @@ type SegmentRef struct {
 	Path             string             `json:"path"`
 	Size             uint64             `json:"size"`
 	Checksum         string             `json:"checksum,omitempty"`
+	// LookupRoot authenticates the small metadata tree of a paged auxiliary
+	// index. It is independent of the canonical MuHash state commitment.
+	LookupRoot string `json:"lookupRoot,omitempty"`
 }
 
 // effectiveAggregationSteps returns the number of base cold-build steps
@@ -326,6 +330,7 @@ func (m *Manifest) validate(ordered bool) error {
 	// the number of cold segments and competes with import on every load.
 	seenPath := make(map[string]*SegmentRef, len(m.Segments))
 	var systemRoutingCount int
+	var accountRoutingCount int
 	// Overlap validation needs only bounds, not owned copies of every path,
 	// checksum and other identity field. Full refs are still checked below and
 	// retained in seenPath for companion validation.
@@ -340,6 +345,12 @@ func (m *Manifest) validate(ordered bool) error {
 			systemRoutingCount++
 			if systemRoutingCount > 1 {
 				return errors.New("snapshots: multiple system history routing segments")
+			}
+		}
+		if seg.Kind == SegmentAccountHistoryRouting {
+			accountRoutingCount++
+			if accountRoutingCount > 1 {
+				return errors.New("snapshots: multiple account history routing segments")
 			}
 		}
 		visibleStart, visibleEnd := m.VisibleTxStart, m.VisibleTxEnd
@@ -698,9 +709,17 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSystemHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
+	}
+	if seg.LookupRoot != "" && seg.Kind != SegmentAccountHistoryRouting {
+		return errors.New("snapshots: unexpected lookup root on canonical segment")
+	}
+	if seg.Kind == SegmentAccountHistoryRouting {
+		if _, ok := snapshotChecksumDigest(seg.LookupRoot); !ok {
+			return errors.New("snapshots: account history routing requires a SHA256 metadata root")
+		}
 	}
 	dataset := seg.normalizedDataset()
 	if seg.Kind == SegmentBalanceTrace {

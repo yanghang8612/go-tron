@@ -129,7 +129,7 @@ func (r *systemHistoryRouting) mayContain(column int, lookup []byte) bool {
 	return systemHistoryMembersContain(r.keys[string(lookup)], column)
 }
 
-func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifest) (*systemHistoryRouting, error) {
+func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifest, window ...TxRange) (*systemHistoryRouting, error) {
 	var found *SegmentRef
 	for i := range manifest.Segments {
 		if manifest.Segments[i].Kind == SegmentSystemHistoryRouting {
@@ -141,6 +141,9 @@ func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifes
 	}
 	if found == nil {
 		return nil, nil
+	}
+	if len(window) != 0 && (found.ToTxNum < window[0].From || found.FromTxNum > window[0].To) {
+		return nil, nil // The index cannot skip a pair in this request's range.
 	}
 	return readSystemHistoryRouting(ctx, dir, *found)
 }
@@ -285,68 +288,76 @@ func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRout
 	return r, nil
 }
 
-func systemHistorySourceKeys(ctx context.Context, dir string, history, accessor SegmentRef) (keys []string, err error) {
+func iterateHistoryRoutingSourceKeys(ctx context.Context, dir string, history, accessor SegmentRef, fn func([]byte) error) error {
 	// Authenticate this exact open descriptor before using dictionary absences.
 	f, err := os.Open(filepath.Join(dir, accessor.Path))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if stat.Size() < 0 || uint64(stat.Size()) != accessor.Size {
-		return nil, errors.New("snapshots: routing source accessor size mismatch")
+		return errors.New("snapshots: routing source accessor size mismatch")
 	}
 	if stat.Size() > systemHistoryRoutingMaxAccessorBytes {
-		return nil, errSystemHistoryRoutingBudget
+		return errSystemHistoryRoutingBudget
 	}
 	var version [12]byte
 	if _, err := f.ReadAt(version[:], 0); err != nil {
-		return nil, err
+		return err
 	}
 	if v := binary.BigEndian.Uint32(version[8:]); v != stateDomainChangeBinaryVersionV6 && v != stateDomainChangeBinaryVersionV7 {
-		return nil, errSystemHistoryRoutingBudget
+		return errSystemHistoryRoutingBudget
 	}
 	hash := sha256.New()
 	if _, err = io.Copy(hash, contextReader{ctx: ctx, r: f}); err != nil {
-		return nil, err
+		return err
 	}
 	if fmt.Sprintf("sha256:%x", hash.Sum(nil)) != accessor.Checksum {
-		return nil, errors.New("snapshots: routing source accessor checksum mismatch")
+		return errors.New("snapshots: routing source accessor checksum mismatch")
 	}
 	r := contextReaderAt{ctx: ctx, r: f}
 	size := uint64(stat.Size())
 	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(r, size)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if h.fromTxNum != history.FromTxNum || h.toTxNum != history.ToTxNum {
-		return nil, errors.New("snapshots: routing source accessor range mismatch")
+		return errors.New("snapshots: routing source accessor range mismatch")
 	}
 	segment, header, _, err := openStateDomainChangeBinarySegmentSequentialReader(dir, history)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if header.version != stateDomainChangeBinaryVersionV6 {
 		segment.Close()
-		return nil, errSystemHistoryRoutingBudget
+		return errSystemHistoryRoutingBudget
 	}
 	if header.count != h.recordCount {
 		segment.Close()
-		return nil, errors.New("snapshots: routing source record count mismatch")
+		return errors.New("snapshots: routing source record count mismatch")
 	}
 	err = verifyStateDomainChangeBinaryV6DictionaryPair(segment, r, size)
 	closeErr := segment.Close()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if closeErr != nil {
-		return nil, closeErr
+		return closeErr
 	}
+	_, err = iterateStateDomainChangeBinaryAccessorV6Keys(r, size, func(_ uint32, key []byte) error { return fn(key) })
+	if err != nil {
+		return err
+	}
+	return contextError(ctx)
+}
+
+func systemHistorySourceKeys(ctx context.Context, dir string, history, accessor SegmentRef) (keys []string, err error) {
 	keyBytes := 0
-	_, err = iterateStateDomainChangeBinaryAccessorV6Keys(r, size, func(_ uint32, key []byte) error {
+	err = iterateHistoryRoutingSourceKeys(ctx, dir, history, accessor, func(key []byte) error {
 		if !systemHistoryRoutingKey(key) {
 			return nil
 		}

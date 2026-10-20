@@ -43,7 +43,7 @@ MuHash and executable snapshot restore regressions. Compare full HTTP eth_call
 on the same head and oracle, separating warm and first/OS-cold measurements.
 No assumption that compression format work alone solves cross-segment routing.
 
-The bulk canonical rewrite experiment was stopped after 33 committed passes
+The bulk canonical rewrite experiment was stopped after 34 committed passes
 because of its construction cost. No complete coarsened-corpus query result is
 claimed. Keep those partial outputs and receipts; prioritize exact routing.
 
