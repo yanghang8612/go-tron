@@ -183,6 +183,23 @@ func (r *PersistentHistoryReader) PrefetchExecutionAt(block uint64, caller, cont
 	if err != nil {
 		return r.contextError()
 	}
+	// Planning pays for itself only if this span can visit a cold segment.
+	// A manifest is merely a cost hint here: skipping optional prefetch does
+	// not skip, memoize, or prove any authoritative demand-read result.
+	if view, ok := r.coldHistory.(interface{ Manifest() *snapshots.Manifest }); ok {
+		overlap := false
+		if manifest := view.Manifest(); manifest != nil {
+			for _, ref := range manifest.Segments {
+				if ref.Dataset == snapshots.SegmentDatasetStateDomainChange && ref.Kind == snapshots.SegmentHistory && ref.ToTxNum > target && ref.FromTxNum <= head {
+					overlap = true
+					break
+				}
+			}
+		}
+		if !overlap {
+			return nil
+		}
+	}
 	accounts := []common.Address{common.SystemAccountAddress, caller, contract}
 	queries := make([]snapshots.StateHistoryQuery, 0, 3)
 	for _, owner := range accounts {

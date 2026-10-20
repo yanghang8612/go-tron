@@ -328,3 +328,39 @@ func TestHistoryExecutionPrefetchUsesHistoricalGenerationAndRetriesFaults(t *tes
 		t.Fatal("demand read swallowed the failure")
 	}
 }
+
+type historyMemoManifestCold struct {
+	*historyMemoCold
+	manifest *snapshots.Manifest
+}
+
+func (c *historyMemoManifestCold) Manifest() *snapshots.Manifest { return c.manifest }
+
+func TestHistoryExecutionPrefetchRangeHintDoesNotProveAbsence(t *testing.T) {
+	owner := testAddr(0x79)
+	for _, end := range []uint64{0, 1, 2} {
+		t.Run(fmt.Sprint(end), func(t *testing.T) {
+			row := &rawdb.StateDomainChange{BlockNum: 2, TxNum: 2, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: owner, PrevExists: true, Prev: []byte("demand-authoritative")}
+			cold := &historyMemoCold{rows: []*rawdb.StateDomainChange{row}}
+			r := newHistoryMemoReader(t, cold, true)
+			hint := &historyMemoManifestCold{historyMemoCold: cold}
+			if end != 0 {
+				hint.manifest = &snapshots.Manifest{Segments: []snapshots.SegmentRef{{Dataset: snapshots.SegmentDatasetStateDomainChange, Kind: snapshots.SegmentHistory, FromTxNum: 1, ToTxNum: end}}}
+			}
+			r.coldHistory = hint
+			if err := r.PrefetchExecutionAt(1, owner, testAddr(0x7a), nil); err != nil {
+				t.Fatal(err)
+			}
+			if end <= 1 && (cold.mixed != 0 || len(r.firstMemo) != 0) {
+				t.Fatal("out-of-range plan performed reads or cached an absence")
+			}
+			got, err := r.firstStateDomainChangeByKey(1, 3, row.FlatDomain, owner, 0, 0, nil)
+			if err != nil || got == nil || string(got.Prev) != "demand-authoritative" {
+				t.Fatalf("manifest hint replaced demand truth: row=%+v err=%v", got, err)
+			}
+			if end <= 1 && cold.calls != 1 || end == 2 && cold.calls != 0 {
+				t.Fatalf("hint end %d: demand/mixed calls %d/%d", end, cold.calls, cold.mixed)
+			}
+		})
+	}
+}
