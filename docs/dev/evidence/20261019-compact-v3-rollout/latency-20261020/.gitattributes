@@ -1,0 +1,2 @@
+# Preserve exact pprof text, whose sample lines include terminal spaces.
+cpu-20261020T005832/query-raw.txt -whitespace

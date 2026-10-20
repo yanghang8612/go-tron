@@ -1,0 +1,2397 @@
+goroutine 18987592 [running]:
+runtime/pprof.writeGoroutineStacks({0x21da480, 0xc03f2601e0})
+	/data/go/src/runtime/pprof/pprof.go:756 +0x6b
+runtime/pprof.writeGoroutine({0x21da480?, 0xc03f2601e0?}, 0x24?)
+	/data/go/src/runtime/pprof/pprof.go:745 +0x25
+runtime/pprof.(*Profile).WriteTo(0x31a5bf0?, {0x21da480?, 0xc03f2601e0?}, 0xc?)
+	/data/go/src/runtime/pprof/pprof.go:371 +0x14b
+net/http/pprof.handler.ServeHTTP({0xc03f8966a1, 0x9}, {0x21e28a0, 0xc03f2601e0}, 0xc034a4a8c0)
+	/data/go/src/net/http/pprof/pprof.go:272 +0x52a
+net/http/pprof.Index({0x21e28a0, 0xc03f2601e0}, 0xc034a4a8c0?)
+	/data/go/src/net/http/pprof/pprof.go:389 +0xda
+net/http.HandlerFunc.ServeHTTP(0xc000288300?, {0x21e28a0?, 0xc03f2601e0?}, 0xada396?)
+	/data/go/src/net/http/server.go:2322 +0x29
+net/http.(*ServeMux).ServeHTTP(0x4a5339?, {0x21e28a0, 0xc03f2601e0}, 0xc034a4a8c0)
+	/data/go/src/net/http/server.go:2861 +0x1c7
+net/http.serverHandler.ServeHTTP({0xc075f7fac0?}, {0x21e28a0?, 0xc03f2601e0?}, 0x1?)
+	/data/go/src/net/http/server.go:3340 +0x8e
+net/http.(*conn).serve(0xc09a6547e0, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2109 +0x665
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 1 [chan receive, 1135 minutes]:
+main.gtron(0xc000354340)
+	/data/gtron/go-tron/cmd/gtron/main.go:1612 +0xb559
+github.com/urfave/cli/v2.(*Command).Run(0xc0004fbce0, 0xc000354340, {0xc000040388, 0x33, 0x37})
+	/home/java-tron/go/pkg/mod/github.com/urfave/cli/v2@v2.27.7/command.go:276 +0x7c2
+github.com/urfave/cli/v2.(*App).RunContext(0x31c8ba0, {0x21e52b8, 0x328fd40}, {0xc000040388, 0x33, 0x37})
+	/home/java-tron/go/pkg/mod/github.com/urfave/cli/v2@v2.27.7/app.go:333 +0x5a5
+github.com/urfave/cli/v2.(*App).Run(...)
+	/home/java-tron/go/pkg/mod/github.com/urfave/cli/v2@v2.27.7/app.go:307
+main.main()
+	/data/gtron/go-tron/cmd/gtron/main.go:1660 +0x45
+
+goroutine 40 [chan receive, 1135 minutes]:
+gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun(...)
+	/home/java-tron/go/pkg/mod/gopkg.in/natefinch/lumberjack.v2@v2.2.1/lumberjack.go:379
+created by gopkg.in/natefinch/lumberjack%2ev2.(*Logger).mill.func1 in goroutine 1
+	/home/java-tron/go/pkg/mod/gopkg.in/natefinch/lumberjack.v2@v2.2.1/lumberjack.go:390 +0x8c
+
+goroutine 41 [chan receive]:
+github.com/ethereum/go-ethereum/metrics.(*meterTicker).loop(0x325b7e0)
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/metrics/meter.go:155 +0x59
+created by github.com/ethereum/go-ethereum/metrics.startMeterTickerLoop.func1 in goroutine 1
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/metrics/meter.go:169 +0x34
+
+goroutine 42 [sleep]:
+time.Sleep(0xb2d05e00)
+	/data/go/src/runtime/time.go:363 +0x165
+github.com/ethereum/go-ethereum/metrics.CollectProcessMetrics(0xb2d05e00)
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/metrics/metrics.go:202 +0x3f9
+created by main.enableMetrics.func1 in goroutine 1
+	/data/gtron/go-tron/cmd/gtron/main.go:98 +0x45
+
+goroutine 43 [chan receive]:
+github.com/cockroachdb/pebble.(*cleanupManager).mainLoop(0xc00044eb40)
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:155 +0x18d
+github.com/cockroachdb/pebble.openCleanupManager.func1.1({0x21e5a28?, 0xc000344c30?})
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:86 +0x17
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112600?, 0x0?, 0x0?}}, 0xc0004e97c0)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.openCleanupManager.func1()
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:85 +0x50
+created by github.com/cockroachdb/pebble.openCleanupManager in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:84 +0x276
+
+goroutine 44 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000267080?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc0004e9fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 45 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc0002670e0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00008afa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 46 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344c00?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00008b7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 47 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a060?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00008bfa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 48 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000266ea0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047dfa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 49 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000266ff0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047e7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 50 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344c90?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047efa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 51 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344c60?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047f7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 52 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000267170?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047ffa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 53 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344d80?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0xc000058008?, 0xc000422600?}}, 0xc0004e37a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0xc00049a850?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 54 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000267200?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc0004e47a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 55 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344de0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc0004e4fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 56 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344db0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc000479fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 57 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000267290?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047a7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 58 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000344e10?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047afa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 59 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc0002672f0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047b7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 523415 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00d1e4d80)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 523283
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 63 [select]:
+github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*diskSpaceObserver).run(0xc000352de0)
+	/data/gtron/go-tron/core/rawdb/pebbledb/space_observer.go:158 +0xd3
+created by github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*diskSpaceObserver).start in goroutine 1
+	/data/gtron/go-tron/core/rawdb/pebbledb/space_observer.go:133 +0x58
+
+goroutine 64 [select]:
+github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*Database).meter(0xc0001622c8, 0xb2d05e00, {0x0, 0x0})
+	/data/gtron/go-tron/core/rawdb/pebbledb/pebble.go:1404 +0x705
+created by github.com/tronprotocol/go-tron/core/rawdb/pebbledb.New in goroutine 1
+	/data/gtron/go-tron/core/rawdb/pebbledb/pebble.go:1027 +0x1a9f
+
+goroutine 66 [chan receive]:
+github.com/cockroachdb/pebble.(*cleanupManager).mainLoop(0xc00015c0a0)
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:155 +0x18d
+github.com/cockroachdb/pebble.openCleanupManager.func1.1({0x21e5a28?, 0xc0008057a0?})
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:86 +0x17
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112600?, 0x0?, 0x0?}}, 0xc0004e8fc0)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.openCleanupManager.func1()
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:85 +0x50
+created by github.com/cockroachdb/pebble.openCleanupManager in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/cleaner.go:84 +0x276
+
+goroutine 67 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a060?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc0004787a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 68 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a090?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc000478fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 69 [chan receive, 440 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc0008058f0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047bfa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 70 [chan receive, 404 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc0008058c0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047c7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 71 [chan receive, 440 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a0c0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047cfa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 72 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a030?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00047d7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 73 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000805800?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0xc000058008?, 0xc0004e0600?}}, 0xc000089fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0xc00049a850?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 74 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000805830?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc000676fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 75 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000805860?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc0006777a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 76 [chan receive, 435 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000805890?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc000677fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 77 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc0008057d0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc0006787a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 78 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a150?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc000678fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 79 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000788000?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0xc000061808?, 0xc00027ca00?}}, 0xc0004e6fa8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0xc00049a850?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 80 [chan receive, 21 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a0f0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x21e52b8?, 0x328fd40?}}, 0xc0004e97a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0xc00044eb40?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 81 [chan receive, 220 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc000805920?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x1?, 0xc0004e57d0?}}, 0xc0004e57a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0xc0003526c0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 82 [chan receive, 1135 minutes]:
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop.func1({0x21e5a28?, 0xc00030a1e0?})
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:385 +0x8e
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112640?, 0x0?, 0x0?}}, 0xc00067a7a8)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble.(*tableCacheShard).releaseLoop(0x0?)
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:383 +0x4c
+created by github.com/cockroachdb/pebble.(*tableCacheShard).init in goroutine 1
+	/data/gtron/go-tron/third_party/pebble/table_cache.go:375 +0xe6
+
+goroutine 118 [select]:
+github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*diskSpaceObserver).run(0xc0000bcfc0)
+	/data/gtron/go-tron/core/rawdb/pebbledb/space_observer.go:158 +0xd3
+created by github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*diskSpaceObserver).start in goroutine 1
+	/data/gtron/go-tron/core/rawdb/pebbledb/space_observer.go:133 +0x58
+
+goroutine 119 [select]:
+github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*Database).meter(0xc00037cdc8, 0xb2d05e00, {0x1cf79f1, 0x8})
+	/data/gtron/go-tron/core/rawdb/pebbledb/pebble.go:1404 +0x705
+created by github.com/tronprotocol/go-tron/core/rawdb/pebbledb.New in goroutine 1
+	/data/gtron/go-tron/core/rawdb/pebbledb/pebble.go:1027 +0x1a9f
+
+goroutine 27 [select]:
+github.com/tronprotocol/go-tron/core.collectFlushCutoffs(0xc0004884d0, 0x8b7e2b?, 0x0?)
+	/data/gtron/go-tron/core/blockchain.go:2491 +0x95
+github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker.func1()
+	/data/gtron/go-tron/core/blockchain.go:2468 +0xfe
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startFlushWorker in goroutine 1
+	/data/gtron/go-tron/core/blockchain.go:2441 +0x65
+
+goroutine 28 [chan receive]:
+github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker.func1()
+	/data/gtron/go-tron/core/async_commit.go:161 +0x8e
+created by github.com/tronprotocol/go-tron/core.(*BlockChain).startCommitWorker in goroutine 1
+	/data/gtron/go-tron/core/async_commit.go:159 +0x65
+
+goroutine 120 [select]:
+github.com/tronprotocol/go-tron/internal/jsonrpc.(*FilterManager).run(0xc0008610e0)
+	/data/gtron/go-tron/internal/jsonrpc/filter.go:73 +0x10e
+created by github.com/tronprotocol/go-tron/internal/jsonrpc.(*FilterManager).Start in goroutine 1
+	/data/gtron/go-tron/internal/jsonrpc/filter.go:58 +0x7a
+
+goroutine 121 [select]:
+github.com/tronprotocol/go-tron/net.(*TronHandler).StartKeepAlive.func1()
+	/data/gtron/go-tron/net/handler.go:293 +0xbd
+created by github.com/tronprotocol/go-tron/net.(*TronHandler).StartKeepAlive in goroutine 1
+	/data/gtron/go-tron/net/handler.go:289 +0x4f
+
+goroutine 122 [select]:
+github.com/tronprotocol/go-tron/net/sync.(*Watchdog).loop(0xc000388540, 0xc00049bc70, 0x0?)
+	/data/gtron/go-tron/net/sync/watchdog.go:156 +0xe5
+created by github.com/tronprotocol/go-tron/net/sync.(*Watchdog).Start in goroutine 1
+	/data/gtron/go-tron/net/sync/watchdog.go:128 +0x170
+
+goroutine 123 [select, 2 minutes]:
+github.com/tronprotocol/go-tron/net.(*SyncService).startProgressReporter.func1()
+	/data/gtron/go-tron/net/sync.go:446 +0xf5
+created by github.com/tronprotocol/go-tron/net.(*SyncService).startProgressReporter in goroutine 1
+	/data/gtron/go-tron/net/sync.go:441 +0x145
+
+goroutine 124 [select]:
+github.com/tronprotocol/go-tron/net.(*BroadcastService).spreadLoop(0xc0008618b0)
+	/data/gtron/go-tron/net/broadcaster.go:119 +0xb1
+created by github.com/tronprotocol/go-tron/net.(*BroadcastService).Start in goroutine 1
+	/data/gtron/go-tron/net/broadcaster.go:61 +0x4f
+
+goroutine 125 [IO wait, 1135 minutes]:
+internal/poll.runtime_pollWait(0x7f2e7ffc8000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00022e100?, 0x4b02a317820a9ed4?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc00022e100)
+	/data/go/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0xc00022e100)
+	/data/go/src/net/fd_unix.go:161 +0x29
+net.(*TCPListener).accept(0xc000131000)
+	/data/go/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0xc000131000)
+	/data/go/src/net/tcpsock.go:380 +0x30
+github.com/tronprotocol/go-tron/p2p.(*Server).acceptLoop(0xc00032e180)
+	/data/gtron/go-tron/p2p/server.go:438 +0x84
+created by github.com/tronprotocol/go-tron/p2p.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/p2p/server.go:192 +0x15b
+
+goroutine 126 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Server).maintainLoop(0xc00032e180)
+	/data/gtron/go-tron/p2p/server.go:707 +0xfb
+created by github.com/tronprotocol/go-tron/p2p.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/p2p/server.go:193 +0x19d
+
+goroutine 127 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e7ffc7e00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00022e400?, 0xc004c59758?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).ReadFromInet6(0xc00022e400, {0xc004c59758, 0x800, 0x800}, 0xc004c595c0)
+	/data/go/src/internal/poll/fd_unix.go:268 +0x211
+net.(*netFD).readFromInet6(0xc00022e400, {0xc004c59758?, 0x456865?, 0x32930e0?}, 0xa5d19aba?)
+	/data/go/src/net/fd_posix.go:85 +0x25
+net.(*UDPConn).readFrom(0x30?, {0xc004c59758?, 0x7f2e801539a8?, 0x30?}, 0xc03958ae10)
+	/data/go/src/net/udpsock_posix.go:59 +0x76
+net.(*UDPConn).readFromUDP(0xc000090c38, {0xc004c59758?, 0x47c6c0?, 0xc03958ade0?}, 0xc0001036c0?)
+	/data/go/src/net/udpsock.go:146 +0x30
+net.(*UDPConn).ReadFromUDP(...)
+	/data/go/src/net/udpsock.go:138
+github.com/tronprotocol/go-tron/p2p/discover.(*Conn).ReadFrom(0x19e8740?, {0xc004c59758, 0x800, 0x800})
+	/data/gtron/go-tron/p2p/discover/udp.go:111 +0x4d
+github.com/tronprotocol/go-tron/p2p/discover.(*Service).readLoop(0xc00041e3f0)
+	/data/gtron/go-tron/p2p/discover/service.go:172 +0x97
+created by github.com/tronprotocol/go-tron/p2p/discover.(*Service).Start in goroutine 1
+	/data/gtron/go-tron/p2p/discover/service.go:156 +0x65
+
+goroutine 128 [select]:
+github.com/tronprotocol/go-tron/p2p/discover.(*Service).maintainLoop(0xc00041e3f0)
+	/data/gtron/go-tron/p2p/discover/service.go:276 +0x1aa
+created by github.com/tronprotocol/go-tron/p2p/discover.(*Service).Start in goroutine 1
+	/data/gtron/go-tron/p2p/discover/service.go:157 +0xa5
+
+goroutine 9317589 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc01d0efb90)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9317558
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 5393759 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc01fd901b0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 5393748
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 4367524 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc0133ff950)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 4367538
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 6537553 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc0008758c0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 6538006
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 2932409 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc01b8d2fc0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 2931849
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 12090 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc005daccf0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9969
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1613025 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e26678a00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc01b9f7000?, 0xc023d7b950?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc01b9f7000, {0xc023d7b950, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc01b9f7000, {0xc023d7b950?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01da77078, {0xc023d7b950?, 0xc008357720?, 0xc007981b90?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01da77078}, {0xc023d7b950, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01da77078}, {0xc023d7b950, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01da77078}, {0xc023d7b950?, 0xc010f2f031?, 0xc002892eb8?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc024165680)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1612644
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 9317587 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e26345600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc02b75cf00?, 0xc00ff922d0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc02b75cf00, {0xc00ff922d0, 0x1, 0xe1})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc02b75cf00, {0xc00ff922d0?, 0xe1?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01f7787b8, {0xc00ff922d0?, 0xc008357720?, 0xc057bfe108?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01f7787b8}, {0xc00ff922d0, 0x1, 0xe1}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01f7787b8}, {0xc00ff922d0, 0x1, 0xe1})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01f7787b8}, {0xc00ff922d0?, 0xc05d55fb71?, 0x3?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc01d0efb90)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9317558
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 10088659 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34177000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc054639000?, 0xc0559082d0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc054639000, {0xc0559082d0, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc054639000, {0xc0559082d0?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc037f51740, {0xc0559082d0?, 0xc008357720?, 0x1d0dc30?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc037f51740}, {0xc0559082d0, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc037f51740}, {0xc0559082d0, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc037f51740}, {0xc0559082d0?, 0xc05d55fe81?, 0x3?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc048e9e630)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 10087953
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 311978 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc0078cab40)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 311889
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 224 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e7ffc7c00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000156100?, 0x900000036?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc000156100)
+	/data/go/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0xc000156100)
+	/data/go/src/net/fd_unix.go:161 +0x29
+net.(*TCPListener).accept(0xc0001311c0)
+	/data/go/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0xc0001311c0)
+	/data/go/src/net/tcpsock.go:380 +0x30
+net/http.(*Server).Serve(0xc000200f00, {0x21e25d0, 0xc0001311c0})
+	/data/go/src/net/http/server.go:3463 +0x30c
+created by github.com/tronprotocol/go-tron/internal/tronapi.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/internal/tronapi/server.go:46 +0x105
+
+goroutine 225 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e7ffc7a00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000156180?, 0x900000036?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc000156180)
+	/data/go/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0xc000156180)
+	/data/go/src/net/fd_unix.go:161 +0x29
+net.(*TCPListener).accept(0xc000131280)
+	/data/go/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0xc000131280)
+	/data/go/src/net/tcpsock.go:380 +0x30
+net/http.(*Server).Serve(0xc000201000, {0x21e25d0, 0xc000131280})
+	/data/go/src/net/http/server.go:3463 +0x30c
+created by github.com/tronprotocol/go-tron/internal/jsonrpc.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/internal/jsonrpc/server.go:86 +0x105
+
+goroutine 290 [IO wait, 1135 minutes]:
+internal/poll.runtime_pollWait(0x7f2e7ffc7800, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000156200?, 0x20?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc000156200)
+	/data/go/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0xc000156200)
+	/data/go/src/net/fd_unix.go:161 +0x29
+net.(*TCPListener).accept(0xc000131300)
+	/data/go/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0xc000131300)
+	/data/go/src/net/tcpsock.go:380 +0x30
+google.golang.org/grpc.(*Server).Serve(0xc000414fc8, {0x21e25d0, 0xc000131300})
+	/home/java-tron/go/pkg/mod/google.golang.org/grpc@v1.79.3/server.go:920 +0x469
+github.com/tronprotocol/go-tron/internal/grpcapi.(*Server).Start.func1()
+	/data/gtron/go-tron/internal/grpcapi/server.go:51 +0x27
+created by github.com/tronprotocol/go-tron/internal/grpcapi.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/internal/grpcapi/server.go:50 +0x1f9
+
+goroutine 291 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341b6600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000156300?, 0x900000036?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc000156300)
+	/data/go/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0xc000156300)
+	/data/go/src/net/fd_unix.go:161 +0x29
+net.(*TCPListener).accept(0xc000131440)
+	/data/go/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0xc000131440)
+	/data/go/src/net/tcpsock.go:380 +0x30
+net/http.(*Server).Serve(0xc000201200, {0x21e25d0, 0xc000131440})
+	/data/go/src/net/http/server.go:3463 +0x30c
+created by github.com/tronprotocol/go-tron/internal/debugapi.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/internal/debugapi/server.go:137 +0x190
+
+goroutine 292 [select]:
+github.com/tronprotocol/go-tron/internal/metricsapi.(*NodeCollector).Start.func1()
+	/data/gtron/go-tron/internal/metricsapi/node_collector.go:75 +0xe7
+created by github.com/tronprotocol/go-tron/internal/metricsapi.(*NodeCollector).Start in goroutine 1
+	/data/gtron/go-tron/internal/metricsapi/node_collector.go:70 +0x56
+
+goroutine 293 [IO wait, 1135 minutes]:
+internal/poll.runtime_pollWait(0x7f2e341b6400, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000156700?, 0x380016?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc000156700)
+	/data/go/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0xc000156700)
+	/data/go/src/net/fd_unix.go:161 +0x29
+net.(*TCPListener).accept(0xc000131540)
+	/data/go/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0xc000131540)
+	/data/go/src/net/tcpsock.go:380 +0x30
+net/http.(*Server).Serve(0xc000201300, {0x21e25d0, 0xc000131540})
+	/data/go/src/net/http/server.go:3463 +0x30c
+github.com/tronprotocol/go-tron/internal/metricsapi.(*Server).Start.func1()
+	/data/gtron/go-tron/internal/metricsapi/server.go:70 +0x26
+created by github.com/tronprotocol/go-tron/internal/metricsapi.(*Server).Start in goroutine 1
+	/data/gtron/go-tron/internal/metricsapi/server.go:69 +0x185
+
+goroutine 294 [select]:
+github.com/tronprotocol/go-tron/net.(*PbftHandler).gcLoop(0xc0004f42a0)
+	/data/gtron/go-tron/net/pbft_handler.go:126 +0xf5
+created by github.com/tronprotocol/go-tron/net.(*PbftHandler).Start in goroutine 1
+	/data/gtron/go-tron/net/pbft_handler.go:110 +0x65
+
+goroutine 295 [select]:
+main.waitHistoryResourceSample({0x21e5a60, 0xc00012c410}, 0x3df009034aaf?)
+	/data/gtron/go-tron/cmd/gtron/history_resources.go:53 +0xbe
+main.(*runtimeHistoryResources).loop(0xc000891b60, {0x21e5a60, 0xc00012c410}, 0x5c90882411709444?)
+	/data/gtron/go-tron/cmd/gtron/history_resources.go:84 +0xf5
+created by main.(*runtimeHistoryResources).Start in goroutine 1
+	/data/gtron/go-tron/cmd/gtron/history_resources.go:70 +0x179
+
+goroutine 296 [sync.WaitGroup.Wait]:
+sync.runtime_SemacquireWaitGroup(0xc028128500?, 0x0?)
+	/data/go/src/runtime/sema.go:114 +0x2e
+sync.(*WaitGroup).Wait(0xc0395160f0)
+	/data/go/src/sync/waitgroup.go:206 +0x85
+github.com/tronprotocol/go-tron/core/state/snapshots.buildHistoryEventFiles({0x21e5a60, 0xc0006e4140}, 0xc05331f9d0, 0xc0693d4a20)
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:56 +0x19a
+github.com/tronprotocol/go-tron/core/state/snapshots.(*Runner).onePassWithPressureContext(_, {_, _}, {_, _, _, _})
+	/data/gtron/go-tron/core/state/snapshots/cold_builder.go:1749 +0x2971
+github.com/tronprotocol/go-tron/core/state/snapshots.(*Runner).onePassWithMaintenanceContext(_, {_, _}, _, _)
+	/data/gtron/go-tron/core/state/snapshots/cold_builder.go:1139 +0x672
+github.com/tronprotocol/go-tron/core/state/snapshots.(*Runner).OnePassWithDeferredMaintenanceContext(...)
+	/data/gtron/go-tron/core/state/snapshots/history_catchup.go:114
+github.com/tronprotocol/go-tron/core/state/pruning.(*SnapshotLifecycle).OnePass(_)
+	/data/gtron/go-tron/core/state/pruning/lifecycle.go:264 +0x1e5
+github.com/tronprotocol/go-tron/core/state/pruning.(*SnapshotLifecycle).runLoop.func7({0x1cf7781, 0x8})
+	/data/gtron/go-tron/core/state/pruning/lifecycle.go:601 +0xf3
+github.com/tronprotocol/go-tron/core/state/pruning.(*SnapshotLifecycle).runLoop(0xc000154120, 0x0?, {0x21dec40, 0xc000398008})
+	/data/gtron/go-tron/core/state/pruning/lifecycle.go:644 +0x397
+github.com/tronprotocol/go-tron/core/state/pruning.(*SnapshotLifecycle).loop(...)
+	/data/gtron/go-tron/core/state/pruning/lifecycle.go:513
+created by github.com/tronprotocol/go-tron/core/state/pruning.(*SnapshotLifecycle).Start in goroutine 1
+	/data/gtron/go-tron/core/state/pruning/lifecycle.go:158 +0xfc
+
+goroutine 3731867 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e26346000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc019c67400?, 0xc0386a83c0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc019c67400, {0xc0386a83c0, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc019c67400, {0xc0386a83c0?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc03fedfb70, {0xc0386a83c0?, 0xc008357720?, 0xc02f7e69f0?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc03fedfb70}, {0xc0386a83c0, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc03fedfb70}, {0xc0386a83c0, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc03fedfb70}, {0xc0386a83c0?, 0xc0910b15b9?, 0xc0079f5500?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc0329a33b0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 3732035
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 297 [select]:
+github.com/tronprotocol/go-tron/core/state/pruning.(*PostingPruneWorker).loop(0xc000232160)
+	/data/gtron/go-tron/core/state/pruning/posting_worker.go:153 +0x230
+created by github.com/tronprotocol/go-tron/core/state/pruning.(*PostingPruneWorker).Start in goroutine 1
+	/data/gtron/go-tron/core/state/pruning/posting_worker.go:128 +0x196
+
+goroutine 298 [select]:
+github.com/tronprotocol/go-tron/core/freezer.(*Runner).loop(0xc0001dea08)
+	/data/gtron/go-tron/core/freezer/runner.go:2615 +0x765
+created by github.com/tronprotocol/go-tron/core/freezer.(*Runner).Start in goroutine 1
+	/data/gtron/go-tron/core/freezer/runner.go:709 +0x71
+
+goroutine 10484 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc0030466c0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9941
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 300 [syscall, 1135 minutes]:
+os/signal.signal_recv()
+	/data/go/src/runtime/sigqueue.go:152 +0x29
+os/signal.loop()
+	/data/go/src/os/signal/signal_unix.go:23 +0x13
+created by os/signal.Notify.func1.1 in goroutine 1
+	/data/go/src/os/signal/signal.go:152 +0x1f
+
+goroutine 1351580 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc019f86090)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1351229
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 247381 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc005d15050)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 247394
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 284026 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00a158480)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 283921
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 12088 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a4000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0003fec80?, 0xc002c3e960?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc0003fec80, {0xc002c3e960, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc0003fec80, {0xc002c3e960?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0005b8118, {0xc002c3e960?, 0xc008357720?, 0xc0031184c8?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0005b8118}, {0xc002c3e960, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0005b8118}, {0xc002c3e960, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0005b8118}, {0xc002c3e960?, 0xc058e35259?, 0x12?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc005daccf0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9969
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 871904 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e342bee00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00ad16a00?, 0xc01855f3b0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00ad16a00, {0xc01855f3b0, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00ad16a00, {0xc01855f3b0?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00107fb98, {0xc01855f3b0?, 0xc008357720?, 0xc01a95f7a0?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00107fb98}, {0xc01855f3b0, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00107fb98}, {0xc01855f3b0, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00107fb98}, {0xc01855f3b0?, 0xc040187a99?, 0x1?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00a960240)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 871561
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18990646 [select]:
+github.com/tronprotocol/go-tron/core/state/snapshots.(*coldSnapshotBuildProgress).run(0xc0838b4120)
+	/data/gtron/go-tron/core/state/snapshots/history_build_progress.go:65 +0xe7
+created by github.com/tronprotocol/go-tron/core/state/snapshots.startColdSnapshotBuildProgress in goroutine 296
+	/data/gtron/go-tron/core/state/snapshots/history_build_progress.go:41 +0x1a5
+
+goroutine 10027 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc002bac360)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9922
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 131230 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00b300f30)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 131084
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 1067507 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc006871ef0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1067322
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 284027 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00a158480)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 283921
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 111201 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a3800, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0006ff800?, 0xc0081ae2d0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc0006ff800, {0xc0081ae2d0, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc0006ff800, {0xc0081ae2d0?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00107e5e0, {0xc0081ae2d0?, 0xc0081ae2d0?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00107e5e0}, {0xc0081ae2d0, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00107e5e0}, {0xc0081ae2d0, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00107e5e0}, {0xc0081ae2d0?, 0xc0910b15c1?, 0x0?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00b7123f0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 111101
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18987845 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a3a00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc099174c80?, 0xc021e7d000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc099174c80, {0xc021e7d000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc099174c80, {0xc021e7d000?, 0x0?, 0xc020a23ac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc047270868, {0xc021e7d000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc0630ec440, {0xc021e7d000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc04f49fb60)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc04f49fb60, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc03eeddcb0, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 10088661 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc048e9e630)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 10087953
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1332397 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc02255fb00)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1331016
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 1849680 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc005d147e0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1849683
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 540597 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e26678c00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc011761300?, 0xc00b710000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc011761300, {0xc00b710000, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc011761300, {0xc00b710000?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01fed4460, {0xc00b710000?, 0xc008357720?, 0xc009301398?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01fed4460}, {0xc00b710000, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01fed4460}, {0xc00b710000, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01fed4460}, {0xc00b710000?, 0xc0a2d94109?, 0xc005f88eb8?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc005f5c240)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 539388
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 311976 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341b6800, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00defe680?, 0xc0082f4690?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00defe680, {0xc0082f4690, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00defe680, {0xc0082f4690?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00a070ab0, {0xc0082f4690?, 0xc008357720?, 0xc00a6a27f8?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00a070ab0}, {0xc0082f4690, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00a070ab0}, {0xc0082f4690, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00a070ab0}, {0xc0082f4690?, 0xc08e881ea1?, 0x13?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc0078cab40)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 311889
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18985097 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a3400, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc031f35280?, 0xc00b192000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc031f35280, {0xc00b192000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc031f35280, {0xc00b192000?, 0x0?, 0xc0083f1ac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc090a1ec20, {0xc00b192000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc07e080c80, {0xc00b192000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc056b5a840)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc056b5a840, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc0049121b0, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 2932410 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc01b8d2fc0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 2931849
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 10028 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc002bac360)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9922
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 247380 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341fee00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00028bc80?, 0xc00700e000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00028bc80, {0xc00700e000, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00028bc80, {0xc00700e000?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00b699f58, {0xc00700e000?, 0xc00700e000?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00b699f58}, {0xc00700e000, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00b699f58}, {0xc00700e000, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00b699f58}, {0xc00700e000?, 0xc009749031?, 0xc0050773c0?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc005d15050)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 247394
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 898915 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00041f950)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 898672
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1067506 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc006871ef0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1067322
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 247382 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc005d15050)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 247394
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 12089 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc005daccf0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9969
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 898833 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e342be800, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00022e080?, 0xc00bd00b40?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00022e080, {0xc00bd00b40, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00022e080, {0xc00bd00b40?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0003f2730, {0xc00bd00b40?, 0xc008357720?, 0xc00ad9aab0?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0003f2730}, {0xc00bd00b40, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0003f2730}, {0xc00bd00b40, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0003f2730}, {0xc00bd00b40?, 0xc05d55fe79?, 0x11?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00041f950)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 898672
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 1279475 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00fd91680)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1279430
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 18985118 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a3600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc098b3af80?, 0xc045d50000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc098b3af80, {0xc045d50000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc098b3af80, {0xc045d50000?, 0x0?, 0xc0727a9ac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0858c21a0, {0xc045d50000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc03dad1080, {0xc045d50000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc0459d9d40)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc0459d9d40, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc0843db3b0, {0x21e5a28, 0xc00077e000})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 224
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 523414 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341b6e00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00cb58f80?, 0xc004617680?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00cb58f80, {0xc004617680, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00cb58f80, {0xc004617680?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0006e2d78, {0xc004617680?, 0xc004617680?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0006e2d78}, {0xc004617680, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0006e2d78}, {0xc004617680, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0006e2d78}, {0xc004617680?, 0xc07eb9fed1?, 0xc0100f7940?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00d1e4d80)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 523283
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 4367523 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34022c00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc01fe6ba00?, 0xc0a1bca000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc01fe6ba00, {0xc0a1bca000, 0x1, 0x1fa57})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc01fe6ba00, {0xc0a1bca000?, 0x1fa57?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc03d7cb328, {0xc0a1bca000?, 0xc0a1bca000?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc03d7cb328}, {0xc0a1bca000, 0x1, 0x1fa57}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc03d7cb328}, {0xc0a1bca000, 0x1, 0x1fa57})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc03d7cb328}, {0xc0a1bca000?, 0xc0910b15c9?, 0x3d93?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc0133ff950)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 4367538
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 90470 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00701c510)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 90223
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 3731868 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc0329a33b0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 3732035
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 284025 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e7ffc7600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00b1b1980?, 0xc004c9f260?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00b1b1980, {0xc004c9f260, 0x1, 0xe0})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00b1b1980, {0xc004c9f260?, 0xe0?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00b698810, {0xc004c9f260?, 0xc008357720?, 0xc00786e090?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00b698810}, {0xc004c9f260, 0x1, 0xe0}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00b698810}, {0xc004c9f260, 0x1, 0xe0})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00b698810}, {0xc004c9f260?, 0xc07aed25f1?, 0xffffffffffffffff?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00a158480)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 283921
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 131229 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34023000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc004f68080?, 0xc004616e10?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc004f68080, {0xc004616e10, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc004f68080, {0xc004616e10?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc008a8e550, {0xc004616e10?, 0xc004616e10?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc008a8e550}, {0xc004616e10, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc008a8e550}, {0xc004616e10, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc008a8e550}, {0xc004616e10?, 0xc08e881b71?, 0x13?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00b300f30)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 131084
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18987267 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341b6200, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc03a426100?, 0xc07b1a0000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc03a426100, {0xc07b1a0000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc03a426100, {0xc07b1a0000?, 0x0?, 0xc050d77ac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0472717c8, {0xc07b1a0000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc07aa61300, {0xc07b1a0000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc08181daa0)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc08181daa0, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc07b1fe000, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 18988887 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e2676bc00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0a1aba480?, 0xc014de7000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc0a1aba480, {0xc014de7000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc0a1aba480, {0xc014de7000?, 0x0?, 0xc050d7bac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0aa28e500, {0xc014de7000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc06dd45100, {0xc014de7000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc03493f560)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc03493f560, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc05c641950, {0x21e5a28, 0xc000560ae0})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 225
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 452778 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc007f9e000)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 452560
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 10483 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e342bf000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000a63600?, 0xc066ed6000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc000a63600, {0xc066ed6000, 0x1, 0x2ea6f})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc000a63600, {0xc066ed6000?, 0x2ea6f?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc000116200, {0xc066ed6000?, 0xc066ed6000?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc000116200}, {0xc066ed6000, 0x1, 0x2ea6f}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc000116200}, {0xc066ed6000, 0x1, 0x2ea6f})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc000116200}, {0xc066ed6000?, 0xc08e881dc1?, 0x2ea6f?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc0030466c0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9941
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 111394 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00b7123f0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 111101
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 1351579 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e342bea00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc020cf4200?, 0xc012233860?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc020cf4200, {0xc012233860, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc020cf4200, {0xc012233860?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0006e2da8, {0xc012233860?, 0xc008357720?, 0x1d0b8db?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0006e2da8}, {0xc012233860, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0006e2da8}, {0xc012233860, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0006e2da8}, {0xc012233860?, 0xc0553e3781?, 0xc00118feb8?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc019f86090)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1351229
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 1332396 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e26678600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc01ed8d480?, 0xc016f66780?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc01ed8d480, {0xc016f66780, 0x1, 0xe6})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc01ed8d480, {0xc016f66780?, 0xe6?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01f7791b8, {0xc016f66780?, 0xc008357720?, 0xc0103b8d20?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01f7791b8}, {0xc016f66780, 0x1, 0xe6}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01f7791b8}, {0xc016f66780, 0x1, 0xe6})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01f7791b8}, {0xc016f66780?, 0xc0a2d94261?, 0xc00f9ebeb8?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc02255fb00)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1331016
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 2932408 [runnable]:
+github.com/tronprotocol/go-tron/core/rawdb.validateStateDomainChange(0xc00be9c6c0?)
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset.go:676 +0xf1
+github.com/tronprotocol/go-tron/core/rawdb.writeStateDomainChangeBlockRows({0x21de218, 0xc000754f00}, {0xc00c2be008, 0x2ad, 0x3ff}, 0x1, 0x1)
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset.go:342 +0x272
+github.com/tronprotocol/go-tron/core/rawdb.WriteStateDomainChangeBlockRows({0x21de218?, 0xc000754f00?}, {0xc00c2be008?, 0x1997f80?, 0x1ad0801?})
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset.go:310 +0x3c
+github.com/tronprotocol/go-tron/core/state.StateDomainChangeRunner.PublishStateDomainChangeBlock({{0x21de218, 0xc000754f00}, {{0x1d00486, 0xd}, 0x1f6bed8, 0x1f6bed0, 0x1f6bec0, 0x1f6bec8, 0x1}}, {0xc00c2be008, ...})
+	/data/gtron/go-tron/core/state/domain_change_stage.go:227 +0xc3
+github.com/tronprotocol/go-tron/core/state.(*DomainChangeStage).FlushFinal(0xc068fb6000)
+	/data/gtron/go-tron/core/state/domain_change_stage.go:85 +0xf7
+github.com/tronprotocol/go-tron/core.(*BlockChain).applyBlockWithPlan(0xc000820008, 0xc040200f08, 0xc096734600)
+	/data/gtron/go-tron/core/blockchain.go:2055 +0x3976
+github.com/tronprotocol/go-tron/core.(*canonicalRangeExecutor).Apply(0xc03ad57620, 0xc040200f08)
+	/data/gtron/go-tron/core/range_executor.go:373 +0x63a
+github.com/tronprotocol/go-tron/core.(*BlockChain).insertBlockLockedWithExecutor(0xc000820008, 0xc040200f08, 0xc03ad57620)
+	/data/gtron/go-tron/core/blockchain.go:1319 +0x4a9
+github.com/tronprotocol/go-tron/core.(*InsertSession).InsertBlocksWithStageHookPrewarmed(0xc038248000, {0xc08dbd7600, 0x20, 0x20}, 0xc0331afbc0, 0xc0739140c0)
+	/data/gtron/go-tron/core/insert_session.go:175 +0x4b0
+github.com/tronprotocol/go-tron/net.syncImportStageHookExecutor.InsertBlocksWithStageHook({0xc000820008?, 0xc038248000?, 0xc0739140c0?}, {0xc08dbd7600?, 0x4a61a5?, 0x18?}, 0x1b6c460?)
+	/data/gtron/go-tron/net/sync.go:3234 +0x96
+github.com/tronprotocol/go-tron/net.syncImportBatchRunApplier.ExecuteImportBatch.RunImportBatchExecutionAttemptWithStageHook.func1({0xc08dbd7600?, 0x2?, 0x8?}, 0x0?)
+	/data/gtron/go-tron/net/sync/downloader/buffer.go:359 +0x36
+github.com/tronprotocol/go-tron/net/sync/downloader.RunImportBatchExecutionAttempt({{{0xc08dbd7600, 0x20, 0x20}, {0xc005254008, 0x20, 0x25}, {{0xc05ff49008, 0x20, 0x20}, {0xc033b159e0, ...}, ...}, ...}, ...}, ...)
+	/data/gtron/go-tron/net/sync/downloader/buffer.go:341 +0x236
+github.com/tronprotocol/go-tron/net/sync/downloader.RunImportBatchExecutionAttemptWithStageHook(...)
+	/data/gtron/go-tron/net/sync/downloader/buffer.go:355
+github.com/tronprotocol/go-tron/net.syncImportBatchRunApplier.ExecuteImportBatch({_, _, _, _, {_, _, _}, _}, {{{0xc08dbd7600, 0x20, ...}, ...}, ...})
+	/data/gtron/go-tron/net/sync.go:3279 +0x1b8
+github.com/tronprotocol/go-tron/net/sync/downloader.ApplyImportBatchRunPlan({{{0xc0754cd800, 0x20, 0x20}, {0xc03f354008, 0x20, 0x25}, {0xc05a16ee00, 0x20, 0x20}}, {0xc037303d00, ...}}, ...)
+	/data/gtron/go-tron/net/sync/downloader/buffer.go:778 +0x13f3
+github.com/tronprotocol/go-tron/net/sync/downloader.ApplyImportBatchRun({{_, _, _}, {_, _, _}, {_, _, _}}, {0x21e9040, ...})
+	/data/gtron/go-tron/net/sync/downloader/buffer.go:639 +0x1d2
+github.com/tronprotocol/go-tron/net.(*SyncService).drainBufferedBlocksOnce(0xc000414d88)
+	/data/gtron/go-tron/net/sync.go:2286 +0xcdf
+github.com/tronprotocol/go-tron/net.(*SyncService).drainBufferedBlocks(0xc000414d88)
+	/data/gtron/go-tron/net/sync.go:2054 +0xb6
+github.com/tronprotocol/go-tron/net.(*syncFetchReceiptSettlementApplier).DrainBuffered(...)
+	/data/gtron/go-tron/net/sync.go:3079
+github.com/tronprotocol/go-tron/net/sync/downloader.applyFetchReceiptSettlementSteps({0xc030ee2e30?, 0x0?, 0x0?}, {0x7f2e266b8a98, 0xc03ad575c0})
+	/data/gtron/go-tron/net/sync/downloader/request.go:544 +0x442
+github.com/tronprotocol/go-tron/net/sync/downloader.ApplyFetchReceiptSettlementAfterUnlockPlan({0x1, 0x0, 0x1, 0x1, 0x1, 0x1, 0x0, 0x1, 0x1, {0xc00d39e7c0, ...}, ...}, ...)
+	/data/gtron/go-tron/net/sync/downloader/request.go:514 +0xf1
+github.com/tronprotocol/go-tron/net/sync/downloader.ApplyFetchReceiptRunAfterUnlockPlan(...)
+	/data/gtron/go-tron/net/sync/downloader/request.go:447
+github.com/tronprotocol/go-tron/net/sync/downloader.ApplyFetchReceiptSessionAfterUnlockPlan({{0x1, 0x0, 0x1, 0x1, 0x1, 0x1, 0x0, 0x1, 0x1, {0xc00d39e7c0, ...}, ...}, ...}, ...)
+	/data/gtron/go-tron/net/sync/downloader/request.go:465 +0xfe
+github.com/tronprotocol/go-tron/net.(*SyncService).handleFetchedBlock(0xc000414d88, 0xc01b8d2fc0, {{0x0, 0x0, 0x0, 0x0, 0x0, 0x8b, 0x7d, 0x64, ...}, ...}, ...)
+	/data/gtron/go-tron/net/sync.go:2020 +0x5d4
+github.com/tronprotocol/go-tron/net.(*SyncService).HandleRawBlock(0xc000414d88, 0xc01b8d2fc0, {0xc062e82001, 0x9ec0, 0x9ec0})
+	/data/gtron/go-tron/net/sync.go:2040 +0x147
+github.com/tronprotocol/go-tron/net.(*TronHandler).handleBlock(0xc0003884d0, 0xc01b8d2fc0, {0xc062e82001, 0x9ec0, 0x9ec0})
+	/data/gtron/go-tron/net/handler.go:609 +0x56
+github.com/tronprotocol/go-tron/net.(*TronHandler).handleProtocolMessage(0xc0003884d0, 0xc01b8d2fc0, 0x2, {0xc062e82001, 0x9ec0, 0x9ec0})
+	/data/gtron/go-tron/net/handler.go:523 +0x135
+github.com/tronprotocol/go-tron/net.(*TronHandler).OnMessage(0xc0003884d0, 0xc01b8d2fc0, 0x2, {0xc062e82001, 0x9ec0, 0x9ec0})
+	/data/gtron/go-tron/net/handler.go:283 +0x138
+github.com/tronprotocol/go-tron/p2p.(*Server).OnMessage(0xc046e30000?, 0x4047?, 0xbc?, {0xc062e82001?, 0x16e43?, 0x4cb?})
+	/data/gtron/go-tron/p2p/server.go:925 +0x27
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc01b8d2fc0)
+	/data/gtron/go-tron/p2p/peer.go:215 +0x1ac
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 2931849
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 452777 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34022e00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00de69380?, 0xc002c3fb30?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00de69380, {0xc002c3fb30, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00de69380, {0xc002c3fb30?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01fed4a30, {0xc002c3fb30?, 0xc008357720?, 0xc00d01e660?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01fed4a30}, {0xc002c3fb30, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01fed4a30}, {0xc002c3fb30, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01fed4a30}, {0xc002c3fb30?, 0xc0a2d94101?, 0xffffffffffffffff?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc007f9e000)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 452560
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 4367525 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc0133ff950)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 4367538
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 18987398 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e342bf400, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc032188980?, 0xc012877000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc032188980, {0xc012877000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc032188980, {0xc012877000?, 0x0?, 0xc039573ac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc059d30358, {0xc012877000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc029b0d500, {0xc012877000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc059146300)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc059146300, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc06143de60, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 2776359 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc017145680)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 2776178
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 6537552 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc0008758c0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 6538006
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 3731869 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc0329a33b0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 3732035
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1849681 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc005d147e0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1849683
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1849679 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341b6c00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc01fa93d80?, 0xc00b711770?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc01fa93d80, {0xc00b711770, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc01fa93d80, {0xc00b711770?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc007e2e7f8, {0xc00b711770?, 0xc008357720?, 0xc0244ac7f8?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc007e2e7f8}, {0xc00b711770, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc007e2e7f8}, {0xc00b711770, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc007e2e7f8}, {0xc00b711770?, 0xc06b799121?, 0x12?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc005d147e0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1849683
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 5393757 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341fe400, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0372e6980?, 0xc062224000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc0372e6980, {0xc062224000, 0x1, 0x1d86e})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc0372e6980, {0xc062224000?, 0x1d86e?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0206ec2f0, {0xc062224000?, 0xc008357720?, 0x1d0dc44?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0206ec2f0}, {0xc062224000, 0x1, 0x1d86e}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0206ec2f0}, {0xc062224000, 0x1, 0x1d86e})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0206ec2f0}, {0xc062224000?, 0xc06b799199?, 0x53a4?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc01fd901b0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 5393748
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18990657 [runnable]:
+github.com/klauspost/compress/zstd.(*bitReader).close(0xc00077cba0?)
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/bitreader.go:122 +0xb5
+github.com/klauspost/compress/zstd.(*sequenceDecs).decodeSyncSimple(0xc000fd9028, {0x0?, 0x0, 0xc000fd9090?})
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/seqdec_amd64.go:156 +0x316
+github.com/klauspost/compress/zstd.(*sequenceDecs).decodeSync(0xc000fd9028, {0x0, 0x0, 0x0})
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/seqdec.go:222 +0x45
+github.com/klauspost/compress/zstd.(*blockDec).decodeCompressed(0xc000528d20, 0xc000fd9020)
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/blockdec.go:496 +0x185
+github.com/klauspost/compress/zstd.(*blockDec).decodeBuf(0xc000528d20, 0xc000fd9020)
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/blockdec.go:260 +0x29e
+github.com/klauspost/compress/zstd.(*frameDec).runDecoder(0xc000fd8fc8, {0xc076546000?, 0x0, 0xc0154c4bf0?}, 0xc000528d20)
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/framedec.go:374 +0x1b0
+github.com/klauspost/compress/zstd.(*Decoder).DecodeAll(0xc000490600, {0xc06dd64000, 0x13321, 0x13321}, {0xc076546000, 0x0, 0x20000})
+	/home/java-tron/go/pkg/mod/github.com/klauspost/compress@v1.17.11/zstd/decoder.go:386 +0x5a9
+github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).blockBytes(0xc072b3fa40, 0x0)
+	/data/gtron/go-tron/core/state/snapshots/compressed_block.go:815 +0x3f9
+github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readAtLocked(0xc072b3fa40, {0xc0924a0930, 0x24, 0x24}, 0x0)
+	/data/gtron/go-tron/core/state/snapshots/compressed_block.go:897 +0x9b
+github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).ReadAt(0x0?, {0xc0924a0930?, 0xc0154c4f28?, 0xc0924a08d0?}, 0x4440db?)
+	/data/gtron/go-tron/core/state/snapshots/compressed_block.go:883 +0xf6
+github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt({{0x0?, 0x0?}, {0x21d6de0?, 0xc072b3fa40?}}, {0xc0924a0930, 0x24, 0x24}, 0x0)
+	/data/gtron/go-tron/core/state/snapshots/context_io.go:29 +0x13f
+github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt({0x21d6d00, 0xc0941fc6a0}, {0x67, 0x74, 0x73, 0x64, 0x63, 0x73, 0x65, 0x67})
+	/data/gtron/go-tron/core/state/snapshots/history_binary.go:3547 +0x52
+github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext({0x0, 0x0}, {0xc0002dfe00, 0x2e}, {0x0, {0xc06e7da0a6, 0x13}, 0x0, {0xc06e7da0b9, 0x7}, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_binary.go:3928 +0x746
+github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit({0xc0002dfe00?, 0x1b49689?}, {0x0, {0xc06e7da0a6, 0x13}, 0x0, {0xc06e7da0b9, 0x7}, 0x1b342b2, 0x1b49689, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_binary.go:3874 +0x4e
+github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead(...)
+	/data/gtron/go-tron/core/state/snapshots/history_binary.go:3863
+github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorKeysFile({0x21e52b8, _}, {_, _}, {0x0, {0xc06e7da0a6, 0x13}, 0x0, {0xc06e7da0b9, 0x7}, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_binary.go:2872 +0x40d
+github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorFile({0xc0002dfe00?, 0x0?}, {0x0, {0xc06e7da0a6, 0x13}, 0x0, {0xc06e7da0b9, 0x7}, 0x1b342b2, 0x1b49689, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_binary.go:2844 +0xf3
+github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeHistoryByKey({0xc0002dfe00, 0x2e}, 0xc0284086e0, {0x0, {0xc06e7da0a6, 0x13}, 0x0, {0xc06e7da0b9, 0x7}, 0x1b342b2, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_segment.go:825 +0x458
+github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).IterateStateDomainChangesByKey(0xc05887acc0, 0x13a2274, 0x1952cba2, 0x1, {0x41, 0xa4, 0x99, 0x71, 0x24, 0xa3, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_segment.go:372 +0x5cc
+github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).firstStateDomainChangeByKey(0xc04ea1be80, 0x13a2273, 0x1952cba2, 0x1, {0x41, 0xa4, 0x99, 0x71, 0x24, 0xa3, ...}, ...)
+	/data/gtron/go-tron/core/state/history.go:1331 +0x8e4
+github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateAccountLatestAsOf(0xc04ea1be80, {0x41, 0xa4, 0x99, 0x71, 0x24, 0xa3, 0x28, 0xa4, 0x61, ...}, ...)
+	/data/gtron/go-tron/core/state/history.go:806 +0xd4
+github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).storageFromStateDomain(0xc04ea1be80, {0x41, 0xa4, 0x99, 0x71, 0x24, 0xa3, 0x28, 0xa4, 0x61, ...}, ...)
+	/data/gtron/go-tron/core/state/history.go:750 +0x9d
+github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).StorageAt(0xc04ea1be80, {0x41, 0xa4, 0x99, 0x71, 0x24, 0xa3, 0x28, 0xa4, 0x61, ...}, ...)
+	/data/gtron/go-tron/core/state/history.go:561 +0x30b
+github.com/tronprotocol/go-tron/core.(*TronBackend).GetStorageAtBlockContext(0xc00cf41528?, {0x21e5a60?, 0xc079be5860?}, {0x41, 0xa4, 0x99, 0x71, 0x24, 0xa3, 0x28, ...}, ...)
+	/data/gtron/go-tron/core/tron_backend.go:3921 +0x12a
+github.com/tronprotocol/go-tron/internal/jsonrpc.(*EthAPI).GetStorageAt(0xc000127bc0, {0x21e5a60, 0xc079be5860}, {0xc03840a6f0?, 0x0?}, {0xc03447f7fb, 0x3}, 0xc049c29ad0)
+	/data/gtron/go-tron/internal/jsonrpc/ethapi.go:214 +0x302
+reflect.Value.call({0xc0003883f0?, 0xc000090ad0?, 0xc0a1dadb80?}, {0x1cf1014, 0x4}, {0xc000a62580, 0x5, 0x8?})
+	/data/go/src/reflect/value.go:581 +0xcc6
+reflect.Value.Call({0xc0003883f0?, 0xc000090ad0?, 0x20?}, {0xc000a62580?, 0xc079be58b0?, 0xc0047b6970?})
+	/data/go/src/reflect/value.go:365 +0xb9
+github.com/tronprotocol/go-tron/internal/rpc.(*callback).call(0xc000111440, {0x21e5a60, 0xc079be5860}, {0xc03447f7b0, 0x10}, {0xc079be58b0, 0x3, 0x500f53?})
+	/data/gtron/go-tron/internal/rpc/service.go:205 +0x2fd
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).runMethod(0xc0399cb450?, {0x21e5a60?, 0xc079be5860?}, 0xc01703fab0, 0x3?, {0xc079be58b0?, 0xc0a1dade88?, 0xc006eb53b0?})
+	/data/gtron/go-tron/internal/rpc/handler.go:622 +0x3c
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCall(0xc041bb94a0, 0xc006eb5380, 0xc01703fab0)
+	/data/gtron/go-tron/internal/rpc/handler.go:564 +0x337
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCallMsg(0xc041bb94a0, 0xc006eb5380, 0xc01703fab0)
+	/data/gtron/go-tron/internal/rpc/handler.go:480 +0x31e
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleNonBatchCall(0xc041bb94a0, 0xc006eb5380, 0xc01703fab0)
+	/data/gtron/go-tron/internal/rpc/handler.go:302 +0x185
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleMsg.func1.1(0x21e5a60?)
+	/data/gtron/go-tron/internal/rpc/handler.go:275 +0x25
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).startCallProc.func1()
+	/data/gtron/go-tron/internal/rpc/handler.go:393 +0xbb
+created by github.com/tronprotocol/go-tron/internal/rpc.(*handler).startCallProc in goroutine 18990655
+	/data/gtron/go-tron/internal/rpc/handler.go:389 +0x76
+
+goroutine 18982540 [sync.Cond.Wait]:
+sync.runtime_notifyListWait(0xc0730900a0, 0x182)
+	/data/go/src/runtime/sema.go:606 +0x159
+sync.(*Cond).Wait(0xc2adcd034ca63be1?)
+	/data/go/src/sync/cond.go:71 +0x73
+github.com/cockroachdb/pebble/record.(*flusherCond).Wait(...)
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:204
+github.com/cockroachdb/pebble/record.(*LogWriter).flushLoop(0xc073090000, {0x1a8f840?, 0x328fd40?})
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:436 +0x6bc
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112360?, 0xc00ade8fd0?, 0x47afd2?}}, 0xc00ade8fc0)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble/record.NewLogWriter.func2()
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:355 +0x50
+created by github.com/cockroachdb/pebble/record.NewLogWriter in goroutine 27
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:354 +0x387
+
+goroutine 18990047 [chan receive]:
+github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).worker(0xc07877f2c0)
+	/data/gtron/go-tron/core/state/read_ahead.go:338 +0x78
+created by github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).Start.func1 in goroutine 2932408
+	/data/gtron/go-tron/core/state/read_ahead.go:172 +0x2b
+
+goroutine 1279474 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34062400, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc021443980?, 0xc0171962d0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc021443980, {0xc0171962d0, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc021443980, {0xc0171962d0?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01fa176e0, {0xc0171962d0?, 0xc0171962d0?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01fa176e0}, {0xc0171962d0, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01fa176e0}, {0xc0171962d0, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01fa176e0}, {0xc0171962d0?, 0xc028d75661?, 0x3?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00fd91680)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1279430
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 1279476 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00fd91680)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1279430
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 871986 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00a960240)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 871561
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 10039 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34177a00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0006fe180?, 0xc049f7c000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc0006fe180, {0xc049f7c000, 0x1, 0x2da78})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc0006fe180, {0xc049f7c000?, 0x2da78?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0000904c0, {0xc049f7c000?, 0xc049f7c000?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0000904c0}, {0xc049f7c000, 0x1, 0x2da78}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0000904c0}, {0xc049f7c000, 0x1, 0x2da78})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0000904c0}, {0xc049f7c000?, 0xc08e881931?, 0x6122?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc000875cb0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9735
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18990656 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a2c00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000a62080?, 0xc06bf1d161?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc000a62080, {0xc06bf1d161, 0x1, 0x1})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc000a62080, {0xc06bf1d161?, 0xffffffffffffffff?, 0xc00f9e9fd0?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0047b6948, {0xc06bf1d161?, 0x7f2e266b8b18?, 0xc0454ff440?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).backgroundRead(0xc06bf1d140)
+	/data/go/src/net/http/server.go:702 +0x33
+created by net/http.(*connReader).startBackgroundRead in goroutine 18990655
+	/data/go/src/net/http/server.go:698 +0xb6
+
+goroutine 2776358 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc017145680)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 2776178
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 1613202 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc024165680)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1612644
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 424406 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00e227290)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 424327
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 10485 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc0030466c0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9941
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 18987030 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34177400, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00441de80?, 0xc00c2ca000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00441de80, {0xc00c2ca000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00441de80, {0xc00c2ca000?, 0x0?, 0xc0232efac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc04f8ed6d8, {0xc00c2ca000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc01fa57d00, {0xc00c2ca000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc05e06fc20)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc05e06fc20, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc09f4faea0, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 18990608 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e2676b600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0448fe780?, 0xc075f7fae1?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc0448fe780, {0xc075f7fae1, 0x1, 0x1})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc0448fe780, {0xc075f7fae1?, 0x2b67?, 0x10?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0047b7ba0, {0xc075f7fae1?, 0xc052438078?, 0xc0a1da3fd0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).backgroundRead(0xc075f7fac0)
+	/data/go/src/net/http/server.go:702 +0x33
+created by net/http.(*connReader).startBackgroundRead in goroutine 18987592
+	/data/go/src/net/http/server.go:698 +0xb6
+
+goroutine 540598 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc005f5c240)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 539388
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 424405 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341b7000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00022ea80?, 0xc0082f5ef0?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00022ea80, {0xc0082f5ef0, 0x1, 0xe3})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00022ea80, {0xc0082f5ef0?, 0xe3?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00041c788, {0xc0082f5ef0?, 0xc0082f5ef0?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00041c788}, {0xc0082f5ef0, 0x1, 0xe3}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00041c788}, {0xc0082f5ef0, 0x1, 0xe3})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00041c788}, {0xc0082f5ef0?, 0xc038dd6591?, 0x84000b0000002000?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00e227290)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 424327
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 18990046 [chan receive]:
+github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).worker(0xc07877f2c0)
+	/data/gtron/go-tron/core/state/read_ahead.go:338 +0x78
+created by github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).Start.func1 in goroutine 2932408
+	/data/gtron/go-tron/core/state/read_ahead.go:172 +0x2b
+
+goroutine 898914 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00041f950)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 898672
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 10088660 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc048e9e630)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 10087953
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 18983886 [sync.Cond.Wait]:
+sync.runtime_notifyListWait(0xc097a7a0a0, 0x980)
+	/data/go/src/runtime/sema.go:606 +0x159
+sync.(*Cond).Wait(0xc2adcd034e6f15cf?)
+	/data/go/src/sync/cond.go:71 +0x73
+github.com/cockroachdb/pebble/record.(*flusherCond).Wait(...)
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:204
+github.com/cockroachdb/pebble/record.(*LogWriter).flushLoop(0xc097a7a000, {0x1a8f840?, 0x328fd40?})
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:436 +0x6bc
+runtime/pprof.Do({0x21e52b8?, 0x328fd40?}, {{0xc000112360?, 0xc004f9cfd0?, 0x47afd2?}}, 0xc004f9cfc0)
+	/data/go/src/runtime/pprof/runtime.go:51 +0x8c
+github.com/cockroachdb/pebble/record.NewLogWriter.func2()
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:355 +0x50
+created by github.com/cockroachdb/pebble/record.NewLogWriter in goroutine 28
+	/data/gtron/go-tron/third_party/pebble/record/log_writer.go:354 +0x387
+
+goroutine 18990045 [chan receive]:
+github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).worker(0xc07877f2c0)
+	/data/gtron/go-tron/core/state/read_ahead.go:338 +0x78
+created by github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).Start.func1 in goroutine 2932408
+	/data/gtron/go-tron/core/state/read_ahead.go:172 +0x2b
+
+goroutine 90469 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00701c510)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 90223
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 5393758 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc01fd901b0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 5393748
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 18985351 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e340a3e00, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc033baa180?, 0xc024556000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc033baa180, {0xc024556000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc033baa180, {0xc024556000?, 0x0?, 0xc020a27ac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01f158b68, {0xc024556000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc0427abc80, {0xc024556000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc07b3fdbc0)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc07b3fdbc0, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc053424480, {0x21e5a28, 0xc000560ae0})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 225
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 131231 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00b300f30)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 131084
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 90468 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341fe200, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc009d74380?, 0xc002ed6690?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc009d74380, {0xc002ed6690, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc009d74380, {0xc002ed6690?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc000836228, {0xc002ed6690?, 0xc008357720?, 0xc006584a08?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc000836228}, {0xc002ed6690, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc000836228}, {0xc002ed6690, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc000836228}, {0xc002ed6690?, 0xc07aed23c1?, 0x12?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc00701c510)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 90223
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 540599 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc005f5c240)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 539388
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1067457 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e26678000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00f1e7700?, 0xc01c008690?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00f1e7700, {0xc01c008690, 0x1, 0xe5})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00f1e7700, {0xc01c008690?, 0xe5?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc01f778b90, {0xc01c008690?, 0xc008357720?, 0x1d0b973?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc01f778b90}, {0xc01c008690, 0x1, 0xe5}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc01f778b90}, {0xc01c008690, 0x1, 0xe5})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc01f778b90}, {0xc01c008690?, 0xc0910b1631?, 0x0?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc006871ef0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1067322
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 1332398 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc02255fb00)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1331016
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 10026 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e341fe600, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000156980?, 0xc011f36000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc000156980, {0xc011f36000, 0x1, 0x13674})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc000156980, {0xc011f36000?, 0x13674?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0000904f0, {0xc011f36000?, 0xc011f36000?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0000904f0}, {0xc011f36000, 0x1, 0x13674}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0000904f0}, {0xc011f36000, 0x1, 0x13674})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0000904f0}, {0xc011f36000?, 0xc07eb9ff79?, 0xae?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc002bac360)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9922
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 10041 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc000875cb0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9735
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 18990648 [runnable]:
+syscall.Syscall6(0x11, 0x86b, 0x7f2d62ddcd70, 0x106d, 0x1b593d6, 0x0, 0x0)
+	/data/go/src/syscall/syscall_linux.go:96 +0x39
+syscall.pread(0x0?, {0x7f2d62ddcd70?, 0x47c07f?, 0x0?}, 0xbdd13a?)
+	/data/go/src/syscall/zsyscall_linux_amd64.go:1229 +0x45
+syscall.Pread(...)
+	/data/go/src/syscall/syscall_unix.go:226
+internal/poll.(*FD).Pread.func1(...)
+	/data/go/src/internal/poll/fd_unix.go:187
+internal/poll.ignoringEINTR2[...](...)
+	/data/go/src/internal/poll/fd_posix.go:84
+internal/poll.(*FD).Pread(0xc00eeeea80?, {0x7f2d62ddcd70, 0x0?, 0x106d}, 0x1b593d6)
+	/data/go/src/internal/poll/fd_unix.go:186 +0xf0
+os.(*File).pread(...)
+	/data/go/src/os/file_posix.go:38
+os.(*File).ReadAt(0xc01f158570, {0x7f2d62ddcd70?, 0xc0049e35b0?, 0x0?}, 0x0?)
+	/data/go/src/os/file.go:162 +0x14c
+github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*physicalReadFile).ReadAt(0xc06be53270, {0x7f2d62ddcd70, 0x106d, 0x106d}, 0x1b593d6)
+	/data/gtron/go-tron/core/rawdb/pebbledb/physical_read_metrics.go:178 +0x153
+github.com/cockroachdb/pebble/objstorage/objstorageprovider.(*vfsReadHandle).ReadAt(0xc07989deb0?, {0x21e52b8?, 0x328fd40?}, {0x7f2d62ddcd70?, 0x106d?, 0x106d?}, 0x1b593d6?)
+	/data/gtron/go-tron/third_party/pebble/objstorage/objstorageprovider/vfs_readable.go:155 +0xc9
+github.com/cockroachdb/pebble/sstable.(*Reader).readBlock(0xc0577e3c08, {0x21e52b8, 0x328fd40}, {0x14?, 0x14?}, 0x0, {0x21e67a8, 0xc07989deb0}, 0x0, 0x0)
+	/data/gtron/go-tron/third_party/pebble/sstable/reader.go:565 +0x310
+github.com/cockroachdb/pebble/sstable.(*singleLevelIterator).loadBlock(0xc07989db88, 0x1)
+	/data/gtron/go-tron/third_party/pebble/sstable/reader_iter_single_lvl.go:398 +0x297
+github.com/cockroachdb/pebble/sstable.(*singleLevelIterator).seekGEHelper(0xc07989db88, {0xc026d46cd0, 0xc, 0xc}, 0x7f2d9e2e9c6a?, 0x0)
+	/data/gtron/go-tron/third_party/pebble/sstable/reader_iter_single_lvl.go:712 +0x3cc
+github.com/cockroachdb/pebble/sstable.(*singleLevelIterator).seekPrefixGE(0xc07989db88?, {0xc026d46cd0?, 0xc?, 0xc?}, {0xc026d46cd0?, 0x1?, 0xc026d46cd0?}, 0x0?, 0x0?)
+	/data/gtron/go-tron/third_party/pebble/sstable/reader_iter_single_lvl.go:828 +0x33f
+github.com/cockroachdb/pebble/sstable.(*twoLevelIterator).SeekPrefixGE(0xc07989db88, {0xc026d46cd0, 0xc, 0xc}, {0xc026d46cd0?, 0xc0049e3a88?, 0xc8c052?}, 0x88?)
+	/data/gtron/go-tron/third_party/pebble/sstable/reader_iter_two_lvl.go:559 +0x765
+github.com/cockroachdb/pebble.(*levelIter).SeekPrefixGE(0xc00591c600, {0xc026d46cd0, 0xc, 0xc}, {0xc026d46cd0, 0xc, 0xc}, 0x0)
+	/data/gtron/go-tron/third_party/pebble/level_iter.go:770 +0x116
+github.com/cockroachdb/pebble.(*getIter).Next(0xc00591c598)
+	/data/gtron/go-tron/third_party/pebble/get_iter.go:216 +0xcbd
+github.com/cockroachdb/pebble.(*getIter).First(0xffff?)
+	/data/gtron/go-tron/third_party/pebble/get_iter.go:72 +0x13
+github.com/cockroachdb/pebble.(*Iterator).iterFirstWithinBounds(0xc00591c008)
+	/data/gtron/go-tron/third_party/pebble/iterator.go:2030 +0xcb
+github.com/cockroachdb/pebble.(*Iterator).First(0xc00591c008)
+	/data/gtron/go-tron/third_party/pebble/iterator.go:1628 +0xe5
+github.com/cockroachdb/pebble.(*DB).getInternal(0xc000365b08, {0xc026d46cd0, 0xc, 0xc}, 0x0, 0xc0693d4ab0)
+	/data/gtron/go-tron/third_party/pebble/db.go:592 +0x3ad
+github.com/cockroachdb/pebble.(*Snapshot).Get(0x1cf76e1?, {0xc026d46cd0?, 0x557f13?, 0x21f7628?})
+	/data/gtron/go-tron/third_party/pebble/snapshot.go:54 +0x28
+github.com/tronprotocol/go-tron/core/rawdb/pebbledb.(*keyValueSnapshot).Get(0xc026d46cd0?, {0xc026d46cd0?, 0x44ddb6?, 0x32930e0?})
+	/data/gtron/go-tron/core/rawdb/pebbledb/pebble.go:521 +0x65
+github.com/tronprotocol/go-tron/core/rawdb.(*directHistorySnapshot).Get(0xc028128520, {0xc026d46cd0, 0xc, 0xc})
+	/data/gtron/go-tron/core/rawdb/direct_history_store.go:578 +0x67
+github.com/tronprotocol/go-tron/core/state/snapshots.eventLogSnapshotStore.Get(...)
+	/data/gtron/go-tron/core/state/snapshots/event_log_build_replay.go:60
+github.com/tronprotocol/go-tron/core/rawdb.readValueThenVerifyMiss({0x21dd3d8, 0xc0aea5fa40}, {0xc026d46cd0, 0xc, 0xc}, {0xc02acb0030, 0x23}, 0xc0049e4758?)
+	/data/gtron/go-tron/core/rawdb/accessors_read.go:65 +0xac
+github.com/tronprotocol/go-tron/core/rawdb.readTransactionInfosByBlockStrict(0xc0aea5fa40, 0x867332, 0xc03205ac88)
+	/data/gtron/go-tron/core/rawdb/accessors_txinfo.go:405 +0x16c
+github.com/tronprotocol/go-tron/core/rawdb.ReadBlockAndTransactionInfosStrict(0xc0aea5fa40, 0x867332)
+	/data/gtron/go-tron/core/rawdb/accessors_txinfo.go:390 +0x29c
+github.com/tronprotocol/go-tron/core/state/snapshots.eventLogV3ChainReader.readBlock({0xc0aea5fa40?, 0xc028128560?}, 0x867332)
+	/data/gtron/go-tron/core/state/snapshots/event_log_chain_identity.go:93 +0x173
+github.com/tronprotocol/go-tron/core/state/snapshots.eventLogV3ChainReader.IterateEventLogs({0xc0aea5fa40?, 0xc028128560?}, 0x18?, 0x867a32, {{0x0, 0x0, 0x0}, {0x0, 0x0, 0x0}}, ...)
+	/data/gtron/go-tron/core/state/snapshots/event_log_segment_v3.go:207 +0x165
+github.com/tronprotocol/go-tron/core/state/snapshots.(*eventLogBuildReplay).IterateEventLogs(0xc05331fa40, 0x8671bd, 0x867a32, {{0x0, 0x0, 0x0}, {0x0, 0x0, 0x0}}, 0xc0aea5faa0)
+	/data/gtron/go-tron/core/state/snapshots/event_log_build_replay.go:113 +0x1c9
+github.com/tronprotocol/go-tron/core/state/snapshots.scanEventLogV3Dictionaries({0x21de6f0, 0xc05331fa40}, 0x8671bd, 0x867a32)
+	/data/gtron/go-tron/core/state/snapshots/event_log_segment_v3.go:596 +0x1b8
+github.com/tronprotocol/go-tron/core/state/snapshots.buildEventLogV4SegmentFromReaderWorkers({0x21de6f0, 0xc05331fa40}, {0xc0002dfe00, 0x2e?}, {0xc02222d440, 0x21}, 0x8671bd, 0x867a32, 0x8)
+	/data/gtron/go-tron/core/state/snapshots/event_log_segment_v3.go:468 +0x24e
+github.com/tronprotocol/go-tron/core/state/snapshots.BuildEventLogV4SegmentFromReader({0x21de6f0, 0xc05331fa40}, {0xc0002dfe00, 0x2e}, {0xc02222d440, 0x21}, 0x8671bd, 0x867a32)
+	/data/gtron/go-tron/core/state/snapshots/event_log_segment_v3.go:440 +0x125
+github.com/tronprotocol/go-tron/core/state/snapshots.buildEventLogV4ChainReplay(0xc00081ac00, {0xc0002dfe00, 0x2e}, {0xc02222d440, 0x21}, 0x8671bd, 0x867a32)
+	/data/gtron/go-tron/core/state/snapshots/event_log_build_replay.go:90 +0x46f
+github.com/tronprotocol/go-tron/core/state/snapshots.BuildEventLogV4SegmentFromChain(0x5bf45c9c22109302?, {0xc0002dfe00?, 0xe2fb36e59f61e8cd?}, {0xc02222d440?, 0x37c681fe4cfa63a3?}, 0x84dd07885b0095c0?, 0xc933ad0bae583e9d?)
+	/data/gtron/go-tron/core/state/snapshots/event_log_segment_v3.go:245 +0x85
+github.com/tronprotocol/go-tron/core/state/snapshots.buildEventLogPairFromChain(0xc00081ac00, {0xc0002dfe00, 0x2e}, 0x8671bd, 0x867a32, {0x4, {{0x0, 0x0}, 0x10000000, 0x0}})
+	/data/gtron/go-tron/core/state/snapshots/aggregator.go:395 +0x146
+github.com/tronprotocol/go-tron/core/state/snapshots.(*Runner).onePassWithPressureContext.func7()
+	/data/gtron/go-tron/core/state/snapshots/cold_builder.go:1690 +0x9d
+github.com/tronprotocol/go-tron/core/state/snapshots.buildColdSnapshotFiles(0xc0693d4a20)
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:31 +0x58
+github.com/tronprotocol/go-tron/core/state/snapshots.buildHistoryEventFiles.func2()
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:54 +0x54
+created by github.com/tronprotocol/go-tron/core/state/snapshots.buildHistoryEventFiles in goroutine 296
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:52 +0x18d
+
+goroutine 1613203 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc024165680)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1612644
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 2776357 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e2676b200, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc00c766c00?, 0xc0258bc000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc00c766c00, {0xc0258bc000, 0x1, 0x3010e})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc00c766c00, {0xc0258bc000?, 0x3010e?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc00b6989c8, {0xc0258bc000?, 0xc0258bc000?, 0xa?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc00b6989c8}, {0xc0258bc000, 0x1, 0x3010e}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc00b6989c8}, {0xc0258bc000, 0x1, 0x3010e})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc00b6989c8}, {0xc0258bc000?, 0xc08e881be9?, 0x3010e?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc017145680)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 2776178
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 10040 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc000875cb0)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9735
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 111395 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00b7123f0)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 111101
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 452779 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc007f9e000)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 452560
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 871905 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc00a960240)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 871561
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 311977 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc0078cab40)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 311889
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 424407 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00e227290)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 424327
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 1351581 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc019f86090)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 1351229
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 6537551 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34063000, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc040898080?, 0xc054d4a000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc040898080, {0xc054d4a000, 0x1, 0x246f1})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc040898080, {0xc054d4a000?, 0x246f1?, 0x4a5308?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc0006e2ef8, {0xc054d4a000?, 0xc008357720?, 0x1d0dc6c?})
+	/data/go/src/net/net.go:196 +0x45
+io.ReadAtLeast({0x21d7d00, 0xc0006e2ef8}, {0xc054d4a000, 0x1, 0x246f1}, 0x1)
+	/data/go/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/data/go/src/io/io.go:354
+github.com/tronprotocol/go-tron/p2p.readVarint32Into({0x21d7d00, 0xc0006e2ef8}, {0xc054d4a000, 0x1, 0x246f1})
+	/data/gtron/go-tron/p2p/varint.go:28 +0x85
+github.com/tronprotocol/go-tron/p2p.readFrameBodyInto({0x21d7d00, 0xc0006e2ef8}, {0xc054d4a000?, 0xc040187681?, 0x589a?})
+	/data/gtron/go-tron/p2p/message.go:57 +0x72
+github.com/tronprotocol/go-tron/p2p.(*Peer).readLoop(0xc0008758c0)
+	/data/gtron/go-tron/p2p/peer.go:180 +0xd5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 6538006
+	/data/gtron/go-tron/p2p/peer.go:97 +0x65
+
+goroutine 523416 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).keepaliveLoop(0xc00d1e4d80)
+	/data/gtron/go-tron/p2p/peer.go:255 +0xf5
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 523283
+	/data/gtron/go-tron/p2p/peer.go:99 +0xe5
+
+goroutine 18987110 [IO wait]:
+internal/poll.runtime_pollWait(0x7f2e34022200, 0x72)
+	/data/go/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc000a62680?, 0xc038010000?, 0x0)
+	/data/go/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/data/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc000a62680, {0xc038010000, 0x1000, 0x1000})
+	/data/go/src/internal/poll/fd_unix.go:165 +0x279
+net.(*netFD).Read(0xc000a62680, {0xc038010000?, 0x0?, 0xc08f0efac8?})
+	/data/go/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0xc05eb289c8, {0xc038010000?, 0x0?, 0x0?})
+	/data/go/src/net/net.go:196 +0x45
+net/http.(*connReader).Read(0xc034298c80, {0xc038010000, 0x1000, 0x1000})
+	/data/go/src/net/http/server.go:812 +0x154
+bufio.(*Reader).fill(0xc08cec7320)
+	/data/go/src/bufio/bufio.go:113 +0x103
+bufio.(*Reader).Peek(0xc08cec7320, 0x4)
+	/data/go/src/bufio/bufio.go:152 +0x53
+net/http.(*conn).serve(0xc0606fd320, {0x21e5a28, 0xc000810180})
+	/data/go/src/net/http/server.go:2145 +0x7c5
+created by net/http.(*Server).Serve in goroutine 291
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 18990655 [sync.WaitGroup.Wait]:
+sync.runtime_SemacquireWaitGroup(0x7f2e80153038?, 0x8?)
+	/data/go/src/runtime/sema.go:114 +0x2e
+sync.(*WaitGroup).Wait(0xc041bb94c8)
+	/data/go/src/sync/waitgroup.go:206 +0x85
+github.com/tronprotocol/go-tron/internal/rpc.(*handler).close(0xc041bb94a0, {0x21d5ec0, 0x318afd0}, 0x0)
+	/data/gtron/go-tron/internal/rpc/handler.go:321 +0x307
+github.com/tronprotocol/go-tron/internal/rpc.(*Server).serveSingleRequest(0x1be2480?, {0x21e5a28, 0xc006eb50b0}, {0x21eba88, 0xc079be5770})
+	/data/gtron/go-tron/internal/rpc/server.go:176 +0x15d
+github.com/tronprotocol/go-tron/internal/rpc.(*Server).ServeHTTP(0xc000861130, {0x21e28a0, 0xc03bb78690}, 0xc041a8b7c0)
+	/data/gtron/go-tron/internal/rpc/http.go:349 +0x3da
+github.com/tronprotocol/go-tron/internal/jsonrpc.NewServer.func1({0x21e28a0, 0xc03bb78690}, 0xc041a8b7c0)
+	/data/gtron/go-tron/internal/jsonrpc/server.go:54 +0x73
+net/http.HandlerFunc.ServeHTTP(0x444e65?, {0x21e28a0?, 0xc03bb78690?}, 0xc03bb78601?)
+	/data/go/src/net/http/server.go:2322 +0x29
+net/http.serverHandler.ServeHTTP({0x21df9a8?}, {0x21e28a0?, 0xc03bb78690?}, 0x1?)
+	/data/go/src/net/http/server.go:3340 +0x8e
+net/http.(*conn).serve(0xc06c06f050, {0x21e5a28, 0xc000560ae0})
+	/data/go/src/net/http/server.go:2109 +0x665
+created by net/http.(*Server).Serve in goroutine 225
+	/data/go/src/net/http/server.go:3493 +0x485
+
+goroutine 9317588 [select]:
+github.com/tronprotocol/go-tron/p2p.(*Peer).writeLoop(0xc01d0efb90)
+	/data/gtron/go-tron/p2p/peer.go:228 +0xe8
+created by github.com/tronprotocol/go-tron/p2p.(*Peer).Start in goroutine 9317558
+	/data/gtron/go-tron/p2p/peer.go:98 +0xa5
+
+goroutine 18990647 [runnable]:
+github.com/ethereum/go-ethereum/rlp.readKind({0xc06a468dac?, 0x23?, 0x10698?})
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/rlp/raw.go:346 +0x1cc
+github.com/ethereum/go-ethereum/rlp.Split({0xc06a468dac, 0x23, 0x10698})
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/rlp/raw.go:233 +0x26
+github.com/ethereum/go-ethereum/rlp.SplitString({0xc06a468dac, 0x23, 0x10698})
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/rlp/raw.go:243 +0x26
+github.com/ethereum/go-ethereum/rlp.SplitUint64({0xc06a468dac, 0x23, 0x10698})
+	/home/java-tron/go/pkg/mod/github.com/ethereum/go-ethereum@v1.17.2/rlp/raw.go:256 +0x26
+github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint({0xc06a468dac, 0x23, 0x10698}, {0x1d079e7, 0x11}, 0x1)
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset_borrowed.go:406 +0x45
+github.com/tronprotocol/go-tron/core/rawdb.decodeBorrowedStateDomainChangeRow({0xc06a468d8b?, 0x4136?, 0x106bb?}, 0x1d01c0f?, 0xe?, 0xc008a78240)
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset_borrowed.go:390 +0x299
+github.com/tronprotocol/go-tron/core/rawdb.iterateMaterializedStateHistoryBlock({0x7f2d55f6ab4f?, 0x0?, 0x0?}, 0x8671e5, 0xc008a78240, 0xc00c3ac008)
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset_borrowed.go:338 +0x654
+github.com/tronprotocol/go-tron/core/rawdb.IterateStateDomainChangesByBlockTxRangeBorrowed({0x7f2e344cedd0?, 0xc02c17b440?}, 0x8671bd, 0x867a32, 0x17dd6da1, 0x17e01640, 0xc019bedf20)
+	/data/gtron/go-tron/core/rawdb/accessors_state_changeset_borrowed.go:193 +0xe18
+github.com/tronprotocol/go-tron/core/state/snapshots.buildStateHistoryReadContext.func3({0x7f2e344cedd0, 0xc02c17b440}, 0x8671bd, 0x867a32, 0x17dd6da1, 0x17e01640, 0xc074f907e0)
+	/data/gtron/go-tron/core/state/snapshots/history_shared_read.go:204 +0xe4
+github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeHistoryChanges({_, _}, {{0x1d00486, 0xd}, {0x1d0b798, 0x13}, 0x0, {0x0, 0x0}, {0x0, ...}, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_stream_build.go:466 +0x6f
+github.com/tronprotocol/go-tron/core/state/snapshots.buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextExecution({_, _}, {_, _}, {_, _}, {0x0, {0x1d0b798, 0x13}, 0x0, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_stream_build.go:163 +0x1076
+github.com/tronprotocol/go-tron/core/state/snapshots.buildStateHistoryReadContext({_, _}, {_, _}, {_, _}, {0x0, {0x1d0b798, 0x13}, 0x0, ...}, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_shared_read.go:220 +0xcae
+github.com/tronprotocol/go-tron/core/state/snapshots.BuildStateDomainChangeHistorySegmentsFromDBByBlockRangeReadContext({0x21e5a60, 0xc0006e4140}, {0x7f2e344ba590, 0xc050ef0b40}, {0xc0002dfe00, 0x2e}, 0x17dd6da1, 0x17e01640, 0x8671bd, 0x867a32, ...)
+	/data/gtron/go-tron/core/state/snapshots/history_segment.go:80 +0x2b7
+github.com/tronprotocol/go-tron/core/state/snapshots.buildDefaultDomainRegistry.func17({0x21e5a60?, 0xc0006e4140?}, {0x21e21e0?, 0xc050ef0b40?}, {0xc0002dfe00?, 0x5?}, 0xc01da9cbc0?, 0x4868f0?, 0x326f000?, 0x867a32, ...)
+	/data/gtron/go-tron/core/state/snapshots/domain_registry.go:433 +0xac
+github.com/tronprotocol/go-tron/core/state/snapshots.(*Runner).onePassWithPressureContext.func6()
+	/data/gtron/go-tron/core/state/snapshots/cold_builder.go:1679 +0x44c
+github.com/tronprotocol/go-tron/core/state/snapshots.buildColdSnapshotFiles(0xc05331f9d0)
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:31 +0x58
+github.com/tronprotocol/go-tron/core/state/snapshots.buildHistoryEventFiles.func1()
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:50 +0x54
+created by github.com/tronprotocol/go-tron/core/state/snapshots.buildHistoryEventFiles in goroutine 296
+	/data/gtron/go-tron/core/state/snapshots/history_event_parallel.go:48 +0x11b
+
+goroutine 18990044 [chan receive]:
+github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).worker(0xc07877f2c0)
+	/data/gtron/go-tron/core/state/read_ahead.go:338 +0x78
+created by github.com/tronprotocol/go-tron/core/state.(*StateReadAhead).Start.func1 in goroutine 2932408
+	/data/gtron/go-tron/core/state/read_ahead.go:172 +0x2b

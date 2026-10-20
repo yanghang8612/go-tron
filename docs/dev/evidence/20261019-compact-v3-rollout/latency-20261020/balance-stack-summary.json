@@ -1,0 +1,138 @@
+[
+  {
+    "at_ms": 155.44691681861877,
+    "state": "goroutine 19092040 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeAtInto",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.findStateDomainChangeBinaryTxRangeForBlock",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state.",
+      "github.com/tronprotocol/go-tron/core/state."
+    ]
+  },
+  {
+    "at_ms": 309.1772720217705,
+    "state": "goroutine 19092040 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeAtInto",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.findStateDomainChangeBinaryTxRangeForBlock",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state.",
+      "github.com/tronprotocol/go-tron/core/state."
+    ]
+  },
+  {
+    "at_ms": 462.55359053611755,
+    "state": "goroutine 19092040 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots."
+    ]
+  },
+  {
+    "at_ms": 615.8062443137169,
+    "state": "goroutine 19092040 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots."
+    ]
+  },
+  {
+    "at_ms": 153.33646535873413,
+    "state": "goroutine 19092851 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots."
+    ]
+  },
+  {
+    "at_ms": 306.32631480693817,
+    "state": "goroutine 19092851 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots."
+    ]
+  },
+  {
+    "at_ms": 459.31826531887054,
+    "state": "goroutine 19092851 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots."
+    ]
+  },
+  {
+    "at_ms": 612.4048158526421,
+    "state": "goroutine 19092851 [runnable]:",
+    "tx_range_for_genesis": true,
+    "functions": [
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimit",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForRead",
+      "github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "github.com/tronprotocol/go-tron/core/state/snapshots."
+    ]
+  }
+]

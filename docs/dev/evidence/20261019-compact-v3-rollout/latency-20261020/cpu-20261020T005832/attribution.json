@@ -1,0 +1,60 @@
+{
+  "query_cpu_ns": 12930000000,
+  "matched_sample_rows": 805,
+  "cumulative_functions": {
+    "readStateAccountKVAsOf": {
+      "cpu_ns": 9200000000,
+      "percent_of_query_cpu": 71.1523588553751
+    },
+    "IterateStateDomainChangesByBlockRangeContext": {
+      "cpu_ns": 3010000000,
+      "percent_of_query_cpu": 23.27919566898685
+    },
+    "decodePersistedStateDomainChangeBlock": {
+      "cpu_ns": 2940000000,
+      "percent_of_query_cpu": 22.737819025522043
+    },
+    "rlp.DecodeBytes": {
+      "cpu_ns": 2520000000,
+      "percent_of_query_cpu": 19.48955916473318
+    },
+    "(*Manager).IterateStateDomainChangesByKey": {
+      "cpu_ns": 9910000000,
+      "percent_of_query_cpu": 76.64346481051817
+    },
+    "openHistorySegmentForReadWithCacheLimitContext": {
+      "cpu_ns": 7750000000,
+      "percent_of_query_cpu": 59.938128383604024
+    },
+    "zstd.(*Decoder).DecodeAll": {
+      "cpu_ns": 5320000000,
+      "percent_of_query_cpu": 41.1446249033256
+    },
+    "historyIndexPages": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    },
+    "openHistoryIndexPages": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    },
+    "readStateAccountLatestAsOf": {
+      "cpu_ns": 3720000000,
+      "percent_of_query_cpu": 28.77030162412993
+    },
+    "readStateKVAsOf": {
+      "cpu_ns": 0,
+      "percent_of_query_cpu": 0.0
+    },
+    "stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry": {
+      "cpu_ns": 880000000,
+      "percent_of_query_cpu": 6.8058778035576175
+    }
+  },
+  "exclusive_high_level_phases_ns": {
+    "account": 3720000000,
+    "metadata": 9200000000,
+    "other": 10000000
+  },
+  "note": "All GetStorageAtBlockContext stacks, may include observer probes. CPU percentages, not wall time; inclusive functions overlap."
+}

@@ -1,0 +1,101 @@
+{
+  "files": {
+    "core/state/history.go": {
+      "deployed_file_sha256": "dbef13c2f7a7143a8e04906d31c582eeca97df8547245b98b75e27c3bc20f5db",
+      "matches_deployed_commit": true,
+      "matches_local": true
+    },
+    "core/rawdb/accessors_state_changeset.go": {
+      "deployed_file_sha256": "4aa0d32d51b23d47ccfa12a8fe91909ab1152f3f06e77c89c9279d65f6965bd2",
+      "matches_deployed_commit": true,
+      "matches_local": true
+    },
+    "core/state/snapshots/history_segment.go": {
+      "deployed_file_sha256": "dd74f362c4229d21237de8c8d7a8bb8530dedf6fc9aa82e6957d8a90b34d5e89",
+      "matches_deployed_commit": true,
+      "matches_local": true
+    },
+    "core/state/snapshots/history_binary.go": {
+      "deployed_file_sha256": "56eee71b593735d98be3026a997e7d1f78bd42db77129efa6f16cf21c829ec3c",
+      "matches_deployed_commit": true,
+      "matches_local": true
+    },
+    "core/state/snapshots/compressed_block.go": {
+      "deployed_file_sha256": "c12f4d726185826c0a2bf4bfb8ea6f8cf66edff6f77426acde0cbdf02c7c8361",
+      "matches_deployed_commit": true,
+      "matches_local": true
+    }
+  },
+  "functions": [
+    {
+      "file": "core/state/history.go",
+      "function": "storageFromStateDomain",
+      "same_before_compact_v3": true,
+      "before_sha256": "d2e15d722aac873421de785e38a2436bc56e7edc306c4fdd77569bc8d18f3e9a",
+      "deployed_sha256": "d2e15d722aac873421de785e38a2436bc56e7edc306c4fdd77569bc8d18f3e9a"
+    },
+    {
+      "file": "core/state/history.go",
+      "function": "readStateAccountKVAsOf",
+      "same_before_compact_v3": true,
+      "before_sha256": "35cb4f113cefd26fcebdcf6e04f119486a31635bae00a7568846e7525204fa93",
+      "deployed_sha256": "35cb4f113cefd26fcebdcf6e04f119486a31635bae00a7568846e7525204fa93"
+    },
+    {
+      "file": "core/state/history.go",
+      "function": "collectStateAccountKVChanges",
+      "same_before_compact_v3": true,
+      "before_sha256": "6b629ea1eb0da8185c078c10b4e86fa45a7a2e23070264a0adac31f5845efe2e",
+      "deployed_sha256": "6b629ea1eb0da8185c078c10b4e86fa45a7a2e23070264a0adac31f5845efe2e"
+    },
+    {
+      "file": "core/state/history.go",
+      "function": "stateTxNumAtBlockEnd",
+      "same_before_compact_v3": true,
+      "before_sha256": "e736df2e72b81f0c91dff3d3982ead0f470425087497882444a83fe723ddb064",
+      "deployed_sha256": "e736df2e72b81f0c91dff3d3982ead0f470425087497882444a83fe723ddb064"
+    },
+    {
+      "file": "core/state/history.go",
+      "function": "stateTxRangeForBlock",
+      "same_before_compact_v3": true,
+      "before_sha256": "cee941ca17c380ec9702a5908ddc3e83cfc9296e9c218490a810055e626a4c7e",
+      "deployed_sha256": "cee941ca17c380ec9702a5908ddc3e83cfc9296e9c218490a810055e626a4c7e"
+    },
+    {
+      "file": "core/state/snapshots/history_segment.go",
+      "function": "IterateStateDomainChangesByKey",
+      "same_before_compact_v3": true,
+      "before_sha256": "55c7d4792ea158a7e7469f53bb13248e22bb79427e5a11b9b5e32e8d2558a633",
+      "deployed_sha256": "55c7d4792ea158a7e7469f53bb13248e22bb79427e5a11b9b5e32e8d2558a633"
+    },
+    {
+      "file": "core/state/snapshots/history_segment.go",
+      "function": "StateTxRangeForBlock",
+      "same_before_compact_v3": true,
+      "before_sha256": "7f03fda978b5de806f1645d4b370ddb2d8a4ee7f167b80cf8dcbef941f3e25b3",
+      "deployed_sha256": "7f03fda978b5de806f1645d4b370ddb2d8a4ee7f167b80cf8dcbef941f3e25b3"
+    },
+    {
+      "file": "core/state/snapshots/history_binary.go",
+      "function": "iterateStateDomainChangeBinarySegmentByAccessorKeysFile",
+      "same_before_compact_v3": true,
+      "before_sha256": "c5b4686baf07414e3e6666c3223fe75a93c2de6b16f5294ed3fdc4eae1bea6aa",
+      "deployed_sha256": "c5b4686baf07414e3e6666c3223fe75a93c2de6b16f5294ed3fdc4eae1bea6aa"
+    },
+    {
+      "file": "core/state/snapshots/history_binary.go",
+      "function": "readStateDomainChangeBinaryTxRangeForBlockByIndexFile",
+      "same_before_compact_v3": true,
+      "before_sha256": "cf1dd3667b32a91a06f4b65daeba3b2f688390ab4ca24e3006091b3478ed890d",
+      "deployed_sha256": "cf1dd3667b32a91a06f4b65daeba3b2f688390ab4ca24e3006091b3478ed890d"
+    },
+    {
+      "file": "core/state/snapshots/history_binary.go",
+      "function": "findStateDomainChangeBinaryTxRangeForBlock",
+      "same_before_compact_v3": true,
+      "before_sha256": "7f6e76f92155dff91b28073e30fac7f25693553aa99aa8537d4998d180063f1c",
+      "deployed_sha256": "7f6e76f92155dff91b28073e30fac7f25693553aa99aa8537d4998d180063f1c"
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+[
+  {
+    "file": "request-1-stack-1.txt",
+    "state": "goroutine 18985368 [runnable]:",
+    "phase": "account",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-1-stack-2.txt",
+    "state": "goroutine 18985368 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [
+      {
+        "from": 9139649,
+        "to": 9140893,
+        "blocks": 1245
+      }
+    ],
+    "cold": true,
+    "pack_decode": true
+  },
+  {
+    "file": "request-1-stack-3.txt",
+    "state": "goroutine 18985368 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-1-stack-4.txt",
+    "state": "goroutine 18985368 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-2-stack-1.txt",
+    "state": "goroutine 18987160 [runnable]:",
+    "phase": "account",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-2-stack-2.txt",
+    "state": "goroutine 18987160 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-2-stack-3.txt",
+    "state": "goroutine 18987160 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-3-stack-1.txt",
+    "state": "goroutine 18988889 [runnable]:",
+    "phase": "account",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-3-stack-2.txt",
+    "state": "goroutine 18988889 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-3-stack-3.txt",
+    "state": "goroutine 18988889 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-4-stack-1.txt",
+    "state": "goroutine 18990657 [runnable]:",
+    "phase": "account",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-4-stack-2.txt",
+    "state": "goroutine 18990657 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  },
+  {
+    "file": "request-4-stack-3.txt",
+    "state": "goroutine 18990657 [runnable]:",
+    "phase": "metadata",
+    "tail_ranges": [],
+    "cold": true,
+    "pack_decode": false
+  }
+]

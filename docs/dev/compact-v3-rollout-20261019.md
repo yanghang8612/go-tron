@@ -202,4 +202,47 @@ Wallet 高度 **6,873,671**，原 SHA/PID 10692、旧库清单及采样服务均
 
 00:44:34 服务仍为原部署 SHA/PID 10692，Wallet 高度 **9,076,844**，冷发布与清理前沿 **8,748,336**，符合冷化条件的积压 **261,307 块**，冷化错误=0，采样器持续运行，旧库文件元数据清单不变。00:40:46、高度 9,057,751 的依次磁盘分配采样合计 **141,070,508,032 B**（ancient 44,981,821,440 B、chaindata 13,532,753,920 B、history 14,531,743,744 B、state-snapshots 68,024,188,928 B）。RSS 约 **11.21 GiB**，窗口最高约 11.75 GiB，主机可用内存约 **27.79 GB**，当前未见内存紧急风险。只报告这次新的查询可用性退化；本轮未重启、发布、修改参数或数据库，也未放宽持续监测的 8 秒超时标准。独立全量 MuHash 重算水位仍为 227,222。[超时批次、采样器源码、loopback 复测及核验脚本](evidence/20261019-compact-v3-rollout/heartbeats/20261020T0039/)。
 
+2026-10-20 08:57–09:11（北京时间）按用户要求再次定位慢查询，并全量核对昨晚 18:00 起的定时采样与服务日志。生产源码仍为 **659ab078**、二进制仍为原 SHA、PID 10692；五个相关线上源码文件与部署提交及本地逐字节匹配。全过程只读，没有重启、发布、修改参数或数据库。
+
+**MuHash 报错结论：在本次核对范围内未发现。** 截至 09:11:13，903 条初始全量窗口记录及追加截止核验合计 **910 条分钟采样、180 批定期检查**；175 批完整 TVM 历史探测通过，5 批因 HTTP 请求超时未完成，已返回的历史余额/槽位结果没有不一致。完整 gtron 文件日志及 systemd journal 均已核对；服务进程环境为 `TZ=Asia/Shanghai`，文件日志时间与 UTC journal 对齐。journal 中对应的五条 WARN 均为 RPC `context canceled`，没有 MuHash/commitment mismatch、corruption 或 Sync paused。以下为监测请求的五次失败，不是全服务请求错误总数；第一条 WARN 自带 `suppressedSinceLastReport=2`，不能将打印条数当作所有 RPC 失败次数。
+
+| 北京时间 | 方法/请求编号 | 服务端最终耗时 | 结果 |
+| --- | --- | ---: | --- |
+| 08:14 | eth_getStorageAt / 3144020 | 9.287 s | context canceled |
+| 08:29 | eth_getBalance / 1 | 8.464 s | context canceled |
+| 08:35 | eth_getStorageAt / 3144020 | 8.308 s | context canceled |
+| 08:40 | eth_getStorageAt / 3144020 | 11.009 s | context canceled |
+| 08:45 | eth_getStorageAt / 3144020 | 9.777 s | context canceled |
+
+这进一步明确了上一轮仅凭采样器部分字段无法区分的槽位：四次 storage 超时均为 **3,144,020 的第一个 counter 查询**。巡检使用的是 8 秒 socket timeout，服务端在 8.31–11.01 秒才结束，取消检查不够及时。定时任务只做错误日志扫描、历史业务值和资源检查，**没有每轮全库重算 MuHash**；最近一次独立一致副本全量重算仍在 **227,222**，不能把上述无报错称为当前 9.2M 高度已完成独立全量验根。
+
+09:04 在服务器 loopback 做两轮串行对照，排除 SOCKS/Nginx 路径开销；每项仅两次，不能推导 p95。
+
+| 查询 | 两轮耗时 |
+| --- | --- |
+| 创世余额 | 1,411.21 / 1,275.36 ms |
+| slot 0 latest | 0.93 / 1.06 ms |
+| slot 0 at 3,144,020，值 6 | 4,460.56 / 4,132.74 ms |
+| slot 0 at 3,144,021，值 7 | 3,888.64 / 4,311.28 ms |
+
+所有固定历史值正确。另采集 13 个活动 storage 调用栈，均为 runnable，直接出现冷段 header/`.kv` 访问、既有 Zstd 解码和热尾部 RLP 扫描，没有看到锁等待主导这批样本。15.18 秒 CPU profile 中，全进程采到 58.77 CPU 秒；过滤全部 `GetStorageAtBlockContext` 栈后为 **12.93 CPU 秒**，其中可能包含同窗口的巡检请求。下表是该 12.93 秒的累计 CPU 归因，**不是墙钟占比；包含关系不可相加**。
+
+| 调用路径 | CPU 秒 | 查询 CPU 占比 |
+| --- | ---: | ---: |
+| 冷库逐键段遍历 | 9.91 | **76.64%** |
+| 其中打开 history reader / 解析头部 | 7.75 | 59.94% |
+| 其中既有 `.seg` Zstd 解码 | 5.32 | 41.14% |
+| 未索引热尾部整块扫描 | 3.01 | **23.28%** |
+| 其中 pack 解码 | 2.94 | 22.74% |
+
+上一轮 10:23 profile 中冷遍历约占 33.17%、热扫尾约占 66.63%；当前样本的大头已转向冷段遍历。09:04 manifest census 共 **3,388 个 history 段**，同一 target tx=20,587,119 之后的候选段为 **3,002 个**；昨晚 18:31 的对应目录统计为 401 个。它们是目录范围内的候选数，不是逐 RPC 实测打开次数，不能换算成 7.49 倍查询回归。现有代码对无变化的 AccountLatest、ContractMetadata 和 KVGeneration 负查会遍历后续段；每个 key/request 重开 reader，且在可信 accessor 负查之前先解压 `.seg` 头部。新增段不断累积，重复打开、解析目录和 Zstd 头部的 CPU 工作随之放大。
+
+元数据恢复自身仍占 **9.20 CPU 秒 / 71.15%**：`storageFromStateDomain` 已有目标账户 envelope 的 generation，随后却调用通用 `readStateAccountKVAsOf`，分别收集 metadata 与 generation 的后续变化。活动栈直接捕获一次 **9,139,649–9,140,893，共 1,245 块**的未索引热尾扫描，整块 RLP 解码后才筛目标 key。这是 posting 索引的尾部，不是约 26 万块的冷化积压。冷段负查和该重复元数据路径均应优化。
+
+**本轮还独立定位了创世余额的线性冷扫描。** 两次补充余额请求耗时 1,390.50/1,360.19 ms，8 个活动栈全部在 `Manager.StateTxRangeForBlock(0)`：为 block 0 的 tx-range 逐段打开 history 文件、解压头部并二分 tx-range table；遍历无命中后，上层 `stateTxNumAtBlockEnd` 才回退 cut=0。单请求的 tx-range cache 会随 reader 销毁，下一次请求重新扫描。这条路径并非账户辅助字段重建，`BalanceAt` 已是只读 account core 的专用实现。应在确认规范创世 cut 后直接处理 block 0，并为一般 block→TxNum 查询使用经 manifest 绑定验证的块号范围目录，避免无可能命中的逐段搜索。
+
+与 compact-v3 的关系已进一步核对：10 个直接相关函数，包括上述 genesis TxRange 路径、元数据恢复、冷逐键遍历和 `.seg` 打开路径，与压缩前 `eaae18c8` 逐字节相同。新 profile 中 `.idx` 分页 reader 仍为零 CPU 样本，零样本不能证明零耗时；block→TxRange 的表命中路径在 `.seg` 内查表后直接返回，未进入新 `.idx` 解压。当前证据支持既有访问算法被增长中的段数和热尾部放大，未建立压缩格式引起秒级回归的证据。取消传播也有明确缺口：冷迭代打开 non-context reader，热 collector 调用 background-context 扫描，负查时上层 callback 无机会及时检查取消；应将请求 context 贯穿每段、每块及解码检查点。
+
+建议实施顺序：先修已复现的 first-change 尾部遗漏，并补齐取消传播及规范创世 cut 快路；随后元数据复用 envelope generation、冷优先有界 earliest-change、经可信绑定证明的 accessor-first 负查；再共享有界不可变 reader/目录缓存，并对必须查的热尾部批量解析或建立随 MVCC/块哈希失效的有界索引。缓存必须保留 manifest pin、文件退役 lease、checksum/CRC 与 generation 隔离。这些读路径修复可复用现有 compact-v3 数据；验收仍需固定数据/负载下的查询延迟、取消后残留工作、历史语义、MuHash 与快照恢复验证。本轮仅提供诊断与方案，未实施线上修改。[完整夜间核验、原始 profile/栈、源码对照、服务器脚本及核验脚本](evidence/20261019-compact-v3-rollout/latency-20261020/)。
+
 ![线上核验截图](evidence/20261019-compact-v3-rollout/rollout-proof.jpg)

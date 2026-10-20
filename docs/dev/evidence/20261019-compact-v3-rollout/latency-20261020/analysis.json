@@ -1,0 +1,311 @@
+{
+  "night_audit": {
+    "since_beijing": "2026-10-19T18:00:00+08:00",
+    "until_utc": "2026-10-20T01:11:13.901283+00:00",
+    "minute_samples": 910,
+    "periodic_batches": 180,
+    "complete_tvm_batches": 175,
+    "timeout_batches": 5,
+    "muhash_errors_observed": 0,
+    "returned_historical_values_incorrect": 0,
+    "last_independent_full_muhash_recompute_block": 227222,
+    "periodic_monitor_performs_full_muhash_recompute": false,
+    "scope": "Complete gtron log prefix, complete gtron journal within the time window, and all minute observations. No independent current-height MuHash root rebuild."
+  },
+  "identity": {
+    "pid": 10692,
+    "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+    "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+  },
+  "query_cpu_profile": {
+    "query_cpu_ns": 12930000000,
+    "matched_sample_rows": 805,
+    "cumulative_functions": {
+      "readStateAccountKVAsOf": {
+        "cpu_ns": 9200000000,
+        "percent_of_query_cpu": 71.1523588553751
+      },
+      "IterateStateDomainChangesByBlockRangeContext": {
+        "cpu_ns": 3010000000,
+        "percent_of_query_cpu": 23.27919566898685
+      },
+      "decodePersistedStateDomainChangeBlock": {
+        "cpu_ns": 2940000000,
+        "percent_of_query_cpu": 22.737819025522043
+      },
+      "rlp.DecodeBytes": {
+        "cpu_ns": 2520000000,
+        "percent_of_query_cpu": 19.48955916473318
+      },
+      "(*Manager).IterateStateDomainChangesByKey": {
+        "cpu_ns": 9910000000,
+        "percent_of_query_cpu": 76.64346481051817
+      },
+      "openHistorySegmentForReadWithCacheLimitContext": {
+        "cpu_ns": 7750000000,
+        "percent_of_query_cpu": 59.938128383604024
+      },
+      "zstd.(*Decoder).DecodeAll": {
+        "cpu_ns": 5320000000,
+        "percent_of_query_cpu": 41.1446249033256
+      },
+      "historyIndexPages": {
+        "cpu_ns": 0,
+        "percent_of_query_cpu": 0.0
+      },
+      "openHistoryIndexPages": {
+        "cpu_ns": 0,
+        "percent_of_query_cpu": 0.0
+      },
+      "readStateAccountLatestAsOf": {
+        "cpu_ns": 3720000000,
+        "percent_of_query_cpu": 28.77030162412993
+      },
+      "readStateKVAsOf": {
+        "cpu_ns": 0,
+        "percent_of_query_cpu": 0.0
+      },
+      "stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry": {
+        "cpu_ns": 880000000,
+        "percent_of_query_cpu": 6.8058778035576175
+      }
+    },
+    "exclusive_high_level_phases_ns": {
+      "account": 3720000000,
+      "metadata": 9200000000,
+      "other": 10000000
+    },
+    "note": "All GetStorageAtBlockContext stacks, may include observer probes. CPU percentages, not wall time; inclusive functions overlap."
+  },
+  "cold_catalog": {
+    "sha256": "a7ab41aefa45e2b1d0280b5cd12168dd58772a0e3e946e7754d7dc958c0ef29d",
+    "generation": 3857,
+    "segments": 17560,
+    "history_segments": 3388,
+    "overlap_after_target_tx": 3002,
+    "target_tx": 20587119,
+    "visibleTxEnd": 402760403,
+    "progress": {
+      "historyBuildTxNum": 402760403,
+      "accessorBuildTxNum": 402760403,
+      "hotPruneTxNum": 402760403,
+      "hotPruneBlockNum": 8840277
+    },
+    "first_overlap": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 20528899,
+      "toTxNum": 20607971,
+      "aggregationSteps": 2,
+      "path": "history/state-domain-change-20528899-20607971-b2d4a1aaace54b5d.seg",
+      "size": 4779805,
+      "checksum": "sha256:b2d4a1aaace54b5dae58a2c917d9d70a45959231df0da89eebd9fa62f2c7c256"
+    },
+    "last_overlap": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 402637533,
+      "toTxNum": 402760403,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-402637533-402760403-c7a2c6aa0521c342.seg",
+      "size": 11976661,
+      "checksum": "sha256:c7a2c6aa0521c342803457bf4d263752239874c9fc4f9349d6b6b9ab3cb438a0"
+    }
+  },
+  "prior_catalog": {
+    "utc": "2026-10-19T10:31:19.092404+00:00",
+    "overlap_after_target_tx": 401,
+    "target_tx": 20587119
+  },
+  "loopback_probes": [
+    {
+      "round": 1,
+      "name": "genesis",
+      "method": "eth_getBalance",
+      "params": [
+        "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "0x0"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      },
+      "correct": true,
+      "milliseconds": 1411.205716431141
+    },
+    {
+      "round": 1,
+      "name": "latest",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "latest"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "correct": null,
+      "milliseconds": 0.9313151240348816
+    },
+    {
+      "round": 1,
+      "name": "cold6",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff954"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true,
+      "milliseconds": 4460.56392788887
+    },
+    {
+      "round": 1,
+      "name": "cold7",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff955"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true,
+      "milliseconds": 3888.637900352478
+    },
+    {
+      "round": 2,
+      "name": "genesis",
+      "method": "eth_getBalance",
+      "params": [
+        "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "0x0"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      },
+      "correct": true,
+      "milliseconds": 1275.356076657772
+    },
+    {
+      "round": 2,
+      "name": "latest",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "latest"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "correct": null,
+      "milliseconds": 1.0555684566497803
+    },
+    {
+      "round": 2,
+      "name": "cold6",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff954"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true,
+      "milliseconds": 4132.737815380096
+    },
+    {
+      "round": 2,
+      "name": "cold7",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff955"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true,
+      "milliseconds": 4311.2757205963135
+    }
+  ],
+  "genesis_active_stacks": {
+    "count": 8,
+    "all_state_tx_range_block_0": true
+  },
+  "timeout_server_warnings": [
+    {
+      "method": "eth_getStorageAt",
+      "reqid": "3144020",
+      "duration_seconds": 9.287397375,
+      "log": "2026-10-20T00:14:56+0000 ip-172-12-16-193.us-east-2.compute.internal gtron[10692]: WARN [10-20|08:14:56.096] RPC request served                       conn=127.0.0.1:30891 method=eth_getStorageAt methodBytes=16 methodTruncated=false reqid=3144020 reqidBytes=7 reqidTruncated=false duration=9.287397375s rpcErrorCode=-32000 err=\"context canceled\" suppressedSinceLastReport=2"
+    },
+    {
+      "method": "eth_getBalance",
+      "reqid": "1",
+      "duration_seconds": 8.464440966,
+      "log": "2026-10-20T00:29:54+0000 ip-172-12-16-193.us-east-2.compute.internal gtron[10692]: WARN [10-20|08:29:54.850] RPC request served                       conn=127.0.0.1:31885 method=eth_getBalance methodBytes=14 methodTruncated=false reqid=1 reqidBytes=1 reqidTruncated=false duration=8.464440966s rpcErrorCode=-32000 err=\"context canceled\""
+    },
+    {
+      "method": "eth_getStorageAt",
+      "reqid": "3144020",
+      "duration_seconds": 8.308024073,
+      "log": "2026-10-20T00:35:56+0000 ip-172-12-16-193.us-east-2.compute.internal gtron[10692]: WARN [10-20|08:35:56.501] RPC request served                       conn=127.0.0.1:32281 method=eth_getStorageAt methodBytes=16 methodTruncated=false reqid=3144020 reqidBytes=7 reqidTruncated=false duration=8.308024073s rpcErrorCode=-32000 err=\"context canceled\""
+    },
+    {
+      "method": "eth_getStorageAt",
+      "reqid": "3144020",
+      "duration_seconds": 11.009049878,
+      "log": "2026-10-20T00:40:59+0000 ip-172-12-16-193.us-east-2.compute.internal gtron[10692]: WARN [10-20|08:40:59.531] RPC request served                       conn=127.0.0.1:32623 method=eth_getStorageAt methodBytes=16 methodTruncated=false reqid=3144020 reqidBytes=7 reqidTruncated=false duration=11.009049878s rpcErrorCode=-32000 err=\"context canceled\""
+    },
+    {
+      "method": "eth_getStorageAt",
+      "reqid": "3144020",
+      "duration_seconds": 9.777483767,
+      "log": "2026-10-20T00:45:58+0000 ip-172-12-16-193.us-east-2.compute.internal gtron[10692]: WARN [10-20|08:45:58.660] RPC request served                       conn=127.0.0.1:32955 method=eth_getStorageAt methodBytes=16 methodTruncated=false reqid=3144020 reqidBytes=7 reqidTruncated=false duration=9.777483767s rpcErrorCode=-32000 err=\"context canceled\""
+    }
+  ],
+  "source_algorithms_unchanged_before_compact_v3": true,
+  "new_findings": [
+    "Cold lookup is now76.64% of sampled query CPU, opening history segments59.94% and existing Zstd41.14% included within it. Tail scan23.28%.",
+    "Genesis block0 TxRange miss traverses all cold history segments; eight active stack observations confirm the path.",
+    "Four timed-out storage probes are specifically reqid3144020 (first counter query); one is genesis balance. Server returns context canceled after8.31-11.01s. Context is not passed through every negative segment/block iteration."
+  ],
+  "recommendations": [
+    "Preserve first-change tail correctness; add prompt context cancellation across both hot scans and cold negative lookups.",
+    "Resolve canonical genesis cut without scanning nonexistent block0 cold rows; route other block-to-TxNum lookups by authenticated block range.",
+    "Reuse target account generation for contract metadata, cold-first bounded earliest-change seeks, and safe immutable reader/directory reuse.",
+    "Avoid opening/decompressing history values before trustworthy accessor negative proof; then batch/index the unindexed hot tail with an explicit memory and MVCC lifetime budget."
+  ],
+  "limitations": [
+    "CPU percentages are not wall-time percentages; inclusive functions overlap and observer requests may coexist in the profile.",
+    "Catalog counts are candidate segments, not measured per-request open counts.",
+    "Loopback matrix has two observations per query, not a p95 or matched-format benchmark.",
+    "One warning carries suppressedSinceLastReport=2; five observer timeout batches do not count every request failure on the service."
+  ],
+  "production_mutations": false
+}

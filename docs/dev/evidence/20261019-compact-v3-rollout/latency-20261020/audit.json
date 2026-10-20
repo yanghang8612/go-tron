@@ -1,0 +1,316 @@
+{
+  "utc": "2026-10-20T01:04:21.225473+00:00",
+  "requested_since_utc": "2026-10-19T10:00:00+00:00",
+  "requested_since_beijing": "2026-10-19T18:00:00+08:00",
+  "identity": {
+    "pid": 10692,
+    "exe": "/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron",
+    "sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+  },
+  "timezone_env": [
+    "TZ=Asia/Shanghai"
+  ],
+  "source_head": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "source_hashes": {
+    "core/state/history.go": "dbef13c2f7a7143a8e04906d31c582eeca97df8547245b98b75e27c3bc20f5db",
+    "core/rawdb/accessors_state_changeset.go": "4aa0d32d51b23d47ccfa12a8fe91909ab1152f3f06e77c89c9279d65f6965bd2",
+    "core/state/snapshots/history_segment.go": "dd74f362c4229d21237de8c8d7a8bb8530dedf6fc9aa82e6957d8a90b34d5e89",
+    "core/state/snapshots/history_binary.go": "56eee71b593735d98be3026a997e7d1f78bd42db77129efa6f16cf21c829ec3c",
+    "core/state/snapshots/compressed_block.go": "c12f4d726185826c0a2bf4bfb8ea6f8cf66edff6f77426acde0cbdf02c7c8361"
+  },
+  "observer": {
+    "source_bytes": 8318455,
+    "source_sha256": "d10cd49f4be75a25293d84362c225963e0913600144665732a973698b8a563e1",
+    "snapshot_path": "/data/gtron/compact-v3-rollout-20261019-01/latency-followup-20261020/runtime-prefix.jsonl",
+    "all_samples": 1143,
+    "window_samples": 903,
+    "first": "2026-10-19T10:00:43.721867+00:00",
+    "last": "2026-10-20T01:03:48.461988+00:00",
+    "first_head": 4540420,
+    "last_head": 9166915,
+    "max_gap_seconds": 60.104252,
+    "pid_counts": {
+      "10692": 903
+    },
+    "periodic_batches": 178,
+    "complete_tvm_batches": 173,
+    "errors": [
+      {
+        "utc": "2026-10-20T00:14:45.070389+00:00",
+        "errors": [
+          "timeout('timed out',)"
+        ],
+        "new_error_lines": [],
+        "genesis_correct": true,
+        "tx_correct": true,
+        "tvm_complete": false
+      },
+      {
+        "utc": "2026-10-20T00:29:46.091206+00:00",
+        "errors": [
+          "timeout('timed out',)"
+        ],
+        "new_error_lines": [],
+        "genesis_correct": null,
+        "tx_correct": null,
+        "tvm_complete": false
+      },
+      {
+        "utc": "2026-10-20T00:35:46.370883+00:00",
+        "errors": [
+          "timeout('timed out',)"
+        ],
+        "new_error_lines": [],
+        "genesis_correct": true,
+        "tx_correct": true,
+        "tvm_complete": false
+      },
+      {
+        "utc": "2026-10-20T00:40:46.746048+00:00",
+        "errors": [
+          "timeout('timed out',)"
+        ],
+        "new_error_lines": [],
+        "genesis_correct": true,
+        "tx_correct": true,
+        "tvm_complete": false
+      },
+      {
+        "utc": "2026-10-20T00:45:47.065808+00:00",
+        "errors": [
+          "timeout('timed out',)"
+        ],
+        "new_error_lines": [],
+        "genesis_correct": true,
+        "tx_correct": true,
+        "tvm_complete": false
+      }
+    ],
+    "commitment_metric_names": [
+      "history/storage/keyspace/commitment/attempted_at",
+      "history/storage/keyspace/commitment/attempts/total",
+      "history/storage/keyspace/commitment/duration_ns",
+      "history/storage/keyspace/commitment/errors/total",
+      "history/storage/keyspace/commitment/known",
+      "history/storage/keyspace/commitment/sampled_at",
+      "history/storage/keyspace/commitment/sst_bytes"
+    ]
+  },
+  "logs": [
+    {
+      "path": "/data/gtron/main/gtron.log",
+      "inode": 93983384,
+      "captured_bytes": 4250586,
+      "prefix_sha256": "8b0060a48378905199b0e67ce774f251848609760cc58b8fde3db2e05c5001cc",
+      "first_line": "INFO [10-19|13:56:22.539] Starting gtron                           version=0.3.0-dev command=\"[/data/gtron/releases/auto-659ab0780e7c-859f0b6b44dcad8b/gtron --history.reference-container=false --history.shared-read-workers=0 --history.shared-chunk-cache=true --history.cross-block-dedup=true --datadir /data/gtron/main/datadir --prune.mode snap --history.enabled=true --history.block-dedup=true --history.compression-format=auto --history.catchup-mode=throughput --sync.async-commit --sync.import-batch 64 --p2p.port 18890 --discover.port 18890 --external.ip 3.12.206.71 --http.port 8090 --jsonrpc.port 8545 --grpc.port 50051 --pprof.port 6062 --pprof.addr 127.0.0.1 --metrics --metrics.addr 127.0.0.1 --metrics.port 6071 --maxpeers 30 --db.cache 12288 --db.handles 8192 --state.trie.cache 128 --log.file /data/gtron/main/gtron.log --log.file.format terminal --state.latest.cache 128]\"",
+      "last_line": "INFO [10-20|09:03:52.340] History cold snapshot published          module=core/state/snapshots dataset=state-domain-change fromBlock=8,838,771 toBlock=8,840,277 blocks=1507  txs=122,871 totalBytes=25,464,838 historyElapsed=2.857s historyEventParallel=true  sharedReadWorkers=0 sharedChunkCache=true  referenceContainer=false historyCodecWorkers=1 sharedReadFallback=0 eventLogElapsed=3.632s publishElapsed=110ms retiredMetadataScanned=0  retiredMetadataRemoved=0  retiredMetadataDeferred= elapsed=3.742s blocksPerSec=402.690   txsPerSec=32832.650 publishedBlock=8,840,277 eligibleCutoffBlock=9,101,367 backlogBlocks=261,090 accelerated=false forcedBusy=true  busyResourceReady=true  moderateL0=false minRecovery=2.494894642s dutyCyclePPM=600,000 recoveryProvisional=true suppressedPasses=3",
+      "window_lines": 4846,
+      "window_first": "INFO [10-19|18:00:00.000] Sync progress                            module=net/sync             window=5m      from=2026-10-19T17:55:00+08:00 to=2026-10-19T18:00:00+08:00 coveragePct=100.000 warming=false head=4,535,343 target=87,243,656 chainProgressPct=5.200 remaining=82,708,338 windowBlocks=32676.520   avgBlocksPerSec=108.920 minBlocksPerSec=99.280  maxBlocksPerSec=119.820 eta=210h55m37.314s",
+      "window_last": "INFO [10-20|09:03:52.340] History cold snapshot published          module=core/state/snapshots dataset=state-domain-change fromBlock=8,838,771 toBlock=8,840,277 blocks=1507  txs=122,871 totalBytes=25,464,838 historyElapsed=2.857s historyEventParallel=true  sharedReadWorkers=0 sharedChunkCache=true  referenceContainer=false historyCodecWorkers=1 sharedReadFallback=0 eventLogElapsed=3.632s publishElapsed=110ms retiredMetadataScanned=0  retiredMetadataRemoved=0  retiredMetadataDeferred= elapsed=3.742s blocksPerSec=402.690   txsPerSec=32832.650 publishedBlock=8,840,277 eligibleCutoffBlock=9,101,367 backlogBlocks=261,090 accelerated=false forcedBusy=true  busyResourceReady=true  moderateL0=false minRecovery=2.494894642s dutyCyclePPM=600,000 recoveryProvisional=true suppressedPasses=3",
+      "unparsed_lines_all": 0,
+      "muhash_or_commitment_lines": 2410,
+      "muhash_or_commitment_examples": [
+        "INFO [10-19|18:00:22.739] Sync import progress                     module=net/sync             window=30.067s head=4,537,981 blocks=3548  txs=212,905 blocksPerSec=118.000   txsPerSec=7081.010  txsPerBlock=60.010 energyPerSec=229.17M energyPerBlock=1.94M   energyPerTx=32.37k  vmTxsPerBlock=55.930 nativeTxsPerBlock=4.070  vmTxSharePct=93.210 rawEnergyPerSec=196.88M rawEnergyPerVMTx=29.83k  billedToRawEnergyRatio=1.160  vmMsPerVMTx=0.060 vmNsPerRawEnergy=1.910 execBusyPct=95.910 bufferWaitPct=3.410  applySamples=3548  applyCoveragePct=100.000 importMsPerBlock=8.130  applyMsPerBlock=10.350 importOverheadMsPerBlock=0.000 outsideTxMsPerBlock=4.770 executeFixedMsPerBlock=1.070 transactionMsPerTx=0.090 rewardsMsPerBlock=0.010 blockStatsMsPerBlock=0.020 stateCommitMsPerBlock=3.420 commitmentUpdatesPerBlock=201.460 stateCommitNsPerUpdate=16956.510 persistMsPerBlock=0.220 persistMetadataBytesPerBlock=31389.580 persistMetadataBytesPerTx=523.140  remaining=82,705,682 peers=8 activePeers=7 inflight=0   buffered=921  requested=0     retries=0",
+        "INFO [10-19|18:00:52.858] Sync import progress                     module=net/sync             window=30.119s head=4,541,433 blocks=3452  txs=222,786 blocksPerSec=114.610   txsPerSec=7396.840  txsPerBlock=64.540 energyPerSec=191.48M energyPerBlock=1.67M   energyPerTx=25.89k  vmTxsPerBlock=57.380 nativeTxsPerBlock=7.160  vmTxSharePct=88.900 rawEnergyPerSec=191.38M rawEnergyPerVMTx=29.10k  billedToRawEnergyRatio=1.000  vmMsPerVMTx=0.060 vmNsPerRawEnergy=1.920 execBusyPct=94.960 bufferWaitPct=4.380  applySamples=3452  applyCoveragePct=100.000 importMsPerBlock=8.290  applyMsPerBlock=10.550 importOverheadMsPerBlock=0.000 outsideTxMsPerBlock=4.810 executeFixedMsPerBlock=0.990 transactionMsPerTx=0.090 rewardsMsPerBlock=0.000 blockStatsMsPerBlock=0.020 stateCommitMsPerBlock=3.520 commitmentUpdatesPerBlock=209.880 stateCommitNsPerUpdate=16794.000 persistMsPerBlock=0.220 persistMetadataBytesPerBlock=33130.900 persistMetadataBytesPerTx=513.330  remaining=82,702,241 peers=8 activePeers=7 inflight=0   buffered=1469 requested=0     retries=0",
+        "INFO [10-20|09:03:21.519] Sync import progress                     module=net/sync             window=30.201s head=9,164,823 blocks=2112  txs=158,761 blocksPerSec=69.930    txsPerSec=5256.770  txsPerBlock=75.170  energyPerSec=181.83M energyPerBlock=2.60M   energyPerTx=34.58k  vmTxsPerBlock=60.410  nativeTxsPerBlock=14.770  vmTxSharePct=80.350 rawEnergyPerSec=180.90M rawEnergyPerVMTx=42.82k  billedToRawEnergyRatio=1.010  vmMsPerVMTx=0.110 vmNsPerRawEnergy=2.630 execBusyPct=97.330 bufferWaitPct=2.120  applySamples=2112  applyCoveragePct=100.000 importMsPerBlock=13.920 applyMsPerBlock=17.130 importOverheadMsPerBlock=0.000 outsideTxMsPerBlock=6.870  executeFixedMsPerBlock=1.340 transactionMsPerTx=0.140 rewardsMsPerBlock=0.000 blockStatsMsPerBlock=0.030 stateCommitMsPerBlock=5.040  commitmentUpdatesPerBlock=297.820 stateCommitNsPerUpdate=16928.780 persistMsPerBlock=0.400 persistMetadataBytesPerBlock=73819.160  persistMetadataBytesPerTx=981.890  remaining=78,096,886 peers=8 activePeers=7 inflight=0   buffered=81   requested=0     retries=0",
+        "INFO [10-20|09:03:51.890] Sync import progress                     module=net/sync             window=30.370s head=9,167,164 blocks=2341  txs=159,809 blocksPerSec=77.080    txsPerSec=5261.990  txsPerBlock=68.270  energyPerSec=185.54M energyPerBlock=2.41M   energyPerTx=35.26k  vmTxsPerBlock=59.350  nativeTxsPerBlock=8.910   vmTxSharePct=86.950 rawEnergyPerSec=185.23M rawEnergyPerVMTx=40.49k  billedToRawEnergyRatio=1.000  vmMsPerVMTx=0.090 vmNsPerRawEnergy=2.330 execBusyPct=97.040 bufferWaitPct=2.450  applySamples=2341  applyCoveragePct=100.000 importMsPerBlock=12.590 applyMsPerBlock=15.520 importOverheadMsPerBlock=0.000 outsideTxMsPerBlock=6.670  executeFixedMsPerBlock=1.400 transactionMsPerTx=0.130 rewardsMsPerBlock=0.000 blockStatsMsPerBlock=0.030 stateCommitMsPerBlock=4.780  commitmentUpdatesPerBlock=287.120 stateCommitNsPerUpdate=16650.020 persistMsPerBlock=0.380 persistMetadataBytesPerBlock=56945.350  persistMetadataBytesPerTx=834.200  remaining=78,094,563 peers=8 activePeers=7 inflight=8   buffered=1732 requested=8     retries=0"
+      ],
+      "error_lines": [],
+      "error_count": 0
+    }
+  ],
+  "journal": {
+    "error": "CalledProcessError(1, ['journalctl', '-u', 'gtron', '--since', '2026-10-19 10:00:00 UTC', '--until', '2026-10-20 01:04:21 UTC', '--no-pager', '-o', 'short-iso'])"
+  },
+  "manifest": {
+    "sha256": "a7ab41aefa45e2b1d0280b5cd12168dd58772a0e3e946e7754d7dc958c0ef29d",
+    "generation": 3857,
+    "segments": 17560,
+    "history_segments": 3388,
+    "overlap_after_target_tx": 3002,
+    "target_tx": 20587119,
+    "visibleTxEnd": 402760403,
+    "progress": {
+      "historyBuildTxNum": 402760403,
+      "accessorBuildTxNum": 402760403,
+      "hotPruneTxNum": 402760403,
+      "hotPruneBlockNum": 8840277
+    },
+    "first_overlap": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 20528899,
+      "toTxNum": 20607971,
+      "aggregationSteps": 2,
+      "path": "history/state-domain-change-20528899-20607971-b2d4a1aaace54b5d.seg",
+      "size": 4779805,
+      "checksum": "sha256:b2d4a1aaace54b5dae58a2c917d9d70a45959231df0da89eebd9fa62f2c7c256"
+    },
+    "last_overlap": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 402637533,
+      "toTxNum": 402760403,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-402637533-402760403-c7a2c6aa0521c342.seg",
+      "size": 11976661,
+      "checksum": "sha256:c7a2c6aa0521c342803457bf4d263752239874c9fc4f9349d6b6b9ab3cb438a0"
+    }
+  },
+  "resources": {
+    "loadavg": "7.64 7.40 8.36 3/1211 31652",
+    "cpus": 16,
+    "memory": "              total        used        free      shared  buff/cache   available\nMem:    65842163712 25344225280   800419840  4151398400 39697518592 35805462528\nSwap:             0           0           0\n",
+    "top_rss": [
+      "  PID  PPID COMMAND         %CPU %MEM   RSS     ELAPSED",
+      "10692     1 gtron            302 18.4 11846256 19:01:36",
+      " 1410     1 java            25.4  8.5 5511620 6-19:11:41",
+      "16405     1 tracker          3.0  4.6 2989696  17:08:17",
+      " 9904     1 mysqld          21.9  2.6 1704960 56-22:07:08",
+      " 2477  2436 python3          0.0  0.8 564232 154-22:43:12",
+      "30237 30207 MainThread       0.0  0.3 235904 154-23:30:50",
+      "31648 31647 python3         66.0  0.1 82288       00:02",
+      "  516     1 systemd-journal  0.0  0.1 81668 557-18:52:12",
+      " 9514     1 dockerd          0.0  0.0 59616 279-22:56:23",
+      "31137     1 issue-bot        0.2  0.0 57808 194-22:28:06",
+      "24359     1 python3          0.0  0.0 48424    16:40:46"
+    ]
+  },
+  "probes": [
+    {
+      "round": 1,
+      "name": "genesis",
+      "method": "eth_getBalance",
+      "params": [
+        "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "0x0"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      },
+      "correct": true,
+      "milliseconds": 1411.205716431141
+    },
+    {
+      "round": 1,
+      "name": "latest",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "latest"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "correct": null,
+      "milliseconds": 0.9313151240348816
+    },
+    {
+      "round": 1,
+      "name": "cold6",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff954"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true,
+      "milliseconds": 4460.56392788887
+    },
+    {
+      "round": 1,
+      "name": "cold7",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff955"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true,
+      "milliseconds": 3888.637900352478
+    },
+    {
+      "round": 2,
+      "name": "genesis",
+      "method": "eth_getBalance",
+      "params": [
+        "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "0x0"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      },
+      "correct": true,
+      "milliseconds": 1275.356076657772
+    },
+    {
+      "round": 2,
+      "name": "latest",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "latest"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "correct": null,
+      "milliseconds": 1.0555684566497803
+    },
+    {
+      "round": 2,
+      "name": "cold6",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff954"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "correct": true,
+      "milliseconds": 4132.737815380096
+    },
+    {
+      "round": 2,
+      "name": "cold7",
+      "method": "eth_getStorageAt",
+      "params": [
+        "0xa4997124a328a4615eab437cede31da47a31b375",
+        "0x0",
+        "0x2ff955"
+      ],
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+      },
+      "correct": true,
+      "milliseconds": 4311.2757205963135
+    }
+  ],
+  "end_utc": "2026-10-20T01:04:42.020740+00:00"
+}
