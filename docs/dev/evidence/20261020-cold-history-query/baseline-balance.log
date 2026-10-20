@@ -1,0 +1,4 @@
+=== RUN   TestOfflineColdBalanceCheckpoint
+--- PASS: TestOfflineColdBalanceCheckpoint (4.28s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state	4.314s

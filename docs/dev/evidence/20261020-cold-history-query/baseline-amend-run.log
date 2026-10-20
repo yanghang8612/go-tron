@@ -1,0 +1,3 @@
+=== RUN   TestOfflineColdQueryCorpus
+--- PASS: TestOfflineColdQueryCorpus (19.75s)
+PASS

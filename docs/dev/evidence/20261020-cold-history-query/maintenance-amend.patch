@@ -1,0 +1,35 @@
+diff --git a/core/state/snapshots/history_binary.go b/core/state/snapshots/history_binary.go
+index 27f9023f..00dd5407 100644
+--- a/core/state/snapshots/history_binary.go
++++ b/core/state/snapshots/history_binary.go
+@@ -2882,7 +2882,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx context.Context
+ 	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+ 		return err
+ 	}
+-	segmentFile, segmentSize, _, err := openHistorySegmentForReadWithCacheLimitContext(ctx, dir, ref, cbCacheBlocks)
++	segmentFile, segmentSize, _, err := openHistorySegmentForReadContext(ctx, dir, ref, cbCacheBlocks, false)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -3901,6 +3901,12 @@ func openHistorySegmentForReadWithCacheLimit(dir string, ref SegmentRef, compres
+ }
+ 
+ func openHistorySegmentForReadWithCacheLimitContext(ctx context.Context, dir string, ref SegmentRef, compressedCacheLimit int) (historySegmentReader, uint64, stateDomainChangeBinaryHeader, error) {
++	return openHistorySegmentForReadContext(ctx, dir, ref, compressedCacheLimit, true)
++}
++
++// Exact-key batches attach their manifest-validated accessor explicitly. Other
++// maintenance readers prepare it here, before entering the record-reader mutex.
++func openHistorySegmentForReadContext(ctx context.Context, dir string, ref SegmentRef, compressedCacheLimit int, prepareAccessor bool) (historySegmentReader, uint64, stateDomainChangeBinaryHeader, error) {
+ 	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
+ 		return nil, 0, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
+ 	}
+@@ -3967,7 +3973,7 @@ func openHistorySegmentForReadWithCacheLimitContext(ctx context.Context, dir str
+ 	// Before exposing this private reader, initialize the V6 dictionary outside
+ 	// its mutex. Lazy v6Key initialization otherwise opens an entire compressed
+ 	// accessor while locked and cannot safely yield the maintenance token.
+-	if maintenance.HasWorkCheckpoint(ctx) && header.version == stateDomainChangeBinaryVersionV6 {
++	if prepareAccessor && maintenance.HasWorkCheckpoint(ctx) && header.version == stateDomainChangeBinaryVersionV6 {
+ 		if err := result.prepareV6AccessorContext(ctx); err != nil {
+ 			_ = result.Close()
+ 			return nil, 0, stateDomainChangeBinaryHeader{}, err

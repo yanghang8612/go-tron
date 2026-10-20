@@ -1,0 +1,10 @@
+{
+  "manifest_sha256": "504728c50b50d3509bd30307942a84061e7bed250e2a546f29a81ac944c4a7d5",
+  "generation": 3968,
+  "visibleTxEnd": 418503420,
+  "files": 10497,
+  "bytes": 57563221709,
+  "service": "MainPID=10692\nActiveState=active\n",
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "copy_note": "Immutable history companions hardlinked; independent manifest. No hot DB consistency claim, no service stop."
+}

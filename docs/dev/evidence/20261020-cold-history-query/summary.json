@@ -1,0 +1,126 @@
+{
+  "base_source": "659ab0780e7c50db694d909cd357495c2d1d3473",
+  "cold_corpus": {
+    "manifest_sha256": "504728c50b50d3509bd30307942a84061e7bed250e2a546f29a81ac944c4a7d5",
+    "generation": 3968,
+    "visibleTxEnd": 418503420,
+    "files": 10497,
+    "bytes": 57563221709,
+    "service": "MainPID=10692\nActiveState=active\n",
+    "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+    "copy_note": "Immutable history companions hardlinked; independent manifest. No hot DB consistency claim, no service stop."
+  },
+  "cold_component_comparisons": 162,
+  "cold_warm_samples_per_case": 2,
+  "cold_component_warm_medians": [
+    {
+      "query": "contract-account",
+      "baseline_warm_median_ms": 1260.0150445,
+      "candidate_warm_median_ms": 802.386501,
+      "warm_latency_reduction_percent": 36.31929201937398,
+      "baseline_warm_alloc_bytes": 822838560.0,
+      "candidate_warm_alloc_bytes": 415278960.0
+    },
+    {
+      "query": "absent-account",
+      "baseline_warm_median_ms": 1269.732003,
+      "candidate_warm_median_ms": 779.082995,
+      "warm_latency_reduction_percent": 38.64193442716589,
+      "baseline_warm_alloc_bytes": 823683396.0,
+      "candidate_warm_alloc_bytes": 416133560.0
+    },
+    {
+      "query": "contract-generation",
+      "baseline_warm_median_ms": 1226.5436220000001,
+      "candidate_warm_median_ms": 739.8056635,
+      "warm_latency_reduction_percent": 39.6837054768852,
+      "baseline_warm_alloc_bytes": 814392776.0,
+      "candidate_warm_alloc_bytes": 406837776.0
+    },
+    {
+      "query": "contract-meta-gen0",
+      "baseline_warm_median_ms": 1389.143712,
+      "candidate_warm_median_ms": 792.6299429999999,
+      "warm_latency_reduction_percent": 42.94111284866112,
+      "baseline_warm_alloc_bytes": 840448716.0,
+      "candidate_warm_alloc_bytes": 432903972.0
+    },
+    {
+      "query": "contract-meta-gen1",
+      "baseline_warm_median_ms": 1339.4531715,
+      "candidate_warm_median_ms": 812.7979170000001,
+      "warm_latency_reduction_percent": 39.31867613633852,
+      "baseline_warm_alloc_bytes": 840448520.0,
+      "candidate_warm_alloc_bytes": 432904084.0
+    },
+    {
+      "query": "genesis-sender-account",
+      "baseline_warm_median_ms": 0.861101,
+      "candidate_warm_median_ms": 0.8584225,
+      "warm_latency_reduction_percent": 0.3110552652940912,
+      "baseline_warm_alloc_bytes": 406024.0,
+      "candidate_warm_alloc_bytes": 406896.0
+    }
+  ],
+  "first_process_query": {
+    "query": "contract-account",
+    "baseline_ms": 1295.474007,
+    "candidate_ms": 1648.443995
+  },
+  "checkpoint_balance_samples_per_case": 3,
+  "checkpoint_balance_medians": [
+    {
+      "query": "genesis-sender",
+      "baseline_median_ms": 1244.295838,
+      "candidate_median_ms": 19.422198,
+      "sun": 99000000000000000
+    },
+    {
+      "query": "receiver-341",
+      "baseline_median_ms": 15.671682,
+      "candidate_median_ms": 16.746697,
+      "sun": 0
+    },
+    {
+      "query": "receiver-342",
+      "baseline_median_ms": 15.743995,
+      "candidate_median_ms": 19.993165,
+      "sun": 33251807524000000
+    },
+    {
+      "query": "sender-341",
+      "baseline_median_ms": 16.53014,
+      "candidate_median_ms": 18.777241,
+      "sun": 99000000000000000
+    },
+    {
+      "query": "sender-342",
+      "baseline_median_ms": 15.609991,
+      "candidate_median_ms": 18.630511,
+      "sun": 65748192475900000
+    }
+  ],
+  "independent_muhash": {
+    "block": 227222,
+    "tx_num": 245565,
+    "source_rows": [
+      4608,
+      0,
+      3042
+    ],
+    "root_hex": "194af866cffd2bec13f1b78269f137a33d736204078431cc466b446a911a4ffa",
+    "verified": true
+  },
+  "server_candidate_binary_sha256": "c224d6be118d99455ff3fb229b7bc8324470a4044a14bf610dced503c1baece8",
+  "production_binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "service_unchanged": true,
+  "notes": [
+    "Cold component benchmark is not whole RPC latency; 3 rounds, warm summaries use rounds 1 and 2 only. No p95 claim.",
+    "First process-cache fill regressed; positive sub-millisecond seeks and some previously fast balance queries did not improve.",
+    "Real balance checkpoint head=227222, combined with later immutable canonical cold history, bounded by checkpoint TxNum=245565. No 9.7M independent root claim.",
+    "No database format/writer/consensus changes, push, deployment or production restart."
+  ],
+  "previous_candidate_binary_sha256": "6d85c5c58b715cf0c74e8d03b8905e9c1b061fbf1a0c3b41e66d6080da094e42",
+  "maintenance_regression_fixed": true,
+  "final_verified_utc": "2026-10-20T02:28:15.590357+00:00"
+}

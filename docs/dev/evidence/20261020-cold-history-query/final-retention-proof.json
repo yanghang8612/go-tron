@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-20T02:13:11.301438+00:00",
+  "files": 10497,
+  "bytes": 57563221709,
+  "inventory_sha256": "53155629f432313a3d84ca04acce5e11d3932d063e5f2eaeb5954ef4098c759e",
+  "all_copied_inode_size_mtime_unchanged": true,
+  "manifest_sha256": "504728c50b50d3509bd30307942a84061e7bed250e2a546f29a81ac944c4a7d5",
+  "service": "MainPID=10692\nActiveState=active\n",
+  "production_binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+}

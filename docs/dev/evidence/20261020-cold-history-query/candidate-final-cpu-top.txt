@@ -1,0 +1,100 @@
+File: candidate-final.test
+Build ID: e683cca941033282676ab80d3700a3b90a23d95c
+Type: cpu
+Time: 2026-10-20 02:12:05 UTC
+Duration: 12.73s, Total samples = 14.30s (112.36%)
+Showing nodes accounting for 11.83s, 82.73% of 14.30s total
+Dropped 324 nodes (cum <= 0.14s)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     12.44s 86.99%  github.com/tronprotocol/go-tron/core/state/snapshots.TestOfflineColdQueryCorpus
+         0     0%     0%     12.44s 86.99%  testing.tRunner
+     0.02s  0.14%  0.14%     12.32s 86.15%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesByKeysContext
+     0.02s  0.14%  0.28%     12.20s 85.31%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorKeysFile
+     0.02s  0.14%  0.42%      8.17s 57.13%  github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt
+     0.01s  0.07%  0.49%      7.95s 55.59%  github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadWithCacheLimitContext
+     0.01s  0.07%  0.56%      6.07s 42.45%  github.com/tronprotocol/go-tron/core/state/snapshots.readStateDomainChangeBinaryHeaderAt
+     0.01s  0.07%  0.63%      6.04s 42.24%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).ReadAt
+         0     0%  0.63%      6.01s 42.03%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readAtLocked
+     0.01s  0.07%   0.7%      5.96s 41.68%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readHeaderPrefix
+         0     0%   0.7%      3.97s 27.76%  golang.org/x/crypto/blake2b.Sum256
+         0     0%   0.7%      3.97s 27.76%  golang.org/x/crypto/blake2b.checkSum
+         0     0%   0.7%      3.97s 27.76%  golang.org/x/crypto/blake2b.hashBlocks
+     3.97s 27.76% 28.46%      3.97s 27.76%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     3.68s 25.73% 54.20%      3.68s 25.73%  internal/runtime/syscall.Syscall6
+     0.04s  0.28% 54.48%      3.60s 25.17%  syscall.RawSyscall6
+     0.01s  0.07% 54.55%      3.23s 22.59%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext
+     0.01s  0.07% 54.62%      3.18s 22.24%  syscall.Syscall6
+     0.04s  0.28% 54.90%      2.96s 20.70%  os.(*File).ReadAt
+     0.01s  0.07% 54.97%      2.92s 20.42%  os.(*File).pread (inline)
+     0.01s  0.07% 55.03%      2.91s 20.35%  internal/poll.(*FD).Pread
+         0     0% 55.03%      2.86s 20.00%  internal/poll.(*FD).Pread.func1 (inline)
+         0     0% 55.03%      2.86s 20.00%  internal/poll.ignoringEINTR2[go.shape.int] (inline)
+         0     0% 55.03%      2.86s 20.00%  syscall.Pread (inline)
+         0     0% 55.03%      2.86s 20.00%  syscall.pread
+     0.02s  0.14% 55.17%      2.06s 14.41%  runtime.systemstack
+     0.01s  0.07% 55.24%      1.70s 11.89%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func2 (inline)
+         0     0% 55.24%      1.66s 11.61%  runtime.gcBgMarkWorker
+     0.01s  0.07% 55.31%      1.64s 11.47%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry
+         0     0% 55.31%      1.62s 11.33%  runtime.gcBgMarkWorker.func2
+         0     0% 55.31%      1.62s 11.33%  runtime.gcDrain
+     0.03s  0.21% 55.52%      1.58s 11.05%  runtime.mallocgc
+     0.51s  3.57% 59.09%      1.57s 10.98%  runtime.scanobject
+     0.05s  0.35% 59.44%      1.43s 10.00%  runtime.makeslice
+     0.02s  0.14% 59.58%      1.37s  9.58%  github.com/tronprotocol/go-tron/core/state/snapshots.openCompressedBlockReaderWithCacheLimitContext
+     0.12s  0.84% 60.42%      1.30s  9.09%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlock
+         0     0% 60.42%      1.28s  8.95%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).readCompressedBlock
+         0     0% 60.42%      1.03s  7.20%  runtime.gcDrainMarkWorkerIdle (inline)
+     0.04s  0.28% 60.70%      0.95s  6.64%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.01s  0.07% 60.77%      0.93s  6.50%  github.com/klauspost/compress/zstd.(*Decoder).DecodeAll
+     0.93s  6.50% 67.27%      0.93s  6.50%  runtime.memclrNoHeapPointers
+         0     0% 67.27%      0.91s  6.36%  github.com/klauspost/compress/zstd.(*frameDec).runDecoder
+         0     0% 67.27%      0.89s  6.22%  github.com/klauspost/compress/zstd.(*blockDec).decodeBuf
+         0     0% 67.27%      0.89s  6.22%  github.com/klauspost/compress/zstd.(*blockDec).decodeCompressed
+         0     0% 67.27%      0.88s  6.15%  runtime.mallocgcLarge
+         0     0% 67.27%      0.81s  5.66%  os.Open (inline)
+         0     0% 67.27%      0.81s  5.66%  os.OpenFile
+         0     0% 67.27%      0.81s  5.66%  os.openFileNolog
+         0     0% 67.27%      0.78s  5.45%  github.com/klauspost/compress/zstd.(*sequenceDecs).decodeSync
+         0     0% 67.27%      0.78s  5.45%  github.com/klauspost/compress/zstd.(*sequenceDecs).decodeSyncSimple
+     0.78s  5.45% 72.73%      0.78s  5.45%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+         0     0% 72.73%      0.72s  5.03%  github.com/tronprotocol/go-tron/core/state/snapshots.(*compressedBlockReader).decodeBlock
+     0.04s  0.28% 73.01%      0.72s  5.03%  syscall.Syscall
+         0     0% 73.01%      0.68s  4.76%  runtime.memclrNoHeapPointersChunked
+         0     0% 73.01%      0.59s  4.13%  github.com/tronprotocol/go-tron/core/state/snapshots.openStateDomainChangeBinaryAccessorReaderContext
+         0     0% 73.01%      0.59s  4.13%  runtime.gcDrainMarkWorkerFractional (inline)
+     0.21s  1.47% 74.48%      0.50s  3.50%  runtime.greyobject
+     0.01s  0.07% 74.55%      0.49s  3.43%  os.newFile
+     0.10s   0.7% 75.24%      0.45s  3.15%  io.ReadAtLeast
+         0     0% 75.24%      0.45s  3.15%  io.ReadFull (inline)
+     0.24s  1.68% 76.92%      0.40s  2.80%  runtime.findObject
+     0.08s  0.56% 77.48%      0.40s  2.80%  runtime.mallocgcSmallNoscan
+         0     0% 77.48%      0.32s  2.24%  os.ignoringEINTR (inline)
+         0     0% 77.48%      0.32s  2.24%  os.open
+         0     0% 77.48%      0.32s  2.24%  os.openFileNolog.func1 (inline)
+         0     0% 77.48%      0.32s  2.24%  syscall.Open (inline)
+     0.01s  0.07% 77.55%      0.32s  2.24%  syscall.SetNonblock
+         0     0% 77.55%      0.32s  2.24%  syscall.openat
+         0     0% 77.55%      0.31s  2.17%  syscall.fcntl
+         0     0% 77.55%      0.29s  2.03%  bufio.NewReaderSize (inline)
+         0     0% 77.55%      0.29s  2.03%  os.(*File).Close (partial-inline)
+         0     0% 77.55%      0.29s  2.03%  os.(*file).close
+     0.01s  0.07% 77.62%      0.26s  1.82%  internal/poll.(*FD).decref
+     0.10s   0.7% 78.32%      0.25s  1.75%  encoding/binary.ReadUvarint
+         0     0% 78.32%      0.25s  1.75%  internal/poll.(*FD).Close
+         0     0% 78.32%      0.24s  1.68%  github.com/tronprotocol/go-tron/core/state/snapshots.decodeStateDomainChangeBinaryAccessorKeyHeader
+         0     0% 78.32%      0.24s  1.68%  internal/poll.(*FD).destroy
+         0     0% 78.32%      0.24s  1.68%  internal/poll.(*SysFile).destroy (inline)
+         0     0% 78.32%      0.24s  1.68%  syscall.Close
+         0     0% 78.32%      0.23s  1.61%  github.com/tronprotocol/go-tron/core/state/snapshots.(*stateDomainChangeHistoryReader).Close
+     0.22s  1.54% 79.86%      0.22s  1.54%  runtime.(*mspan).base (inline)
+     0.05s  0.35% 80.21%      0.18s  1.26%  bufio.(*Reader).Read
+         0     0% 80.21%      0.17s  1.19%  github.com/tronprotocol/go-tron/core/state/snapshots.decodeStateDomainChangeBinaryAccessorV7Header
+         0     0% 80.21%      0.16s  1.12%  os.(*File).Stat
+         0     0% 80.21%      0.16s  1.12%  runtime.(*mheap).alloc
+         0     0% 80.21%      0.16s  1.12%  runtime.(*mheap).alloc.func1
+     0.16s  1.12% 81.33%      0.16s  1.12%  runtime.memmove
+     0.01s  0.07% 81.40%      0.16s  1.12%  runtime.newobject
+     0.15s  1.05% 82.45%      0.15s  1.05%  bytes.(*Reader).ReadByte
+         0     0% 82.45%      0.15s  1.05%  github.com/tronprotocol/go-tron/core/state/snapshots.verifyStateDomainChangeBinaryKeyDictionaryPair
+         0     0% 82.45%      0.15s  1.05%  runtime.(*mheap).allocSpan
+     0.04s  0.28% 82.73%      0.15s  1.05%  runtime.exitsyscall

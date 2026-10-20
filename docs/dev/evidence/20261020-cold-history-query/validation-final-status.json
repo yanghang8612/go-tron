@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "phase": "verified",
+  "utc": "2026-10-20T02:07:00.142706+00:00",
+  "compared_results": 162,
+  "mismatches": 0,
+  "service": "MainPID=10692\nActiveState=active\n",
+  "binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505"
+}

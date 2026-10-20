@@ -1,0 +1,140 @@
+package snapshots
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"runtime"
+	"testing"
+	"time"
+
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+)
+
+// Opt-in offline read benchmark, identical source used for both revisions.
+func TestOfflineColdQueryCorpus(t *testing.T) {
+	dir := os.Getenv("GTRON_COLD_QUERY_CORPUS")
+	if dir == "" {
+		t.Skip("offline corpus required")
+	}
+	m, err := OpenManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, release, err := m.PinHistoryReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	m = pinned
+	manifest, err := m.currentManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := func(s string) common.Address {
+		b, e := hex.DecodeString("41" + s)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return common.BytesToAddress(b)
+	}
+	owner := addr("a4997124a328a4615eab437cede31da47a31b375")
+	type query struct {
+		Name   string
+		Flat   rawdb.StateFlatDomain
+		Owner  common.Address
+		Gen    uint64
+		Domain kvdomains.KVDomain
+		Key    []byte
+		From   uint64
+	}
+	qs := []query{
+		{Name: "contract-account", Flat: rawdb.StateFlatDomainAccountLatest, Owner: owner, From: 20587120},
+		{Name: "genesis-sender-account", Flat: rawdb.StateFlatDomainAccountLatest, Owner: addr("71b0af54e0a1182a5e0947d6a64f3b22740ef318"), From: 1},
+		{Name: "absent-account", Flat: rawdb.StateFlatDomainAccountLatest, Owner: addr("d76e92303b7ebcc46916ec7bf946582180001234"), From: 20587120},
+		{Name: "contract-generation", Flat: rawdb.StateFlatDomainKVGeneration, Owner: owner, From: 20587120},
+		{Name: "contract-meta-gen0", Flat: rawdb.StateFlatDomainKVLatest, Owner: owner, Domain: kvdomains.ContractMetadata, Key: []byte("meta"), From: 20587120},
+		{Name: "contract-meta-gen1", Flat: rawdb.StateFlatDomainKVLatest, Owner: owner, Gen: 1, Domain: kvdomains.ContractMetadata, Key: []byte("meta"), From: 20587120},
+	}
+	// Add 48 real keys from twelve evenly spaced segments. The range scanner
+	// supplies an independent witness for a hit at the segment's first tx.
+	var histories []SegmentRef
+	for _, r := range manifest.Segments {
+		if r.Dataset == SegmentDatasetStateDomainChange && r.Kind == SegmentHistory {
+			histories = append(histories, r)
+		}
+	}
+	witnesses := map[string]*rawdb.StateDomainChange{}
+	for n := 0; n < 12; n++ {
+		ref := histories[n*(len(histories)-1)/11]
+		count := 0
+		err := iterateStateDomainChangeHistoryRange(dir, manifest, ref, ref.FromTxNum, ref.ToTxNum, func(c *rawdb.StateDomainChange) (bool, error) {
+			if c == nil {
+				return true, nil
+			}
+			name := fmt.Sprintf("sample-%02d-%02d", n, count)
+			qs = append(qs, query{Name: name, Flat: c.FlatDomain, Owner: c.Owner, Gen: c.Generation, Domain: c.Domain, Key: append([]byte(nil), c.Key...), From: c.TxNum})
+			witnesses[name] = cloneStateDomainChangeForSegment(c)
+			count++
+			return count < 4, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		Round          int
+		Query          string
+		Milliseconds   float64
+		AllocatedBytes uint64
+		Hash           string
+		Found          bool
+		Tx             uint64
+		Seq            uint64
+	}
+	var results []result
+	for round := 0; round < 3; round++ {
+		for _, q := range qs {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			started := time.Now()
+			found, e := m.FirstStateDomainChangesByKeysContext(context.Background(), q.From, manifest.VisibleTxEnd, q.Flat, q.Owner, q.Gen, q.Domain, [][]byte{q.Key})
+			elapsed := time.Since(started)
+			runtime.ReadMemStats(&after)
+			if e != nil {
+				t.Fatal(e)
+			}
+			c := found[string(q.Key)]
+			raw, e := json.Marshal(c)
+			if e != nil {
+				t.Fatal(e)
+			}
+			r := result{Round: round, Query: q.Name, Milliseconds: float64(elapsed.Nanoseconds()) / 1e6, AllocatedBytes: after.TotalAlloc - before.TotalAlloc, Hash: fmt.Sprintf("%x", sha256.Sum256(raw)), Found: c != nil}
+			if c != nil {
+				r.Tx = c.TxNum
+				r.Seq = c.Seq
+			}
+			if w := witnesses[q.Name]; w != nil && (c == nil || c.TxNum != w.TxNum || c.Seq > w.Seq) {
+				t.Fatalf("missing independent range witness %s: %+v", q.Name, c)
+			}
+			results = append(results, r)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, cancelErr := m.FirstStateDomainChangesByKeysContext(ctx, 20587120, manifest.VisibleTxEnd, rawdb.StateFlatDomainAccountLatest, qs[2].Owner, 0, 0, [][]byte{nil})
+	out := map[string]any{"results": results, "queries": qs, "history_segments": len(histories), "manifest_generation": manifest.Generation, "visible_tx_end": manifest.VisibleTxEnd, "cancel_error": fmt.Sprint(cancelErr), "cancel_milliseconds": float64(time.Since(start).Nanoseconds()) / 1e6, "note": "Offline cold first-seek component; 3 rounds, same immutable corpus, process cache initially cold; OS cache not dropped. Does not measure whole RPC or full MuHash."}
+	raw, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("GTRON_COLD_QUERY_OUT"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -714,6 +714,16 @@ func mergeStateTxRange(txRanges map[uint64]*rawdb.StateTxRange, row *rawdb.State
 }
 
 func (m *Manager) StateTxRangeForBlock(blockNum uint64) (*rawdb.StateTxRange, bool, error) {
+	return m.StateTxRangeForBlockContext(context.Background(), blockNum)
+}
+
+func (m *Manager) StateTxRangeForBlockContext(ctx context.Context, blockNum uint64) (*rawdb.StateTxRange, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	manifest, err := m.currentManifest()
 	if err != nil || manifest == nil {
 		return nil, false, err
@@ -721,6 +731,9 @@ func (m *Manager) StateTxRangeForBlock(blockNum uint64) (*rawdb.StateTxRange, bo
 	var derived *rawdb.StateTxRange
 	registry := DefaultDomainRegistry()
 	for _, ref := range manifest.Segments {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
 			continue
 		}
@@ -730,7 +743,7 @@ func (m *Manager) StateTxRangeForBlock(blockNum uint64) (*rawdb.StateTxRange, bo
 			if !ok {
 				return nil, false, fmt.Errorf("snapshots: binary state-domain-change history %q missing required index %q", ref.Path, cfg.HistoryIndexPathFor(ref.Path))
 			}
-			row, ok, err := readStateDomainChangeBinaryTxRangeForBlockByIndexFile(m.dir, ref, idxRef, blockNum)
+			row, ok, err := readStateDomainChangeBinaryTxRangeForBlockByIndexFileContext(ctx, m.dir, ref, idxRef, blockNum)
 			if err != nil {
 				return nil, false, err
 			}

@@ -75,6 +75,7 @@ type DomainCfg struct {
 	IterateHotHistoryBlocks           HotHistoryBlockIterator
 	IterateHotHistoryChanges          HotHistoryChangeIterator
 	ReadHotHistoryFirstBlockRange     HotHistoryFirstBlockRangeReader
+	ReadHotHistoryFirstContext        HotHistoryFirstContextReader
 	IterateHotHistoryBlockRange       HotHistoryBlockRangeChangeIterator
 	IterateHotHistoryPrefix           HotHistoryPrefixIterator
 	IterateHotHistoryPrefixBlockRange HotHistoryPrefixBlockRangeIterator
@@ -195,6 +196,8 @@ type HotHistoryBlocksDeleter func(db rawdb.StateKVLatestStore, blockNums []uint6
 type HotHistoryBlockIterator func(db ethdb.Iteratee, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error
 
 type HotHistoryChangeIterator func(db rawdb.StateKVHistoryReader, targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
+
+type HotHistoryFirstContextReader func(ctx context.Context, db rawdb.StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error)
 
 type HotHistoryFirstBlockRangeReader func(db rawdb.StateKVHistoryReader, targetBlock, headBlock, targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error)
 
@@ -461,6 +464,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			IterateHotHistoryBlocks:           rawdb.IterateStateDomainChangeBlocksByKey,
 			IterateHotHistoryChanges:          rawdb.IterateStateDomainChangesByKey,
 			ReadHotHistoryFirstBlockRange:     rawdb.ReadFirstStateDomainChangeByKeyBlockRange,
+			ReadHotHistoryFirstContext:        rawdb.ReadFirstStateDomainChangeByKeyBlockRangeContext,
 			IterateHotHistoryBlockRange:       rawdb.IterateStateDomainChangesByKeyBlockRange,
 			IterateHotHistoryPrefix:           rawdb.IterateStateDomainChangesByPrefix,
 			IterateHotHistoryPrefixBlockRange: rawdb.IterateStateDomainChangesByPrefixBlockRange,

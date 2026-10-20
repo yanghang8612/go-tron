@@ -1,0 +1,47 @@
+{
+  "complete": true,
+  "phase": "verified",
+  "utc": "2026-10-20T02:09:54.453693+00:00",
+  "muhash_verified": true,
+  "block_num": 227222,
+  "source_files_sha256": {
+    "core/rawdb/accessors_state_changeset.go": "55621cbbee2b93ac5fad6d3fc3f08712a0bab0a44b01bb4db47da6b95fe1d1c1",
+    "core/rawdb/history_first_tail_test.go": "1af700794e3642f44716b8428c57da89634cc28617a56ba3993f524c69067326",
+    "core/state/history.go": "e3d284c906fa659dcb8969f55a17be28232439fd7310f0a9746b2b69715f5904",
+    "core/state/history_point_bound_test.go": "9f1c6db4d84f382b34baf6d98ef5b18687b8ba18875de118b18b27393da215af",
+    "core/state/snapshots/compressed_block.go": "2f3a67a2030dac5feaa6d22dec1fbc9610d982e179d7fdac5847dddbadb23d5d",
+    "core/state/snapshots/compressed_history_reader_audit_test.go": "9c8d1184069c97decb551ef9ab6f951544e335cb618e283cb91a1a57f6c3eafe",
+    "core/state/snapshots/domain_registry.go": "e9137c329aa741752803c9ee18d0e817b3f3e0229c7f57b56c80499154e6ff93",
+    "core/state/snapshots/history_binary.go": "7b0f18d61c32940f02952366400e7cca86c869d16ca82a127075dfad4b59214f",
+    "core/state/snapshots/history_header_cache.go": "94fa561a6fa2fbf52b3f31da3e3e112591ec2b581a3eb2c2d00dcbfb59df3991",
+    "core/state/snapshots/history_header_cache_test.go": "68e4dc8cb0a4f502dd7fd8d8dc0cff77b4312bdb1138f3141aa511670d10083b",
+    "core/state/snapshots/history_segment.go": "ef372cbac864a0c541ed001d07752d988a1463aaa65a16b9a61c2d6c0402cfce"
+  },
+  "candidate_binary_sha256": "6d85c5c58b715cf0c74e8d03b8905e9c1b061fbf1a0c3b41e66d6080da094e42",
+  "service": "MainPID=10692\nActiveState=active\n",
+  "production_binary_sha256": "859f0b6b44dcad8b74905a7d889d93ab1317d91a2365aa8aab1c30c455313505",
+  "wallet": {
+    "version": "0.2.0-dev",
+    "currentBlock": 9591002,
+    "lastInsertTime": 1792462194447,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87263048,
+      "appliedTip": 9591032,
+      "sessionBlocks": 9363778,
+      "sessionTransactions": 441357376,
+      "remaining": 77672046,
+      "inflight": 94,
+      "bufferedBlocks": 1252,
+      "bufferedBytes": 17927854,
+      "fetchBackpressured": false,
+      "requestedBlocks": 220,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  }
+}

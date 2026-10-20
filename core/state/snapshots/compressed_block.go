@@ -484,15 +484,17 @@ func writeCompressedBlockHeaderAndTable(out io.Writer, blockSize int, recCount, 
 // decompresses each block exactly once). Concurrent callers are serialized on mu
 // and always receive a private copy, so the reader is safe to share.
 type compressedBlockReader struct {
-	cdc       *cdcReader
-	f         *os.File
-	dec       *zstd.Decoder
-	blockSize int
-	recCount  uint64
-	uncSize   uint64
-	dataOff   uint64
-	fileSize  uint64
-	table     []cbBlock
+	cdc          *cdcReader
+	prefixCache  *historyHeaderCache
+	headerPrefix *historyHeaderPrefix
+	f            *os.File
+	dec          *zstd.Decoder
+	blockSize    int
+	recCount     uint64
+	uncSize      uint64
+	dataOff      uint64
+	fileSize     uint64
+	table        []cbBlock
 
 	mu         sync.Mutex
 	cacheLimit int
@@ -778,24 +780,34 @@ func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
 			return e.bytes, nil
 		}
 	}
-	b := r.table[i]
-	expectedLen, err := compressedBlockExpectedLen(r.table, r.uncSize, i)
+	comp, expectedLen, err := r.readCompressedBlock(i)
 	if err != nil {
 		return nil, err
 	}
+	return r.decodeBlock(i, comp, expectedLen)
+}
+
+// readCompressedBlock retains the complete physical bounds and allocation checks
+// even when a previously decoded header prefix may be reused.
+func (r *compressedBlockReader) readCompressedBlock(i int) ([]byte, uint64, error) {
+	b := r.table[i]
+	expectedLen, err := compressedBlockExpectedLen(r.table, r.uncSize, i)
+	if err != nil {
+		return nil, 0, err
+	}
 	compStart, overflow := checkedAdd(r.dataOff, b.compressedStart)
 	if overflow {
-		return nil, fmt.Errorf("snapshots: compressed-block entry %d physical offset overflows", i)
+		return nil, 0, fmt.Errorf("snapshots: compressed-block entry %d physical offset overflows", i)
 	}
 	compEnd, overflow := checkedAdd(compStart, b.compressedLen)
 	if overflow || compEnd > r.fileSize {
-		return nil, fmt.Errorf("snapshots: compressed-block entry %d range [%d,%d] outside file size %d", i, compStart, compEnd, r.fileSize)
+		return nil, 0, fmt.Errorf("snapshots: compressed-block entry %d range [%d,%d] outside file size %d", i, compStart, compEnd, r.fileSize)
 	}
 	if compEnd > uint64(1<<63-1) {
-		return nil, fmt.Errorf("snapshots: compressed-block entry %d end %d exceeds int64", i, compEnd)
+		return nil, 0, fmt.Errorf("snapshots: compressed-block entry %d end %d exceeds int64", i, compEnd)
 	}
 	if b.compressedLen > compressedBlockMaxAlloc() {
-		return nil, fmt.Errorf("snapshots: compressed-block entry %d compressed length %d exceeds allocation limit", i, b.compressedLen)
+		return nil, 0, fmt.Errorf("snapshots: compressed-block entry %d compressed length %d exceeds allocation limit", i, b.compressedLen)
 	}
 	compressedLen := int(b.compressedLen)
 	if cap(r.compressed) < compressedLen {
@@ -803,8 +815,12 @@ func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
 	}
 	comp := r.compressed[:compressedLen]
 	if _, err := r.f.ReadAt(comp, int64(compStart)); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	return comp, expectedLen, nil
+}
+
+func (r *compressedBlockReader) decodeBlock(i int, comp []byte, expectedLen uint64) ([]byte, error) {
 	var decoded []byte
 	if len(r.cache) >= r.cacheLimit {
 		decoded = r.cache[len(r.cache)-1].bytes[:0]
@@ -884,6 +900,9 @@ func (r *compressedBlockReader) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (r *compressedBlockReader) readAtLocked(p []byte, uoff uint64) (int, error) {
+	if r.prefixCache != nil && len(r.table) != 0 && r.table[0].uncompressedStart == 0 && uoff < historyHeaderPrefixBytes && uint64(len(p)) <= historyHeaderPrefixBytes-uoff && uoff+uint64(len(p)) <= r.uncSize {
+		return r.readHeaderPrefix(p, uoff)
+	}
 	n := 0
 	for n < len(p) {
 		cur := uoff + uint64(n)

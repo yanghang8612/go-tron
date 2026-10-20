@@ -1519,8 +1519,12 @@ func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db St
 	}
 	for fromBlock <= indexedHead {
 		blockNum, ok, err := firstStateDomainChangeBlockByKeyRangeContext(ctx, db, fromBlock, indexedHead, flatDomain, owner, generation, domain, key)
-		if err != nil || !ok {
+		if err != nil {
 			return nil, err
+		}
+		if !ok {
+			// A negative posting seek says nothing about the unindexed tail.
+			break
 		}
 		var first *StateDomainChange
 		if err := IterateStateDomainChangesContext(ctx, db, blockNum, func(change *StateDomainChange) (bool, error) {

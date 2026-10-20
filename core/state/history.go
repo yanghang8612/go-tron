@@ -246,6 +246,10 @@ type StateDomainChangeColdHistory interface {
 	IterateStateDomainChanges(fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error
 }
 
+type StateDomainChangeColdTxRangeContext interface {
+	StateTxRangeForBlockContext(ctx context.Context, blockNum uint64) (*rawdb.StateTxRange, bool, error)
+}
+
 type StateDomainChangeColdTxRange interface {
 	StateTxRangeForBlock(blockNum uint64) (*rawdb.StateTxRange, bool, error)
 }
@@ -759,7 +763,7 @@ func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, s
 		return tcommon.Hash{}, false, err
 	}
 	var meta *contractpb.SmartContract
-	if data, ok, err := r.readStateAccountKVAsOf(addr, kvdomains.ContractMetadata, contractMetaKVKey, blockNum, r.headNum); err != nil {
+	if data, ok, err := r.readStateKVAsOf(addr, envelope.AccountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey, blockNum, r.headNum); err != nil {
 		return tcommon.Hash{}, false, err
 	} else if ok && len(data) > 0 {
 		var sc contractpb.SmartContract
@@ -1320,14 +1324,18 @@ func (r *PersistentHistoryReader) firstStateDomainChangeByKey(targetTxNum, headT
 		}
 		return true
 	}
-	hotFirst, err := r.readFirstHotStateDomainChangeByKey(targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
-	if err != nil {
-		return nil, err
-	}
-	consider(hotFirst)
+	// Cold history is ordered by transaction range. Its first match bounds
+	// the hot search even when the tiers overlap. Include the matching tx and
+	// block so an earlier hot sequence in that same transaction still wins.
 	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
 		fromTxNum := targetTxNum + 1
-		if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
+		if batch, ok := r.coldHistory.(StateDomainChangeColdKeyBatchHistory); ok {
+			changes, err := batch.FirstStateDomainChangesByKeysContext(r.ctx, fromTxNum, headTxNum, flatDomain, owner, generation, domain, [][]byte{key})
+			if err != nil {
+				return nil, err
+			}
+			consider(changes[string(key)])
+		} else if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
 			if err := keyed.IterateStateDomainChangesByKey(fromTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
 				if err := r.contextError(); err != nil {
 					return false, err
@@ -1340,27 +1348,54 @@ func (r *PersistentHistoryReader) firstStateDomainChangeByKey(targetTxNum, headT
 			if err := r.contextError(); err != nil {
 				return false, err
 			}
-			// The generic compatibility path is not key ordered, so it must
-			// inspect the complete range to select the earliest match.
 			consider(change)
 			return true, nil
 		}); err != nil {
 			return nil, err
 		}
 	}
+	hotHeadTxNum := headTxNum
+	hotHeadBlock := r.hotHistoryToBlock
+	if first != nil {
+		hotHeadTxNum = first.TxNum
+		if first.BlockNum < hotHeadBlock {
+			hotHeadBlock = first.BlockNum
+		}
+	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	hotFirst, err := r.readFirstHotStateDomainChangeByKeyThroughBlock(targetTxNum, hotHeadTxNum, hotHeadBlock, flatDomain, owner, generation, domain, key)
+	if err != nil {
+		return nil, err
+	}
+	consider(hotFirst)
 	return first, nil
 }
 
 func (r *PersistentHistoryReader) readFirstHotStateDomainChangeByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error) {
+	if r == nil {
+		return nil, nil
+	}
+	return r.readFirstHotStateDomainChangeByKeyThroughBlock(targetTxNum, headTxNum, r.hotHistoryToBlock, flatDomain, owner, generation, domain, key)
+}
+
+func (r *PersistentHistoryReader) readFirstHotStateDomainChangeByKeyThroughBlock(targetTxNum, headTxNum, headBlock uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error) {
 	if r == nil || targetTxNum >= headTxNum {
 		return nil, nil
+	}
+	if err := r.contextError(); err != nil {
+		return nil, err
 	}
 	cfg, err := stateDomainHistoryConfig()
 	if err != nil {
 		return nil, err
 	}
+	if r.hotHistoryBounded && cfg.ReadHotHistoryFirstContext != nil {
+		return cfg.ReadHotHistoryFirstContext(r.ctx, r.db, r.hotHistoryFromBlock, headBlock, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
+	}
 	if r.hotHistoryBounded && cfg.ReadHotHistoryFirstBlockRange != nil {
-		return cfg.ReadHotHistoryFirstBlockRange(r.db, r.hotHistoryFromBlock, r.hotHistoryToBlock, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
+		return cfg.ReadHotHistoryFirstBlockRange(r.db, r.hotHistoryFromBlock, headBlock, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
 	}
 	if cfg.IterateHotHistoryChanges == nil {
 		return nil, ErrStateDomainHistoryUnavailable
@@ -1637,6 +1672,9 @@ func (r *PersistentHistoryReader) stateTxRangeForBlock(blockNum uint64) (*rawdb.
 	if r == nil {
 		return nil, false, nil
 	}
+	if err := r.contextError(); err != nil {
+		return nil, false, err
+	}
 	if cached, ok := r.txRanges[blockNum]; ok {
 		if !cached.ok {
 			return nil, false, nil
@@ -1651,8 +1689,22 @@ func (r *PersistentHistoryReader) stateTxRangeForBlock(blockNum uint64) (*rawdb.
 		copy := *row
 		return &copy, true, nil
 	}
+	// Genesis allocation is materialized at txNum zero, before the first
+	// post-genesis StateTxRange. Honor an explicit hot row above, but do not
+	// search every immutable history segment to rediscover its absence.
+	if blockNum == 0 {
+		r.txRanges[blockNum] = stateTxRangeCacheEntry{}
+		return nil, false, nil
+	}
 	if cold, ok := r.coldHistory.(StateDomainChangeColdTxRange); ok {
-		row, found, err := cold.StateTxRangeForBlock(blockNum)
+		var row *rawdb.StateTxRange
+		var found bool
+		var err error
+		if contextual, ok := r.coldHistory.(StateDomainChangeColdTxRangeContext); ok {
+			row, found, err = contextual.StateTxRangeForBlockContext(r.ctx, blockNum)
+		} else {
+			row, found, err = cold.StateTxRangeForBlock(blockNum)
+		}
 		if err != nil {
 			return nil, false, err
 		}

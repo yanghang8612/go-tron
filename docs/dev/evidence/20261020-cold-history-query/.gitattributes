@@ -1,0 +1,2 @@
+# The transported unified diff retains literal context prefixes and blank lines.
+maintenance-amend.patch whitespace=-space-before-tab,-blank-at-eol

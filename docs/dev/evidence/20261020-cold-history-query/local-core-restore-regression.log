@@ -1,0 +1,3 @@
+ok  	github.com/tronprotocol/go-tron/core	45.158s
+ok  	github.com/tronprotocol/go-tron/cmd/gtron	21.783s
+ok  	github.com/tronprotocol/go-tron/cmd/generation-census	0.775s [no tests to run]

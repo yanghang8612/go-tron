@@ -1,0 +1,5 @@
+--- FAIL: TestHistoryKeySeekWithMaintenanceContextBindsAccessorOnce (0.09s)
+    history_key_context_test.go:24: seen=0 checkpoints=13 err=snapshots: V6 history accessor is already attached
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core/state/snapshots	1.757s
+FAIL

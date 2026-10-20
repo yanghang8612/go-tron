@@ -1,0 +1,99 @@
+{
+  "head_block": 227222,
+  "head_tx": 245565,
+  "note": "Full PersistentHistoryReader balance path on a real 227222 consistent chaindata copy plus fixed later cold corpus, clipped to checkpoint TxNum. No HTTP/RPC timing, no current 9M root claim.",
+  "results": [
+    {
+      "milliseconds": 50.157684,
+      "query": "genesis-sender",
+      "round": 0,
+      "sun": 99000000000000000
+    },
+    {
+      "milliseconds": 18.777241,
+      "query": "sender-341",
+      "round": 0,
+      "sun": 99000000000000000
+    },
+    {
+      "milliseconds": 18.630511,
+      "query": "sender-342",
+      "round": 0,
+      "sun": 65748192475900000
+    },
+    {
+      "milliseconds": 18.701754,
+      "query": "receiver-341",
+      "round": 0,
+      "sun": 0
+    },
+    {
+      "milliseconds": 15.645092,
+      "query": "receiver-342",
+      "round": 0,
+      "sun": 33251807524000000
+    },
+    {
+      "milliseconds": 14.591601,
+      "query": "genesis-sender",
+      "round": 1,
+      "sun": 99000000000000000
+    },
+    {
+      "milliseconds": 16.807088,
+      "query": "sender-341",
+      "round": 1,
+      "sun": 99000000000000000
+    },
+    {
+      "milliseconds": 17.500668,
+      "query": "sender-342",
+      "round": 1,
+      "sun": 65748192475900000
+    },
+    {
+      "milliseconds": 16.746697,
+      "query": "receiver-341",
+      "round": 1,
+      "sun": 0
+    },
+    {
+      "milliseconds": 19.993165,
+      "query": "receiver-342",
+      "round": 1,
+      "sun": 33251807524000000
+    },
+    {
+      "milliseconds": 19.422198,
+      "query": "genesis-sender",
+      "round": 2,
+      "sun": 99000000000000000
+    },
+    {
+      "milliseconds": 20.362134,
+      "query": "sender-341",
+      "round": 2,
+      "sun": 99000000000000000
+    },
+    {
+      "milliseconds": 20.2698,
+      "query": "sender-342",
+      "round": 2,
+      "sun": 65748192475900000
+    },
+    {
+      "milliseconds": 16.399484,
+      "query": "receiver-341",
+      "round": 2,
+      "sun": 0
+    },
+    {
+      "milliseconds": 20.759954,
+      "query": "receiver-342",
+      "round": 2,
+      "sun": 33251807524000000
+    }
+  ],
+  "root": "31393461663836366366666432626563313366316237383236396631333761333364373336323034303738343331636334363662343436613931316134666661",
+  "unchanged_head": true
+}
