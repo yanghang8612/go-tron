@@ -5,6 +5,7 @@ ROOT=pathlib.Path(__file__).resolve().parent
 parser=argparse.ArgumentParser();parser.add_argument('--source',action='store_true',help='also compare frozen production sources to Git revisions');parser.add_argument('--archives',action='store_true',help='also check retained raw ZIPs from transfers.json');args=parser.parse_args()
 def data(path):
  if path.exists():return path.read_bytes()
+ if path.suffix=='.go' and path.with_name(path.name+'.txt').exists():return path.with_name(path.name+'.txt').read_bytes()
  return gzip.decompress(path.with_name(path.name+'.gz').read_bytes())
 def read(path):return json.loads(data(path))
 def sha(raw):return hashlib.sha256(raw).hexdigest()
@@ -14,7 +15,7 @@ def inventory(stage):
  verified=omitted=0
  for name,row in inv.items():
   p=ROOT/stage/name
-  if not p.exists() and not p.with_name(p.name+'.gz').exists():
+  if not p.exists() and not p.with_name(p.name+'.gz').exists() and not (p.suffix=='.go' and p.with_name(p.name+'.txt').exists()):
    assert name.endswith(('.trace','.zlib')),name;omitted+=1;continue
   raw=data(p);assert len(raw)==row['bytes'] and sha(raw)==row['sha256'],p;verified+=1
  return {'files_verified':verified,'raw_trace_or_delivery_files_in_archive_only':omitted}

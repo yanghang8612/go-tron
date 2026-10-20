@@ -28,3 +28,5 @@ python3 docs/dev/evidence/20261021-cold-query-layout/verify.py --source --archiv
 新进程组没有控制 OS 缓存；私有 OS 冷缓存组只针对该轮 strace 发现的读集做独立 inode 的 fadvise/mincore，不是全设备冷启动。请求数量较少、单一计数器合约，适合定位结构性瓶颈，不构成并发吞吐、p95 或所有合约的性能保证。
 
 最后的 [可视验收/线上身份回执](final-acceptance-and-production.png) 保存了完成后的实际终端状态：2026-10-20T19:10:02Z、PID 28737、高度 15,388,544、原二进制 SHA256 和旧库存在。此前结构化生产核验仍保存在 lazy-final/lazy-final-production-proof.json，不覆盖旧回执。
+
+证据中的 Go 源码以 `.go.txt` 原样保存，避免被 `go test ./...` 当作项目包编译；读取器去掉 `.txt` 映射后核对原 inventory，原 ZIP 中的文件名与字节均保持不变。
