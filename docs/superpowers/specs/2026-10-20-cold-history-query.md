@@ -54,3 +54,22 @@ and incomplete scans never publish coverage. The byte limit accounts retained
 cache payload and estimated row overhead, not all RPC RSS or per-block decode scratch.
 Never publish partial, canceled or failed scans; no global negative cache,
 new persistence, MuHash changes or online scheduler parameter changes.
+
+## Follow-up: request planning and directory reads
+
+Reuse only explicit pinned KV views. Memoize first-change results, including
+absence, by the complete target/head transaction cut and logical identity;
+bound retention charges to 4 MiB / 4096 entries and detach all returned bytes.
+Charges include copied bytes and estimated entry overhead, not total RPC RSS. Do not cache
+errors or canceled/partial batches. A changed hot range clears the memo.
+Batch heterogeneous account/KV queries against one validated cold pair per
+segment, preserving earliest TxNum/Seq and cold/hot overlap. Constant-call
+prefetch is optional: failures leave demand reads authoritative, cancellation
+still propagates, and generation-dependent metadata follows account resolution.
+
+Coalesce accessor directory offsets/entries, and reuse at most eight 4 KiB
+directory pages for one open batch. No retained file handles, global directory
+cache, changed format, relaxed CRC/dictionary checks or stat-only trust.
+Rebenchmark real HTTP on the existing immutable 11818192 capture, including
+startup-cold private inodes, against 4e6978dd and retain oracle/MuHash/restore
+evidence. No production restart, deployment, parameter change or database reset.

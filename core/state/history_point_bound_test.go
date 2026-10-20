@@ -169,9 +169,12 @@ func TestHistoryStorageMetadataAcrossRecreateHotAndCold(t *testing.T) {
 			if err := rawdb.WriteStageProgressWithHash(f.disk, rawdb.StageStateHistoryIndex, 0, common.Hash{}); err != nil {
 				t.Fatal(err)
 			}
-			r.db = rawdb.WithStateHistoryQueryTailCache(&pointReadCounter{readerDB: r.db})
+			r = NewPersistentHistoryReaderWithColdHistory(rawdb.WithStateHistoryQueryTailCache(&pointReadCounter{readerDB: r.db}), r.live, r.headNum, r.coldHistory)
 			for height, want := range map[uint64]byte{0: 0, 1: 11, 2: 22, 3: 0, 4: 44} {
 				if err := r.SetHotHistoryBlockRange(height, f.head); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.PrefetchExecutionAt(height, addr, addr, []int32{27, 35}); err != nil {
 					t.Fatal(err)
 				}
 				got, err := r.StorageAt(addr, slot, height)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
@@ -232,6 +233,9 @@ type PersistentHistoryReader struct {
 	hotHistoryFromBlock uint64
 	hotHistoryToBlock   uint64
 	hotHistoryBounded   bool
+	firstMemo           map[historyFirstKey]*rawdb.StateDomainChange
+	firstMemoBytes      int
+	firstMemoPinned     bool
 }
 
 // readerDB is the KV surface the reader needs: point Get/Has reads plus
@@ -342,15 +346,17 @@ func NewPersistentHistoryReader(db readerDB, live LiveAccountReader, headNum uin
 }
 
 func NewPersistentHistoryReaderWithColdHistory(db readerDB, live LiveAccountReader, headNum uint64, coldHistory StateDomainChangeColdHistory) *PersistentHistoryReader {
+	marker, pinned := db.(pointread.PinnedKeyValueView)
 	return &PersistentHistoryReader{
-		db:          db,
-		live:        live,
-		headNum:     headNum,
-		coldHistory: coldHistory,
-		latest:      newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry()),
-		cache:       make(map[reqCacheKey]any),
-		txRanges:    make(map[uint64]stateTxRangeCacheEntry),
-		ctx:         context.Background(),
+		firstMemoPinned: pinned && marker.IsPinnedKeyValueView(),
+		db:              db,
+		live:            live,
+		headNum:         headNum,
+		coldHistory:     coldHistory,
+		latest:          newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry()),
+		cache:           make(map[reqCacheKey]any),
+		txRanges:        make(map[uint64]stateTxRangeCacheEntry),
+		ctx:             context.Background(),
 	}
 }
 
@@ -410,6 +416,8 @@ func (r *PersistentHistoryReader) SetHotHistoryBlockRange(targetBlock, headBlock
 			targetBlock = min(prunedThrough, headBlock)
 		}
 	}
+	clear(r.firstMemo)
+	r.firstMemoBytes = 0
 	r.hotHistoryFromBlock = targetBlock
 	r.hotHistoryToBlock = headBlock
 	r.hotHistoryBounded = true
@@ -836,6 +844,59 @@ func (r *PersistentHistoryReader) readStateKVAsOf(owner tcommon.Address, generat
 }
 
 func (r *PersistentHistoryReader) readStateKVBatchAsOf(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte, targetBlock, headBlock uint64) (map[string][]byte, error) {
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	if !r.firstMemoPinned || !r.hotHistoryBounded {
+		return r.readStateKVBatchAsOfUncached(owner, generation, domain, keys, targetBlock, headBlock)
+	}
+	target, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return nil, err
+	}
+	head, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(keys))
+	pending := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		q := snapshots.StateHistoryQuery{FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: generation, Domain: domain, Key: key}
+		change, cached := r.memoFirst(target, head, q)
+		if !cached {
+			pending = append(pending, key)
+			continue
+		}
+		var value []byte
+		var exists bool
+		if change != nil {
+			value, exists = previousStateDomainValue(change)
+		} else {
+			value, exists, err = r.latestAtTxNum(head).KVLatest(owner, generation, domain, key)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if exists {
+			out[string(key)] = append([]byte(nil), value...)
+		}
+	}
+	if len(pending) > 0 {
+		values, err := r.readStateKVBatchAsOfUncached(owner, generation, domain, pending, targetBlock, headBlock)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range values {
+			out[key] = value
+		}
+	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *PersistentHistoryReader) readStateKVBatchAsOfUncached(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, keys [][]byte, targetBlock, headBlock uint64) (map[string][]byte, error) {
 	out := make(map[string][]byte, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -925,6 +986,12 @@ func (r *PersistentHistoryReader) readStateKVBatchAsOf(owner tcommon.Address, ge
 		}); err != nil {
 			return nil, err
 		}
+	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		r.rememberFirst(targetTxNum, headTxNum, snapshots.StateHistoryQuery{FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: generation, Domain: domain, Key: key}, first[string(key)])
 	}
 	latest := r.latestAtTxNum(headTxNum)
 	for _, key := range keys {
@@ -1301,6 +1368,25 @@ func (r *PersistentHistoryReader) collectStateAccountKVPrefixChanges(targetTxNum
 // can overlap around the freeze boundary, so seek both and keep the earlier
 // logical mutation rather than relying on storage-tier precedence.
 func (r *PersistentHistoryReader) firstStateDomainChangeByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error) {
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	query := snapshots.StateHistoryQuery{FlatDomain: flatDomain, Owner: owner, Generation: generation, Domain: domain, Key: key}
+	if change, ok := r.memoFirst(targetTxNum, headTxNum, query); ok {
+		return change, nil
+	}
+	change, err := r.firstStateDomainChangeByKeyUncached(targetTxNum, headTxNum, flatDomain, owner, generation, domain, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.contextError(); err != nil {
+		return nil, err
+	}
+	r.rememberFirst(targetTxNum, headTxNum, query, change)
+	return change, nil
+}
+
+func (r *PersistentHistoryReader) firstStateDomainChangeByKeyUncached(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) (*rawdb.StateDomainChange, error) {
 	if r == nil || targetTxNum >= headTxNum {
 		return nil, nil
 	}

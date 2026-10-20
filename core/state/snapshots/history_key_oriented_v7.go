@@ -677,12 +677,14 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx context.Co
 	// dynamic-property keys: on a compressed reader that turns a point lookup
 	// into a multi-gigabyte directory walk. Cache only directory entries touched
 	// by binary searches and key blocks that actually contain requested keys.
+	pages := acquireHistoryDirectoryPages(ctx, accessor, h.headerSize, h.blockDirLen)
+	defer releaseHistoryDirectoryPages(pages)
 	directory := make(map[uint64]stateDomainChangeBinaryAccessorV6Block)
 	readDirectory := func(index uint64) (stateDomainChangeBinaryAccessorV6Block, error) {
 		if block, ok := directory[index]; ok {
 			return block, nil
 		}
-		block, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(accessor, h, index)
+		block, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(pages, h, index)
 		if err == nil {
 			directory[index] = block
 		}

@@ -45,3 +45,22 @@ Acceptance and exact commands/results:
 
 This follow-up remains local/offline. Deployment authorization for 9030ce7a
 already completed does not cause another automatic push or production restart.
+
+## Follow-up: request planning and directory reads
+
+- [x] Bound pinned request first-change memo by complete logical identity and
+      transaction cuts; cover absence, ownership, cancellation, range reset,
+      moving-view bypass and retained byte/entry caps.
+- [x] Add heterogeneous first-change batches and constant-call account-first
+      planning; preserve historical generations, hot/cold same-tx order and
+      authoritative demand-read errors after failed optional prefetch.
+- [x] Coalesce directory offset/entry reads and reuse eight 4 KiB directory
+      pages within one open batch; retain CRC, bounds and context checks.
+- [x] Run affected packages, race, vet and native Sapling archive/MuHash/CLI
+      restore/continued-execution regressions and build.
+- [ ] Recompare complete HTTP eth_call against 4e6978dd on the unchanged
+      11818192 capture with warm, fresh-process and private OS-cold conditions.
+- [ ] Record read/CPU/allocation amplification, recheck fixed-copy MuHash and
+      production identity, seal source/binary/input/oracle evidence.
+
+No push, deployment, service restart or online parameter/database change.

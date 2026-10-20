@@ -287,35 +287,34 @@ func stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(r io.ReaderAt, h s
 	dirStart := h.headerSize
 	entriesStart := dirStart + h.blockCount*8
 	dirEnd := dirStart + h.blockDirLen
-	var offRaw [8]byte
-	if _, err := r.ReadAt(offRaw[:], int64(dirStart+index*8)); err != nil {
+	// Adjacent offsets and the complete CRC-protected entry each need one
+	// bounded read, rather than four small ReaderAt calls per binary-search step.
+	var offsets [16]byte
+	n := 8
+	if index+1 < h.blockCount {
+		n = 16
+	}
+	if _, err := r.ReadAt(offsets[:n], int64(dirStart+index*8)); err != nil {
 		return stateDomainChangeBinaryAccessorV6Block{}, err
 	}
-	off := binary.BigEndian.Uint64(offRaw[:])
+	off := binary.BigEndian.Uint64(offsets[:8])
 	next := dirEnd
-	if index+1 < h.blockCount {
-		if _, err := r.ReadAt(offRaw[:], int64(dirStart+(index+1)*8)); err != nil {
-			return stateDomainChangeBinaryAccessorV6Block{}, err
-		}
-		next = binary.BigEndian.Uint64(offRaw[:])
+	if n == 16 {
+		next = binary.BigEndian.Uint64(offsets[8:])
 	}
-	if off < entriesStart || off >= next || next > dirEnd || next-off < 2+stateDomainChangeBinaryAccessorV6BlockTail || index == 0 && off != entriesStart {
+	if off < entriesStart || off >= next || next > dirEnd || next-off < 2+stateDomainChangeBinaryAccessorV6BlockTail || next-off > 2+math.MaxUint16+stateDomainChangeBinaryAccessorV6BlockTail || index == 0 && off != entriesStart {
 		return stateDomainChangeBinaryAccessorV6Block{}, errors.New("snapshots: invalid V6 accessor block directory offset")
 	}
-	var lenRaw [2]byte
-	if _, err := r.ReadAt(lenRaw[:], int64(off)); err != nil {
+	raw := make([]byte, next-off)
+	if _, err := r.ReadAt(raw, int64(off)); err != nil {
 		return stateDomainChangeBinaryAccessorV6Block{}, err
 	}
-	keyLen := uint64(binary.BigEndian.Uint16(lenRaw[:]))
+	keyLen := uint64(binary.BigEndian.Uint16(raw[:2]))
 	if keyLen == 0 || next-off != 2+keyLen+stateDomainChangeBinaryAccessorV6BlockTail {
 		return stateDomainChangeBinaryAccessorV6Block{}, errors.New("snapshots: invalid V6 accessor block directory entry")
 	}
-	raw := make([]byte, keyLen+stateDomainChangeBinaryAccessorV6BlockTail)
-	if _, err := r.ReadAt(raw, int64(off+2)); err != nil {
-		return stateDomainChangeBinaryAccessorV6Block{}, err
-	}
-	key := append([]byte(nil), raw[:keyLen]...)
-	tail := raw[keyLen:]
+	key := append([]byte(nil), raw[2:2+keyLen]...)
+	tail := raw[2+keyLen:]
 	entryCRC := crc32.NewIEEE()
 	_, _ = entryCRC.Write(key)
 	_, _ = entryCRC.Write(tail[:24])

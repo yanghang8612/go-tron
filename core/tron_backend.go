@@ -349,6 +349,12 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 		energyLimit = 30_000_000 // default max energy for constant calls
 	}
 
+	if history != nil {
+		if err := history.PrefetchExecutionAt(historyBlock, owner, contractAddr, []int32{27, 35}); err != nil {
+			return nil, err
+		}
+	}
+
 	dp, err := b.executionDynamicPropertiesStrict(statedbCopy, block)
 	if err != nil {
 		return nil, fmt.Errorf("load constant-call dynamic properties: %w", err)

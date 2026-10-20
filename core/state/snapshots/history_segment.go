@@ -415,10 +415,36 @@ func (m *Manager) IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flat
 // are opened once per segment for the entire batch; this is the primary archive
 // read path used when loading the many dynamic properties required by eth_call.
 func (m *Manager) FirstStateDomainChangesByKeysContext(ctx context.Context, fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKeys [][]byte) (map[string]*rawdb.StateDomainChange, error) {
-	out := make(map[string]*rawdb.StateDomainChange, len(logicalKeys))
-	if m == nil || len(logicalKeys) == 0 {
-		return out, nil
+	queries := make([]StateHistoryQuery, len(logicalKeys))
+	for i, key := range logicalKeys {
+		queries[i] = StateHistoryQuery{flatDomain, owner, generation, domain, key}
 	}
+	changes, err := m.FirstStateDomainChangesContext(ctx, fromTxNum, toTxNum, queries)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*rawdb.StateDomainChange, len(logicalKeys))
+	for i, change := range changes {
+		if change != nil {
+			out[string(logicalKeys[i])] = change
+		}
+	}
+	return out, nil
+}
+
+// StateHistoryQuery identifies one physical logical state key. A mixed batch
+// shares each authenticated segment/accessor open across owners and domains.
+// Results are positional; nil proves no change in the requested closed range.
+type StateHistoryQuery struct {
+	FlatDomain rawdb.StateFlatDomain
+	Owner      common.Address
+	Generation uint64
+	Domain     kvdomains.KVDomain
+	Key        []byte
+}
+
+func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum, toTxNum uint64, queries []StateHistoryQuery) ([]*rawdb.StateDomainChange, error) {
+	out := make([]*rawdb.StateDomainChange, len(queries))
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -428,34 +454,54 @@ func (m *Manager) FirstStateDomainChangesByKeysContext(ctx context.Context, from
 	if toTxNum < fromTxNum {
 		return nil, fmt.Errorf("snapshots: state-domain-change range [%d,%d] is inverted", fromTxNum, toTxNum)
 	}
+	if m == nil || len(queries) == 0 {
+		return out, nil
+	}
 	manifest, err := m.currentManifest()
 	if err != nil || manifest == nil {
 		return out, err
 	}
-	type keyQuery struct {
-		logical []byte
+	type queryEntry struct {
+		query   StateHistoryQuery
 		lookup  []byte
+		indices []int
+		first   *rawdb.StateDomainChange
 	}
-	queries := make([]keyQuery, 0, len(logicalKeys))
-	queryByLookup := make(map[string]keyQuery, len(logicalKeys))
-	for _, logicalKey := range logicalKeys {
-		lookup := stateDomainChangeBinaryAccessorLookupKey(flatDomain, owner, generation, domain, logicalKey)
-		query := keyQuery{logical: append([]byte(nil), logicalKey...), lookup: lookup}
-		if _, exists := queryByLookup[string(lookup)]; exists {
-			continue
+	entries := make([]*queryEntry, 0, len(queries))
+	byLookup := make(map[string]*queryEntry, len(queries))
+	for i, query := range queries {
+		switch query.FlatDomain {
+		case rawdb.StateFlatDomainAccountLatest, rawdb.StateFlatDomainKVGeneration:
+		case rawdb.StateFlatDomainKVLatest:
+			if !kvdomains.IsRegistered(query.Domain) {
+				return nil, fmt.Errorf("snapshots: unknown history KV domain %d", query.Domain)
+			}
+		default:
+			return nil, fmt.Errorf("snapshots: unknown history flat domain %d", query.FlatDomain)
 		}
-		queries = append(queries, query)
-		queryByLookup[string(lookup)] = query
+		lookup := stateDomainChangeBinaryAccessorLookupKey(query.FlatDomain, query.Owner, query.Generation, query.Domain, query.Key)
+		entry := byLookup[string(lookup)]
+		if entry == nil {
+			query.Key = append([]byte(nil), query.Key...)
+			entry = &queryEntry{query: query, lookup: lookup}
+			entries = append(entries, entry)
+			byLookup[string(lookup)] = entry
+		}
+		entry.indices = append(entry.indices, i)
 	}
-	consider := func(query keyQuery, change *rawdb.StateDomainChange) {
-		if !stateDomainChangeMatchesAccessorLookup(change, flatDomain, owner, generation, domain, query.logical) {
-			return
+	consider := func(lookup []byte, change *rawdb.StateDomainChange) (bool, error) {
+		entry := byLookup[string(lookup)]
+		if entry == nil {
+			return false, errors.New("snapshots: unexpected batch history lookup key")
 		}
-		key := string(query.logical)
-		current := out[key]
-		if current == nil || change.TxNum < current.TxNum || change.TxNum == current.TxNum && change.Seq < current.Seq {
-			out[key] = cloneStateDomainChangeForSegment(change)
+		q := entry.query
+		if change == nil || change.TxNum < fromTxNum || change.TxNum > toTxNum || !stateDomainChangeMatchesAccessorLookup(change, q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key) {
+			return true, nil
 		}
+		if entry.first == nil || change.TxNum < entry.first.TxNum || change.TxNum == entry.first.TxNum && change.Seq < entry.first.Seq {
+			entry.first = cloneStateDomainChangeForSegment(change)
+		}
+		return false, nil
 	}
 	for _, ref := range manifest.Segments {
 		if err := ctx.Err(); err != nil {
@@ -464,13 +510,10 @@ func (m *Manager) FirstStateDomainChangesByKeysContext(ctx context.Context, from
 		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory || ref.ToTxNum < fromTxNum || ref.FromTxNum > toTxNum {
 			continue
 		}
-		// Active history ranges are validated as non-overlapping and sorted by
-		// FromTxNum. Once the first change for a key is found, no later segment
-		// can contain an earlier answer, so exclude it from subsequent opens.
-		lookupKeys := make([][]byte, 0, len(queries)-len(out))
-		for _, query := range queries {
-			if out[string(query.logical)] == nil {
-				lookupKeys = append(lookupKeys, query.lookup)
+		lookupKeys := make([][]byte, 0, len(entries))
+		for _, entry := range entries {
+			if entry.first == nil {
+				lookupKeys = append(lookupKeys, entry.lookup)
 			}
 		}
 		if len(lookupKeys) == 0 {
@@ -485,37 +528,31 @@ func (m *Manager) FirstStateDomainChangesByKeysContext(ctx context.Context, from
 			if !ok {
 				return nil, fmt.Errorf("snapshots: binary state-domain-change history %q missing required accessor %q", ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
 			}
-			if err := iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx, m.dir, ref, accessorRef, lookupKeys, fromTxNum, toTxNum, func(lookupKey []byte, change *rawdb.StateDomainChange) (bool, error) {
-				query, ok := queryByLookup[string(lookupKey)]
-				if !ok {
-					return false, errors.New("snapshots: unexpected batch history lookup key")
-				}
-				if !stateDomainChangeMatchesAccessorLookup(change, flatDomain, owner, generation, domain, query.logical) {
-					return true, nil
-				}
-				consider(query, change)
-				return false, nil
-			}); err != nil {
+			if err := iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx, m.dir, ref, accessorRef, lookupKeys, fromTxNum, toTxNum, consider); err != nil {
 				return nil, err
 			}
-			continue
-		}
-		// JSON compatibility segments are small and already resident after one
-		// open, so scan the segment once rather than once per requested key.
-		if err := iterateStateDomainChangeHistoryRange(m.dir, manifest, ref, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+		} else if err := iterateStateDomainChangeHistoryRange(m.dir, manifest, ref, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
-			if change == nil || change.FlatDomain != flatDomain || change.Owner != owner {
-				return true, nil
-			}
-			query, ok := queryByLookup[string(stateDomainChangeBinaryAccessorKey(change))]
-			if ok {
-				consider(query, change)
+			if change != nil {
+				lookup := stateDomainChangeBinaryAccessorKey(change)
+				if byLookup[string(lookup)] != nil {
+					_, err := consider(lookup, change)
+					return true, err
+				}
 			}
 			return true, nil
 		}); err != nil {
 			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		for _, i := range entry.indices {
+			out[i] = cloneStateDomainChangeForSegment(entry.first)
 		}
 	}
 	return out, nil
