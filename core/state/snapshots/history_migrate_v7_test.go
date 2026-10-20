@@ -14,7 +14,7 @@ func TestHistoryUsesCurrentCompressionDistinguishesChunkLayout(t *testing.T) {
 	dir := t.TempDir()
 	payload := bytes.Repeat([]byte("history-compression-sample-"), 10_000)
 	currentPath := filepath.Join(dir, "current.seg")
-	if err := compressBlobToFile(dir, currentPath, payload, historyCompressChunkSize); err != nil {
+	if err := compressHistoryBlobToFile(currentPath, payload); err != nil {
 		t.Fatalf("write current compression: %v", err)
 	}
 	current, err := historyUsesCurrentCompression(currentPath)
@@ -28,6 +28,13 @@ func TestHistoryUsesCurrentCompressionDistinguishesChunkLayout(t *testing.T) {
 	current, err = historyUsesCurrentCompression(legacyPath)
 	if err != nil || current {
 		t.Fatalf("legacy compression = %t, err=%v", current, err)
+	}
+	// The former 128 KiB first block is readable but no longer current.
+	if err := compressBlobToFile(dir, legacyPath, payload, historyCompressChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	if current, err = historyUsesCurrentCompression(legacyPath); err != nil || current {
+		t.Fatalf("large-prefix compression = %t, err=%v", current, err)
 	}
 }
 

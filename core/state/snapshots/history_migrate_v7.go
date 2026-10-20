@@ -273,7 +273,7 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 		return false, fmt.Errorf("snapshots: invalid history compression format %q", format)
 	}
 	if len(reader.table) <= 1 {
-		return reader.uncSize <= uint64(historyCompressChunkSize), nil
+		return reader.uncSize <= historyHeaderPrefixBytes, nil
 	}
 	for i, block := range reader.table {
 		end := reader.uncSize
@@ -284,7 +284,13 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 			return false, errors.New("compressed history block bounds regress")
 		}
 		span := end - block.uncompressedStart
-		if i+1 < len(reader.table) && span != uint64(historyCompressChunkSize) || i+1 == len(reader.table) && span > uint64(historyCompressChunkSize) {
+		limit := uint64(historyCompressChunkSize)
+		if i == 0 {
+			limit = historyHeaderPrefixBytes
+		} else if i == 1 {
+			limit -= historyHeaderPrefixBytes
+		}
+		if i+1 < len(reader.table) && span != limit || i+1 == len(reader.table) && span > limit {
 			return false, nil
 		}
 	}

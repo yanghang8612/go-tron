@@ -219,8 +219,8 @@ func TestMigrateHistoryV7Rewrites64KiBAndPublishes128KiB(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if len(r.table) > 1 && r.table[1].uncompressedStart != historyCompressChunkSize {
-		t.Fatalf("published second block starts at %d, want %d", r.table[1].uncompressedStart, historyCompressChunkSize)
+	if len(r.table) > 1 && r.table[1].uncompressedStart != historyHeaderPrefixBytes {
+		t.Fatalf("published second block starts at %d, want %d", r.table[1].uncompressedStart, historyHeaderPrefixBytes)
 	}
 }
 

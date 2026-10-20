@@ -241,7 +241,7 @@ func readCompressedBlockFooterLayoutContext(ctx context.Context, src io.ReaderAt
 	layout.table = make([]cbBlock, info.blockCount)
 	// Decode directly into the final table; do not retain a second full encoded
 	// table allocation for large history files.
-	reader := bufio.NewReaderSize(io.NewSectionReader(src, int64(info.tableOff), int64(info.tableLen)), 32<<10)
+	reader := bufio.NewReaderSize(io.NewSectionReader(src, int64(info.tableOff), int64(info.tableLen)), int(min(info.tableLen, 32<<10)))
 	var entry [compressedBlockTableEntry]byte
 	for i := range layout.table {
 		if i%1024 == 0 {

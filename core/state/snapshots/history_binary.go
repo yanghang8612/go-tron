@@ -393,8 +393,9 @@ func writeHistorySegmentFiles(dir string, ref SegmentRef, changes []*rawdb.State
 	return writeStateDomainChangeBinaryFilesWithAccessor(dir, ref, changes, txRanges...)
 }
 
-// historyCompressChunkSize is the uncompressed chunk size per compressed block
-// in a cold history .seg. Production V7 sampling found that 128 KiB materially
+// historyCompressChunkSize is the aligned body chunk size in a cold history
+// .seg. V1/V2 split the first chunk into a 128-byte header and its remainder.
+// Production V7 sampling found that 128 KiB materially
 // reduces the dominant history payload beyond 64 KiB while keeping a point read
 // bounded to one small page. Record frames span chunks freely and the physical
 // table records every span, so readers never infer this value from the version.
@@ -447,7 +448,7 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 	if err := os.MkdirAll(filepath.Dir(tmpAbs), 0o755); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
-	if err := compressBlobToFile(dir, tmpAbs, segmentData, historyCompressChunkSize); err != nil {
+	if err := compressHistoryBlobToFile(tmpAbs, segmentData); err != nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
 	}
 	size, checksum, err := stateDomainChangeBinaryFileMetadata(tmpAbs)
@@ -524,6 +525,18 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compressed history segment self-check failed: %w", err)
 	}
 	return segRef, idxRef, accessorRef, nil
+}
+
+func compressHistoryBlobToFile(path string, data []byte) error {
+	w, err := newHistoryCompressedStream(context.Background(), filepath.Dir(path), historyCompressChunkSize, 1)
+	if err != nil {
+		return err
+	}
+	defer w.Abort()
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	return w.Finish(path)
 }
 
 // validateHistorySegmentReadable walks every record of a written history
@@ -3936,8 +3949,7 @@ func openHistorySegmentForReadContext(ctx context.Context, dir string, ref Segme
 	var reader historySegmentReader = file
 	logicalSize := uint64(stat.Size())
 	if string(magic[:]) == compressedBlockMagic {
-		_ = file.Close() // the codec reopens path itself
-		cr, err := openCompressedBlockReaderWithCacheLimitContext(ctx, path, compressedCacheLimit)
+		cr, err := openCompressedBlockFileWithCacheLimitContext(ctx, file, stat, compressedCacheLimit)
 		if err != nil {
 			return nil, 0, stateDomainChangeBinaryHeader{}, err
 		}
@@ -4137,8 +4149,7 @@ func openStateDomainChangeBinaryAccessorReaderContext(ctx context.Context, dir s
 	var reader historySegmentReader = file
 	logicalSize := uint64(stat.Size())
 	if string(magic[:]) == compressedBlockMagic {
-		_ = file.Close()
-		cr, err := openCompressedBlockReaderWithCacheLimitContext(ctx, path, cbCacheBlocks)
+		cr, err := openCompressedBlockFileWithCacheLimitContext(ctx, file, stat, cbCacheBlocks)
 		if err != nil {
 			return nil, stateDomainChangeBinaryHeader{}, 0, err
 		}

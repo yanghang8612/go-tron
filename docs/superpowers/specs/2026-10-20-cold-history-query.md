@@ -1,5 +1,9 @@
 # Cold history point reads
 
+The later user-authorized layout investigation is specified in
+`2026-10-20-cold-query-layout.md`. It expands the original format-preserving
+scope below while retaining the production no-deployment/no-restart constraint.
+
 User authorization: implement and verify locally and on independent copies;
 no production restart, push, deployment, format migration, or source DB writes.
 Reuse compact-v3 bytes and retain all MuHash, as-of and snapshot semantics.

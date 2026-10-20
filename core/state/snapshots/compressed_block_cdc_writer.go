@@ -54,14 +54,17 @@ func newHistoryCompressedStream(ctx context.Context, dir string, prefixSize, wor
 
 // Selection is per artifact. Never mutate the process environment while a
 // concurrent builder/merge may be choosing its own format.
-func newHistoryCompressedStreamFormat(ctx context.Context, dir string, prefixSize, workers int, format string) (historyCompressedStream, error) {
+func newHistoryCompressedStreamFormat(ctx context.Context, dir string, chunkSize, workers int, format string) (historyCompressedStream, error) {
+	prefixSize := min(historyHeaderPrefixBytes, chunkSize)
 	switch format {
 	case "3":
-		return newCDCStreamWriterWorkers(ctx, dir, prefixSize, workers)
+		// CDC chunk boundaries affect deduplication as well as point reads.
+		// Keep that separately measured policy unchanged in this V1/V2 change.
+		return newCDCStreamWriterWorkers(ctx, dir, chunkSize, workers)
 	case "2", "auto":
-		return newCompressedBlockStreamWriterWithFooter(dir, prefixSize, workers, true)
+		return newCompressedBlockStreamWriterWithPrefix(dir, chunkSize, prefixSize, workers, true)
 	case "", "1":
-		return newCompressedBlockStreamWriterWithFooter(dir, prefixSize, workers, false)
+		return newCompressedBlockStreamWriterWithPrefix(dir, chunkSize, prefixSize, workers, false)
 	default:
 		return nil, fmt.Errorf("snapshots: invalid history compression format %q", format)
 	}

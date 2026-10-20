@@ -525,16 +525,8 @@ func openCompressedBlockReaderWithCacheLimit(path string, cacheLimit int) (*comp
 // may cooperatively yield. The stored reader remains unwrapped: runtime codec
 // reads hold its private mutex and must only checkpoint at the outer reader.
 func openCompressedBlockReaderWithCacheLimitContext(ctx context.Context, path string, cacheLimit int) (*compressedBlockReader, error) {
-	if cacheLimit < 1 || cacheLimit > cbCacheBlocks {
-		return nil, fmt.Errorf("snapshots: compressed-block cache limit %d outside [1,%d]", cacheLimit, cbCacheBlocks)
-	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
-	}
-	_, dec, err := cbCodec()
-	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	stat, err := f.Stat()
@@ -542,13 +534,29 @@ func openCompressedBlockReaderWithCacheLimitContext(ctx context.Context, path st
 		_ = f.Close()
 		return nil, err
 	}
+	return openCompressedBlockFileWithCacheLimitContext(ctx, f, stat, cacheLimit)
+}
+
+// Takes ownership of f on success AND failure. Magic dispatchers pass the
+// same descriptor they already sized/inspected, avoiding a second open/stat
+// and a path-replacement race between physical identity and decoding.
+func openCompressedBlockFileWithCacheLimitContext(ctx context.Context, f *os.File, stat os.FileInfo, cacheLimit int) (*compressedBlockReader, error) {
+	if cacheLimit < 1 || cacheLimit > cbCacheBlocks {
+		_ = f.Close()
+		return nil, fmt.Errorf("snapshots: compressed-block cache limit %d outside [1,%d]", cacheLimit, cbCacheBlocks)
+	}
+	_, dec, err := cbCodec()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	fileSize := uint64(stat.Size())
 	if fileSize < compressedBlockHeaderSize {
 		_ = f.Close()
-		return nil, fmt.Errorf("snapshots: compressed-block file %q size %d below header size %d", path, fileSize, compressedBlockHeaderSize)
+		return nil, fmt.Errorf("snapshots: compressed-block file %q size %d below header size %d", f.Name(), fileSize, compressedBlockHeaderSize)
 	}
 	hdr := make([]byte, compressedBlockHeaderSize)
-	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, hdr); err != nil {
+	if _, err := (contextReaderAt{ctx: ctx, r: f}).ReadAt(hdr, 0); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -609,7 +617,7 @@ func openCompressedBlockReaderWithCacheLimitContext(ctx context.Context, path st
 		return nil, fmt.Errorf("snapshots: compressed-block data offset %d, want table end %d", r.dataOff, tableEnd)
 	}
 	tableBytes := make([]byte, int(tableLen))
-	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, tableBytes); err != nil {
+	if _, err := (contextReaderAt{ctx: ctx, r: f}).ReadAt(tableBytes, compressedBlockHeaderSize); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -1098,7 +1106,13 @@ func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
 	if footer {
 		// The footer publishes the temporary inode with rename. Keep it on the
 		// destination filesystem even when a history tier is mounted elsewhere.
-		stream, err := newHistoryCompressedStream(context.Background(), filepath.Dir(path), chunkSize, 1)
+		var stream historyCompressedStream
+		var err error
+		if os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT") == "3" {
+			stream, err = newCDCStreamWriterWorkers(context.Background(), filepath.Dir(path), chunkSize, 1)
+		} else {
+			stream, err = newCompressedBlockStreamWriterWithFooter(filepath.Dir(path), chunkSize, 1, true)
+		}
 		if err != nil {
 			return err
 		}
@@ -1349,17 +1363,18 @@ func (p *orderedCompressionPipeline) releaseAvailableBuffers() {
 // after the measured break-even size, encoding moves to the ordered worker
 // pipeline above. No complete uncompressed segment is written to disk.
 type compressedBlockStreamWriter struct {
-	dir       string
-	chunkSize int
-	workers   int
-	body      *compressedBlockWriter
-	first     []byte
-	chunk     []byte
-	parallel  *orderedCompressionPipeline
-	logical   uint64
-	bodyStart bool
-	footer    bool
-	closed    bool
+	dir        string
+	chunkSize  int
+	prefixSize int
+	workers    int
+	body       *compressedBlockWriter
+	first      []byte
+	chunk      []byte
+	parallel   *orderedCompressionPipeline
+	logical    uint64
+	bodyStart  bool
+	footer     bool
+	closed     bool
 }
 
 func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compressedBlockStreamWriter, error) {
@@ -1371,8 +1386,18 @@ func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compre
 }
 
 func newCompressedBlockStreamWriterWithFooter(dir string, chunkSize, workers int, footer bool) (*compressedBlockStreamWriter, error) {
+	return newCompressedBlockStreamWriterWithPrefix(dir, chunkSize, chunkSize, workers, footer)
+}
+
+// Prefix and body have independent boundaries. History point reads need only
+// the header, dictionary commitment and range count, not a 128 KiB range table.
+// Both remain ordinary independently checksummed compression blocks.
+func newCompressedBlockStreamWriterWithPrefix(dir string, chunkSize, prefixSize, workers int, footer bool) (*compressedBlockStreamWriter, error) {
 	if chunkSize <= 0 {
 		chunkSize = 16384
+	}
+	if prefixSize <= 0 || prefixSize > chunkSize {
+		prefixSize = chunkSize
 	}
 	if workers < 1 {
 		workers = 1
@@ -1383,12 +1408,13 @@ func newCompressedBlockStreamWriterWithFooter(dir string, chunkSize, workers int
 	}
 	body.encoded = acquireStateDomainChangeHistoryEncodedChunk(body.enc, chunkSize)
 	return &compressedBlockStreamWriter{
-		dir:       dir,
-		chunkSize: chunkSize,
-		workers:   workers,
-		body:      body,
-		footer:    footer,
-		first:     acquireStateDomainChangeHistoryCompressionChunk(chunkSize),
+		dir:        dir,
+		chunkSize:  chunkSize,
+		prefixSize: prefixSize,
+		workers:    workers,
+		body:       body,
+		footer:     footer,
+		first:      acquireStateDomainChangeHistoryCompressionChunk(chunkSize),
 	}, nil
 }
 
@@ -1397,8 +1423,8 @@ func (w *compressedBlockStreamWriter) Write(p []byte) (int, error) {
 		return 0, errors.New("snapshots: compressed stream writer is closed")
 	}
 	written := 0
-	if len(w.first) < w.chunkSize {
-		n := w.chunkSize - len(w.first)
+	if len(w.first) < w.prefixSize {
+		n := w.prefixSize - len(w.first)
 		if n > len(p) {
 			n = len(p)
 		}
@@ -1414,7 +1440,13 @@ func (w *compressedBlockStreamWriter) Write(p []byte) (int, error) {
 		w.chunk = acquireStateDomainChangeHistoryCompressionChunk(w.chunkSize)
 	}
 	for len(p) != 0 {
-		n := w.chunkSize - len(w.chunk)
+		chunkTarget := w.chunkSize
+		if !w.bodyStart && w.prefixSize < w.chunkSize {
+			// Split only the original first chunk. Subsequent chunk boundaries
+			// stay aligned, preserving their compressed bytes and IO locality.
+			chunkTarget -= w.prefixSize
+		}
+		n := chunkTarget - len(w.chunk)
 		if n > len(p) {
 			n = len(p)
 		}
@@ -1422,7 +1454,7 @@ func (w *compressedBlockStreamWriter) Write(p []byte) (int, error) {
 		p = p[n:]
 		written += n
 		w.logical += uint64(n)
-		if len(w.chunk) == w.chunkSize {
+		if len(w.chunk) == chunkTarget {
 			if err := w.flushChunk(false); err != nil {
 				return written, err
 			}
