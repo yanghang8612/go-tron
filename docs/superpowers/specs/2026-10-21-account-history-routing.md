@@ -48,3 +48,23 @@ cover that source. Compare full HTTP calls on the unchanged fixed head and
 oracle, with warm, fresh-process and private OS-cold runs. MuHash and executable
 snapshot restore checks remain required; auxiliary rows never enter MuHash or
 advance hot-prune/cold-build frontiers.
+
+The fixed-copy build retained 64 intermediate generations totaling
+3,120,267,917 bytes while the newest table was 94,374,995 bytes. Add a separate
+bounded retirement path for unpublished auxiliary routing objects. It must
+never select canonical paths, before-images or recovery sources. Require exact
+constructor paths, file class, current/retained-generation absence, a physical
+retirement lease, publication serialization, stable regular-file/root/parent
+identities and no migration journal. Keep missing retired metadata for the
+existing metadata sweep. Inspect at most 256 refs and unlink at most sixteen
+objects per pass; honor RetainObsoleteSegments. Protect immutable published
+generations with at most 64 directory entries and 128 MiB of bounded metadata
+reads; defer on legacy, malformed, oversized or incomplete catalog leases.
+The signed catalog publisher must pin its source files for its complete
+verification/publication interval, closing a publication-versus-retirement race.
+
+Test reclamation on a separate copy with independent, exclusive old auxiliary
+inodes. Preserve the measured corpus and every canonical input; verify exact
+removed file sizes/allocated blocks, unchanged manifest bytes and canonical
+identities, full final-binary MuHash, HTTP values and history restore. Primary
+query timings remain labeled with the frozen measured reader revision.

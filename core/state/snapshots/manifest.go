@@ -717,7 +717,7 @@ func validateSegmentRef(seg SegmentRef) error {
 		return errors.New("snapshots: unexpected lookup root on canonical segment")
 	}
 	if seg.Kind == SegmentAccountHistoryRouting {
-		if _, ok := snapshotChecksumDigest(seg.LookupRoot); !ok {
+		if digest, ok := snapshotChecksumDigest(seg.LookupRoot); !ok || len(digest) != 64 || seg.LookupRoot != "sha256:"+digest {
 			return errors.New("snapshots: account history routing requires a SHA256 metadata root")
 		}
 	}

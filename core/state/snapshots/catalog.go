@@ -51,6 +51,10 @@ func PublishSignedSnapshotCatalog(dir string, privateKey ed25519.PrivateKey) (*S
 	if len(privateKey) != ed25519.PrivateKeySize {
 		return nil, fmt.Errorf("snapshots: ed25519 private key length %d, want %d", len(privateKey), ed25519.PrivateKeySize)
 	}
+	if !historyReadLeaseGate.TryRLock() {
+		return nil, ErrHistoryReadLeaseBusy
+	}
+	defer historyReadLeaseGate.RUnlock()
 	manifestData, err := os.ReadFile(filepath.Join(dir, ManifestFile))
 	if err != nil {
 		return nil, err

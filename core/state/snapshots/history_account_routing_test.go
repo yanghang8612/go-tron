@@ -449,3 +449,15 @@ func TestAccountHistoryRoutingMergeOrder(t *testing.T) {
 		t.Fatalf("group max %x/%d", out, bound)
 	}
 }
+
+func TestAccountHistoryRoutingRejectsNonSHA256MetadataRoot(t *testing.T) {
+	dir, m, _ := accountRoutingFixture(t, 3)
+	m = addAccountRoutingFixture(t, dir, m, 64)
+	ref := mustAccountRoutingRef(t, m)
+	for _, invalid := range []string{"", "sha256:0011223344556677", "00112233445566778899001122334455667788990011223344556677889900112233", "sha256:" + fmt.Sprintf("%066x", 1)} {
+		ref.LookupRoot = invalid
+		if err := validateSegmentRef(ref); err == nil {
+			t.Fatalf("invalid metadata root accepted: %q", invalid)
+		}
+	}
+}

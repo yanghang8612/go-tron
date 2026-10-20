@@ -18,11 +18,12 @@ const (
 // Protected by Runner.passMu. A merge recovery belongs to optional compaction,
 // independently of the deadline for publishing and pruning new cold history.
 type historyCompactionBudgetState struct {
-	notBefore    time.Time
-	pending      bool
-	pendingAt    time.Time
-	inputCosts   *historyCompactionCostCache
-	outerMetrics *historyCompactionOuterMetrics
+	notBefore            time.Time
+	pending              bool
+	pendingAt            time.Time
+	inputCosts           *historyCompactionCostCache
+	outerMetrics         *historyCompactionOuterMetrics
+	routingRetiredCursor retiredMetadataSweepCursor
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -184,6 +185,13 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 	// The small singleton routing index removes cross-segment negative reads
 	// without rewriting canonical rows or enlarging streaming merge budgets.
 	if r.cfg.HistoryDataset == SegmentDatasetStateDomainChange {
+		if !r.cfg.RetainObsoleteSegments {
+			pruned, pruneErr := pruneRetiredHistoryRoutingContext(ctx, r.cfg.Dir, r.compactionBudget.routingRetiredCursor)
+			if pruneErr != nil {
+				return total, pruneErr
+			}
+			r.compactionBudget.routingRetiredCursor = pruned.Next
+		}
 		built, routeErr := refreshSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy)
 		if routeErr != nil {
 			return total, routeErr
