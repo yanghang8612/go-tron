@@ -18,6 +18,17 @@ type historyMemoPinnedDB struct{ readerDB }
 
 func (historyMemoPinnedDB) IsPinnedKeyValueView() bool { return true }
 
+type historyMemoCountingDB struct {
+	readerDB
+	iterators int
+}
+
+func (*historyMemoCountingDB) IsPinnedKeyValueView() bool { return true }
+func (d *historyMemoCountingDB) NewIterator(prefix, start []byte) ethdb.Iterator {
+	d.iterators++
+	return d.readerDB.NewIterator(prefix, start)
+}
+
 type historyMemoCold struct {
 	rows         []*rawdb.StateDomainChange
 	calls, mixed int
@@ -206,6 +217,47 @@ func TestHistoryRequestMixedPrefetchOverlapErrorsAndBatchReuse(t *testing.T) {
 	cold.onMixed = cancel
 	if e := r.prefetchFirst(1, 3, []snapshots.StateHistoryQuery{q}); !errors.Is(e, context.Canceled) || len(r.firstMemo) != 0 {
 		t.Fatal("published canceled batch")
+	}
+}
+
+func TestHistoryRequestPrefetchSharesHotTailWithoutCrossingColdBounds(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	defer db.Close()
+	owner := testAddr(0x78)
+	query := func(key string, generation uint64) snapshots.StateHistoryQuery {
+		return snapshots.StateHistoryQuery{FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: owner, Generation: generation, Domain: kvdomains.SystemReward, Key: []byte(key)}
+	}
+	queries := []snapshots.StateHistoryQuery{query("early", 1), query("late", 1), query("hot", 1), query("absent", 1), query("hot", 2)}
+	row := func(q snapshots.StateHistoryQuery, block, seq uint64, value string) *rawdb.StateDomainChange {
+		return &rawdb.StateDomainChange{BlockNum: block, TxNum: block, Seq: seq, FlatDomain: q.FlatDomain, Owner: q.Owner, Generation: q.Generation, Domain: q.Domain, Key: q.Key, PrevExists: true, Prev: []byte(value)}
+	}
+	for _, change := range []*rawdb.StateDomainChange{row(queries[0], 2, 1, "earlier-hot-seq"), row(queries[1], 3, 1, "later-hot-tx"), row(queries[2], 3, 2, "hot-only"), row(queries[4], 3, 3, "other-generation")} {
+		if err := rawdb.WriteStateDomainChange(db, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageStateHistoryIndex, 1, common.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	cold := &historyMemoCold{rows: []*rawdb.StateDomainChange{row(queries[0], 2, 2, "later-cold-seq"), row(queries[1], 2, 2, "earlier-cold-tx")}}
+	counted := &historyMemoCountingDB{readerDB: db}
+	r := NewPersistentHistoryReaderWithColdHistory(counted, nil, 3, cold)
+	if err := r.SetHotHistoryBlockRange(1, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.prefetchFirst(1, 3, queries); err != nil {
+		t.Fatal(err)
+	}
+	// Two equal cold bounds share a pass; hot-only and absent keys share a
+	// second pass. The other generation has its own pass and identity.
+	if counted.iterators != 3 {
+		t.Fatalf("hot owner-tail passes = %d, want 3", counted.iterators)
+	}
+	for i, want := range []string{"earlier-hot-seq", "earlier-cold-tx", "hot-only", "", "other-generation"} {
+		got, ok := r.memoFirst(1, 3, queries[i])
+		if !ok || (got == nil) != (want == "") || got != nil && string(got.Prev) != want {
+			t.Fatalf("query %d: row=%+v cached=%v, want %q", i, got, ok, want)
+		}
 	}
 }
 

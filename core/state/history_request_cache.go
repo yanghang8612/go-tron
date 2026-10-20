@@ -99,6 +99,13 @@ func (r *PersistentHistoryReader) prefetchFirst(target, head uint64, queries []s
 	if len(changes) != len(pending) {
 		return ErrStateDomainHistoryUnavailable
 	}
+	type hotBatchKey struct {
+		owner             common.Address
+		generation        uint64
+		domain            kvdomains.KVDomain
+		headTx, headBlock uint64
+	}
+	groups := make(map[hotBatchKey][]int)
 	for i, q := range pending {
 		if err := r.contextError(); err != nil {
 			return err
@@ -112,12 +119,36 @@ func (r *PersistentHistoryReader) prefetchFirst(target, head uint64, queries []s
 			hotHead = first.TxNum
 			hotBlock = min(hotBlock, first.BlockNum)
 		}
+		if q.FlatDomain == rawdb.StateFlatDomainKVLatest {
+			group := hotBatchKey{q.Owner, q.Generation, q.Domain, hotHead, hotBlock}
+			groups[group] = append(groups[group], i)
+			continue
+		}
 		hot, err := r.readFirstHotStateDomainChangeByKeyThroughBlock(target, hotHead, hotBlock, q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key)
 		if err != nil {
 			return err
 		}
 		if hot != nil && (first == nil || stateDomainChangeLess(hot, first)) {
 			changes[i] = hot
+		}
+	}
+	// Preserve the ordinary KV batch's single unindexed-tail pass. Scalar hot
+	// lookups for every speculative property would decode the same owner tail
+	// repeatedly, even when the requested height needs no cold segment reads.
+	// Separate cold first-match bounds remain inclusive for same-tx ordering.
+	for group, indices := range groups {
+		keys := make([][]byte, len(indices))
+		for j, i := range indices {
+			keys[j] = pending[i].Key
+		}
+		hot, err := rawdb.ReadFirstStateKVChangesByKeysBlockRangeContext(r.ctx, r.db, r.hotHistoryFromBlock, group.headBlock, target, group.headTx, group.owner, group.generation, group.domain, keys)
+		if err != nil {
+			return err
+		}
+		for _, i := range indices {
+			if row := hot[string(pending[i].Key)]; row != nil && (changes[i] == nil || stateDomainChangeLess(row, changes[i])) {
+				changes[i] = row
+			}
 		}
 	}
 	if err := r.contextError(); err != nil {
