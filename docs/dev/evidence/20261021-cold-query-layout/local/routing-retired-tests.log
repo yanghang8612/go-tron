@@ -1,0 +1,25 @@
+=== RUN   TestRetiredHistoryRoutingOnlyDeletesUnleasedAuxiliaryFiles
+    history_routing_retired_test.go:44: prune={Next:{Key:{Dataset:state-domain-change Domain:0 Kind:account-history-routing From:1 To:1 Path:history/account-routing-1-1-90d5067fb5f5e6822d38b604c88a40a6bcde05e77b49d5e9b62793529d154978.route} Offset:1 Valid:true} Scanned:1 FilesDeleted:0 BytesDeleted:0 Deferred:false} err=<nil>
+--- FAIL: TestRetiredHistoryRoutingOnlyDeletesUnleasedAuxiliaryFiles (0.25s)
+=== RUN   TestRetiredHistoryRoutingPinsReadersAndPublishedGenerations
+--- PASS: TestRetiredHistoryRoutingPinsReadersAndPublishedGenerations (0.23s)
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/cancel
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/migration
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/bad-published
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/many-published
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/symlink
+--- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases (1.28s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/cancel (0.25s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/migration (0.26s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/bad-published (0.28s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/many-published (0.27s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/symlink (0.22s)
+=== RUN   TestRetiredHistoryRoutingBoundsCursorAndIdentity
+    history_routing_retired_test.go:167: bad fixture identity
+--- FAIL: TestRetiredHistoryRoutingBoundsCursorAndIdentity (0.34s)
+=== RUN   TestSnapshotCatalogPublisherDefersDuringPhysicalRetirement
+--- PASS: TestSnapshotCatalogPublisherDefersDuringPhysicalRetirement (0.00s)
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core/state/snapshots	3.617s
+FAIL

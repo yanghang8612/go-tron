@@ -1,0 +1,62 @@
+[
+  {
+    "stage": "prefix",
+    "server": "/tmp/gtron-cold-query-prefix-20261020-01.zip",
+    "local_retained": "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261020-cold-query-layout/prefix-original.zip",
+    "bytes": 31671096,
+    "sha256": "1bf3c0cc9633cf033f549a7a2b78c22f18f1a56cab5f9006a5eb3034fe3af59a",
+    "inventory_files_verified": 252,
+    "whole_zip_crc_and_inventory_verified": true,
+    "raw_traces_retained_in_zip": true
+  },
+  {
+    "stage": "routing",
+    "server": "/tmp/gtron-cold-routing-20261020-01.zip",
+    "local_retained": "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261020-cold-query-layout/routing-original.zip",
+    "bytes": 21877032,
+    "sha256": "cc2684f34e297493649b88804579878c156bea37ae2be6bf7529d337d97602d8",
+    "inventory_files_verified": 273,
+    "whole_zip_crc_and_inventory_verified": true,
+    "raw_traces_retained_in_zip": true
+  },
+  {
+    "stage": "account2",
+    "server": "/tmp/gtron-cold-account-routing-20261020-01.zip",
+    "local_retained": "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261020-cold-query-layout/account2-original.zip",
+    "bytes": 17186540,
+    "sha256": "9b1e77a49b95b5fd063f1d7063ab88b3684a83f6fab8a1e893843f3cb45ee08f",
+    "inventory_files_verified": 270,
+    "whole_zip_crc_and_inventory_verified": true,
+    "raw_traces_retained_in_zip": true
+  },
+  {
+    "stage": "account-gc",
+    "server": "/tmp/gtron-cold-routing-final-audit-20261020-01.zip",
+    "local_retained": "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261020-cold-query-layout/account-gc-original.zip",
+    "bytes": 127768,
+    "sha256": "03ceda388ae4ac02d3c122a98b8ea3405503f7286dee6f0f075c397dd1247e02",
+    "inventory_files_verified": 32,
+    "whole_zip_crc_and_inventory_verified": true,
+    "raw_traces_retained_in_zip": true
+  },
+  {
+    "stage": "lazy-final",
+    "server": "/tmp/gtron-cold-lazy-final-20261020-01.zip",
+    "local_retained": "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261020-cold-query-layout/lazy-final-original.zip",
+    "bytes": 1210433,
+    "sha256": "c99d00798acb2285f084dd27b96383680ae003d44362bc82512bc8cb9d46a975",
+    "inventory_files_verified": 249,
+    "whole_zip_crc_and_inventory_verified": true,
+    "raw_traces_retained_in_zip": true
+  },
+  {
+    "stage": "lazy-nine",
+    "server": "/tmp/gtron-cold-lazy-nine-diagnostic-20261020-01.zip",
+    "local_retained": "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261020-cold-query-layout/lazy-nine-original.zip",
+    "bytes": 404479,
+    "sha256": "95509692a5ed286c20c402752283ed7a0c47c0b5d6dd1f2871c2af7392735713",
+    "inventory_files_verified": 9,
+    "whole_zip_crc_and_inventory_verified": true,
+    "raw_traces_retained_in_zip": true
+  }
+]

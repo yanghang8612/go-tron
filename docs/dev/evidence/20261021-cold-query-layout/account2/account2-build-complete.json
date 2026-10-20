@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "expected": 4609,
+  "keys": 3419768,
+  "pass": 73,
+  "pass_seconds": 1.908133887,
+  "ref": {
+    "rows": 3419768,
+    "dataset": "state-domain-change",
+    "kind": "account-history-routing",
+    "fromTxNum": 1,
+    "toTxNum": 568104018,
+    "path": "history/account-routing-1-568104018-fa9388fe60cb51d7e06b6fa871e2bcd6f0b350ad43ae9356c421b7a9659ce646.route",
+    "size": 100798871,
+    "checksum": "sha256:fa9388fe60cb51d7e06b6fa871e2bcd6f0b350ad43ae9356c421b7a9659ce646",
+    "lookupRoot": "sha256:127b965c263a440082797e0a1d08e3877f5aa37e7187b380b6045d5fb7241826"
+  },
+  "seconds": 473.11931229,
+  "sources": 4609,
+  "strict_dictionary_check": true
+}

@@ -1,0 +1,16 @@
+=== RUN   TestOfflineFixedEthCallHTTP
+    offline_fixed_http_test.go:151: READY {
+          "gomaxprocs": 2,
+          "head": 11818192,
+          "head_hash": "30303030303030303030623435346430396134363838366134306430396438636265633733383132643031336635376465316663383033373834616366646636",
+          "head_tx": 601386177,
+          "history_cache_mib": 512,
+          "hot_cache_mib": 512,
+          "manifest_generation": 5175,
+          "pid": 10033,
+          "read_only": true,
+          "root": "38666266313439363834313436613539623136353062333138613736386630656462616530633863316333636562326335633631303132396331306637366135",
+          "url": "http://127.0.0.1:15155/"
+        }
+--- PASS: TestOfflineFixedEthCallHTTP (5.04s)
+PASS

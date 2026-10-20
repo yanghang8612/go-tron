@@ -1,0 +1,77 @@
+{
+  "utc": "2026-10-20T15:57:41.680603Z",
+  "production_before": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "reason": "Stop bulk canonical rewrite after measured cost; prioritize exact scoped routing without canonical row rewrite",
+  "production_mutations": false,
+  "before": {
+    "gtron-cold-layout-compare-final-20261020.service": "MainPID=13812\nExecStart={ path=/usr/bin/nice ; argv[]=/usr/bin/nice -n 15 /usr/bin/ionice -c 3 /usr/bin/python3 /data/gtron/cold-query-layout-20261020-01/compare-final.py merged ; ignore_errors=no ; start_time=[Tue 2026-10-20 15:11:08 UTC] ; stop_time=[n/a] ; pid=13812 ; code=(null) ; status=0/0 }\nActiveState=active\n",
+    "gtron-cold-layout-merge-final-20261020.service": "MainPID=13811\nExecStart={ path=/usr/bin/nice ; argv[]=/usr/bin/nice -n 15 /usr/bin/ionice -c 3 /usr/bin/python3 /data/gtron/cold-query-layout-20261020-01/merge-final.py ; ignore_errors=no ; start_time=[Tue 2026-10-20 15:11:08 UTC] ; stop_time=[n/a] ; pid=13811 ; code=(null) ; status=0/0 }\nActiveState=active\n"
+  },
+  "last_merge_status": {
+    "complete": false,
+    "last": {
+      "Merged": true,
+      "MergePasses": 1,
+      "Dataset": "state-domain-change",
+      "FromTxNum": 185159611,
+      "ToTxNum": 191909933,
+      "AggregationSteps": 64,
+      "SegmentsMerged": 63,
+      "Segments": [
+        {
+          "dataset": "state-domain-change",
+          "kind": "history",
+          "fromTxNum": 185159611,
+          "toTxNum": 191909933,
+          "aggregationSteps": 64,
+          "path": "history/state-domain-change-185159611-191909933-a8ecf6de9cbcb987.seg",
+          "size": 520328828,
+          "checksum": "sha256:a8ecf6de9cbcb9877b5581cf1ffe417dd6923ba2e501f0d864daabb5d7af9e9a"
+        },
+        {
+          "dataset": "state-domain-change",
+          "kind": "accessor",
+          "fromTxNum": 185159611,
+          "toTxNum": 191909933,
+          "aggregationSteps": 64,
+          "path": "history/state-domain-change-185159611-191909933-a8ecf6de9cbcb987.kv",
+          "size": 238838412,
+          "checksum": "sha256:44818099525602179a9f67c4d0577764f479bcb67753cbe6f4937eb721165d59"
+        },
+        {
+          "dataset": "state-domain-change",
+          "kind": "inverted",
+          "fromTxNum": 185159611,
+          "toTxNum": 191909933,
+          "aggregationSteps": 64,
+          "path": "history/state-domain-change-185159611-191909933-a8ecf6de9cbcb987.idx",
+          "size": 21094702,
+          "checksum": "sha256:1054300d650c47367f759fda7ef7c14bc6230f64c8492bc537417f75c5e48abc"
+        }
+      ],
+      "Deferred": false,
+      "DeferReason": "",
+      "InputBytes": 792209440,
+      "InputLogicalBytes": 2183805362,
+      "InputRecords": 37238760,
+      "InputSources": 63,
+      "Recovery": 0,
+      "RetryAfter": 0,
+      "RetryDeadline": "0001-01-01T00:00:00Z"
+    },
+    "pass": 33,
+    "seconds": 2432.25223905
+  },
+  "production_after": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "stopped_only_offline_units": [
+    "gtron-cold-layout-compare-final-20261020.service",
+    "gtron-cold-layout-merge-final-20261020.service"
+  ],
+  "complete": true
+}

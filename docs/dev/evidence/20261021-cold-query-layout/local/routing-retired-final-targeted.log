@@ -1,0 +1,24 @@
+=== RUN   TestAccountHistoryRoutingRejectsNonSHA256MetadataRoot
+--- PASS: TestAccountHistoryRoutingRejectsNonSHA256MetadataRoot (0.18s)
+=== RUN   TestRetiredHistoryRoutingOnlyDeletesUnleasedAuxiliaryFiles
+--- PASS: TestRetiredHistoryRoutingOnlyDeletesUnleasedAuxiliaryFiles (0.19s)
+=== RUN   TestRetiredHistoryRoutingPinsReadersAndPublishedGenerations
+--- PASS: TestRetiredHistoryRoutingPinsReadersAndPublishedGenerations (0.20s)
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/cancel
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/migration
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/bad-published
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/many-published
+=== RUN   TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/symlink
+--- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases (1.24s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/cancel (0.23s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/migration (0.26s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/bad-published (0.24s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/many-published (0.27s)
+    --- PASS: TestRetiredHistoryRoutingCancellationMigrationAndBadLeases/symlink (0.23s)
+=== RUN   TestRetiredHistoryRoutingBoundsCursorAndIdentity
+--- PASS: TestRetiredHistoryRoutingBoundsCursorAndIdentity (0.56s)
+=== RUN   TestSnapshotCatalogPublisherDefersDuringPhysicalRetirement
+--- PASS: TestSnapshotCatalogPublisherDefersDuringPhysicalRetirement (0.00s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	3.895s

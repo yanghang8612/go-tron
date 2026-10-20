@@ -1,0 +1,1298 @@
+[
+  {
+    "path": "state-snapshots/history/account-routing-1-298022593-daa0c4e19e8d2da2c9d024ff56080f3bdabb29175cef286f43b2119d5bc037e0.route",
+    "bytes": 61491221,
+    "allocated_bytes": 61497344,
+    "source_inode": 95814897,
+    "private_inode": 95819237,
+    "private_link_count": 1,
+    "sha256": "daa0c4e19e8d2da2c9d024ff56080f3bdabb29175cef286f43b2119d5bc037e0"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-164460490-4277544dffc3b60b98ea52a27546a2c1d48fdb14770ef472db86da2e8f104d8c.route",
+    "bytes": 55776,
+    "allocated_bytes": 57344,
+    "source_inode": 95814766,
+    "private_inode": 95819238,
+    "private_link_count": 1,
+    "sha256": "4277544dffc3b60b98ea52a27546a2c1d48fdb14770ef472db86da2e8f104d8c"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-298193018-b8c7a8944809b8f7d7011e91e193066c158b306b12f3dacd45cd62a9559ce8dc.route",
+    "bytes": 92896,
+    "allocated_bytes": 94208,
+    "source_inode": 95814767,
+    "private_inode": 95819239,
+    "private_link_count": 1,
+    "sha256": "b8c7a8944809b8f7d7011e91e193066c158b306b12f3dacd45cd62a9559ce8dc"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-376445372-d9bb1cf6e560c8721da85d16fd15f9f0bbe7da732f1fafd38c9ca4ac0a2ca017.route",
+    "bytes": 75538513,
+    "allocated_bytes": 75546624,
+    "source_inode": 95814917,
+    "private_inode": 95819240,
+    "private_link_count": 1,
+    "sha256": "d9bb1cf6e560c8721da85d16fd15f9f0bbe7da732f1fafd38c9ca4ac0a2ca017"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-211744522-29e5ffccc1d5a85182f7480b57057d877162b9328da7c2c606da659d94752485.route",
+    "bytes": 46343749,
+    "allocated_bytes": 46350336,
+    "source_inode": 95814896,
+    "private_inode": 95819241,
+    "private_link_count": 1,
+    "sha256": "29e5ffccc1d5a85182f7480b57057d877162b9328da7c2c606da659d94752485"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-496837806-211ebf8257eb0ea5ac1f860c32e2a11a2eb51f954e37380c2fcc578ddd343935.route",
+    "bytes": 95671591,
+    "allocated_bytes": 95678464,
+    "source_inode": 95814932,
+    "private_inode": 95819242,
+    "private_link_count": 1,
+    "sha256": "211ebf8257eb0ea5ac1f860c32e2a11a2eb51f954e37380c2fcc578ddd343935"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-113254486-0210729e78f4fd490ec0b5a5f6e0fdb5860169f251871a9b1d05a09a7e3d6543.route",
+    "bytes": 44713,
+    "allocated_bytes": 45056,
+    "source_inode": 95814768,
+    "private_inode": 95819243,
+    "private_link_count": 1,
+    "sha256": "0210729e78f4fd490ec0b5a5f6e0fdb5860169f251871a9b1d05a09a7e3d6543"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-329986384-855b056c198aa61725ed28c6ebd5d420d85282efec59a5ac22edc64827f2e925.route",
+    "bytes": 99514,
+    "allocated_bytes": 102400,
+    "source_inode": 95814769,
+    "private_inode": 95819244,
+    "private_link_count": 1,
+    "sha256": "855b056c198aa61725ed28c6ebd5d420d85282efec59a5ac22edc64827f2e925"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-88520554-c4f0a6f47bf45fcf4537dd9f90848e12a3262a20c5bde9f65c61d4fff0912199.route",
+    "bytes": 37937,
+    "allocated_bytes": 40960,
+    "source_inode": 95814770,
+    "private_inode": 95819245,
+    "private_link_count": 1,
+    "sha256": "c4f0a6f47bf45fcf4537dd9f90848e12a3262a20c5bde9f65c61d4fff0912199"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-454059121-efd537e9f0ce639d3f03de23cf35d1226401d66ac07a11061fa87c39a0c9dc57.route",
+    "bytes": 89188611,
+    "allocated_bytes": 89194496,
+    "source_inode": 95814927,
+    "private_inode": 95819246,
+    "private_link_count": 1,
+    "sha256": "efd537e9f0ce639d3f03de23cf35d1226401d66ac07a11061fa87c39a0c9dc57"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-446186268-7395d15a153149ac38cf1d00d61fe6c9ad72cccda1d36098b4ac503d9ec2847f.route",
+    "bytes": 130263,
+    "allocated_bytes": 131072,
+    "source_inode": 95814771,
+    "private_inode": 95819247,
+    "private_link_count": 1,
+    "sha256": "7395d15a153149ac38cf1d00d61fe6c9ad72cccda1d36098b4ac503d9ec2847f"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-385742412-97029099d6a4589be68b1a8148bbefac6799ea56fb41fa702c56caa7afd18b1f.route",
+    "bytes": 112619,
+    "allocated_bytes": 114688,
+    "source_inode": 95814772,
+    "private_inode": 95819248,
+    "private_link_count": 1,
+    "sha256": "97029099d6a4589be68b1a8148bbefac6799ea56fb41fa702c56caa7afd18b1f"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-503349902-39fbeb38b24aff21d97b189e2e320c7b1218ee644c7e2e831a81e5008fb68ef3.route",
+    "bytes": 96595398,
+    "allocated_bytes": 96600064,
+    "source_inode": 95814933,
+    "private_inode": 95819249,
+    "private_link_count": 1,
+    "sha256": "39fbeb38b24aff21d97b189e2e320c7b1218ee644c7e2e831a81e5008fb68ef3"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-529121778-43d728d706239d9e61e676f9d473d8bbe4f0036838d213ca048c9e85d32cd369.route",
+    "bytes": 99174254,
+    "allocated_bytes": 99180544,
+    "source_inode": 95814936,
+    "private_inode": 95819250,
+    "private_link_count": 1,
+    "sha256": "43d728d706239d9e61e676f9d473d8bbe4f0036838d213ca048c9e85d32cd369"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-510546716-87c7b704cc12f9dd57ecb2ed5d3d8549997c0e91175f48ec4368c1d494fac2fd.route",
+    "bytes": 147689,
+    "allocated_bytes": 151552,
+    "source_inode": 95814773,
+    "private_inode": 95819251,
+    "private_link_count": 1,
+    "sha256": "87c7b704cc12f9dd57ecb2ed5d3d8549997c0e91175f48ec4368c1d494fac2fd"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-268487949-a51fe642c4dbd7cb39b003ee7910b1025f9743eabd1822721f8e9a2b434c3cbf.route",
+    "bytes": 55929947,
+    "allocated_bytes": 55934976,
+    "source_inode": 95814904,
+    "private_inode": 95819252,
+    "private_link_count": 1,
+    "sha256": "a51fe642c4dbd7cb39b003ee7910b1025f9743eabd1822721f8e9a2b434c3cbf"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-1828074-5be017c3cf55d149c5916c388a7149c93576697ed128384cc39f31c1c82a26ff.route",
+    "bytes": 3365511,
+    "allocated_bytes": 3366912,
+    "source_inode": 95814866,
+    "private_inode": 95819253,
+    "private_link_count": 1,
+    "sha256": "5be017c3cf55d149c5916c388a7149c93576697ed128384cc39f31c1c82a26ff"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-482117383-388e6b5f201ba3fa3e4951be8da3aabc2fd55fa47d812ae5b783ea25a7d7a9c2.route",
+    "bytes": 138871,
+    "allocated_bytes": 139264,
+    "source_inode": 95814774,
+    "private_inode": 95819254,
+    "private_link_count": 1,
+    "sha256": "388e6b5f201ba3fa3e4951be8da3aabc2fd55fa47d812ae5b783ea25a7d7a9c2"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-221998335-45c1dbbc356dd716f44fc8f23671784d47102d613e284a8e108f66f1b9b704db.route",
+    "bytes": 71039,
+    "allocated_bytes": 73728,
+    "source_inode": 95814775,
+    "private_inode": 95819255,
+    "private_link_count": 1,
+    "sha256": "45c1dbbc356dd716f44fc8f23671784d47102d613e284a8e108f66f1b9b704db"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-171870525-9fc770f4eea07c74a86411b3390b64d5a92e1ac2cb0049276c30d17f846a856a.route",
+    "bytes": 57940,
+    "allocated_bytes": 61440,
+    "source_inode": 95814776,
+    "private_inode": 95819256,
+    "private_link_count": 1,
+    "sha256": "9fc770f4eea07c74a86411b3390b64d5a92e1ac2cb0049276c30d17f846a856a"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-221998335-1a3deda4008c8eb08f8e41fc0ffb685b7797bdbc887bf9d98892b7341e36650d.route",
+    "bytes": 48312195,
+    "allocated_bytes": 48316416,
+    "source_inode": 95814900,
+    "private_inode": 95819257,
+    "private_link_count": 1,
+    "sha256": "1a3deda4008c8eb08f8e41fc0ffb685b7797bdbc887bf9d98892b7341e36650d"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-516081009-91499dc83542c936ec10f810fd5f9fc3f7cdae8addb8edbd7e4cd4ca52cceef2.route",
+    "bytes": 98545412,
+    "allocated_bytes": 98549760,
+    "source_inode": 95814935,
+    "private_inode": 95819258,
+    "private_link_count": 1,
+    "sha256": "91499dc83542c936ec10f810fd5f9fc3f7cdae8addb8edbd7e4cd4ca52cceef2"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-70084022-7f653b6260b0829f924015d963aa89fec81ddc81e5cefb2e5c39e9d53bdec222.route",
+    "bytes": 29137,
+    "allocated_bytes": 32768,
+    "source_inode": 95814777,
+    "private_inode": 95819259,
+    "private_link_count": 1,
+    "sha256": "7f653b6260b0829f924015d963aa89fec81ddc81e5cefb2e5c39e9d53bdec222"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-420626003-64524de3da26108f40fbbcca937ed95251ceb312bbb7809d036d838750ea2c54.route",
+    "bytes": 83115284,
+    "allocated_bytes": 83120128,
+    "source_inode": 95814924,
+    "private_inode": 95819260,
+    "private_link_count": 1,
+    "sha256": "64524de3da26108f40fbbcca937ed95251ceb312bbb7809d036d838750ea2c54"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-133244408-8cb0066958d703a696da7f227520ebe4e21cabbde1e539d075d8a9f5a2124330.route",
+    "bytes": 49101,
+    "allocated_bytes": 49152,
+    "source_inode": 95814778,
+    "private_inode": 95819261,
+    "private_link_count": 1,
+    "sha256": "8cb0066958d703a696da7f227520ebe4e21cabbde1e539d075d8a9f5a2124330"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-318884101-6c261559d5987f5a487aa4ed3ec2e725fda54c112bfa711befb454fc9b2de551.route",
+    "bytes": 64575762,
+    "allocated_bytes": 64581632,
+    "source_inode": 95814911,
+    "private_inode": 95819262,
+    "private_link_count": 1,
+    "sha256": "6c261559d5987f5a487aa4ed3ec2e725fda54c112bfa711befb454fc9b2de551"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-359565372-336d41b4399ded68ecd353c198f3d980e43a9006c738f4be9100e8d211f084b3.route",
+    "bytes": 105994,
+    "allocated_bytes": 106496,
+    "source_inode": 95814779,
+    "private_inode": 95819263,
+    "private_link_count": 1,
+    "sha256": "336d41b4399ded68ecd353c198f3d980e43a9006c738f4be9100e8d211f084b3"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-13333847-e1734895fce1d6335da838243b8234ae60bdf0002b49688ffe45d2ba0fd9be4c.route",
+    "bytes": 10131168,
+    "allocated_bytes": 10133504,
+    "source_inode": 95814871,
+    "private_inode": 95819264,
+    "private_link_count": 1,
+    "sha256": "e1734895fce1d6335da838243b8234ae60bdf0002b49688ffe45d2ba0fd9be4c"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-472686074-75af161a8a5187a0895ae8b45633f38c58fe06a726ddc1788eb49377d88a4d8d.route",
+    "bytes": 91687595,
+    "allocated_bytes": 91693056,
+    "source_inode": 95814929,
+    "private_inode": 95819265,
+    "private_link_count": 1,
+    "sha256": "75af161a8a5187a0895ae8b45633f38c58fe06a726ddc1788eb49377d88a4d8d"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-5527597-478e848eeae3f912536a656ec00ef1f417b7167f021102befd5bbb0d26ee9f40.route",
+    "bytes": 6980814,
+    "allocated_bytes": 6983680,
+    "source_inode": 95814867,
+    "private_inode": 95819266,
+    "private_link_count": 1,
+    "sha256": "478e848eeae3f912536a656ec00ef1f417b7167f021102befd5bbb0d26ee9f40"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-566991193-aca2dde8f002c9ba3e1eb4d7def20d388a64ef6bfba8d8aa19b2f28a33353334.route",
+    "bytes": 100737143,
+    "allocated_bytes": 100745216,
+    "source_inode": 95814937,
+    "private_inode": 95819267,
+    "private_link_count": 1,
+    "sha256": "aca2dde8f002c9ba3e1eb4d7def20d388a64ef6bfba8d8aa19b2f28a33353334"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-241625297-d0a7565a2f546fe263243a2376a9ef0e747cb5aded623239b94338590642397c.route",
+    "bytes": 51528106,
+    "allocated_bytes": 51535872,
+    "source_inode": 95814901,
+    "private_inode": 95819268,
+    "private_link_count": 1,
+    "sha256": "d0a7565a2f546fe263243a2376a9ef0e747cb5aded623239b94338590642397c"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-341248048-0e634beda78905aa1d9dc8cf45fb2e43e082368b25597fbbecc710860aeb966b.route",
+    "bytes": 101666,
+    "allocated_bytes": 102400,
+    "source_inode": 95814780,
+    "private_inode": 95819269,
+    "private_link_count": 1,
+    "sha256": "0e634beda78905aa1d9dc8cf45fb2e43e082368b25597fbbecc710860aeb966b"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-260045654-a3d9823d6fc914780fea50da56d7eae9ed71adca686a7b6e62e6fa60c8afb371.route",
+    "bytes": 54309714,
+    "allocated_bytes": 54317056,
+    "source_inode": 95814895,
+    "private_inode": 95819270,
+    "private_link_count": 1,
+    "sha256": "a3d9823d6fc914780fea50da56d7eae9ed71adca686a7b6e62e6fa60c8afb371"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-97077710-1d6fb102777f23984784d0f8664bd1b03786eb08592e0d7762af4158b7510b46.route",
+    "bytes": 42388,
+    "allocated_bytes": 45056,
+    "source_inode": 95814781,
+    "private_inode": 95819271,
+    "private_link_count": 1,
+    "sha256": "1d6fb102777f23984784d0f8664bd1b03786eb08592e0d7762af4158b7510b46"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-279139862-d44c769fd9420ccddf1a5677aabb9411abce311d938ea797b8a566b1abc20937.route",
+    "bytes": 88476,
+    "allocated_bytes": 90112,
+    "source_inode": 95814782,
+    "private_inode": 95819272,
+    "private_link_count": 1,
+    "sha256": "d44c769fd9420ccddf1a5677aabb9411abce311d938ea797b8a566b1abc20937"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-241744446-913669f48fa1c506b966e69381174d1bcd1422945534bc5eb5ddcaaea1e9fadd.route",
+    "bytes": 75359,
+    "allocated_bytes": 77824,
+    "source_inode": 95814783,
+    "private_inode": 95819273,
+    "private_link_count": 1,
+    "sha256": "913669f48fa1c506b966e69381174d1bcd1422945534bc5eb5ddcaaea1e9fadd"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-489284093-0dda43869a2d62879f53e693782e20dd8b370e6e5560bd8c8b217a94d9d988b9.route",
+    "bytes": 94374995,
+    "allocated_bytes": 94380032,
+    "source_inode": 95814931,
+    "private_inode": 95819274,
+    "private_link_count": 1,
+    "sha256": "0dda43869a2d62879f53e693782e20dd8b370e6e5560bd8c8b217a94d9d988b9"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-41677631-2ac1e04e750005ddc9878dce2ed48b020df56120bbff7fc9bd770938af2422fc.route",
+    "bytes": 20306,
+    "allocated_bytes": 20480,
+    "source_inode": 95814784,
+    "private_inode": 95819275,
+    "private_link_count": 1,
+    "sha256": "2ac1e04e750005ddc9878dce2ed48b020df56120bbff7fc9bd770938af2422fc"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-279091311-27ae9b7affb124b88ba2252b62d4645c0ce361a97df6462e4c592402c14081f2.route",
+    "bytes": 59385506,
+    "allocated_bytes": 59392000,
+    "source_inode": 95814905,
+    "private_inode": 95819276,
+    "private_link_count": 1,
+    "sha256": "27ae9b7affb124b88ba2252b62d4645c0ce361a97df6462e4c592402c14081f2"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-133244408-a2175c8057f0e92870f2c248e50dca9d2faf2606380f51cc16b605d97bade33e.route",
+    "bytes": 30942293,
+    "allocated_bytes": 30945280,
+    "source_inode": 95814887,
+    "private_inode": 95819277,
+    "private_link_count": 1,
+    "sha256": "a2175c8057f0e92870f2c248e50dca9d2faf2606380f51cc16b605d97bade33e"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-348725392-b8d3fed0ff9d5cf2c825cce3e14d03bb60c02e5b980e8f14ef36a2a137c6bf40.route",
+    "bytes": 69248045,
+    "allocated_bytes": 69255168,
+    "source_inode": 95814914,
+    "private_inode": 95819278,
+    "private_link_count": 1,
+    "sha256": "b8d3fed0ff9d5cf2c825cce3e14d03bb60c02e5b980e8f14ef36a2a137c6bf40"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-80692992-ef1bb34aacd01a5cfdad70530dc9c70bb65317e1b866a794d12cd5a4f0e9a862.route",
+    "bytes": 20927978,
+    "allocated_bytes": 20930560,
+    "source_inode": 95814880,
+    "private_inode": 95819279,
+    "private_link_count": 1,
+    "sha256": "ef1bb34aacd01a5cfdad70530dc9c70bb65317e1b866a794d12cd5a4f0e9a862"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-463974565-719e51656d3323281981b127487ec4c9b24049fe19ac2b16336623234cf80458.route",
+    "bytes": 134575,
+    "allocated_bytes": 135168,
+    "source_inode": 95814786,
+    "private_inode": 95819280,
+    "private_link_count": 1,
+    "sha256": "719e51656d3323281981b127487ec4c9b24049fe19ac2b16336623234cf80458"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-424489175-1a38dc8359b45525b2d4311eb57680d98de4137f5784c017b962c74eb349fcbd.route",
+    "bytes": 123723,
+    "allocated_bytes": 126976,
+    "source_inode": 95814787,
+    "private_inode": 95819281,
+    "private_link_count": 1,
+    "sha256": "1a38dc8359b45525b2d4311eb57680d98de4137f5784c017b962c74eb349fcbd"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-232765796-1ae3995892f929516fbce107c7ec1f692e8a2ef328ad721216008025754f76c9.route",
+    "bytes": 50383062,
+    "allocated_bytes": 50388992,
+    "source_inode": 95814899,
+    "private_inode": 95819282,
+    "private_link_count": 1,
+    "sha256": "1ae3995892f929516fbce107c7ec1f692e8a2ef328ad721216008025754f76c9"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-516782482-5940e5aec67cab748a5efbb3bc963b4e3a84d133e320b3095e752df54ebc25e8.route",
+    "bytes": 149845,
+    "allocated_bytes": 151552,
+    "source_inode": 95814788,
+    "private_inode": 95819283,
+    "private_link_count": 1,
+    "sha256": "5940e5aec67cab748a5efbb3bc963b4e3a84d133e320b3095e752df54ebc25e8"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-211744522-3bca3bcccb9566502c300d6fe2fa2165077d55e26dffaff15e61f81f25734718.route",
+    "bytes": 68879,
+    "allocated_bytes": 69632,
+    "source_inode": 95814789,
+    "private_inode": 95819284,
+    "private_link_count": 1,
+    "sha256": "3bca3bcccb9566502c300d6fe2fa2165077d55e26dffaff15e61f81f25734718"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-455134758-336cda29324eddb4c7052350c7d7602b6244c275a4381dd25fd2df480689e885.route",
+    "bytes": 132423,
+    "allocated_bytes": 135168,
+    "source_inode": 95814790,
+    "private_inode": 95819285,
+    "private_link_count": 1,
+    "sha256": "336cda29324eddb4c7052350c7d7602b6244c275a4381dd25fd2df480689e885"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-531074815-a991c1d8c5eb79654406cd26f02862b5e17091ad1fd889f81adbcba04afc7c0c.route",
+    "bytes": 152001,
+    "allocated_bytes": 155648,
+    "source_inode": 95814791,
+    "private_inode": 95819286,
+    "private_link_count": 1,
+    "sha256": "a991c1d8c5eb79654406cd26f02862b5e17091ad1fd889f81adbcba04afc7c0c"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-274155705-c832d3ea814ac3500d1c45cfc8992d2f9f2147ae676bc7e45de2fe0dc8401e46.route",
+    "bytes": 84116,
+    "allocated_bytes": 86016,
+    "source_inode": 95814792,
+    "private_inode": 95819287,
+    "private_link_count": 1,
+    "sha256": "c832d3ea814ac3500d1c45cfc8992d2f9f2147ae676bc7e45de2fe0dc8401e46"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-202111648-e73f40ba272c7bf2d9db75812456d9d007658202b53ca51fdcec9c1fcac44b4b.route",
+    "bytes": 66715,
+    "allocated_bytes": 69632,
+    "source_inode": 95814793,
+    "private_inode": 95819288,
+    "private_link_count": 1,
+    "sha256": "e73f40ba272c7bf2d9db75812456d9d007658202b53ca51fdcec9c1fcac44b4b"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-504294490-f4567f35e643b1fcd3fc8f2216d58b67e71a3b8426562b396f62055dba340355.route",
+    "bytes": 145311,
+    "allocated_bytes": 147456,
+    "source_inode": 95814794,
+    "private_inode": 95819289,
+    "private_link_count": 1,
+    "sha256": "f4567f35e643b1fcd3fc8f2216d58b67e71a3b8426562b396f62055dba340355"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-250379517-a3db751e949dcca520366dcc0dbc00c508fce93769f012a7bb10aa63f9a3d800.route",
+    "bytes": 77519,
+    "allocated_bytes": 77824,
+    "source_inode": 95814795,
+    "private_inode": 95819290,
+    "private_link_count": 1,
+    "sha256": "a3db751e949dcca520366dcc0dbc00c508fce93769f012a7bb10aa63f9a3d800"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-25742225-503726f5b35e4f59b6e5ae620b383ce7d52591e4e5e4004e41a79cc85c0a6c1f.route",
+    "bytes": 15918,
+    "allocated_bytes": 16384,
+    "source_inode": 95814796,
+    "private_inode": 95819291,
+    "private_link_count": 1,
+    "sha256": "503726f5b35e4f59b6e5ae620b383ce7d52591e4e5e4004e41a79cc85c0a6c1f"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-84744898-cb1fe4744fe55edd07a58dbb2425247f259ccdd00e23fdc81165723ea7d7f072.route",
+    "bytes": 35709,
+    "allocated_bytes": 36864,
+    "source_inode": 95814797,
+    "private_inode": 95819292,
+    "private_link_count": 1,
+    "sha256": "cb1fe4744fe55edd07a58dbb2425247f259ccdd00e23fdc81165723ea7d7f072"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-268607456-493647a19e8f6f21d42a8b7af54f395b349d41b74c6da060ecc667fcba66de5f.route",
+    "bytes": 81851,
+    "allocated_bytes": 81920,
+    "source_inode": 95814798,
+    "private_inode": 95819293,
+    "private_link_count": 1,
+    "sha256": "493647a19e8f6f21d42a8b7af54f395b349d41b74c6da060ecc667fcba66de5f"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-88520554-2e62a975ab5fda74333a437a762c386e41c334427c10ba18f0be8c19fdec9790.route",
+    "bytes": 21583444,
+    "allocated_bytes": 21585920,
+    "source_inode": 95814882,
+    "private_inode": 95819294,
+    "private_link_count": 1,
+    "sha256": "2e62a975ab5fda74333a437a762c386e41c334427c10ba18f0be8c19fdec9790"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-184563366-cb84b6d1a347d15078fa2604ff728f0e1bb2d3d422501de977e7e119ae012ed9.route",
+    "bytes": 41843551,
+    "allocated_bytes": 41848832,
+    "source_inode": 95814892,
+    "private_inode": 95819295,
+    "private_link_count": 1,
+    "sha256": "cb84b6d1a347d15078fa2604ff728f0e1bb2d3d422501de977e7e119ae012ed9"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-164460490-ddf013a6f6ee7cb5cab955699264eb6a6e80b63777bf8ea0a98c6c28a9bac8b1.route",
+    "bytes": 36204506,
+    "allocated_bytes": 36204544,
+    "source_inode": 95814889,
+    "private_inode": 95819296,
+    "private_link_count": 1,
+    "sha256": "ddf013a6f6ee7cb5cab955699264eb6a6e80b63777bf8ea0a98c6c28a9bac8b1"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-402162709-72cf98ac6a2749385b502349cdbb2af1612ca82fdcd7b6f95dd426e21cde9db1.route",
+    "bytes": 80366444,
+    "allocated_bytes": 80371712,
+    "source_inode": 95814920,
+    "private_inode": 95819297,
+    "private_link_count": 1,
+    "sha256": "72cf98ac6a2749385b502349cdbb2af1612ca82fdcd7b6f95dd426e21cde9db1"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-91361853-09b9ef1f99297101ceddb8f7c8307fca2f978e93eb77b1f3075aa314f3b0a268.route",
+    "bytes": 40097,
+    "allocated_bytes": 40960,
+    "source_inode": 95814799,
+    "private_inode": 95819298,
+    "private_link_count": 1,
+    "sha256": "09b9ef1f99297101ceddb8f7c8307fca2f978e93eb77b1f3075aa314f3b0a268"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-154913515-965af63e89978f246b813e1a8ab46f13d30ee5b1a74ae648c2e11308985e1ac3.route",
+    "bytes": 53553,
+    "allocated_bytes": 57344,
+    "source_inode": 95814800,
+    "private_inode": 95819299,
+    "private_link_count": 1,
+    "sha256": "965af63e89978f246b813e1a8ab46f13d30ee5b1a74ae648c2e11308985e1ac3"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-367447028-33b4fed16bfcf52d22f89e39a9eca9f7f779c978d0dbd964711aec8b6e4a0a36.route",
+    "bytes": 73705235,
+    "allocated_bytes": 73711616,
+    "source_inode": 95814916,
+    "private_inode": 95819300,
+    "private_link_count": 1,
+    "sha256": "33b4fed16bfcf52d22f89e39a9eca9f7f779c978d0dbd964711aec8b6e4a0a36"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-250185923-f53aceda6992369dabfebfd0101aa1e07fdffbe7519ac49f7c12e02753a1ac55.route",
+    "bytes": 52701769,
+    "allocated_bytes": 52707328,
+    "source_inode": 95814903,
+    "private_inode": 95819301,
+    "private_link_count": 1,
+    "sha256": "f53aceda6992369dabfebfd0101aa1e07fdffbe7519ac49f7c12e02753a1ac55"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route",
+    "bytes": 158445,
+    "allocated_bytes": 159744,
+    "source_inode": 95814801,
+    "private_inode": 95819302,
+    "private_link_count": 1,
+    "sha256": "d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-283616230-4cd06af318e7932462be89c55c19e5401b10b635cd2b72002cdf295b7fad1253.route",
+    "bytes": 59850508,
+    "allocated_bytes": 59854848,
+    "source_inode": 95814906,
+    "private_inode": 95819303,
+    "private_link_count": 1,
+    "sha256": "4cd06af318e7932462be89c55c19e5401b10b635cd2b72002cdf295b7fad1253"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-188842935-8e495f687cbe1de4cfc7158352bfa752713acfb7210d8e8003330b0f3b1132a4.route",
+    "bytes": 64490,
+    "allocated_bytes": 65536,
+    "source_inode": 95814802,
+    "private_inode": 95819304,
+    "private_link_count": 1,
+    "sha256": "8e495f687cbe1de4cfc7158352bfa752713acfb7210d8e8003330b0f3b1132a4"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-377403714-35e13413fa9da865b7e8e8d3e4a8186be539b6a8252f260898cd6c54255ade9f.route",
+    "bytes": 110326,
+    "allocated_bytes": 110592,
+    "source_inode": 95814803,
+    "private_inode": 95819305,
+    "private_link_count": 1,
+    "sha256": "35e13413fa9da865b7e8e8d3e4a8186be539b6a8252f260898cd6c54255ade9f"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-25742225-c7c12ee3bbc52951e9cff8869df5694b7dcebddc979a029a058eef33191d0e38.route",
+    "bytes": 15446629,
+    "allocated_bytes": 15450112,
+    "source_inode": 95814874,
+    "private_inode": 95819306,
+    "private_link_count": 1,
+    "sha256": "c7c12ee3bbc52951e9cff8869df5694b7dcebddc979a029a058eef33191d0e38"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-429420162-87535f0fec3de05bd60fab9846a64dfcda946c3274d88f0efdc2b68de7b57256.route",
+    "bytes": 84172264,
+    "allocated_bytes": 84176896,
+    "source_inode": 95814910,
+    "private_inode": 95819307,
+    "private_link_count": 1,
+    "sha256": "87535f0fec3de05bd60fab9846a64dfcda946c3274d88f0efdc2b68de7b57256"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-57066515-f6bb8d7d1ac416723b6b5bc691bc63db96001db43302043e98ca4f099c6f3066.route",
+    "bytes": 24772,
+    "allocated_bytes": 28672,
+    "source_inode": 95814804,
+    "private_inode": 95819308,
+    "private_link_count": 1,
+    "sha256": "f6bb8d7d1ac416723b6b5bc691bc63db96001db43302043e98ca4f099c6f3066"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-202111648-132da37eb48ac2c02b45f4b88c9b69cf36d2d9cf2e94229a81eddd9445167260.route",
+    "bytes": 44805489,
+    "allocated_bytes": 44810240,
+    "source_inode": 95814865,
+    "private_inode": 95819309,
+    "private_link_count": 1,
+    "sha256": "132da37eb48ac2c02b45f4b88c9b69cf36d2d9cf2e94229a81eddd9445167260"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-77050194-8d6c72494106258a36ed48d7fdac6312a9c9f71139b136ac8015c543d70fc568.route",
+    "bytes": 31381,
+    "allocated_bytes": 32768,
+    "source_inode": 95814805,
+    "private_inode": 95819310,
+    "private_link_count": 1,
+    "sha256": "8d6c72494106258a36ed48d7fdac6312a9c9f71139b136ac8015c543d70fc568"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-77050194-3abfb1de7d834a14bdcc4885ec2dcc42d55783e3afca17670d8751ba1755a738.route",
+    "bytes": 20733365,
+    "allocated_bytes": 20733952,
+    "source_inode": 95814879,
+    "private_inode": 95819311,
+    "private_link_count": 1,
+    "sha256": "3abfb1de7d834a14bdcc4885ec2dcc42d55783e3afca17670d8751ba1755a738"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-411125305-7dd72b78a8751e01094e9e07a2c74d75025b112f9635e321674b84f2a054c632.route",
+    "bytes": 81458187,
+    "allocated_bytes": 81465344,
+    "source_inode": 95814922,
+    "private_inode": 95819312,
+    "private_link_count": 1,
+    "sha256": "7dd72b78a8751e01094e9e07a2c74d75025b112f9635e321674b84f2a054c632"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-497635499-f55c4b4b43929953d8b1b9b2ede65c0755b4cf948b47c9a823018c1d6700a677.route",
+    "bytes": 143159,
+    "allocated_bytes": 143360,
+    "source_inode": 95814806,
+    "private_inode": 95819313,
+    "private_link_count": 1,
+    "sha256": "f55c4b4b43929953d8b1b9b2ede65c0755b4cf948b47c9a823018c1d6700a677"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-48589670-8c286d566b1b2d9e4de752af9884211ca41d35526007c8b87f27bd7337379b4b.route",
+    "bytes": 22502,
+    "allocated_bytes": 24576,
+    "source_inode": 95814807,
+    "private_inode": 95819314,
+    "private_link_count": 1,
+    "sha256": "8c286d566b1b2d9e4de752af9884211ca41d35526007c8b87f27bd7337379b4b"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-490104035-cad36102959f2eaa6793798cddb0b9cadb1e887c553cd03fbe3905c298324d71.route",
+    "bytes": 141015,
+    "allocated_bytes": 143360,
+    "source_inode": 95814808,
+    "private_inode": 95819315,
+    "private_link_count": 1,
+    "sha256": "cad36102959f2eaa6793798cddb0b9cadb1e887c553cd03fbe3905c298324d71"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-61808234-a1af94a2a8179c12c6f8699c178916b340993ffb67d10694766a44710112f5c5.route",
+    "bytes": 26928,
+    "allocated_bytes": 28672,
+    "source_inode": 95814809,
+    "private_inode": 95819316,
+    "private_link_count": 1,
+    "sha256": "a1af94a2a8179c12c6f8699c178916b340993ffb67d10694766a44710112f5c5"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-178258870-b30cc579200a5fa54d11884c048cc87ce56044a1a243a492a42904e720231d9d.route",
+    "bytes": 60166,
+    "allocated_bytes": 61440,
+    "source_inode": 95814810,
+    "private_inode": 95819317,
+    "private_link_count": 1,
+    "sha256": "b30cc579200a5fa54d11884c048cc87ce56044a1a243a492a42904e720231d9d"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-61808234-e008a1d11864a4333301ea9757b666ffbecd544f00c692f7ed74ac70d526e49e.route",
+    "bytes": 19844427,
+    "allocated_bytes": 19845120,
+    "source_inode": 95814877,
+    "private_inode": 95819318,
+    "private_link_count": 1,
+    "sha256": "e008a1d11864a4333301ea9757b666ffbecd544f00c692f7ed74ac70d526e49e"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-188842935-bec49af3d06f8f0b79518e02485199559193feba27fd6de47be23749003e2e99.route",
+    "bytes": 42492873,
+    "allocated_bytes": 42496000,
+    "source_inode": 95814893,
+    "private_inode": 95819319,
+    "private_link_count": 1,
+    "sha256": "bec49af3d06f8f0b79518e02485199559193feba27fd6de47be23749003e2e99"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-437401209-3e1b5e35a46c8c278795f35ee85312d148f95abd0b14250e7e97f0877565106e.route",
+    "bytes": 86476635,
+    "allocated_bytes": 86482944,
+    "source_inode": 95814926,
+    "private_inode": 95819320,
+    "private_link_count": 1,
+    "sha256": "3e1b5e35a46c8c278795f35ee85312d148f95abd0b14250e7e97f0877565106e"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-48589670-2e941feaf6c3ef785fc587517f6a8cc91097fc7f287818338f9fcca9a324ea0c.route",
+    "bytes": 17677272,
+    "allocated_bytes": 17678336,
+    "source_inode": 95814875,
+    "private_inode": 95819321,
+    "private_link_count": 1,
+    "sha256": "2e941feaf6c3ef785fc587517f6a8cc91097fc7f287818338f9fcca9a324ea0c"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-310477962-8936b921d831daf7e34c5ffb7c6f61b7c0924c1e51203b3363715c0cc19a5e8d.route",
+    "bytes": 63189054,
+    "allocated_bytes": 63197184,
+    "source_inode": 95814908,
+    "private_inode": 95819322,
+    "private_link_count": 1,
+    "sha256": "8936b921d831daf7e34c5ffb7c6f61b7c0924c1e51203b3363715c0cc19a5e8d"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-393818448-868b540a212438527394b063e39a75c920a04c1df2ae2f4a499936c745709a72.route",
+    "bytes": 114855,
+    "allocated_bytes": 118784,
+    "source_inode": 95814811,
+    "private_inode": 95819323,
+    "private_link_count": 1,
+    "sha256": "868b540a212438527394b063e39a75c920a04c1df2ae2f4a499936c745709a72"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-276501705-7a01eea9521c7531a5183ad70a552b2b5813f1dd071ca772ffd84cf1df9a0df7.route",
+    "bytes": 86296,
+    "allocated_bytes": 90112,
+    "source_inode": 95814812,
+    "private_inode": 95819324,
+    "private_link_count": 1,
+    "sha256": "7a01eea9521c7531a5183ad70a552b2b5813f1dd071ca772ffd84cf1df9a0df7"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-91361853-b3b314090b65e31b7be589e38317d33d88e4839e98338fa1067b800618c9e601.route",
+    "bytes": 22064777,
+    "allocated_bytes": 22065152,
+    "source_inode": 95814883,
+    "private_inode": 95819325,
+    "private_link_count": 1,
+    "sha256": "b3b314090b65e31b7be589e38317d33d88e4839e98338fa1067b800618c9e601"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-542464269-0c67e7e5ba57924fea273763897c3b464181ecce3def2b0c604a4e39f5a4e3bf.route",
+    "bytes": 99680216,
+    "allocated_bytes": 99684352,
+    "source_inode": 95814921,
+    "private_inode": 95819326,
+    "private_link_count": 1,
+    "sha256": "0c67e7e5ba57924fea273763897c3b464181ecce3def2b0c604a4e39f5a4e3bf"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-424212725-baf3f4f8a75a858723356aafd8ce58bd73c3b10c42a7e563981d1e8011922041.route",
+    "bytes": 83613054,
+    "allocated_bytes": 83619840,
+    "source_inode": 95814909,
+    "private_inode": 95819327,
+    "private_link_count": 1,
+    "sha256": "baf3f4f8a75a858723356aafd8ce58bd73c3b10c42a7e563981d1e8011922041"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-283924671-e0a89ca9998e5630886ff2acda3242f35299a0db149e50594f5c5942f400b8dd.route",
+    "bytes": 90656,
+    "allocated_bytes": 94208,
+    "source_inode": 95814813,
+    "private_inode": 95819328,
+    "private_link_count": 1,
+    "sha256": "e0a89ca9998e5630886ff2acda3242f35299a0db149e50594f5c5942f400b8dd"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-260327241-d7244a984a7efcb6cae340757425397290c5a80dfb2178534f8afff9942895fb.route",
+    "bytes": 79691,
+    "allocated_bytes": 81920,
+    "source_inode": 95814814,
+    "private_inode": 95819329,
+    "private_link_count": 1,
+    "sha256": "d7244a984a7efcb6cae340757425397290c5a80dfb2178534f8afff9942895fb"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-154913515-31d8f21269a5af6e495fbb728e7e7962895066352be2b241bf29e9983a8a265f.route",
+    "bytes": 34211431,
+    "allocated_bytes": 34213888,
+    "source_inode": 95814890,
+    "private_inode": 95819330,
+    "private_link_count": 1,
+    "sha256": "31d8f21269a5af6e495fbb728e7e7962895066352be2b241bf29e9983a8a265f"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-403236361-7f6dcdf6a6e131ae4a963da4a0e4b3e565b5753cd117aa1450083035c39aa20e.route",
+    "bytes": 117091,
+    "allocated_bytes": 118784,
+    "source_inode": 95814815,
+    "private_inode": 95819331,
+    "private_link_count": 1,
+    "sha256": "7f6dcdf6a6e131ae4a963da4a0e4b3e565b5753cd117aa1450083035c39aa20e"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-384932026-d1b8e8fe3dac142bb2dd1eb2bc5da5ff987b58ad6e8c1cae23971be024fac4f1.route",
+    "bytes": 77150554,
+    "allocated_bytes": 77156352,
+    "source_inode": 95814918,
+    "private_inode": 95819332,
+    "private_link_count": 1,
+    "sha256": "d1b8e8fe3dac142bb2dd1eb2bc5da5ff987b58ad6e8c1cae23971be024fac4f1"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-445426871-cec7686f8420e448f93f3bfe8a82056c636b4499bcb4800f4afe1aca3baaa768.route",
+    "bytes": 87719983,
+    "allocated_bytes": 87728128,
+    "source_inode": 95814925,
+    "private_inode": 95819333,
+    "private_link_count": 1,
+    "sha256": "cec7686f8420e448f93f3bfe8a82056c636b4499bcb4800f4afe1aca3baaa768"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-392739772-1a86452ddefd95b6b32e3ce9e776d2807e6c39068639103797a1e11cc27a3450.route",
+    "bytes": 78778979,
+    "allocated_bytes": 78786560,
+    "source_inode": 95814919,
+    "private_inode": 95819334,
+    "private_link_count": 1,
+    "sha256": "1a86452ddefd95b6b32e3ce9e776d2807e6c39068639103797a1e11cc27a3450"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-57066515-4df75a788ef89ac647538abfe4e9d888e7c1c1d3dc03b71b4a1df005e0efcfb6.route",
+    "bytes": 19580182,
+    "allocated_bytes": 19582976,
+    "source_inode": 95814876,
+    "private_inode": 95819335,
+    "private_link_count": 1,
+    "sha256": "4df75a788ef89ac647538abfe4e9d888e7c1c1d3dc03b71b4a1df005e0efcfb6"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-438372291-f01360d55bf72fbaa7b8308c7fb8c1ca8c632279dc7b8ae8e9b4168c5662d098.route",
+    "bytes": 128107,
+    "allocated_bytes": 131072,
+    "source_inode": 95814816,
+    "private_inode": 95819336,
+    "private_link_count": 1,
+    "sha256": "f01360d55bf72fbaa7b8308c7fb8c1ca8c632279dc7b8ae8e9b4168c5662d098"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-70084022-181c775fece3e8947fbb6b1697aea8476d49992a36a98cff200f3a184000aace.route",
+    "bytes": 20252032,
+    "allocated_bytes": 20254720,
+    "source_inode": 95814878,
+    "private_inode": 95819337,
+    "private_link_count": 1,
+    "sha256": "181c775fece3e8947fbb6b1697aea8476d49992a36a98cff200f3a184000aace"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-9651766-606c7d3a7596807192a9197a38378a9272dbef82d4ac0ac623a7dcbc41a0c589.route",
+    "bytes": 8658444,
+    "allocated_bytes": 8658944,
+    "source_inode": 95814870,
+    "private_inode": 95819338,
+    "private_link_count": 1,
+    "sha256": "606c7d3a7596807192a9197a38378a9272dbef82d4ac0ac623a7dcbc41a0c589"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-421370568-ba1556dd90c2fe72715d265e6a78a98691afbe4f3489c23ef69a685a067a72e3.route",
+    "bytes": 121551,
+    "allocated_bytes": 122880,
+    "source_inode": 95814817,
+    "private_inode": 95819339,
+    "private_link_count": 1,
+    "sha256": "ba1556dd90c2fe72715d265e6a78a98691afbe4f3489c23ef69a685a067a72e3"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-274109708-f427a42449ff1a413aac054fdf4dbe69e8802a90f3da38bae8010b7dc2cb679b.route",
+    "bytes": 58725944,
+    "allocated_bytes": 58732544,
+    "source_inode": 95814898,
+    "private_inode": 95819340,
+    "private_link_count": 1,
+    "sha256": "f427a42449ff1a413aac054fdf4dbe69e8802a90f3da38bae8010b7dc2cb679b"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-178258870-a0e29b5c7aedf2f1e396be596cab23b7c0c97eb28c84aba6d98fb8ab9a4a241c.route",
+    "bytes": 40764096,
+    "allocated_bytes": 40767488,
+    "source_inode": 95814894,
+    "private_inode": 95819341,
+    "private_link_count": 1,
+    "sha256": "a0e29b5c7aedf2f1e396be596cab23b7c0c97eb28c84aba6d98fb8ab9a4a241c"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-113254486-f20681b0fe15b4cc0766626b6b62b5db9592cb01cb3da4fecf906991c259af99.route",
+    "bytes": 26554735,
+    "allocated_bytes": 26558464,
+    "source_inode": 95814885,
+    "private_inode": 95819342,
+    "private_link_count": 1,
+    "sha256": "f20681b0fe15b4cc0766626b6b62b5db9592cb01cb3da4fecf906991c259af99"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-430226477-1263feb8cd452e879dda462a59823abb365317ff70badfd19db1764370627bce.route",
+    "bytes": 125919,
+    "allocated_bytes": 126976,
+    "source_inode": 95814818,
+    "private_inode": 95819343,
+    "private_link_count": 1,
+    "sha256": "1263feb8cd452e879dda462a59823abb365317ff70badfd19db1764370627bce"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-32901958-2e480775451c3ce1ce7bfdccabdd08063320dc86b83950e36da47e001479c9b0.route",
+    "bytes": 18066,
+    "allocated_bytes": 20480,
+    "source_inode": 95814819,
+    "private_inode": 95819344,
+    "private_link_count": 1,
+    "sha256": "2e480775451c3ce1ce7bfdccabdd08063320dc86b83950e36da47e001479c9b0"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-543945245-0a9b3d884ae2d54c32d3fba2e599331ac1ad1d07463b913b0edd4b494e438f0e.route",
+    "bytes": 154153,
+    "allocated_bytes": 155648,
+    "source_inode": 95814820,
+    "private_inode": 95819345,
+    "private_link_count": 1,
+    "sha256": "0a9b3d884ae2d54c32d3fba2e599331ac1ad1d07463b913b0edd4b494e438f0e"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-13333847-c25dc2aa6e07d30580f4744329f9c75b97dbe203f77d7854bc37afcd4ac58a8c.route",
+    "bytes": 9206,
+    "allocated_bytes": 12288,
+    "source_inode": 95814821,
+    "private_inode": 95819346,
+    "private_link_count": 1,
+    "sha256": "c25dc2aa6e07d30580f4744329f9c75b97dbe203f77d7854bc37afcd4ac58a8c"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-557871649-30b6e086cb8e397869a93cf88c1618194fb95b8aa22295c4d7788b65e272dc5a.route",
+    "bytes": 156301,
+    "allocated_bytes": 159744,
+    "source_inode": 95814822,
+    "private_inode": 95819347,
+    "private_link_count": 1,
+    "sha256": "30b6e086cb8e397869a93cf88c1618194fb95b8aa22295c4d7788b65e272dc5a"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-142378331-96f256275a22aa5084899e883a4b94bd584fe2e96753ce6b614dd8ec68d9697f.route",
+    "bytes": 51281,
+    "allocated_bytes": 53248,
+    "source_inode": 95814823,
+    "private_inode": 95819348,
+    "private_link_count": 1,
+    "sha256": "96f256275a22aa5084899e883a4b94bd584fe2e96753ce6b614dd8ec68d9697f"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-328851240-45000580e59b1f1c1093df5752185a5e58bb8e2e71f32f500d8576d6e47893f0.route",
+    "bytes": 65983003,
+    "allocated_bytes": 65990656,
+    "source_inode": 95814912,
+    "private_inode": 95819349,
+    "private_link_count": 1,
+    "sha256": "45000580e59b1f1c1093df5752185a5e58bb8e2e71f32f500d8576d6e47893f0"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-232876097-647691ed41e1ac995ed7373fb969f8624d8266ec7ed63f5b20a061c2983b6f12.route",
+    "bytes": 73199,
+    "allocated_bytes": 73728,
+    "source_inode": 95814824,
+    "private_inode": 95819350,
+    "private_link_count": 1,
+    "sha256": "647691ed41e1ac995ed7373fb969f8624d8266ec7ed63f5b20a061c2983b6f12"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-412246043-43cfeedd512cabcfff29db6d694b05186d478673834965050a6fc2fd3c2e86c6.route",
+    "bytes": 119307,
+    "allocated_bytes": 122880,
+    "source_inode": 95814825,
+    "private_inode": 95819351,
+    "private_link_count": 1,
+    "sha256": "43cfeedd512cabcfff29db6d694b05186d478673834965050a6fc2fd3c2e86c6"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-184563366-517c15c31d22826763426ee1e192c78f00fc389670b97b4d68e4a888b3d31e37.route",
+    "bytes": 62330,
+    "allocated_bytes": 65536,
+    "source_inode": 95814826,
+    "private_inode": 95819352,
+    "private_link_count": 1,
+    "sha256": "517c15c31d22826763426ee1e192c78f00fc389670b97b4d68e4a888b3d31e37"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-276466636-d7056706831b534f4cb890521db82dd37af981ba18f6a39ea1d5b16a0ea7e90f.route",
+    "bytes": 59035245,
+    "allocated_bytes": 59039744,
+    "source_inode": 95814902,
+    "private_inode": 95819353,
+    "private_link_count": 1,
+    "sha256": "d7056706831b534f4cb890521db82dd37af981ba18f6a39ea1d5b16a0ea7e90f"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-1828074-3c7831cce850f6f380fb3ae10facf348abbcb22b820402d3906e16917d15b2fb.route",
+    "bytes": 2798,
+    "allocated_bytes": 4096,
+    "source_inode": 95814827,
+    "private_inode": 95819354,
+    "private_link_count": 1,
+    "sha256": "3c7831cce850f6f380fb3ae10facf348abbcb22b820402d3906e16917d15b2fb"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-16781033-ed4dc8375a8d71c04ff3273c94503b9b21d5e942aa3b328b314f880728d91441.route",
+    "bytes": 11419,
+    "allocated_bytes": 12288,
+    "source_inode": 95814828,
+    "private_inode": 95819355,
+    "private_link_count": 1,
+    "sha256": "ed4dc8375a8d71c04ff3273c94503b9b21d5e942aa3b328b314f880728d91441"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-349707493-757c93c7d090c7e7b1ab73ffc0547fa993493ced38ba1be1c78180211458ecc8.route",
+    "bytes": 103818,
+    "allocated_bytes": 106496,
+    "source_inode": 95814829,
+    "private_inode": 95819356,
+    "private_link_count": 1,
+    "sha256": "757c93c7d090c7e7b1ab73ffc0547fa993493ced38ba1be1c78180211458ecc8"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-171870525-35076f1c5d6f1ad895c5c80b74b64c2cb6a81303520be1ca229af2f0bbe668a2.route",
+    "bytes": 38951298,
+    "allocated_bytes": 38957056,
+    "source_inode": 95814891,
+    "private_inode": 95819357,
+    "private_link_count": 1,
+    "sha256": "35076f1c5d6f1ad895c5c80b74b64c2cb6a81303520be1ca229af2f0bbe668a2"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-9651766-bd270271be109e8c72ca8c02da1b31143f6f2c60d8a822624e25987e74371cd3.route",
+    "bytes": 7070,
+    "allocated_bytes": 8192,
+    "source_inode": 95814830,
+    "private_inode": 95819358,
+    "private_link_count": 1,
+    "sha256": "bd270271be109e8c72ca8c02da1b31143f6f2c60d8a822624e25987e74371cd3"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-16781033-d523326e51796760da1f2714ce5216d4b9a968f105dcf79519899823d3052070.route",
+    "bytes": 12148766,
+    "allocated_bytes": 12152832,
+    "source_inode": 95814873,
+    "private_inode": 95819359,
+    "private_link_count": 1,
+    "sha256": "d523326e51796760da1f2714ce5216d4b9a968f105dcf79519899823d3052070"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-20418041-e683dc3f06e8f9b95e65cdc0e980628eab3bdd6580afd8bd74179c775a848124.route",
+    "bytes": 13713,
+    "allocated_bytes": 16384,
+    "source_inode": 95814831,
+    "private_inode": 95819360,
+    "private_link_count": 1,
+    "sha256": "e683dc3f06e8f9b95e65cdc0e980628eab3bdd6580afd8bd74179c775a848124"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-84744898-69c649f1f0209c0ebbb002a528c82a87b697e713a0eace457a372967ee5afd8b.route",
+    "bytes": 21151263,
+    "allocated_bytes": 21151744,
+    "source_inode": 95814881,
+    "private_inode": 95819361,
+    "private_link_count": 1,
+    "sha256": "69c649f1f0209c0ebbb002a528c82a87b697e713a0eace457a372967ee5afd8b"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-123980632-505326fae596ce247a5719dc973632dc7c255ff074673d04a29177459d155102.route",
+    "bytes": 28408493,
+    "allocated_bytes": 28409856,
+    "source_inode": 95814886,
+    "private_inode": 95819362,
+    "private_link_count": 1,
+    "sha256": "505326fae596ce247a5719dc973632dc7c255ff074673d04a29177459d155102"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-556266490-e1c8c7d891f8a46979caab971494be244955c3e40790f98bfde1cc555d2cbeda.route",
+    "bytes": 100157453,
+    "allocated_bytes": 100163584,
+    "source_inode": 95814934,
+    "private_inode": 95819363,
+    "private_link_count": 1,
+    "sha256": "e1c8c7d891f8a46979caab971494be244955c3e40790f98bfde1cc555d2cbeda"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-80692992-e49d578680c8c32ec7415ba58bbcbb68aea53ad55d935abe01ba5c0b300df98f.route",
+    "bytes": 33549,
+    "allocated_bytes": 36864,
+    "source_inode": 95814832,
+    "private_inode": 95819364,
+    "private_link_count": 1,
+    "sha256": "e49d578680c8c32ec7415ba58bbcbb68aea53ad55d935abe01ba5c0b300df98f"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-5527597-781f68c908648cb3e7b317dc7de8ad4c74e2c3313887b30e64ab2d77504001f3.route",
+    "bytes": 4934,
+    "allocated_bytes": 8192,
+    "source_inode": 95814833,
+    "private_inode": 95819365,
+    "private_link_count": 1,
+    "sha256": "781f68c908648cb3e7b317dc7de8ad4c74e2c3313887b30e64ab2d77504001f3"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-41677631-32b3e9a3301c9bda627204a869ec3c96ecc0d4eaf561210057e850bb8f988771.route",
+    "bytes": 17134446,
+    "allocated_bytes": 17137664,
+    "source_inode": 95814869,
+    "private_inode": 95819366,
+    "private_link_count": 1,
+    "sha256": "32b3e9a3301c9bda627204a869ec3c96ecc0d4eaf561210057e850bb8f988771"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-97077710-e5ce9c29cba10521575354097d1af5c2ca3753a60a77fdc3ab95990e59eb87aa.route",
+    "bytes": 22931240,
+    "allocated_bytes": 22933504,
+    "source_inode": 95814884,
+    "private_inode": 95819367,
+    "private_link_count": 1,
+    "sha256": "e5ce9c29cba10521575354097d1af5c2ca3753a60a77fdc3ab95990e59eb87aa"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-123980632-2d40b52fa7c8172e302c3305b44ac69c5b8b3a9ee4101f87c69c8aae20f690b8.route",
+    "bytes": 46933,
+    "allocated_bytes": 49152,
+    "source_inode": 95814834,
+    "private_inode": 95819368,
+    "private_link_count": 1,
+    "sha256": "2d40b52fa7c8172e302c3305b44ac69c5b8b3a9ee4101f87c69c8aae20f690b8"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-142378331-bc11bcc72e515704bc3513b2bee0a9b487cd7e05e313e64051d9bf156ccc8aeb.route",
+    "bytes": 32333150,
+    "allocated_bytes": 32333824,
+    "source_inode": 95814888,
+    "private_inode": 95819369,
+    "private_link_count": 1,
+    "sha256": "bc11bcc72e515704bc3513b2bee0a9b487cd7e05e313e64051d9bf156ccc8aeb"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-20418041-9ac99f69878626311b37fce079f289bbf261b700134817a59365238cfcdec658.route",
+    "bytes": 14293393,
+    "allocated_bytes": 14295040,
+    "source_inode": 95814872,
+    "private_inode": 95819370,
+    "private_link_count": 1,
+    "sha256": "9ac99f69878626311b37fce079f289bbf261b700134817a59365238cfcdec658"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-463101281-12ab72ed6a7adc799f3826ea9e60da8c954a471cafc4816eac6934d2a7326a00.route",
+    "bytes": 90599948,
+    "allocated_bytes": 90607616,
+    "source_inode": 95814928,
+    "private_inode": 95819371,
+    "private_link_count": 1,
+    "sha256": "12ab72ed6a7adc799f3826ea9e60da8c954a471cafc4816eac6934d2a7326a00"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-509818311-e75be18f88ce82d1d36af588d65ed40ec07677f0468df18ea29bce83e5f7ee1a.route",
+    "bytes": 97592933,
+    "allocated_bytes": 97599488,
+    "source_inode": 95814907,
+    "private_inode": 95819372,
+    "private_link_count": 1,
+    "sha256": "e75be18f88ce82d1d36af588d65ed40ec07677f0468df18ea29bce83e5f7ee1a"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-340204984-bb54f1981e00bf945132156f7efff427878f60acfc8db465daa13ca347b918ec.route",
+    "bytes": 67422959,
+    "allocated_bytes": 67428352,
+    "source_inode": 95814913,
+    "private_inode": 95819373,
+    "private_link_count": 1,
+    "sha256": "bb54f1981e00bf945132156f7efff427878f60acfc8db465daa13ca347b918ec"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-473819939-515bffab1f38a39be4ab80fa11590ae3eef89417ae100eda9186b09c9ea9b944.route",
+    "bytes": 136723,
+    "allocated_bytes": 139264,
+    "source_inode": 95814835,
+    "private_inode": 95819374,
+    "private_link_count": 1,
+    "sha256": "515bffab1f38a39be4ab80fa11590ae3eef89417ae100eda9186b09c9ea9b944"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-358529310-35668d0ed8d6aab700d1cd00b4030ae679a1620870df940ada2024bd653bcede.route",
+    "bytes": 71912917,
+    "allocated_bytes": 71917568,
+    "source_inode": 95814915,
+    "private_inode": 95819375,
+    "private_link_count": 1,
+    "sha256": "35668d0ed8d6aab700d1cd00b4030ae679a1620870df940ada2024bd653bcede"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-32901958-ec9d2b80a2702d4318a6aadd80e089ad57292890841c9c994a4d3595311a4c78.route",
+    "bytes": 16370436,
+    "allocated_bytes": 16371712,
+    "source_inode": 95814868,
+    "private_inode": 95819376,
+    "private_link_count": 1,
+    "sha256": "ec9d2b80a2702d4318a6aadd80e089ad57292890841c9c994a4d3595311a4c78"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-319910983-21a9c9090d14802eafe4940a4c1e14f309d045327f82933abf56b32bd3f4519a.route",
+    "bytes": 97304,
+    "allocated_bytes": 98304,
+    "source_inode": 95814836,
+    "private_inode": 95819377,
+    "private_link_count": 1,
+    "sha256": "21a9c9090d14802eafe4940a4c1e14f309d045327f82933abf56b32bd3f4519a"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-368759318-6e5c06099ddfa09577a3a7ae18b6f5f314a88a56b1e69ff693c756fce47d5f19.route",
+    "bytes": 108154,
+    "allocated_bytes": 110592,
+    "source_inode": 95814837,
+    "private_inode": 95819378,
+    "private_link_count": 1,
+    "sha256": "6e5c06099ddfa09577a3a7ae18b6f5f314a88a56b1e69ff693c756fce47d5f19"
+  },
+  {
+    "path": "state-snapshots/history/account-routing-1-480962081-556976c89d409509a01053d279d84e795fc25ff1e21e3412f34d2fc4848cbb65.route",
+    "bytes": 93205428,
+    "allocated_bytes": 93212672,
+    "source_inode": 95814930,
+    "private_inode": 95819379,
+    "private_link_count": 1,
+    "sha256": "556976c89d409509a01053d279d84e795fc25ff1e21e3412f34d2fc4848cbb65"
+  },
+  {
+    "path": "state-snapshots/history/system-routing-1-310604592-60d34cf1a5026b26847aff9b4d0b57cfd55c6b4577d1b58cc4e33455f50278a5.route",
+    "bytes": 95116,
+    "allocated_bytes": 98304,
+    "source_inode": 95814838,
+    "private_inode": 95819380,
+    "private_link_count": 1,
+    "sha256": "60d34cf1a5026b26847aff9b4d0b57cfd55c6b4577d1b58cc4e33455f50278a5"
+  }
+]

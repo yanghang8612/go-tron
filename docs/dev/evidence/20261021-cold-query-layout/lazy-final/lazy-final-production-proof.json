@@ -1,0 +1,53 @@
+{
+  "utc": "2026-10-20T18:59:03.286208+00:00",
+  "production_mutations": false,
+  "pid": 28737,
+  "binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+  "service": "MainPID=28737\nExecMainStartTimestamp=Tue 2026-10-20 05:36:07 UTC\nActiveState=active\nSubState=running\n",
+  "datadir": {
+    "path": "/data/gtron/main/datadir",
+    "exists": true,
+    "inode": 94642617,
+    "device": 66304,
+    "realpath": "/data/gtron/main/datadir"
+  },
+  "old_database": {
+    "path": "/data/gtron/main/datadir-pre-compact-v3-20261019-659ab078",
+    "exists": true,
+    "inode": 93979262,
+    "device": 66304,
+    "realpath": "/data/gtron/main/datadir-pre-compact-v3-20261019-659ab078"
+  },
+  "process_status": "Name:\tgtron\nUmask:\t0027\nState:\tS (sleeping)\nTgid:\t28737\nNgid:\t0\nPid:\t28737\nPPid:\t1\nTracerPid:\t0\nUid:\t1003\t1003\t1003\t1003\nGid:\t1003\t1003\t1003\t1003\nFDSize:\t4096\nGroups:\t991 1003 \nVmPeak:\t20966628 kB\nVmSize:\t20708512 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t18999076 kB\nVmRSS:\t17539736 kB\nRssAnon:\t17510628 kB\nRssFile:\t   29108 kB\nRssShmem:\t       0 kB\nVmData:\t20647332 kB\nVmStk:\t     132 kB\nVmExe:\t   44628 kB\nVmLib:\t    3244 kB\nVmPTE:\t   37772 kB\nVmSwap:\t       0 kB\nThreads:\t39\nSigQ:\t0/250942\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\tfffffffdffc1feff\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000001fffffffff\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t0\nSpeculation_Store_Bypass:\tvulnerable\nCpus_allowed:\tffff\nCpus_allowed_list:\t0-15\nMems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t1281954\nnonvoluntary_ctxt_switches:\t39045\n",
+  "meminfo": "MemTotal:       64298988 kB\nMemFree:          541872 kB\nMemAvailable:   28576380 kB\nBuffers:          140736 kB\nCached:         31303352 kB\nSwapCached:            0 kB\nActive:         46078808 kB\nInactive:       15329008 kB\nActive(anon):   32433160 kB\nInactive(anon):  1553328 kB\nActive(file):   13645648 kB\nInactive(file): 13775680 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:             39584 kB\nWriteback:           144 kB\nAnonPages:      29965196 kB\nMapped:           256656 kB\nShmem:           4021972 kB\nSlab:            1306632 kB\nSReclaimable:    1139144 kB\nSUnreclaim:       167488 kB\nKernelStack:       21472 kB\nPageTables:       244972 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32149492 kB\nCommitted_AS:   37307080 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      122964 kB\nVmallocChunk:   34359484544 kB\nPercpu:            10624 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    364544 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nDirectMap4k:      309156 kB\nDirectMap2M:    43249664 kB\nDirectMap1G:    22020096 kB\n",
+  "own_units": {
+    "gtron-cold-lazy-final-prepare-20261020.service": "CPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nActiveState=inactive\nSubState=dead\n",
+    "gtron-cold-lazy-final-compare-20261020.service": "CPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nActiveState=inactive\nSubState=dead\n",
+    "gtron-cold-account-gc-final-20261020.service": "CPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nActiveState=inactive\nSubState=dead\n",
+    "gtron-cold-lazy-caller-check-20261020.service": "CPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nActiveState=inactive\nSubState=dead\n"
+  },
+  "live_head": 15303365,
+  "live_block_id": "0000000000e982c567e4a336369ef19e2a13f70b8b808e090b050147618b5a2e",
+  "live_manifest": {
+    "sourceRows": [
+      0,
+      0,
+      0
+    ],
+    "commitmentScheme": "state-flat-latest-muhash3072-compact-v3",
+    "elementVersion": 3,
+    "version": 4,
+    "generation": 7858,
+    "publishedUnix": 1792522698,
+    "visibleTxStart": 1,
+    "visibleTxEnd": 829388500,
+    "progress": {
+      "historyBuildTxNum": 829388500,
+      "accessorBuildTxNum": 829388500,
+      "hotPruneTxNum": 829388500,
+      "hotPruneBlockNum": 14970914
+    }
+  },
+  "live_manifest_active_refs": 36912,
+  "live_manifest_retired_refs": 27
+}

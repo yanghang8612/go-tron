@@ -1,0 +1,64 @@
+{
+  "prefix": {
+    "files_verified": 250,
+    "raw_trace_or_delivery_files_in_archive_only": 2,
+    "http": {
+      "requests": 154,
+      "timed": 112,
+      "groups": 42,
+      "private_cold_residency_checks": 28
+    },
+    "git_source_files_verified": 1067
+  },
+  "routing": {
+    "files_verified": 270,
+    "raw_trace_or_delivery_files_in_archive_only": 3,
+    "http": {
+      "requests": 154,
+      "timed": 112,
+      "groups": 42,
+      "private_cold_residency_checks": 28
+    },
+    "git_source_files_verified": 1068
+  },
+  "account2": {
+    "files_verified": 267,
+    "raw_trace_or_delivery_files_in_archive_only": 3,
+    "http": {
+      "requests": 154,
+      "timed": 112,
+      "groups": 42,
+      "private_cold_residency_checks": 28
+    },
+    "git_source_files_verified": 1069
+  },
+  "account-gc": {
+    "files_verified": 31,
+    "raw_trace_or_delivery_files_in_archive_only": 1,
+    "git_source_files_verified": 1070
+  },
+  "lazy-final": {
+    "files_verified": 247,
+    "raw_trace_or_delivery_files_in_archive_only": 2,
+    "http": {
+      "requests": 154,
+      "timed": 112,
+      "groups": 42,
+      "private_cold_residency_checks": 28
+    },
+    "git_source_files_verified": 1070
+  },
+  "lazy-nine": {
+    "files_verified": 8,
+    "raw_trace_or_delivery_files_in_archive_only": 1,
+    "file_read_calls_verified": 5647
+  },
+  "canonical_correctness": {
+    "muhash_verified": true,
+    "restored_rows": 22496,
+    "restored_block_ranges": 60,
+    "retired_auxiliary_files": 144,
+    "exclusive_allocated_bytes": 3914711040
+  },
+  "retained_archives_verified": true
+}

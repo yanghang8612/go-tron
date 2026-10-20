@@ -1,0 +1,26 @@
+{
+  "base_sha256": "65c0403d52d8eed72c52c960056275e07d2dc8cbd3049274af58ee62ebcd05b7",
+  "after_sha256": "a6265e5ddb173486aebf25a42fab4c58558f66bd101d4bae0206dfa1ccefec4f",
+  "edits": [
+    {
+      "start": 14,
+      "end": 14,
+      "text": "\t\"time\"\n"
+    },
+    {
+      "start": 445,
+      "end": 446,
+      "text": "func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum, toTxNum uint64, queries []StateHistoryQuery) (result []*rawdb.StateDomainChange, retErr error) {\n"
+    },
+    {
+      "start": 447,
+      "end": 447,
+      "text": " tries:=make([]uint64,len(queries));started:=time.Now()\n defer func(){\n  path:=os.Getenv(\"GTRON_ROUTING_QUERY_TRACE\");if path==\"\"{return}\n  elapsed:=time.Since(started).Nanoseconds()\n  rows:=make([]map[string]any,len(queries))\n  for i,q:=range queries{\n   row:=map[string]any{\"flat\":q.FlatDomain,\"owner\":q.Owner.Hex(),\"generation\":q.Generation,\"domain\":q.Domain,\"key_hex\":hex.EncodeToString(q.Key),\"segments_visited\":tries[i],\"found\":out[i]!=nil}\n   if out[i]!=nil{row[\"tx\"]=out[i].TxNum;row[\"seq\"]=out[i].Seq;row[\"prev_exists\"]=out[i].PrevExists;row[\"prev_bytes\"]=len(out[i].Prev)}\n   rows[i]=row\n  }\n  event:=map[string]any{\"from\":fromTxNum,\"to\":toTxNum,\"elapsed_ns\":elapsed,\"queries\":rows};if retErr!=nil{event[\"error\"]=retErr.Error()}\n  data,e:=json.Marshal(event);if e!=nil{return};f,e:=os.OpenFile(path,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e==nil{f.Write(append(data,'\\n'));f.Close()}\n }()\n"
+    },
+    {
+      "start": 541,
+      "end": 541,
+      "text": "\t\t\t\tfor _, i := range entry.indices { tries[i]++ }\n"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "completed_merge_count": 34,
+  "sum_input_sources": 1867,
+  "sum_input_records": 1162677763,
+  "sum_input_physical_bytes": 23891569115,
+  "sum_input_logical_bytes": 67028276268,
+  "sum_output_active_file_bytes": 23393612297,
+  "stopped_before_complete": true,
+  "production_mutations": false
+}

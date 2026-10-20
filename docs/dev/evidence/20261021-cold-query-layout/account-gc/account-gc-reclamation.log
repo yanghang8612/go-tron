@@ -1,0 +1,4 @@
+=== RUN   TestOfflineRetiredRoutingReclamation
+RECLAIMED_DERIVED_FILES 144 LOGICAL_BYTES 3914238960 EXCLUSIVE_ALLOCATED_BYTES 3914711040
+--- PASS: TestOfflineRetiredRoutingReclamation (0.48s)
+PASS

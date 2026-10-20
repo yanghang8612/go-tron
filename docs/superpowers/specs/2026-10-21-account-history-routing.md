@@ -68,3 +68,9 @@ inodes. Preserve the measured corpus and every canonical input; verify exact
 removed file sizes/allocated blocks, unchanged manifest bytes and canonical
 identities, full final-binary MuHash, HTTP values and history restore. Primary
 query timings remain labeled with the frozen measured reader revision.
+
+The final excluded diagnostic isolates all remaining account cold visits to the
+omitted eth_call caller (the empty address). Do not eagerly prefetch that optional
+caller; keep non-empty callers and demand reads unchanged. This changes no state
+commitment or absence semantics. Compare the final reader on the same reclaimed
+fixed copy under all three cache conditions before accepting performance.

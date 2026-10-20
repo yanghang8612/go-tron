@@ -1,0 +1,998 @@
+{
+  "check-lazy-caller.py": {
+    "bytes": 5090,
+    "sha256": "772b49c29bce3632514350e1c7a389ec4b6204438b5c3396a13ed3abb5c43531"
+  },
+  "compare-lazy-final.py": {
+    "bytes": 12316,
+    "sha256": "ed9aca2e8f7b98619ed3a35bc10aca6d7bb5ea0049d5b00aeb91bd021075503e"
+  },
+  "lazy-caller-delta.json": {
+    "bytes": 10051,
+    "sha256": "b22cc245b3cd72152cb63632cac69dd7c79472f1527465082a02097382bb3e2c"
+  },
+  "lazy-caller-http-build.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "lazy-caller-native-state.log": {
+    "bytes": 55,
+    "sha256": "2653e3b5470ea476c01a7a8ed57e147fda8466908b86b5e6a8876b148409286a"
+  },
+  "lazy-caller-overlay.json": {
+    "bytes": 187,
+    "sha256": "33ecd50bde5cda0a503b5c667aa6b7ffa0a7e2e1a328bae6e74965fc3a7ac249"
+  },
+  "lazy-caller-preflight/baseline/host.log": {
+    "bytes": 737,
+    "sha256": "15cc1dacc3b8e6263f2aff0f631cef51bb3d0bc6da883abfc289722f2ec7bd43"
+  },
+  "lazy-caller-preflight/baseline/ready.json": {
+    "bytes": 509,
+    "sha256": "2fed842e988e0e9230f264d3b89d32d1ecbedd60047aa8f63e9332a44e8a29fe"
+  },
+  "lazy-caller-preflight/baseline/server-requests.jsonl": {
+    "bytes": 10684,
+    "sha256": "9551334a89a29c5c12f860651fe194134df48f3236b9b55a67da75fd8ee7370e"
+  },
+  "lazy-caller-preflight/candidate/host.log": {
+    "bytes": 738,
+    "sha256": "5fae0cab2a469a560cebfc0def2ce3f81a3f8cacfdfb9166830fecf21cab66b5"
+  },
+  "lazy-caller-preflight/candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "c13340e9de2654f1b4f14c4e92c508b644bff8a707db558a16371a120b3c3780"
+  },
+  "lazy-caller-preflight/candidate/server-requests.jsonl": {
+    "bytes": 10334,
+    "sha256": "231eb24e562eba12d6012ae6930852e280e1c76c4a5bb33f092df172dfadcf85"
+  },
+  "lazy-caller-preflight/responses.json": {
+    "bytes": 10938,
+    "sha256": "94dcac6fe704ad3701d5341b91f6f3c3092d109763f4ca0df98a38e1026d0d86"
+  },
+  "lazy-caller-preflight-status.json": {
+    "bytes": 142,
+    "sha256": "82a3cd35658e547ab6bf97c244e2d182afe4d4b317a91e7dec39f4f1ab5d919a"
+  },
+  "lazy-caller-source-identity.json": {
+    "bytes": 118516,
+    "sha256": "ab5cdf24ace3c517da1edb367c2581c6779b7f4c7f9f682c01787bb87ae3df9c"
+  },
+  "lazy-final-comparison/baseline-private-files.json": {
+    "bytes": 995832,
+    "sha256": "baffb9fa67922c43aa9d32389325857f8f509b71580d7d128b3f6ec2b1dea5d2"
+  },
+  "lazy-final-comparison/baseline-read-files.json": {
+    "bytes": 205883,
+    "sha256": "6cb4e922871433dd083c3d97dda14fed45db8a46ba09fc2a4934300d8c490bb3"
+  },
+  "lazy-final-comparison/candidate-private-files.json": {
+    "bytes": 961291,
+    "sha256": "cfef3da3b7eac47d036ea6865eee10188e66b40e97ec18b86e777b22517d9784"
+  },
+  "lazy-final-comparison/candidate-read-files.json": {
+    "bytes": 198007,
+    "sha256": "c1c5313057f3a301504c37b2f293b24bbda6c942ec9f5c3cf869f180a0be8fbc"
+  },
+  "lazy-final-comparison/comparison-status.json": {
+    "bytes": 1615,
+    "sha256": "e75c217e8fa4537b0891d8566b3b8c0c794367395236f445fba4b60a08ab9d05"
+  },
+  "lazy-final-comparison/discovery-baseline/host.log": {
+    "bytes": 739,
+    "sha256": "6c607e2b9c3d12af747ce603843eba74f75fe3396d54205771206f17ef575bc2"
+  },
+  "lazy-final-comparison/discovery-baseline/read.trace": {
+    "bytes": 4479033,
+    "sha256": "1c1a908b89ac0ffbccd653d70a231317addfa5e6d95e2109294d2df027278c44"
+  },
+  "lazy-final-comparison/discovery-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "2656fdb3c4cdef6f9da12c46560b32e09d43a14b10d75b4206fec2d7a3606e8a"
+  },
+  "lazy-final-comparison/discovery-baseline/server-requests.jsonl": {
+    "bytes": 6817,
+    "sha256": "b203bab554a8a1e1b42f6f48c5ed4c02532c6f1cf6fe49fed8363c87be2b09c4"
+  },
+  "lazy-final-comparison/discovery-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "0e206bc33da5adc388bcea23a68fb401449e72781eaafd1802fe4b558f4b7ed2"
+  },
+  "lazy-final-comparison/discovery-candidate/read.trace": {
+    "bytes": 3402873,
+    "sha256": "1c856e6a0e68abbaf7326357fedf50d94a5555efbafb9fbad395225e8ef517fd"
+  },
+  "lazy-final-comparison/discovery-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "55f3ddcc4d58d92ccd67fa064ef0c795e58c1ed2368ae7aa416b23b7831deb08"
+  },
+  "lazy-final-comparison/discovery-candidate/server-requests.jsonl": {
+    "bytes": 6749,
+    "sha256": "fe97f36bab4e0b491d51cfd3c3d84fe5cd5c467a86ec488fbd696cfaeb0de477"
+  },
+  "lazy-final-comparison/first-0-0-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "2ae4a7f294498f8cfc7bfebfd935ef1f5d40c56c659c84de064c6e0164fc3cf0"
+  },
+  "lazy-final-comparison/first-0-0-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "beda8563afb259fb3676c77a8a8defd26e46f2863a37901c6512227de9307545"
+  },
+  "lazy-final-comparison/first-0-0-baseline/server-requests.jsonl": {
+    "bytes": 935,
+    "sha256": "dd11a0d6f2a1311ba7ba7275a288f77b4db8398b6c3b3cde3a5ab266102d5fc8"
+  },
+  "lazy-final-comparison/first-0-0-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "d480d45c4d27c98b1d4af595765a1319527096d6959e0026497090b9c550b9f1"
+  },
+  "lazy-final-comparison/first-0-0-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "7409190114b9b9e5cb520799539abc5a3f1189ddbcd2ca1a80e13c1c81c742a5"
+  },
+  "lazy-final-comparison/first-0-0-candidate/server-requests.jsonl": {
+    "bytes": 934,
+    "sha256": "adc12a23b995d378fa5ea080377b9ee7894843563d60f1c44a943b08e7344f41"
+  },
+  "lazy-final-comparison/first-0-1-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "bda572891b98061aaac1da8d7642f5014ebec9ac89da53ab3aec066af042230c"
+  },
+  "lazy-final-comparison/first-0-1-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "8004f65d186a54b62ca732681635c5dd42f4a3986bdd975768900edfdd3b3cce"
+  },
+  "lazy-final-comparison/first-0-1-baseline/server-requests.jsonl": {
+    "bytes": 938,
+    "sha256": "03889b6138d87e2700276cafead420854c6c4450196dbc38cf8dfa67a2901629"
+  },
+  "lazy-final-comparison/first-0-1-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "dc27238664946e40c8f24fb214633c6a0093793e30827d99cbe1f0cb3c7f1926"
+  },
+  "lazy-final-comparison/first-0-1-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "c67a1d4722f17202b40c550cc4455c48e58fac203a5be0d401037086665c6208"
+  },
+  "lazy-final-comparison/first-0-1-candidate/server-requests.jsonl": {
+    "bytes": 935,
+    "sha256": "8b5a71a247573ee151c6b0397eff085850f3495882241dea5a0ccc62d1517024"
+  },
+  "lazy-final-comparison/first-0-2-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "d08a519fe3873afc16624310bba182e5f1633bd334019fad9eb2120aab3d9153"
+  },
+  "lazy-final-comparison/first-0-2-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "53a7472f4c01b7fcd194fba157c6a57b052f611dc6703143a3eaf5f7bebfe493"
+  },
+  "lazy-final-comparison/first-0-2-baseline/server-requests.jsonl": {
+    "bytes": 936,
+    "sha256": "7decf4936726074a0f008d0aa778be781a9b53104ad1b50a69be063f6cef6a0d"
+  },
+  "lazy-final-comparison/first-0-2-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "8791707c0f2b54655c988916c60310bb667b23e8061180ef0a7fd579d47ca0fa"
+  },
+  "lazy-final-comparison/first-0-2-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "3e87587ec0b9428f03985f6e972a2aca93b1bf573823bd19e52ec8aaee7502da"
+  },
+  "lazy-final-comparison/first-0-2-candidate/server-requests.jsonl": {
+    "bytes": 938,
+    "sha256": "e04bd9e8e8abb4eb4b2ff8b194d527ff2122fc5df402b0968c02af475ee41f71"
+  },
+  "lazy-final-comparison/first-0-3-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "f0ece1f7cc4f83f14ff5a384aafa07847fe9f61f47af62fbe63ef1f2990a51eb"
+  },
+  "lazy-final-comparison/first-0-3-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "0f9699c78a15f9551fa16bc209a97e041a77906b5978c20dcbb763c5037683fa"
+  },
+  "lazy-final-comparison/first-0-3-baseline/server-requests.jsonl": {
+    "bytes": 937,
+    "sha256": "616d116139bc2fc8a7ae81f736ac5ed0f7639bfa2ca77718a9079a525566c0c4"
+  },
+  "lazy-final-comparison/first-0-3-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "dd78080b998a59154896f3d5d49b3d51db733ad240ed6d09702cfb6635e88965"
+  },
+  "lazy-final-comparison/first-0-3-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "d149110583aa1b66504ed6529a1274ca75c226145b13fbb9908aed5ca3434ca8"
+  },
+  "lazy-final-comparison/first-0-3-candidate/server-requests.jsonl": {
+    "bytes": 937,
+    "sha256": "499f2c24a2f19f0280f00008d5c2391be0c22b3eaa40e7d9002d9b403e038354"
+  },
+  "lazy-final-comparison/first-0-4-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "484e81ce266fc0c56a7e2d8a35e4fc960b7648b0800a36f67e294951f7e22943"
+  },
+  "lazy-final-comparison/first-0-4-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "6dcc6d7f7b246b953b47be852d5640618e81f2f5f426d21a2afd8fbc5fae2e99"
+  },
+  "lazy-final-comparison/first-0-4-baseline/server-requests.jsonl": {
+    "bytes": 931,
+    "sha256": "1b4f4748a5a22c86caaccdba5cd51df13263070497a5df90cbce0154ddf33eff"
+  },
+  "lazy-final-comparison/first-0-4-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "d223b6b2525526ff23ee855b64294b7dd4222831a3b011b13536155b6eb1980a"
+  },
+  "lazy-final-comparison/first-0-4-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "38e2c3a8d1021e9f7ae4462854d5d64d44cafffa663e52c7f32ec456cb50b938"
+  },
+  "lazy-final-comparison/first-0-4-candidate/server-requests.jsonl": {
+    "bytes": 934,
+    "sha256": "825151e81bab425a5161bcdfa3020b9b3e0e2b163594f4468bcfa0f6ffd285ba"
+  },
+  "lazy-final-comparison/first-0-5-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "616f513e534b6b56f3e46529fac31d603e25cbf04d8247d9ea3022c3087daa42"
+  },
+  "lazy-final-comparison/first-0-5-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "e60a241a6ce8477196632307c70548e50552d907c1e1507ad5d443a84bda85f7"
+  },
+  "lazy-final-comparison/first-0-5-baseline/server-requests.jsonl": {
+    "bytes": 934,
+    "sha256": "5afbacdd16c74c01cac9bc35f80099828b2eb5fefab34900b795ef344ab19b65"
+  },
+  "lazy-final-comparison/first-0-5-candidate/host.log": {
+    "bytes": 737,
+    "sha256": "660fef65979a581419073d6b550e4be7f5b35524fc8080921956ba3942297f9e"
+  },
+  "lazy-final-comparison/first-0-5-candidate/ready.json": {
+    "bytes": 509,
+    "sha256": "45be1fcf2b6dced50745d612005179aa9712d9a830c087032abe3a554160e26a"
+  },
+  "lazy-final-comparison/first-0-5-candidate/server-requests.jsonl": {
+    "bytes": 934,
+    "sha256": "0c811fe8a1b61522e31e592893c2e8d63c69e67bb580f0e06de0df5850803f37"
+  },
+  "lazy-final-comparison/first-0-6-baseline/host.log": {
+    "bytes": 737,
+    "sha256": "8e16522a7cddc2e044b2badb9220898d70bfcd64a0d3667129704c1ddf95ea3e"
+  },
+  "lazy-final-comparison/first-0-6-baseline/ready.json": {
+    "bytes": 509,
+    "sha256": "716a584eddd1a747f8c2fd38f6c6899aceed09ee1345983c6c1586d185961f81"
+  },
+  "lazy-final-comparison/first-0-6-baseline/server-requests.jsonl": {
+    "bytes": 928,
+    "sha256": "bad3d216228287a894cc3feb4f004cc974b7087f7bc2d8d1f36de8df66cf71e4"
+  },
+  "lazy-final-comparison/first-0-6-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "2421ee9a08610d37cde6f0b21c1443cd3ffd94be3540546def71b03581450d9a"
+  },
+  "lazy-final-comparison/first-0-6-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "c94bc0ff44226c5532b33f7d81e45e542726c12808fac15bc7e145fef46bc2d4"
+  },
+  "lazy-final-comparison/first-0-6-candidate/server-requests.jsonl": {
+    "bytes": 928,
+    "sha256": "452b81880dcb61702816a57a15687e4d3bb401d7f3343323baa8b4798734e646"
+  },
+  "lazy-final-comparison/first-1-0-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "419f91e462ea045126dae4cce1eb7e5e36361ba51fabf269c5f957b02dc3b3d2"
+  },
+  "lazy-final-comparison/first-1-0-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "7456c01f15d82d99d1156ddc64b5a10210c6ae2acd200635f3e5ef2dcf6807d7"
+  },
+  "lazy-final-comparison/first-1-0-baseline/server-requests.jsonl": {
+    "bytes": 936,
+    "sha256": "8b9fe60c61723115b5d5268fe5de2f6ad4cf8d56b92182d8d625bb2de6152a5d"
+  },
+  "lazy-final-comparison/first-1-0-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "32ea6e3b1cb4d2a0b0a412f9f09bfbf51bbc34b095a274a93c13e56dbc644129"
+  },
+  "lazy-final-comparison/first-1-0-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "6752314d734c632f6316fd490b23a39929488addde320ab6df7f5c6d43a2aebd"
+  },
+  "lazy-final-comparison/first-1-0-candidate/server-requests.jsonl": {
+    "bytes": 936,
+    "sha256": "78ce78dbc747bff282818396ca520b1e75f0d199e21374e5e3f7cbddc397f276"
+  },
+  "lazy-final-comparison/first-1-1-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "fb0c7111d7a3cd500bc589ea576d71780bd5d45da3abbde12ef3903c2950962b"
+  },
+  "lazy-final-comparison/first-1-1-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "79b536d0f955b769a4520d75feae2468482739f9f1d30d311e92b018c697fb96"
+  },
+  "lazy-final-comparison/first-1-1-baseline/server-requests.jsonl": {
+    "bytes": 938,
+    "sha256": "da7aeef3184ccaf881cce83283a2b1fc6b1a6da3a1b12a1074494166114502ca"
+  },
+  "lazy-final-comparison/first-1-1-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "d0570c55f75b96549c2400983748499b12e75334e0df69a7ebb7b3960c3133b6"
+  },
+  "lazy-final-comparison/first-1-1-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "6e91abbe8c9ec8224c32f6ddffaff81b855fd4d816f45bac1bf458b28e368b7f"
+  },
+  "lazy-final-comparison/first-1-1-candidate/server-requests.jsonl": {
+    "bytes": 933,
+    "sha256": "88e86ace3088911401f076d2aa66d904ab063aab645164c213c5ee989e799928"
+  },
+  "lazy-final-comparison/first-1-2-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "3a50feab36b60c0b39c9edae0163c115e6ed7469022c38b57600e37951141526"
+  },
+  "lazy-final-comparison/first-1-2-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "1f106a329d18a95e5b876b982e93f5de9084a51bb28ddf3ebda495cd7b4597ae"
+  },
+  "lazy-final-comparison/first-1-2-baseline/server-requests.jsonl": {
+    "bytes": 936,
+    "sha256": "8518d9928f7cf6bb6ba087f20352c712ec1fbab572f66108c23b75ec4e588e22"
+  },
+  "lazy-final-comparison/first-1-2-candidate/host.log": {
+    "bytes": 737,
+    "sha256": "322f9a2b2f534579529f3141b351e7163e0425a27b6cc381f4f26ef56185180a"
+  },
+  "lazy-final-comparison/first-1-2-candidate/ready.json": {
+    "bytes": 509,
+    "sha256": "17cef1d19f0fdc8128dd7b60bbba66242968a7c0c3278b7615524b9b41239d03"
+  },
+  "lazy-final-comparison/first-1-2-candidate/server-requests.jsonl": {
+    "bytes": 933,
+    "sha256": "2b61f1671d22800ec01895f775e711cc98cba26c90c11e3f8f40265a5394dfde"
+  },
+  "lazy-final-comparison/first-1-3-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "fd73c4fd67033e1a7f6425278f7bd234035175596a7b2cd51e160b7c4e642f24"
+  },
+  "lazy-final-comparison/first-1-3-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "1903e856bcb7a30d099552551838edb64408d011c8341a78e65b73ebd83bdb9f"
+  },
+  "lazy-final-comparison/first-1-3-baseline/server-requests.jsonl": {
+    "bytes": 936,
+    "sha256": "262669754b7c11ac5d012e4fd47891a8c21a520d942a3ee2b61cd8b484e737c6"
+  },
+  "lazy-final-comparison/first-1-3-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "75bd4031d1b2ba7d9b3f5b8fb810b31e7b9cbea0015f34d32d29965fea5b0228"
+  },
+  "lazy-final-comparison/first-1-3-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "b49ee46412bf31d76181d7c852a588b4b18b6e5413ce56c6785bc9ec063ae882"
+  },
+  "lazy-final-comparison/first-1-3-candidate/server-requests.jsonl": {
+    "bytes": 936,
+    "sha256": "1e8e272e9b0a20d04daa3f0131682830b5c76d66433610e2f23157b4565bbd9b"
+  },
+  "lazy-final-comparison/first-1-4-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "b0514f21fa60268f6a9c4ea632ec5ebed45b6c3f4974b048ceb266462ce89030"
+  },
+  "lazy-final-comparison/first-1-4-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "11bcd1dee815239aeef8da6e12bc89bea8ab3516c0d7064dc51d6f8ed43b5a42"
+  },
+  "lazy-final-comparison/first-1-4-baseline/server-requests.jsonl": {
+    "bytes": 933,
+    "sha256": "46670f73e87ae2218f75f0a40e4a17d0f4af02e70ecd58e76b2879807d319cfb"
+  },
+  "lazy-final-comparison/first-1-4-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "36c077ff6f2881842da27cd40f753826e1a667b10b47ac9d7e0fb4197695b787"
+  },
+  "lazy-final-comparison/first-1-4-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "05708753e9d2130006a527b6cdd37014601ecde9b101f333522f1cf92166bec1"
+  },
+  "lazy-final-comparison/first-1-4-candidate/server-requests.jsonl": {
+    "bytes": 933,
+    "sha256": "2f683116ab4cb7b67c41b622eefe2855ddb2825fc4b4c471f7d5f56fbc680831"
+  },
+  "lazy-final-comparison/first-1-5-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "338bece13f6c6924cc747318c1b6506639f07650fc06e4635af6bd1741127c97"
+  },
+  "lazy-final-comparison/first-1-5-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "628c5f35eefc135c967384d2898d8ef379cc42b572fe4495b496a5c1f375a461"
+  },
+  "lazy-final-comparison/first-1-5-baseline/server-requests.jsonl": {
+    "bytes": 934,
+    "sha256": "7bca52e6d719fa13376e8f0930b37f252b2ed01b9517a45056295439114bbf8a"
+  },
+  "lazy-final-comparison/first-1-5-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "575f34e0690044fb22a9fe81130f949d6bd8cdb55f73ed62da0b0cdc298df10f"
+  },
+  "lazy-final-comparison/first-1-5-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "429eacecbe72aa110eb39f2ed2558a8781b60c681fce62e4a8e291e540c933f9"
+  },
+  "lazy-final-comparison/first-1-5-candidate/server-requests.jsonl": {
+    "bytes": 932,
+    "sha256": "1856cc5353cf841d8628532799e2a28cae300bd97e50b36e1e26ba0b2326a88a"
+  },
+  "lazy-final-comparison/first-1-6-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "05df202a663426cfdc6acca5a99110c0504abb8e074220e0419fb290e753b99a"
+  },
+  "lazy-final-comparison/first-1-6-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "e2a12be8d95793d916899c893a10b878a6cf05164df2f2a17d9fd1cb8151122c"
+  },
+  "lazy-final-comparison/first-1-6-baseline/server-requests.jsonl": {
+    "bytes": 930,
+    "sha256": "21d1f36f5b8af87475ea90eca640df51e0e2372dd959bd97938af8eacf696848"
+  },
+  "lazy-final-comparison/first-1-6-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "5a47ac73e4beeffcb3b2fd25caf81901867c78e7064212c2244af28d909b7b08"
+  },
+  "lazy-final-comparison/first-1-6-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "d68bf78931f317596c97187e83fb280b33282c8728b6ac714ed5a9bd866a07ac"
+  },
+  "lazy-final-comparison/first-1-6-candidate/server-requests.jsonl": {
+    "bytes": 928,
+    "sha256": "82dd1c10df96a704596271abc24ebf980e7abb0f7b30f3a2ebda4fc95cbea195"
+  },
+  "lazy-final-comparison/os-cold-0-0-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "a5b4886b22649bdf8c6b2f34519ecaea1b65a18c039af11daca13c8e33491a57"
+  },
+  "lazy-final-comparison/os-cold-0-0-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "15c69544b7c5f3559f95971473b047c19e38f4fc2d25a82835a4bf55989e5b3e"
+  },
+  "lazy-final-comparison/os-cold-0-0-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "d7631435daa042e3d1b55a62b5ed026dd7a0375c4bf6250bbb6854d40679bdc7"
+  },
+  "lazy-final-comparison/os-cold-0-0-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-0-0-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "9f865fbb4d61eff20a4cd0fd3e42c244ae9be7d2024df714cbed10f1138059c7"
+  },
+  "lazy-final-comparison/os-cold-0-0-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "9016fc93bf31aa54c21e8021edc85f7393ac79df9ca50375a8d43d83bac2750a"
+  },
+  "lazy-final-comparison/os-cold-0-0-candidate/server-requests.jsonl": {
+    "bytes": 968,
+    "sha256": "73dc2e9d7975915e7d773b9209d997bfd76a14ab22cbca7d5ada0f8c14092523"
+  },
+  "lazy-final-comparison/os-cold-0-0-candidate-residency.json": {
+    "bytes": 75,
+    "sha256": "987a83963417c624ce064006ee955afb0eb22b296d64350ab0f35af956413ac7"
+  },
+  "lazy-final-comparison/os-cold-0-1-baseline/host.log": {
+    "bytes": 737,
+    "sha256": "047ff9975c537b973b7299c95d5d089e0b6c06ea890d1f8da97c5c646964176e"
+  },
+  "lazy-final-comparison/os-cold-0-1-baseline/ready.json": {
+    "bytes": 509,
+    "sha256": "af540cce9db70f642feb45f8d495bd471544e5f7725188fa18cb9a2d125f810c"
+  },
+  "lazy-final-comparison/os-cold-0-1-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "221cfd13d9309e6d3396176a461aedafa9b67639aad7c0db0bddc3a4cd7af369"
+  },
+  "lazy-final-comparison/os-cold-0-1-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-0-1-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "f8b9c335c504c7ac4d8a832cf2fa303a504ddd2a7cd1e96096fb6f4b143d3042"
+  },
+  "lazy-final-comparison/os-cold-0-1-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "182b9c701825ff2a57d5563d4ed89fe2c6e71f519e3253f25dae7812b4b0659a"
+  },
+  "lazy-final-comparison/os-cold-0-1-candidate/server-requests.jsonl": {
+    "bytes": 968,
+    "sha256": "a7af76131d18dce84af39d97b32c1062e7f6e0db3abf0844eb38c7e5dc2028fe"
+  },
+  "lazy-final-comparison/os-cold-0-1-candidate-residency.json": {
+    "bytes": 76,
+    "sha256": "38078973a7224badabbab082e3c40e6a0fbec499d839528c8909a3f46d0f0fe7"
+  },
+  "lazy-final-comparison/os-cold-0-2-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "cbf996e997b6bbac1b4d8a3fee61b05eafbebf830f750d8048351134cf2b774f"
+  },
+  "lazy-final-comparison/os-cold-0-2-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "dfae4108d6d35810cdfea0e38333e791c315431d1862c6df4da1535f2b24a505"
+  },
+  "lazy-final-comparison/os-cold-0-2-baseline/server-requests.jsonl": {
+    "bytes": 978,
+    "sha256": "d3347ec9e3015c8fc2e2c4798d6be702a9e7592f09e2306df41e051fbe8dbb00"
+  },
+  "lazy-final-comparison/os-cold-0-2-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-0-2-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "bc4658bb986db762995e7f50cf23ebce8293bbb55397496cc0f155f8a8e63488"
+  },
+  "lazy-final-comparison/os-cold-0-2-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "85bace887b678e26ce7e0aecbaed50bacc564e4eaec908248d56252694f04087"
+  },
+  "lazy-final-comparison/os-cold-0-2-candidate/server-requests.jsonl": {
+    "bytes": 983,
+    "sha256": "d1a00859baa77a64cbffaf2369c084b4fb284e98c087fdc9ffc01b12642d8bd8"
+  },
+  "lazy-final-comparison/os-cold-0-2-candidate-residency.json": {
+    "bytes": 76,
+    "sha256": "01143e9cc1031e28c0789ffb5997fef9fb13bbcd8e202775e9275f2af8e5accb"
+  },
+  "lazy-final-comparison/os-cold-0-3-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "3a5325bbd085e6224ed3e592480e50aea40836c15f2703255c3af2cb92b92bbb"
+  },
+  "lazy-final-comparison/os-cold-0-3-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "73646bdb15686a7939c70cb5e613d8f7328f5ae450f4e2ff9764a0bf92d0113c"
+  },
+  "lazy-final-comparison/os-cold-0-3-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "4276a5eb6d6947bd95c821cdade2608c0931a31d96fae24585c649297f72efe9"
+  },
+  "lazy-final-comparison/os-cold-0-3-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-0-3-candidate/host.log": {
+    "bytes": 737,
+    "sha256": "708a2722ed59adab0cca7397db6b6c53e121b18f711963a7136a412d24ccf368"
+  },
+  "lazy-final-comparison/os-cold-0-3-candidate/ready.json": {
+    "bytes": 509,
+    "sha256": "013156d8065e90984a3ebe8d12d698244ea1d04c4844471a82f52f28e4ba8f3e"
+  },
+  "lazy-final-comparison/os-cold-0-3-candidate/server-requests.jsonl": {
+    "bytes": 972,
+    "sha256": "27353c7025f743e626ebb1dbd0e327c6bb0a419a5ffe73d3b7065ec39922884d"
+  },
+  "lazy-final-comparison/os-cold-0-3-candidate-residency.json": {
+    "bytes": 76,
+    "sha256": "01143e9cc1031e28c0789ffb5997fef9fb13bbcd8e202775e9275f2af8e5accb"
+  },
+  "lazy-final-comparison/os-cold-0-4-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "bccf8a465b366b81d803242959b20ce4293dd80992f68bc8dfe9986b9553deb6"
+  },
+  "lazy-final-comparison/os-cold-0-4-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "aa53cfb941ea6a00b017e7c010990338f5726009a1b7292c1811c958cbd26964"
+  },
+  "lazy-final-comparison/os-cold-0-4-baseline/server-requests.jsonl": {
+    "bytes": 976,
+    "sha256": "ac4a40579a9fe8de2c57ceff805cf936836497fe51a6ee2b44f9634eaeb10148"
+  },
+  "lazy-final-comparison/os-cold-0-4-baseline-residency.json": {
+    "bytes": 77,
+    "sha256": "aa377e959562766b8efae3b466d0cb67ab024926bf1faf3d1a30d4a596e366ff"
+  },
+  "lazy-final-comparison/os-cold-0-4-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "3850e8b68e44c462bfd7968e2ea903b193e1532ed69587a3076d7d98b701b8da"
+  },
+  "lazy-final-comparison/os-cold-0-4-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "757dcdc6330ce33df8dc23183fce73291392a9ca86918a35666b30c8944c6cad"
+  },
+  "lazy-final-comparison/os-cold-0-4-candidate/server-requests.jsonl": {
+    "bytes": 968,
+    "sha256": "f1b12a5bba8f9ea54299f2f5fe9261b43bbed200a0c5d36e8540a3a15742b8f9"
+  },
+  "lazy-final-comparison/os-cold-0-4-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/os-cold-0-5-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "a2776187fa99518e36f43d7302ae6776ab322d0f5a2275a86ab92c65568df386"
+  },
+  "lazy-final-comparison/os-cold-0-5-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "8067615251c3421a3122ebf2dd7c4e67479a58f37a1bfab70d547253320ed598"
+  },
+  "lazy-final-comparison/os-cold-0-5-baseline/server-requests.jsonl": {
+    "bytes": 966,
+    "sha256": "8b92f22b6d305ab84d2263f2ba3c79c7da472ae5d8b5ed37425de5be14faeef4"
+  },
+  "lazy-final-comparison/os-cold-0-5-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-0-5-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "af71b5ab62faa3b69afb753eda29a9387cde01490bd01b5b11eb1aeb6bde637c"
+  },
+  "lazy-final-comparison/os-cold-0-5-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "bb9c597d3057e0418d11186a1139cbeb71c3673869199d9e64f7489f53391db5"
+  },
+  "lazy-final-comparison/os-cold-0-5-candidate/server-requests.jsonl": {
+    "bytes": 967,
+    "sha256": "16a8b9d3aeee82acf8d50f89ecc1e64bf9f4deb7072b5d959df9b5ab0a971b75"
+  },
+  "lazy-final-comparison/os-cold-0-5-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/os-cold-0-6-baseline/host.log": {
+    "bytes": 737,
+    "sha256": "4a854ff74cdd6cfe8d811c4a9e65d7b7917a046ce2bedf604bf20876409520b2"
+  },
+  "lazy-final-comparison/os-cold-0-6-baseline/ready.json": {
+    "bytes": 509,
+    "sha256": "5b765cc4867a6a83015b5201d67326237ea3edb1ef4e36124f0b6251a56fb738"
+  },
+  "lazy-final-comparison/os-cold-0-6-baseline/server-requests.jsonl": {
+    "bytes": 963,
+    "sha256": "08f84264995e77b7c1fb3c6603dd6961f00ea9882c06448f19305e1af177cb22"
+  },
+  "lazy-final-comparison/os-cold-0-6-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-0-6-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "26e05dd2b53998a5641e5988ffc0274ba85c5a2cc395e418d6f5a14a1e6e06bd"
+  },
+  "lazy-final-comparison/os-cold-0-6-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "195d29628ec51ec5366dbc0d443186c24d037d4d27908df924c3f471750661b8"
+  },
+  "lazy-final-comparison/os-cold-0-6-candidate/server-requests.jsonl": {
+    "bytes": 963,
+    "sha256": "659543c39a6d2fc867b5f33ad6f910c45198456ed2f68e4c43d4f0eb40ced4ee"
+  },
+  "lazy-final-comparison/os-cold-0-6-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/os-cold-1-0-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "880a357d159c91f2a954314bde10627cae97e04f5f2f2260ed048934031d4e4e"
+  },
+  "lazy-final-comparison/os-cold-1-0-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "91928509d7d5680eb9b57b2296e8f8a9f441e8ae0826c47b36344ba6bead168f"
+  },
+  "lazy-final-comparison/os-cold-1-0-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "f450e37b1494c3ff8a9e25ac9227187b3cbb399ef96bbdff042f6f1e889ae20d"
+  },
+  "lazy-final-comparison/os-cold-1-0-baseline-residency.json": {
+    "bytes": 77,
+    "sha256": "6cf3ab5df08d621ed02fe334f87198c78d624f456b7db2d013fc220144c3d8ee"
+  },
+  "lazy-final-comparison/os-cold-1-0-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "6b5c276224f2d261d22e79a8f88d3e40e780bdc8a98f3edec301d1988f06dc44"
+  },
+  "lazy-final-comparison/os-cold-1-0-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "4ddca9b2da55f702c9c922fe3e92289bdb58d2210275b5116221da92a37933be"
+  },
+  "lazy-final-comparison/os-cold-1-0-candidate/server-requests.jsonl": {
+    "bytes": 968,
+    "sha256": "fc22c921f61a3e6b6a7784d89db1418a98fbb90ba0bcc0288fe928c8ffacd832"
+  },
+  "lazy-final-comparison/os-cold-1-0-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/os-cold-1-1-baseline/host.log": {
+    "bytes": 737,
+    "sha256": "db1d3ac43a08cca595b26c91668db937b55f0258a4cf74b172369669c4faed9d"
+  },
+  "lazy-final-comparison/os-cold-1-1-baseline/ready.json": {
+    "bytes": 509,
+    "sha256": "0948cbf12aef21817e977ffc62d0742f2f6f3227f5ab137517c6baea570a3340"
+  },
+  "lazy-final-comparison/os-cold-1-1-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "18ddf34ee8e86df71a18e569ae9cc96b7c77624d1fa3e70873bced0c21b38106"
+  },
+  "lazy-final-comparison/os-cold-1-1-baseline-residency.json": {
+    "bytes": 77,
+    "sha256": "73a435b73342cb6e0aaf4c5a5af60bca89a69f0cdc8af41fdb307132775d014a"
+  },
+  "lazy-final-comparison/os-cold-1-1-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "66dacebe1d798164eb54f989589a17888acbd0043eb011f9ba2b2e92bb224049"
+  },
+  "lazy-final-comparison/os-cold-1-1-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "ac1db5ce86c8bda16224d996367c31fbf698569a98972d2c6a40330b4d048879"
+  },
+  "lazy-final-comparison/os-cold-1-1-candidate/server-requests.jsonl": {
+    "bytes": 968,
+    "sha256": "c159829ef32ab4efcbafdbfe822d86914d3eff081c0e076a5abde007e5af5333"
+  },
+  "lazy-final-comparison/os-cold-1-1-candidate-residency.json": {
+    "bytes": 75,
+    "sha256": "73616969a63f1f77d8d3d2a4f23c4146f4d37a19a09ff06ac8341ffc5f0d3b89"
+  },
+  "lazy-final-comparison/os-cold-1-2-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "b9aa09773f218a6e0a9697ece9676e670379fcc9199c5db5529f9963aa1c4942"
+  },
+  "lazy-final-comparison/os-cold-1-2-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "5af69b949cd8874b4b6da68c712bd809b0e1edef5b2860084aa93255494221c4"
+  },
+  "lazy-final-comparison/os-cold-1-2-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "8c63939e93c8cb3e99084978b2b019e41230809606af1ef38ccb425e7705f2c6"
+  },
+  "lazy-final-comparison/os-cold-1-2-baseline-residency.json": {
+    "bytes": 76,
+    "sha256": "f8afd7fa38ec5043fcc2ea6f5c190944ba8db23e505f1da88e38564007a0867c"
+  },
+  "lazy-final-comparison/os-cold-1-2-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "b1ff618cc604c1e43003e1ca1d7ac6c7e2aa012a505b338f4fae0b783a77c317"
+  },
+  "lazy-final-comparison/os-cold-1-2-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "d40864e2436cc6ab001ff4b8015009b0827f04968f3fec525c43216c00a8b069"
+  },
+  "lazy-final-comparison/os-cold-1-2-candidate/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "577d074d2a911a4385e8fc0d39b19647a386375ba98908b040ad73d82bf9547a"
+  },
+  "lazy-final-comparison/os-cold-1-2-candidate-residency.json": {
+    "bytes": 76,
+    "sha256": "93478805403ec202cb662a9847253202e7fb1116c78b12ede9c91c7eb39a677b"
+  },
+  "lazy-final-comparison/os-cold-1-3-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "7cf780f39739eb65fb685be5a7af3733852f6f186d17499c358ce0b5f96ff812"
+  },
+  "lazy-final-comparison/os-cold-1-3-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "c39df192a08d950f079bd03e8fcccbb34a842dfb93a9f5f1fc5ac7421443a362"
+  },
+  "lazy-final-comparison/os-cold-1-3-baseline/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "d23bd3c0a3cccacf1a31884bb30cc6ef7cf94deb990b7f19a6db12ec75332e77"
+  },
+  "lazy-final-comparison/os-cold-1-3-baseline-residency.json": {
+    "bytes": 75,
+    "sha256": "e7c2b89b1a7dfaca82ea75f21d184f58315a318069a7b05138aaeaaf2d9ae2cb"
+  },
+  "lazy-final-comparison/os-cold-1-3-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "866ecc302e4e01d85412eeb190f9b33c3f7079ef386a690aee8c4a0bc7fb4b46"
+  },
+  "lazy-final-comparison/os-cold-1-3-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "d364bfb032e5f969c008cc561fe245f01f4b12ef7657de11ef8779ace36cafba"
+  },
+  "lazy-final-comparison/os-cold-1-3-candidate/server-requests.jsonl": {
+    "bytes": 970,
+    "sha256": "f271816280fb496876023bbac41c4573f6d73a795a0c76f37fc825701b49b496"
+  },
+  "lazy-final-comparison/os-cold-1-3-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/os-cold-1-4-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "5ac2103bc2ec7e53271a6b2d2a13917cba463783cad6dac5d87cf5cf05c5a1d5"
+  },
+  "lazy-final-comparison/os-cold-1-4-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "0e8f46c9ea37533c3a958f786aa7394406c78a1b804bb8c7812445c8e9534417"
+  },
+  "lazy-final-comparison/os-cold-1-4-baseline/server-requests.jsonl": {
+    "bytes": 967,
+    "sha256": "b17bd79343fe707d6ea96a000e08eb5f50ea5610ede580bc327fc8af0ea1db85"
+  },
+  "lazy-final-comparison/os-cold-1-4-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-1-4-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "0fc9cf15f82373f3174d3e148b5c0f82fc3458245ec932f025909d0499b80f02"
+  },
+  "lazy-final-comparison/os-cold-1-4-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "1faee3a067ef0c199be3e793bc9156618f2aa54d9a171e71bb3bed4c9f3c11b5"
+  },
+  "lazy-final-comparison/os-cold-1-4-candidate/server-requests.jsonl": {
+    "bytes": 968,
+    "sha256": "376c64f4304a8fbed1bc635decf10090f3363dd3eb1d57371b4e721c00e88a05"
+  },
+  "lazy-final-comparison/os-cold-1-4-candidate-residency.json": {
+    "bytes": 76,
+    "sha256": "0ed84e6c0ebfcd4a3d234850f807aea2266ab769e0f5e83f2c1798399c0c9304"
+  },
+  "lazy-final-comparison/os-cold-1-5-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "14322141a651216f87e72a7e5ae21ff3deb498f40b7d2aadce131aa74964a12c"
+  },
+  "lazy-final-comparison/os-cold-1-5-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "41fd4022d86f0f203277c3e35eb7dc778adf6b2aebbdf703e2f429dca0204d3e"
+  },
+  "lazy-final-comparison/os-cold-1-5-baseline/server-requests.jsonl": {
+    "bytes": 966,
+    "sha256": "633d1a0dbd933aed0dc4bc36b8ba042d3cb4e36cef1f682e7fa623115fb41bfc"
+  },
+  "lazy-final-comparison/os-cold-1-5-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-1-5-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "a74feb48a8da50b888ced28cf324beaa350d96089413fd2ce93e94dbee69d95a"
+  },
+  "lazy-final-comparison/os-cold-1-5-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "eb85a6b389aae8a464f075316a9966891abf6eafc2f74f0f57fa981637a66396"
+  },
+  "lazy-final-comparison/os-cold-1-5-candidate/server-requests.jsonl": {
+    "bytes": 966,
+    "sha256": "3beefe8bd85aeaaf55272afba00e603206ef68333f2a115094b35b1affbe713a"
+  },
+  "lazy-final-comparison/os-cold-1-5-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/os-cold-1-6-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "a463f5eae80ba702688e88a94043ef7ef27b421dc227ca173c9dfa72565a0112"
+  },
+  "lazy-final-comparison/os-cold-1-6-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "b92036e53d86029fe56a238e4c56bae22de560d5e3770824b67c5f39883af5df"
+  },
+  "lazy-final-comparison/os-cold-1-6-baseline/server-requests.jsonl": {
+    "bytes": 963,
+    "sha256": "cdb622fdd1e1e01bff7b984d65a29b00a118033ed385cf10429c532cc44472ea"
+  },
+  "lazy-final-comparison/os-cold-1-6-baseline-residency.json": {
+    "bytes": 57,
+    "sha256": "d4360c520696acc85ee23b8a26813eeb0031760596c33932f08a7c37244f4b4a"
+  },
+  "lazy-final-comparison/os-cold-1-6-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "041890e38d0ee39b3bb3c6c665a6231a6c8d6199bcaac4518a45626547b89dc7"
+  },
+  "lazy-final-comparison/os-cold-1-6-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "53e8e427953cbfaed0ca15d6645fbcfdaa38f3b54e90bc3cf5c16624f8e6de45"
+  },
+  "lazy-final-comparison/os-cold-1-6-candidate/server-requests.jsonl": {
+    "bytes": 963,
+    "sha256": "11f0601c02564334e9814827401e48394f12e9cf9fd9ee95caec4086f0e7d9b6"
+  },
+  "lazy-final-comparison/os-cold-1-6-candidate-residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "lazy-final-comparison/requests.jsonl": {
+    "bytes": 69328,
+    "sha256": "42343128ae464301a0f3c2a0b3a15812b8735a4b037855721602e436e874ab4a"
+  },
+  "lazy-final-comparison/specs.json": {
+    "bytes": 1579,
+    "sha256": "e50b5e0a67ceb7ba7c9e692308b91acf996a987f01d42ee4f1512cd92f1d818c"
+  },
+  "lazy-final-comparison/summary.json": {
+    "bytes": 8747,
+    "sha256": "8d417bbc5544a050a6e52954e58bb07e38e8126b15ff7d5663c1d9e670de5636"
+  },
+  "lazy-final-comparison/warm-0-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "98dfd1004f5657d0f08fe99b17709504de93f808a9e486d23b948a33c6579f65"
+  },
+  "lazy-final-comparison/warm-0-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "d14898e760aeb6d5b8b3b4d01756ee6f4a8a6f1e16e3baa7b24bce255b509c18"
+  },
+  "lazy-final-comparison/warm-0-baseline/server-requests.jsonl": {
+    "bytes": 20107,
+    "sha256": "76ddb71255065066aa28bbbe24806790eafba05f50c4cf11481fe28336352447"
+  },
+  "lazy-final-comparison/warm-0-candidate/host.log": {
+    "bytes": 738,
+    "sha256": "fe2e9bca783d880ee9367b10ef8335397355a1ee58ed4e80a39cd1f20d4d8286"
+  },
+  "lazy-final-comparison/warm-0-candidate/ready.json": {
+    "bytes": 510,
+    "sha256": "8f4e8f781d6df2c7ad1499a638782c7e30b5e8d328fd8c1a48a1879f43b745b2"
+  },
+  "lazy-final-comparison/warm-0-candidate/server-requests.jsonl": {
+    "bytes": 19733,
+    "sha256": "dccb81aea3832269013cbbc6b13048e85081778ba8fbce1f7f66afcd13a3b30b"
+  },
+  "lazy-final-comparison/warm-1-baseline/host.log": {
+    "bytes": 738,
+    "sha256": "adf8296045eb50951f0d133096f8d8c08787903710fc469f982e8900ddb71dd1"
+  },
+  "lazy-final-comparison/warm-1-baseline/ready.json": {
+    "bytes": 510,
+    "sha256": "6df40c7ae64d4f2f7d9a029c09edcae738e0dd3a72a7af4cef4228fc1754754b"
+  },
+  "lazy-final-comparison/warm-1-baseline/server-requests.jsonl": {
+    "bytes": 19747,
+    "sha256": "75abbb1a2cd40b629bfd51d877601e74bc9e0d67ed22f8c6380d4a60eafc4f0a"
+  },
+  "lazy-final-comparison/warm-1-candidate/host.log": {
+    "bytes": 737,
+    "sha256": "2b8c529bf7cdbae7ff6e13a21b7644d45f7461f8cf42509b2acdc4e86dfb2911"
+  },
+  "lazy-final-comparison/warm-1-candidate/ready.json": {
+    "bytes": 509,
+    "sha256": "4efa39f11eb416383d6c3a5b425e1fc14d1533b85c8cf6aabd974e5a6c8706b2"
+  },
+  "lazy-final-comparison/warm-1-candidate/server-requests.jsonl": {
+    "bytes": 19734,
+    "sha256": "b2e9a1262c423007cba7f50394db373ff1c505519686ee46bd2ab027ff1b9f9f"
+  },
+  "lazy-final-http-build.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "lazy-final-native-build.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "lazy-final-native-correctness.log": {
+    "bytes": 159,
+    "sha256": "8f7c47cbd2c4ca621640ee9c402710880897b2a25981dbc35121e262fccfa04c"
+  },
+  "lazy-final-native-vet.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "lazy-final-preparation-status.json": {
+    "bytes": 123,
+    "sha256": "ee78553916bc86e2c01448b43b056651c1fa69e8eefa253b50672ccba1a9b5d3"
+  },
+  "lazy-final-production-proof.json": {
+    "bytes": 4763,
+    "sha256": "0239004e1906c35a6da3de2d50de42eb6bc3956304c154c0e7e4374b8faa888f"
+  },
+  "lazy-final-source-identity.json": {
+    "bytes": 118524,
+    "sha256": "eb0e72b83531ef2f7f1a4de602a5cabfe51844061c8b1c3040c8538bbd40e8be"
+  },
+  "lazy-history-request-cache.go": {
+    "bytes": 9230,
+    "sha256": "eb8d55a5da2c16c8dad9caa54c60c0fe836175f15c7ccd8c0644bde5aa02d127"
+  },
+  "prepare-lazy-final.py": {
+    "bytes": 3539,
+    "sha256": "2e2584a2744832b8f34559cd4b820796258c65cb1e074205c6badf6b0bb37a3f"
+  },
+  "seal-lazy-final.py": {
+    "bytes": 3904,
+    "sha256": "8a7e53f86e2bb19cc4e049a7b3c164195ea8f7f73aa2d69e317585360d4949c3"
+  }
+}

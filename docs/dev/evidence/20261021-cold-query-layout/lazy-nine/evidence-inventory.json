@@ -1,0 +1,38 @@
+{
+  "host.log": {
+    "bytes": 737,
+    "sha256": "12600cf82e16d12ebafeccb7e46db9e320e01e2656677137adba053739ff8b2a"
+  },
+  "read-breakdown.json": {
+    "bytes": 101997,
+    "sha256": "7507eb719a7c4c0c7d65759a8310ed343762cf14acb752c2c06651234d78b568"
+  },
+  "read.trace": {
+    "bytes": 3747654,
+    "sha256": "87ba2ccca5ce3112ad350351c6233cffff9e47d04e02d29bbd54af7c77774d8d"
+  },
+  "ready.json": {
+    "bytes": 509,
+    "sha256": "4030352985dc745391b3f02c2b974c16a58decdda7ac493c5882e3c81f493455"
+  },
+  "residency.json": {
+    "bytes": 57,
+    "sha256": "3948211f871df860f5ee923dac106f3c5a99cbac38557271fc7291f12e7becab"
+  },
+  "response.json": {
+    "bytes": 313,
+    "sha256": "4621679b13cadfd490c80d8d692ba89ce37834d678160935fbc8e2a1ebcf8ec3"
+  },
+  "server-requests.jsonl": {
+    "bytes": 972,
+    "sha256": "01fe4b6a395a44fd5451766270850475b68947ee5214314b7cf98f170c2dd078"
+  },
+  "status.json": {
+    "bytes": 258,
+    "sha256": "e7d075ee2d90207e01c03e3315de272501a49243606cfef9d8425a793f1f57d0"
+  },
+  "unparsed-window.txt": {
+    "bytes": 10135,
+    "sha256": "4a80ee2eea771de75578964b04c48123609ddfe351d84d431937a2bc1fed7bf9"
+  }
+}

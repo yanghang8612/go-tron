@@ -6,10 +6,10 @@
 - [x] Add two-level page authentication and current-byte corruption tests.
 - [x] Verify partial coverage, replacement, query cuts and strict semantic checks.
 - [x] Bound obsolete auxiliary-file retirement and preserve reader/catalog leases.
-- [ ] Verify exclusive-inode reclamation on an isolated mainnet copy.
-- [ ] Complete native package, race, vet, MuHash and snapshot restore checks.
-- [ ] Build the index on the unchanged mainnet fixed copy and record its cost.
-- [ ] Compare complete HTTP calls at seven heights under three cache conditions.
-- [ ] Seal raw evidence, recompute results and document practical limits.
+- [x] Verify exclusive-inode reclamation on an isolated mainnet copy.
+- [x] Complete native package, race, vet, MuHash and snapshot restore checks.
+- [x] Build the index on the unchanged mainnet fixed copy and record its cost.
+- [x] Compare complete HTTP calls at seven heights under three cache conditions.
+- [x] Seal raw evidence, recompute results and document practical limits.
 
 Keep production unchanged. Do not push, deploy, restart or reset the live node.

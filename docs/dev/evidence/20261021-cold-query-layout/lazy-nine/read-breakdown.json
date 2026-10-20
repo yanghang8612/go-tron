@@ -1,0 +1,2853 @@
+{
+  "complete": true,
+  "excluded_from_primary_performance": true,
+  "notes": "Completed read/pread64 syscalls starting in the client request window; syscall elapsed sums can overlap across threads and are not a disjoint wall-clock profile. Unparsed lines are retained. Startup reads excluded.",
+  "groups": {
+    "family": [
+      {
+        "family": "cold-history",
+        "calls": 3944,
+        "returned_bytes": 7724036,
+        "syscall_elapsed_seconds": 0.8114339999999982
+      },
+      {
+        "family": "hot-history-pebble",
+        "calls": 1666,
+        "returned_bytes": 14660137,
+        "syscall_elapsed_seconds": 0.5778290000000005
+      },
+      {
+        "family": "state-pebble",
+        "calls": 35,
+        "returned_bytes": 1052915,
+        "syscall_elapsed_seconds": 0.016191000000000004
+      },
+      {
+        "family": "other-input",
+        "calls": 2,
+        "returned_bytes": 572504,
+        "syscall_elapsed_seconds": 0.002419
+      }
+    ],
+    "family+suffix": [
+      {
+        "family": "hot-history-pebble",
+        "suffix": ".sst",
+        "calls": 1666,
+        "returned_bytes": 14660137,
+        "syscall_elapsed_seconds": 0.5778290000000005
+      },
+      {
+        "family": "cold-history",
+        "suffix": ".kv",
+        "calls": 2874,
+        "returned_bytes": 4424857,
+        "syscall_elapsed_seconds": 0.43469599999999875
+      },
+      {
+        "family": "cold-history",
+        "suffix": ".seg",
+        "calls": 1062,
+        "returned_bytes": 2801506,
+        "syscall_elapsed_seconds": 0.3706399999999999
+      },
+      {
+        "family": "state-pebble",
+        "suffix": ".sst",
+        "calls": 35,
+        "returned_bytes": 1052915,
+        "syscall_elapsed_seconds": 0.016191000000000004
+      },
+      {
+        "family": "cold-history",
+        "suffix": ".route",
+        "calls": 8,
+        "returned_bytes": 497673,
+        "syscall_elapsed_seconds": 0.006097999999999999
+      },
+      {
+        "family": "other-input",
+        "suffix": ".gtv2",
+        "calls": 2,
+        "returned_bytes": 572504,
+        "syscall_elapsed_seconds": 0.002419
+      }
+    ],
+    "path": [
+      {
+        "path": "history/058040.sst",
+        "calls": 88,
+        "returned_bytes": 342004,
+        "syscall_elapsed_seconds": 0.050846
+      },
+      {
+        "path": "history/058041.sst",
+        "calls": 71,
+        "returned_bytes": 272565,
+        "syscall_elapsed_seconds": 0.037633000000000014
+      },
+      {
+        "path": "history/057144.sst",
+        "calls": 59,
+        "returned_bytes": 148369,
+        "syscall_elapsed_seconds": 0.037329
+      },
+      {
+        "path": "history/058033.sst",
+        "calls": 50,
+        "returned_bytes": 120171,
+        "syscall_elapsed_seconds": 0.029653
+      },
+      {
+        "path": "history/058023.sst",
+        "calls": 48,
+        "returned_bytes": 187039,
+        "syscall_elapsed_seconds": 0.027995999999999997
+      },
+      {
+        "path": "history/057502.sst",
+        "calls": 46,
+        "returned_bytes": 179171,
+        "syscall_elapsed_seconds": 0.027534000000000006
+      },
+      {
+        "path": "history/057112.sst",
+        "calls": 46,
+        "returned_bytes": 175769,
+        "syscall_elapsed_seconds": 0.025993000000000002
+      },
+      {
+        "path": "history/058020.sst",
+        "calls": 43,
+        "returned_bytes": 164614,
+        "syscall_elapsed_seconds": 0.025654000000000003
+      },
+      {
+        "path": "history/057002.sst",
+        "calls": 42,
+        "returned_bytes": 104033,
+        "syscall_elapsed_seconds": 0.024270999999999997
+      },
+      {
+        "path": "history/058027.sst",
+        "calls": 42,
+        "returned_bytes": 162705,
+        "syscall_elapsed_seconds": 0.023900000000000008
+      },
+      {
+        "path": "history/057358.sst",
+        "calls": 39,
+        "returned_bytes": 151301,
+        "syscall_elapsed_seconds": 0.023044000000000002
+      },
+      {
+        "path": "history/058052.sst",
+        "calls": 356,
+        "returned_bytes": 5887293,
+        "syscall_elapsed_seconds": 0.017445000000000013
+      },
+      {
+        "path": "history/058032.sst",
+        "calls": 24,
+        "returned_bytes": 85783,
+        "syscall_elapsed_seconds": 0.013388
+      },
+      {
+        "path": "history/057887.sst",
+        "calls": 24,
+        "returned_bytes": 57625,
+        "syscall_elapsed_seconds": 0.013333
+      },
+      {
+        "path": "history/058053.sst",
+        "calls": 325,
+        "returned_bytes": 5438851,
+        "syscall_elapsed_seconds": 0.013255999999999999
+      },
+      {
+        "path": "history/058007.sst",
+        "calls": 22,
+        "returned_bytes": 79067,
+        "syscall_elapsed_seconds": 0.013052
+      },
+      {
+        "path": "history/058021.sst",
+        "calls": 18,
+        "returned_bytes": 61670,
+        "syscall_elapsed_seconds": 0.012551
+      },
+      {
+        "path": "history/056714.sst",
+        "calls": 14,
+        "returned_bytes": 26620,
+        "syscall_elapsed_seconds": 0.010888
+      },
+      {
+        "path": "history/057819.sst",
+        "calls": 20,
+        "returned_bytes": 68845,
+        "syscall_elapsed_seconds": 0.010813000000000001
+      },
+      {
+        "path": "history/058018.sst",
+        "calls": 20,
+        "returned_bytes": 69453,
+        "syscall_elapsed_seconds": 0.010773999999999999
+      },
+      {
+        "path": "history/058030.sst",
+        "calls": 18,
+        "returned_bytes": 65675,
+        "syscall_elapsed_seconds": 0.010282000000000001
+      },
+      {
+        "path": "history/057001.sst",
+        "calls": 19,
+        "returned_bytes": 43270,
+        "syscall_elapsed_seconds": 0.010183999999999999
+      },
+      {
+        "path": "history/057893.sst",
+        "calls": 20,
+        "returned_bytes": 67733,
+        "syscall_elapsed_seconds": 0.010161
+      },
+      {
+        "path": "history/057145.sst",
+        "calls": 18,
+        "returned_bytes": 36393,
+        "syscall_elapsed_seconds": 0.009344000000000002
+      },
+      {
+        "path": "history/058039.sst",
+        "calls": 17,
+        "returned_bytes": 53279,
+        "syscall_elapsed_seconds": 0.009173
+      },
+      {
+        "path": "history/056999.sst",
+        "calls": 16,
+        "returned_bytes": 36349,
+        "syscall_elapsed_seconds": 0.008928
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425136716-425262405-43da8aea241f9888.kv",
+        "calls": 38,
+        "returned_bytes": 68774,
+        "syscall_elapsed_seconds": 0.008428000000000001
+      },
+      {
+        "path": "history/055927.sst",
+        "calls": 16,
+        "returned_bytes": 38146,
+        "syscall_elapsed_seconds": 0.008353000000000001
+      },
+      {
+        "path": "history/057896.sst",
+        "calls": 16,
+        "returned_bytes": 36955,
+        "syscall_elapsed_seconds": 0.007712000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429610404-429701642-c505e906636cb16d.kv",
+        "calls": 13,
+        "returned_bytes": 19624,
+        "syscall_elapsed_seconds": 0.0072710000000000006
+      },
+      {
+        "path": "history/057895.sst",
+        "calls": 15,
+        "returned_bytes": 46488,
+        "syscall_elapsed_seconds": 0.006363
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424139564-424172213-2001d0a52525aea0.seg",
+        "calls": 5,
+        "returned_bytes": 2579,
+        "syscall_elapsed_seconds": 0.006111999999999999
+      },
+      {
+        "path": "history/058019.sst",
+        "calls": 12,
+        "returned_bytes": 40751,
+        "syscall_elapsed_seconds": 0.006012999999999999
+      },
+      {
+        "path": "history/052954.sst",
+        "calls": 12,
+        "returned_bytes": 27616,
+        "syscall_elapsed_seconds": 0.005960000000000001
+      },
+      {
+        "path": "history/058022.sst",
+        "calls": 12,
+        "returned_bytes": 35897,
+        "syscall_elapsed_seconds": 0.005922
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415031468-415154209-67291e836bfa6bee.kv",
+        "calls": 85,
+        "returned_bytes": 59169,
+        "syscall_elapsed_seconds": 0.005432999999999993
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427167645-427280881-7c2d62d73989ab9d.kv",
+        "calls": 13,
+        "returned_bytes": 19714,
+        "syscall_elapsed_seconds": 0.005225
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415031468-415154209-67291e836bfa6bee.seg",
+        "calls": 15,
+        "returned_bytes": 216106,
+        "syscall_elapsed_seconds": 0.005073999999999999
+      },
+      {
+        "path": "state-snapshots/history/account-routing-1-568104018-fa9388fe60cb51d7e06b6fa871e2bcd6f0b350ad43ae9356c421b7a9659ce646.route",
+        "calls": 6,
+        "returned_bytes": 180695,
+        "syscall_elapsed_seconds": 0.004698000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-501796887-501901595-5959f86bac0d978b.seg",
+        "calls": 8,
+        "returned_bytes": 198724,
+        "syscall_elapsed_seconds": 0.0043560000000000005
+      },
+      {
+        "path": "history/057998.sst",
+        "calls": 8,
+        "returned_bytes": 31521,
+        "syscall_elapsed_seconds": 0.0037099999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-501549223-501674319-25934b9f3a16a91b.seg",
+        "calls": 8,
+        "returned_bytes": 170428,
+        "syscall_elapsed_seconds": 0.003686
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423917730-423961910-3622e32a66b6eee7.kv",
+        "calls": 12,
+        "returned_bytes": 15908,
+        "syscall_elapsed_seconds": 0.0036230000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422882378-422915536-343fae6cdd144dd0.kv",
+        "calls": 12,
+        "returned_bytes": 15709,
+        "syscall_elapsed_seconds": 0.003591
+      },
+      {
+        "path": "history/057010.sst",
+        "calls": 8,
+        "returned_bytes": 12074,
+        "syscall_elapsed_seconds": 0.0035840000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415154210-415295913-2ae9309298a06b50.kv",
+        "calls": 37,
+        "returned_bytes": 55548,
+        "syscall_elapsed_seconds": 0.0035060000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433829627-434011803-61a4f096636e3acc.seg",
+        "calls": 7,
+        "returned_bytes": 125049,
+        "syscall_elapsed_seconds": 0.0034939999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-504857868-505009272-2eae9adc8b11398f.seg",
+        "calls": 7,
+        "returned_bytes": 124254,
+        "syscall_elapsed_seconds": 0.0034430000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425136716-425262405-43da8aea241f9888.seg",
+        "calls": 12,
+        "returned_bytes": 123135,
+        "syscall_elapsed_seconds": 0.0034150000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421565827-421671054-cf6ec991cdfa51a1.kv",
+        "calls": 13,
+        "returned_bytes": 19846,
+        "syscall_elapsed_seconds": 0.0033949999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415295914-415417316-499d80b8fde154d5.kv",
+        "calls": 32,
+        "returned_bytes": 45696,
+        "syscall_elapsed_seconds": 0.0032969999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422843763-422882377-29068ff99b543eea.kv",
+        "calls": 12,
+        "returned_bytes": 15701,
+        "syscall_elapsed_seconds": 0.0031520000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415154210-415295913-2ae9309298a06b50.seg",
+        "calls": 11,
+        "returned_bytes": 128365,
+        "syscall_elapsed_seconds": 0.0031460000000000004
+      },
+      {
+        "path": "chaindata/093367.sst",
+        "calls": 5,
+        "returned_bytes": 627065,
+        "syscall_elapsed_seconds": 0.003123
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422948837-422979781-903d762bd491e02b.seg",
+        "calls": 12,
+        "returned_bytes": 87257,
+        "syscall_elapsed_seconds": 0.0030830000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424139564-424172213-2001d0a52525aea0.kv",
+        "calls": 12,
+        "returned_bytes": 17258,
+        "syscall_elapsed_seconds": 0.0030780000000000004
+      },
+      {
+        "path": "history/058024.sst",
+        "calls": 8,
+        "returned_bytes": 17700,
+        "syscall_elapsed_seconds": 0.003025
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-504857868-505009272-2eae9adc8b11398f.kv",
+        "calls": 24,
+        "returned_bytes": 29570,
+        "syscall_elapsed_seconds": 0.0030119999999999995
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-501796887-501901595-5959f86bac0d978b.kv",
+        "calls": 20,
+        "returned_bytes": 29475,
+        "syscall_elapsed_seconds": 0.0029690000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415295914-415417316-499d80b8fde154d5.seg",
+        "calls": 12,
+        "returned_bytes": 115462,
+        "syscall_elapsed_seconds": 0.0029600000000000004
+      },
+      {
+        "path": "chaindata/096489.sst",
+        "calls": 5,
+        "returned_bytes": 377119,
+        "syscall_elapsed_seconds": 0.002953
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427280882-427388706-d3c50dc6ff835467.seg",
+        "calls": 5,
+        "returned_bytes": 9467,
+        "syscall_elapsed_seconds": 0.0029260000000000006
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421370569-421465957-48f522a9f2491fe7.kv",
+        "calls": 14,
+        "returned_bytes": 23953,
+        "syscall_elapsed_seconds": 0.0028500000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433320848-433440101-e3312a04e0914d0f.seg",
+        "calls": 5,
+        "returned_bytes": 8963,
+        "syscall_elapsed_seconds": 0.002806
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425532885-425614033-e308016b37f21a3f.seg",
+        "calls": 5,
+        "returned_bytes": 7675,
+        "syscall_elapsed_seconds": 0.002731
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-501549223-501674319-25934b9f3a16a91b.kv",
+        "calls": 20,
+        "returned_bytes": 30561,
+        "syscall_elapsed_seconds": 0.00272
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433829627-434011803-61a4f096636e3acc.kv",
+        "calls": 19,
+        "returned_bytes": 27103,
+        "syscall_elapsed_seconds": 0.0027180000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422155869-422299167-a99ffa89447e3112.kv",
+        "calls": 15,
+        "returned_bytes": 27945,
+        "syscall_elapsed_seconds": 0.0026999999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427639995-427732019-6eb47a2badfdb507.kv",
+        "calls": 13,
+        "returned_bytes": 19903,
+        "syscall_elapsed_seconds": 0.0026700000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430125675-430226477-fe9dcdb1ddeb5369.kv",
+        "calls": 13,
+        "returned_bytes": 19652,
+        "syscall_elapsed_seconds": 0.0026700000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426774306-426812677-4fe563bd257fe885.seg",
+        "calls": 5,
+        "returned_bytes": 3474,
+        "syscall_elapsed_seconds": 0.002642
+      },
+      {
+        "path": "history/057614.sst",
+        "calls": 7,
+        "returned_bytes": 23560,
+        "syscall_elapsed_seconds": 0.002626
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424322201-424356172-f77711916acdca6a.kv",
+        "calls": 12,
+        "returned_bytes": 15640,
+        "syscall_elapsed_seconds": 0.0026159999999999994
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433171466-433320847-f78b360034c33650.kv",
+        "calls": 14,
+        "returned_bytes": 23853,
+        "syscall_elapsed_seconds": 0.0025879999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420190019-420285277-d8c791a43b108626.seg",
+        "calls": 5,
+        "returned_bytes": 8431,
+        "syscall_elapsed_seconds": 0.002547
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422948837-422979781-903d762bd491e02b.kv",
+        "calls": 30,
+        "returned_bytes": 35970,
+        "syscall_elapsed_seconds": 0.0025379999999999995
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416902580-417056322-68074eae4b60dcf8.seg",
+        "calls": 5,
+        "returned_bytes": 13331,
+        "syscall_elapsed_seconds": 0.002522
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424872253-424945506-0fe1c55e1ce90c84.seg",
+        "calls": 5,
+        "returned_bytes": 6835,
+        "syscall_elapsed_seconds": 0.002516
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425354047-425444741-42123871c0ef3058.seg",
+        "calls": 5,
+        "returned_bytes": 8599,
+        "syscall_elapsed_seconds": 0.00251
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422915537-422948836-0274c625b4627da3.kv",
+        "calls": 12,
+        "returned_bytes": 15467,
+        "syscall_elapsed_seconds": 0.0024850000000000002
+      },
+      {
+        "path": "chaindata/059450.sst",
+        "calls": 6,
+        "returned_bytes": 15212,
+        "syscall_elapsed_seconds": 0.0024749999999999998
+      },
+      {
+        "path": "history/057503.sst",
+        "calls": 6,
+        "returned_bytes": 11651,
+        "syscall_elapsed_seconds": 0.002466
+      },
+      {
+        "path": "history/045583.sst",
+        "calls": 5,
+        "returned_bytes": 165914,
+        "syscall_elapsed_seconds": 0.002463
+      },
+      {
+        "path": "history/037496.sst",
+        "calls": 6,
+        "returned_bytes": 9248,
+        "syscall_elapsed_seconds": 0.002451
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429104605-429198842-7dd42a0fc334f11d.kv",
+        "calls": 14,
+        "returned_bytes": 24087,
+        "syscall_elapsed_seconds": 0.002434
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424322201-424356172-f77711916acdca6a.seg",
+        "calls": 5,
+        "returned_bytes": 3195,
+        "syscall_elapsed_seconds": 0.0024330000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418725515-418977161-d4ef05184bad1fb8.seg",
+        "calls": 5,
+        "returned_bytes": 20947,
+        "syscall_elapsed_seconds": 0.002426
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433320848-433440101-e3312a04e0914d0f.kv",
+        "calls": 14,
+        "returned_bytes": 22680,
+        "syscall_elapsed_seconds": 0.002425
+      },
+      {
+        "path": "chaindata/081407.sst",
+        "calls": 6,
+        "returned_bytes": 9039,
+        "syscall_elapsed_seconds": 0.002424
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424107533-424139563-73bae7ac5dcc129f.kv",
+        "calls": 12,
+        "returned_bytes": 16901,
+        "syscall_elapsed_seconds": 0.00242
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426646686-426680719-b540e261d3ea8bfc.kv",
+        "calls": 12,
+        "returned_bytes": 15637,
+        "syscall_elapsed_seconds": 0.002414
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421191929-421277745-d9366697461f4c49.seg",
+        "calls": 5,
+        "returned_bytes": 7815,
+        "syscall_elapsed_seconds": 0.002413
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427077100-427167644-ff8800cd9e4649c8.kv",
+        "calls": 13,
+        "returned_bytes": 19533,
+        "syscall_elapsed_seconds": 0.002398
+      },
+      {
+        "path": "history/058031.sst",
+        "calls": 6,
+        "returned_bytes": 10239,
+        "syscall_elapsed_seconds": 0.0023970000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417982516-418155175-00f32680d2e62068.kv",
+        "calls": 14,
+        "returned_bytes": 24074,
+        "syscall_elapsed_seconds": 0.0023749999999999995
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432711408-432915877-9fbadb44c7c33b9e.kv",
+        "calls": 16,
+        "returned_bytes": 32008,
+        "syscall_elapsed_seconds": 0.002352
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417841859-417982515-5450fea50c0e2411.kv",
+        "calls": 14,
+        "returned_bytes": 23824,
+        "syscall_elapsed_seconds": 0.0023350000000000003
+      },
+      {
+        "path": "history/056279.sst",
+        "calls": 7,
+        "returned_bytes": 13613,
+        "syscall_elapsed_seconds": 0.002326
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421277746-421370568-34f4782f8ae50956.kv",
+        "calls": 13,
+        "returned_bytes": 19955,
+        "syscall_elapsed_seconds": 0.0023110000000000006
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431274567-431461538-15af74590eebd539.kv",
+        "calls": 14,
+        "returned_bytes": 24196,
+        "syscall_elapsed_seconds": 0.0023110000000000006
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420626004-420739452-fca44a7250e694dd.kv",
+        "calls": 15,
+        "returned_bytes": 28222,
+        "syscall_elapsed_seconds": 0.0023100000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429010560-429104604-2422d58263f8736a.kv",
+        "calls": 13,
+        "returned_bytes": 19974,
+        "syscall_elapsed_seconds": 0.0023049999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429198843-429316646-defa3fe21f87c242.kv",
+        "calls": 13,
+        "returned_bytes": 19641,
+        "syscall_elapsed_seconds": 0.002298
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429523835-429610403-f72cb613dbc8853b.kv",
+        "calls": 13,
+        "returned_bytes": 20061,
+        "syscall_elapsed_seconds": 0.0022979999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417056323-417184085-dfd27ddc820efdc7.kv",
+        "calls": 14,
+        "returned_bytes": 23774,
+        "syscall_elapsed_seconds": 0.0022889999999999994
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417442358-417551382-0de085aeb4c56df5.kv",
+        "calls": 13,
+        "returned_bytes": 19463,
+        "syscall_elapsed_seconds": 0.002275
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425030408-425136715-4e675b01e943f6e5.seg",
+        "calls": 5,
+        "returned_bytes": 9551,
+        "syscall_elapsed_seconds": 0.002274
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430892076-430997269-085da854462e990c.kv",
+        "calls": 13,
+        "returned_bytes": 19317,
+        "syscall_elapsed_seconds": 0.002269
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418503421-418725514-7b1c860e9bae1680.kv",
+        "calls": 16,
+        "returned_bytes": 32133,
+        "syscall_elapsed_seconds": 0.002265
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415524267-415637701-1f926375d5eb2947.kv",
+        "calls": 13,
+        "returned_bytes": 19876,
+        "syscall_elapsed_seconds": 0.002259
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428914124-429010559-77e2d3ca334222ca.kv",
+        "calls": 14,
+        "returned_bytes": 23909,
+        "syscall_elapsed_seconds": 0.002255
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420914288-421007782-5b2416d890b10329.kv",
+        "calls": 13,
+        "returned_bytes": 19294,
+        "syscall_elapsed_seconds": 0.0022510000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424290043-424322200-28c8dbd5833cd5ca.kv",
+        "calls": 12,
+        "returned_bytes": 17119,
+        "syscall_elapsed_seconds": 0.0022500000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429420163-429523834-7739b25444e26219.kv",
+        "calls": 13,
+        "returned_bytes": 19417,
+        "syscall_elapsed_seconds": 0.002248
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430493308-430678645-b25bf767f57d4a4c.kv",
+        "calls": 14,
+        "returned_bytes": 23797,
+        "syscall_elapsed_seconds": 0.0022470000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432270869-432386377-e0433b98cf373467.kv",
+        "calls": 13,
+        "returned_bytes": 19781,
+        "syscall_elapsed_seconds": 0.00224
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416264810-416386310-13fa4bc362f82c03.kv",
+        "calls": 14,
+        "returned_bytes": 23950,
+        "syscall_elapsed_seconds": 0.002234
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428042336-428178767-804d4d99cfb201b5.kv",
+        "calls": 15,
+        "returned_bytes": 27793,
+        "syscall_elapsed_seconds": 0.002234
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419711971-419953001-444aeadeff059752.kv",
+        "calls": 16,
+        "returned_bytes": 32207,
+        "syscall_elapsed_seconds": 0.002229
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416386311-416532042-61171ad1c3c7adc7.kv",
+        "calls": 14,
+        "returned_bytes": 24087,
+        "syscall_elapsed_seconds": 0.002225
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433553059-433676043-3a1334c9695e666f.kv",
+        "calls": 14,
+        "returned_bytes": 23987,
+        "syscall_elapsed_seconds": 0.002219
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416152871-416264809-ccac57fe9c30e0eb.kv",
+        "calls": 13,
+        "returned_bytes": 19992,
+        "syscall_elapsed_seconds": 0.0022130000000000006
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415747860-415885560-a4fec3761cf236a7.kv",
+        "calls": 15,
+        "returned_bytes": 28126,
+        "syscall_elapsed_seconds": 0.0022110000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424636129-424667222-0f96eae5f7d65261.kv",
+        "calls": 12,
+        "returned_bytes": 15742,
+        "syscall_elapsed_seconds": 0.0022110000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421671055-421776847-623db3ffecd67b41.kv",
+        "calls": 14,
+        "returned_bytes": 24036,
+        "syscall_elapsed_seconds": 0.0022080000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431898091-432004945-d6c7a0ae54419082.kv",
+        "calls": 13,
+        "returned_bytes": 19572,
+        "syscall_elapsed_seconds": 0.0022059999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422678465-422720786-299b81411aaad022.kv",
+        "calls": 13,
+        "returned_bytes": 19309,
+        "syscall_elapsed_seconds": 0.002205
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420067552-420190018-50c7b472730834ad.kv",
+        "calls": 13,
+        "returned_bytes": 19675,
+        "syscall_elapsed_seconds": 0.0022039999999999994
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416902580-417056322-68074eae4b60dcf8.kv",
+        "calls": 15,
+        "returned_bytes": 27694,
+        "syscall_elapsed_seconds": 0.002203
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419267707-419469512-3cdec39ecab02db1.kv",
+        "calls": 14,
+        "returned_bytes": 23753,
+        "syscall_elapsed_seconds": 0.002203
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425030408-425136715-4e675b01e943f6e5.kv",
+        "calls": 14,
+        "returned_bytes": 24039,
+        "syscall_elapsed_seconds": 0.0022
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420739453-420829999-c92506b62fae9490.kv",
+        "calls": 14,
+        "returned_bytes": 23745,
+        "syscall_elapsed_seconds": 0.0021990000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433676044-433829626-37beb88fbc5dae85.kv",
+        "calls": 15,
+        "returned_bytes": 28041,
+        "syscall_elapsed_seconds": 0.002198
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432138532-432270868-0398541da333b393.kv",
+        "calls": 14,
+        "returned_bytes": 24144,
+        "syscall_elapsed_seconds": 0.002197
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417184086-417340349-7b72926f5661cbb9.kv",
+        "calls": 15,
+        "returned_bytes": 28137,
+        "syscall_elapsed_seconds": 0.002195
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417551383-417687665-bf8e9e8f8cc7e816.kv",
+        "calls": 15,
+        "returned_bytes": 28060,
+        "syscall_elapsed_seconds": 0.002193
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427388707-427504839-94e6c77165c098fb.kv",
+        "calls": 13,
+        "returned_bytes": 19882,
+        "syscall_elapsed_seconds": 0.002193
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418725515-418977161-d4ef05184bad1fb8.kv",
+        "calls": 16,
+        "returned_bytes": 34000,
+        "syscall_elapsed_seconds": 0.0021780000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419106273-419267706-a3828e8a74465dce.kv",
+        "calls": 14,
+        "returned_bytes": 24214,
+        "syscall_elapsed_seconds": 0.002178
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419469513-419711970-e462b61a69155b91.kv",
+        "calls": 15,
+        "returned_bytes": 28202,
+        "syscall_elapsed_seconds": 0.002174
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430678646-430892075-79a416e6493a0c05.kv",
+        "calls": 14,
+        "returned_bytes": 23883,
+        "syscall_elapsed_seconds": 0.002172
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416532043-416714279-534ce7b0930513a6.kv",
+        "calls": 14,
+        "returned_bytes": 23629,
+        "syscall_elapsed_seconds": 0.002164
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432915878-433171465-347a28de7557e023.kv",
+        "calls": 14,
+        "returned_bytes": 23415,
+        "syscall_elapsed_seconds": 0.0021620000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429316647-429420162-20573530b399bfc4.kv",
+        "calls": 13,
+        "returned_bytes": 19779,
+        "syscall_elapsed_seconds": 0.002162
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429795055-429901956-b580374dc270d311.kv",
+        "calls": 14,
+        "returned_bytes": 23981,
+        "syscall_elapsed_seconds": 0.002161
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421465958-421565826-251a739da248c31e.kv",
+        "calls": 13,
+        "returned_bytes": 19812,
+        "syscall_elapsed_seconds": 0.002158
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428649500-428723246-5430aef9929500c1.kv",
+        "calls": 13,
+        "returned_bytes": 19722,
+        "syscall_elapsed_seconds": 0.002157
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421191929-421277745-d9366697461f4c49.kv",
+        "calls": 13,
+        "returned_bytes": 19781,
+        "syscall_elapsed_seconds": 0.0021530000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427826835-427933204-27e348ca077fcb46.kv",
+        "calls": 14,
+        "returned_bytes": 24079,
+        "syscall_elapsed_seconds": 0.0021469999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431461539-431561276-6a8517033828b402.kv",
+        "calls": 14,
+        "returned_bytes": 23661,
+        "syscall_elapsed_seconds": 0.002144
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418155176-418325778-4d602ee105d23c24.kv",
+        "calls": 14,
+        "returned_bytes": 24221,
+        "syscall_elapsed_seconds": 0.002143
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415637702-415747859-c914c71122a66e42.kv",
+        "calls": 13,
+        "returned_bytes": 20007,
+        "syscall_elapsed_seconds": 0.0021410000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424525244-424560912-3cc98b46cad66b87.kv",
+        "calls": 12,
+        "returned_bytes": 15884,
+        "syscall_elapsed_seconds": 0.002141
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430345055-430493307-ec34bbc757e942b8.kv",
+        "calls": 14,
+        "returned_bytes": 23664,
+        "syscall_elapsed_seconds": 0.0021400000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426441158-426598606-c791e06013496351.kv",
+        "calls": 15,
+        "returned_bytes": 28042,
+        "syscall_elapsed_seconds": 0.00214
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420385310-420492229-2cb0b87d7cfc8b3d.kv",
+        "calls": 14,
+        "returned_bytes": 23551,
+        "syscall_elapsed_seconds": 0.002136
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426312801-426441157-755a882c38ea8377.kv",
+        "calls": 14,
+        "returned_bytes": 24001,
+        "syscall_elapsed_seconds": 0.002132
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429901957-430011597-4f39f67d485b76c0.kv",
+        "calls": 14,
+        "returned_bytes": 24113,
+        "syscall_elapsed_seconds": 0.00213
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421007783-421097344-c9f694cd8f14a1f1.kv",
+        "calls": 14,
+        "returned_bytes": 23565,
+        "syscall_elapsed_seconds": 0.0021290000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426205237-426312800-b14c3352ebf1face.kv",
+        "calls": 14,
+        "returned_bytes": 24186,
+        "syscall_elapsed_seconds": 0.002128
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421862490-421949602-497ec04a668f1949.seg",
+        "calls": 5,
+        "returned_bytes": 7591,
+        "syscall_elapsed_seconds": 0.002127
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422801979-422843762-c1c852ddce0c6008.kv",
+        "calls": 13,
+        "returned_bytes": 19848,
+        "syscall_elapsed_seconds": 0.002125
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423961911-424010950-8d4d689c851eca32.kv",
+        "calls": 12,
+        "returned_bytes": 15643,
+        "syscall_elapsed_seconds": 0.002121
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432386378-432530813-1f5193a809cffe6f.seg",
+        "calls": 5,
+        "returned_bytes": 10727,
+        "syscall_elapsed_seconds": 0.002119
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425262406-425354046-a4d74f05fc144164.kv",
+        "calls": 13,
+        "returned_bytes": 19760,
+        "syscall_elapsed_seconds": 0.002118
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421097345-421191928-2733610498fec04f.kv",
+        "calls": 13,
+        "returned_bytes": 19491,
+        "syscall_elapsed_seconds": 0.002116
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431660017-431783443-a5577f230d986393.kv",
+        "calls": 13,
+        "returned_bytes": 19439,
+        "syscall_elapsed_seconds": 0.002115
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418325779-418503420-6c3f2a0991963a76.kv",
+        "calls": 14,
+        "returned_bytes": 23861,
+        "syscall_elapsed_seconds": 0.0021149999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418977162-419106272-79f304a740ddbfc3.kv",
+        "calls": 13,
+        "returned_bytes": 19923,
+        "syscall_elapsed_seconds": 0.002114
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431561277-431660016-16820f8375215aa5.kv",
+        "calls": 13,
+        "returned_bytes": 19933,
+        "syscall_elapsed_seconds": 0.002114
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427933205-428042335-610f524ea68be23b.kv",
+        "calls": 14,
+        "returned_bytes": 24039,
+        "syscall_elapsed_seconds": 0.002111
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420830000-420914287-11ff11b5b95b8595.kv",
+        "calls": 13,
+        "returned_bytes": 19681,
+        "syscall_elapsed_seconds": 0.0021069999999999995
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422041266-422155868-ac1c96bdbf77b684.kv",
+        "calls": 15,
+        "returned_bytes": 27793,
+        "syscall_elapsed_seconds": 0.0021069999999999995
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416714280-416902579-6bb6231c183ca7b2.kv",
+        "calls": 14,
+        "returned_bytes": 24235,
+        "syscall_elapsed_seconds": 0.002103
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424454999-424489175-22321570c164717d.kv",
+        "calls": 12,
+        "returned_bytes": 15656,
+        "syscall_elapsed_seconds": 0.002102
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426312801-426441157-755a882c38ea8377.seg",
+        "calls": 5,
+        "returned_bytes": 10531,
+        "syscall_elapsed_seconds": 0.002102
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424706108-424754732-4d0bac4d9b3f764c.kv",
+        "calls": 13,
+        "returned_bytes": 20005,
+        "syscall_elapsed_seconds": 0.002096
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417687666-417841858-74e460e6cddf46b1.kv",
+        "calls": 15,
+        "returned_bytes": 27999,
+        "syscall_elapsed_seconds": 0.0020940000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428814838-428914123-6d031fc8feaf5839.kv",
+        "calls": 13,
+        "returned_bytes": 19794,
+        "syscall_elapsed_seconds": 0.0020910000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424667223-424706107-d71fab633ede93d8.kv",
+        "calls": 12,
+        "returned_bytes": 15790,
+        "syscall_elapsed_seconds": 0.002089
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433440102-433553058-f807b8113e9baba2.kv",
+        "calls": 13,
+        "returned_bytes": 19882,
+        "syscall_elapsed_seconds": 0.0020859999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419953002-420067551-4259c1e70e306c5a.kv",
+        "calls": 13,
+        "returned_bytes": 19862,
+        "syscall_elapsed_seconds": 0.002085
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428723247-428814837-2567827b6ebeeb95.kv",
+        "calls": 13,
+        "returned_bytes": 21108,
+        "syscall_elapsed_seconds": 0.0020810000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428551303-428649499-6318df06d245a2b6.kv",
+        "calls": 13,
+        "returned_bytes": 20043,
+        "syscall_elapsed_seconds": 0.0020800000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429701643-429795054-97cdf8ec4f8d2839.kv",
+        "calls": 13,
+        "returned_bytes": 20138,
+        "syscall_elapsed_seconds": 0.0020800000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426119291-426205236-165dbba891aa2e15.kv",
+        "calls": 13,
+        "returned_bytes": 21413,
+        "syscall_elapsed_seconds": 0.002078
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430226478-430345054-ed0ba0092f5a41ac.kv",
+        "calls": 15,
+        "returned_bytes": 27790,
+        "syscall_elapsed_seconds": 0.002075
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422720787-422759809-284fad7026ff9ffb.seg",
+        "calls": 5,
+        "returned_bytes": 3810,
+        "syscall_elapsed_seconds": 0.0020719999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422720787-422759809-284fad7026ff9ffb.kv",
+        "calls": 12,
+        "returned_bytes": 15416,
+        "syscall_elapsed_seconds": 0.002069
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428349218-428551302-c4a8a8ec3390cc84.kv",
+        "calls": 15,
+        "returned_bytes": 28079,
+        "syscall_elapsed_seconds": 0.0020689999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415417317-415524266-ad650c9a12675aef.kv",
+        "calls": 13,
+        "returned_bytes": 19277,
+        "syscall_elapsed_seconds": 0.002066
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427504840-427639994-62fb7d1b0bc09bc4.kv",
+        "calls": 15,
+        "returned_bytes": 28240,
+        "syscall_elapsed_seconds": 0.002066
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421776848-421862489-55dfb139647c82f4.kv",
+        "calls": 13,
+        "returned_bytes": 19933,
+        "syscall_elapsed_seconds": 0.002065
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432530814-432711407-799757d8c556ea60.kv",
+        "calls": 16,
+        "returned_bytes": 32217,
+        "syscall_elapsed_seconds": 0.002062
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428178768-428349217-6ef28318aa0630d4.kv",
+        "calls": 16,
+        "returned_bytes": 32078,
+        "syscall_elapsed_seconds": 0.002058
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430011598-430125674-b94b701bbc4d4cc4.kv",
+        "calls": 13,
+        "returned_bytes": 19925,
+        "syscall_elapsed_seconds": 0.002056
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417340350-417442357-ab01f2c4672e094e.kv",
+        "calls": 14,
+        "returned_bytes": 23784,
+        "syscall_elapsed_seconds": 0.0020550000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429701643-429795054-97cdf8ec4f8d2839.seg",
+        "calls": 5,
+        "returned_bytes": 7310,
+        "syscall_elapsed_seconds": 0.0020529999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420492230-420626003-bbcd684bb2d3f240.kv",
+        "calls": 15,
+        "returned_bytes": 28309,
+        "syscall_elapsed_seconds": 0.002052
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420285278-420385309-dbf67d667f0405eb.kv",
+        "calls": 14,
+        "returned_bytes": 23458,
+        "syscall_elapsed_seconds": 0.002049
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422601263-422641408-c9c24eada575498b.kv",
+        "calls": 12,
+        "returned_bytes": 14696,
+        "syscall_elapsed_seconds": 0.0020489999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427280882-427388706-d3c50dc6ff835467.kv",
+        "calls": 13,
+        "returned_bytes": 19512,
+        "syscall_elapsed_seconds": 0.002045
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417551383-417687665-bf8e9e8f8cc7e816.seg",
+        "calls": 5,
+        "returned_bytes": 9999,
+        "syscall_elapsed_seconds": 0.002032
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424806962-424872252-0526424c14af5b34.kv",
+        "calls": 13,
+        "returned_bytes": 19603,
+        "syscall_elapsed_seconds": 0.00203
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425900566-426009475-d6ac88f2a03bda99.kv",
+        "calls": 13,
+        "returned_bytes": 21443,
+        "syscall_elapsed_seconds": 0.002027
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426774306-426812677-4fe563bd257fe885.kv",
+        "calls": 12,
+        "returned_bytes": 15738,
+        "syscall_elapsed_seconds": 0.0020269999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421949603-422041265-f5f8868d662be531.kv",
+        "calls": 13,
+        "returned_bytes": 20018,
+        "syscall_elapsed_seconds": 0.002026
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415885561-416057696-53c074dd1a99c045.kv",
+        "calls": 15,
+        "returned_bytes": 28129,
+        "syscall_elapsed_seconds": 0.0020239999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424489176-424525243-77d0dcb6778e0f6a.kv",
+        "calls": 12,
+        "returned_bytes": 15731,
+        "syscall_elapsed_seconds": 0.0020220000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419711971-419953001-444aeadeff059752.seg",
+        "calls": 5,
+        "returned_bytes": 20524,
+        "syscall_elapsed_seconds": 0.002022
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424945507-425030407-2471104951638149.kv",
+        "calls": 13,
+        "returned_bytes": 19774,
+        "syscall_elapsed_seconds": 0.00202
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422446422-422487208-14e30e44a7570e8c.kv",
+        "calls": 12,
+        "returned_bytes": 15283,
+        "syscall_elapsed_seconds": 0.0020109999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431783444-431898090-539399a9be6de454.kv",
+        "calls": 13,
+        "returned_bytes": 19799,
+        "syscall_elapsed_seconds": 0.002006
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433440102-433553058-f807b8113e9baba2.seg",
+        "calls": 5,
+        "returned_bytes": 8094,
+        "syscall_elapsed_seconds": 0.002005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421370569-421465957-48f522a9f2491fe7.seg",
+        "calls": 5,
+        "returned_bytes": 7675,
+        "syscall_elapsed_seconds": 0.001999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424872253-424945506-0fe1c55e1ce90c84.kv",
+        "calls": 13,
+        "returned_bytes": 19727,
+        "syscall_elapsed_seconds": 0.0019970000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422527612-422564907-70db99c3fa7d2766.kv",
+        "calls": 12,
+        "returned_bytes": 15677,
+        "syscall_elapsed_seconds": 0.001997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416057697-416152870-42ad825c0ddf4da9.kv",
+        "calls": 13,
+        "returned_bytes": 19906,
+        "syscall_elapsed_seconds": 0.0019920000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422299168-422351720-986a4dfd01e84480.kv",
+        "calls": 12,
+        "returned_bytes": 15877,
+        "syscall_elapsed_seconds": 0.0019909999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432004946-432138531-c8bc339995b9f7a1.kv",
+        "calls": 15,
+        "returned_bytes": 28299,
+        "syscall_elapsed_seconds": 0.00199
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422487209-422527611-7f7ac57019689ec1.kv",
+        "calls": 12,
+        "returned_bytes": 15742,
+        "syscall_elapsed_seconds": 0.0019890000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430226478-430345054-ed0ba0092f5a41ac.seg",
+        "calls": 5,
+        "returned_bytes": 9859,
+        "syscall_elapsed_seconds": 0.001989
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415637702-415747859-c914c71122a66e42.seg",
+        "calls": 5,
+        "returned_bytes": 9131,
+        "syscall_elapsed_seconds": 0.0019870000000000005
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424454999-424489175-22321570c164717d.seg",
+        "calls": 5,
+        "returned_bytes": 3195,
+        "syscall_elapsed_seconds": 0.001986
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430125675-430226477-fe9dcdb1ddeb5369.seg",
+        "calls": 5,
+        "returned_bytes": 8235,
+        "syscall_elapsed_seconds": 0.001984
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431123275-431274566-022cf0c4fda2d244.kv",
+        "calls": 15,
+        "returned_bytes": 28294,
+        "syscall_elapsed_seconds": 0.001981
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415417317-415524266-ad650c9a12675aef.seg",
+        "calls": 5,
+        "returned_bytes": 9299,
+        "syscall_elapsed_seconds": 0.00198
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427732020-427826834-4bb92cb1f0669d9b.kv",
+        "calls": 13,
+        "returned_bytes": 19739,
+        "syscall_elapsed_seconds": 0.001976
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432386378-432530813-1f5193a809cffe6f.kv",
+        "calls": 15,
+        "returned_bytes": 28136,
+        "syscall_elapsed_seconds": 0.00197
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421862490-421949602-497ec04a668f1949.kv",
+        "calls": 14,
+        "returned_bytes": 23231,
+        "syscall_elapsed_seconds": 0.001967
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431660017-431783443-a5577f230d986393.seg",
+        "calls": 5,
+        "returned_bytes": 9774,
+        "syscall_elapsed_seconds": 0.001965
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430997270-431123274-8268612989f8fde0.kv",
+        "calls": 14,
+        "returned_bytes": 24018,
+        "syscall_elapsed_seconds": 0.001964
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424754733-424806961-7afd4613a83db523.kv",
+        "calls": 13,
+        "returned_bytes": 19598,
+        "syscall_elapsed_seconds": 0.0019560000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427504840-427639994-62fb7d1b0bc09bc4.seg",
+        "calls": 5,
+        "returned_bytes": 11931,
+        "syscall_elapsed_seconds": 0.0019529999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428723247-428814837-2567827b6ebeeb95.seg",
+        "calls": 5,
+        "returned_bytes": 7787,
+        "syscall_elapsed_seconds": 0.001951
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417056323-417184085-dfd27ddc820efdc7.seg",
+        "calls": 5,
+        "returned_bytes": 10867,
+        "syscall_elapsed_seconds": 0.0019480000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423229828-423289422-68026babb7682439.kv",
+        "calls": 13,
+        "returned_bytes": 19182,
+        "syscall_elapsed_seconds": 0.001948
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422564908-422601262-04ac19626903b5d9.kv",
+        "calls": 12,
+        "returned_bytes": 15040,
+        "syscall_elapsed_seconds": 0.00194
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422399447-422446421-113fccbc44c2d295.kv",
+        "calls": 12,
+        "returned_bytes": 15553,
+        "syscall_elapsed_seconds": 0.001938
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418503421-418725514-7b1c860e9bae1680.seg",
+        "calls": 5,
+        "returned_bytes": 18875,
+        "syscall_elapsed_seconds": 0.001937
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428914124-429010559-77e2d3ca334222ca.seg",
+        "calls": 5,
+        "returned_bytes": 8207,
+        "syscall_elapsed_seconds": 0.0019339999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426009476-426119290-bf4c6311dff64310.kv",
+        "calls": 15,
+        "returned_bytes": 27712,
+        "syscall_elapsed_seconds": 0.0019280000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429104605-429198842-7dd42a0fc334f11d.seg",
+        "calls": 5,
+        "returned_bytes": 7423,
+        "syscall_elapsed_seconds": 0.001926
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427639995-427732019-6eb47a2badfdb507.seg",
+        "calls": 5,
+        "returned_bytes": 8123,
+        "syscall_elapsed_seconds": 0.0019210000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422843763-422882377-29068ff99b543eea.seg",
+        "calls": 5,
+        "returned_bytes": 3698,
+        "syscall_elapsed_seconds": 0.001918
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424560913-424598820-0bfb0e4e61b5fde8.kv",
+        "calls": 12,
+        "returned_bytes": 17700,
+        "syscall_elapsed_seconds": 0.0019160000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421277746-421370568-34f4782f8ae50956.seg",
+        "calls": 5,
+        "returned_bytes": 8179,
+        "syscall_elapsed_seconds": 0.001916
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420190019-420285277-d8c791a43b108626.kv",
+        "calls": 13,
+        "returned_bytes": 20038,
+        "syscall_elapsed_seconds": 0.001912
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422678465-422720786-299b81411aaad022.seg",
+        "calls": 5,
+        "returned_bytes": 3839,
+        "syscall_elapsed_seconds": 0.001909
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429420163-429523834-7739b25444e26219.seg",
+        "calls": 5,
+        "returned_bytes": 8375,
+        "syscall_elapsed_seconds": 0.0019080000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417687666-417841858-74e460e6cddf46b1.seg",
+        "calls": 5,
+        "returned_bytes": 11819,
+        "syscall_elapsed_seconds": 0.001907
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421776848-421862489-55dfb139647c82f4.seg",
+        "calls": 5,
+        "returned_bytes": 7591,
+        "syscall_elapsed_seconds": 0.001907
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432915878-433171465-347a28de7557e023.seg",
+        "calls": 5,
+        "returned_bytes": 19855,
+        "syscall_elapsed_seconds": 0.001906
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429901957-430011597-4f39f67d485b76c0.seg",
+        "calls": 5,
+        "returned_bytes": 8795,
+        "syscall_elapsed_seconds": 0.001902
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421097345-421191928-2733610498fec04f.seg",
+        "calls": 5,
+        "returned_bytes": 8179,
+        "syscall_elapsed_seconds": 0.0018979999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426995906-427077099-7194f08714e6cb03.kv",
+        "calls": 13,
+        "returned_bytes": 19801,
+        "syscall_elapsed_seconds": 0.0018940000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424062237-424107532-64359f8eaa389534.seg",
+        "calls": 5,
+        "returned_bytes": 3335,
+        "syscall_elapsed_seconds": 0.0018919999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428814838-428914123-6d031fc8feaf5839.seg",
+        "calls": 5,
+        "returned_bytes": 8402,
+        "syscall_elapsed_seconds": 0.001891
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417982516-418155175-00f32680d2e62068.seg",
+        "calls": 5,
+        "returned_bytes": 14507,
+        "syscall_elapsed_seconds": 0.0018900000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430997270-431123274-8268612989f8fde0.seg",
+        "calls": 5,
+        "returned_bytes": 10531,
+        "syscall_elapsed_seconds": 0.001886
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420739453-420829999-c92506b62fae9490.seg",
+        "calls": 5,
+        "returned_bytes": 7870,
+        "syscall_elapsed_seconds": 0.0018859999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420914288-421007782-5b2416d890b10329.seg",
+        "calls": 5,
+        "returned_bytes": 7927,
+        "syscall_elapsed_seconds": 0.001883
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422351721-422399446-3e940b035e9b67a6.kv",
+        "calls": 13,
+        "returned_bytes": 19389,
+        "syscall_elapsed_seconds": 0.0018820000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422759810-422801978-e67b9904a35f92ea.kv",
+        "calls": 13,
+        "returned_bytes": 19250,
+        "syscall_elapsed_seconds": 0.0018809999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427167645-427280881-7c2d62d73989ab9d.seg",
+        "calls": 5,
+        "returned_bytes": 9831,
+        "syscall_elapsed_seconds": 0.0018800000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433171466-433320847-f78b360034c33650.seg",
+        "calls": 5,
+        "returned_bytes": 11651,
+        "syscall_elapsed_seconds": 0.00188
+      },
+      {
+        "path": "history/056170.sst",
+        "calls": 6,
+        "returned_bytes": 7020,
+        "syscall_elapsed_seconds": 0.001874
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418977162-419106272-79f304a740ddbfc3.seg",
+        "calls": 5,
+        "returned_bytes": 10755,
+        "syscall_elapsed_seconds": 0.0018729999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420385310-420492229-2cb0b87d7cfc8b3d.seg",
+        "calls": 5,
+        "returned_bytes": 8935,
+        "syscall_elapsed_seconds": 0.0018729999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421949603-422041265-f5f8868d662be531.seg",
+        "calls": 5,
+        "returned_bytes": 7647,
+        "syscall_elapsed_seconds": 0.0018709999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424667223-424706107-d71fab633ede93d8.seg",
+        "calls": 5,
+        "returned_bytes": 3531,
+        "syscall_elapsed_seconds": 0.00187
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431274567-431461538-15af74590eebd539.seg",
+        "calls": 5,
+        "returned_bytes": 15011,
+        "syscall_elapsed_seconds": 0.00187
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432530814-432711407-799757d8c556ea60.seg",
+        "calls": 5,
+        "returned_bytes": 13443,
+        "syscall_elapsed_seconds": 0.0018699999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420626004-420739452-fca44a7250e694dd.seg",
+        "calls": 5,
+        "returned_bytes": 9299,
+        "syscall_elapsed_seconds": 0.001868
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433676044-433829626-37beb88fbc5dae85.seg",
+        "calls": 5,
+        "returned_bytes": 11035,
+        "syscall_elapsed_seconds": 0.001868
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419469513-419711970-e462b61a69155b91.seg",
+        "calls": 5,
+        "returned_bytes": 19211,
+        "syscall_elapsed_seconds": 0.0018630000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429010560-429104604-2422d58263f8736a.seg",
+        "calls": 5,
+        "returned_bytes": 7787,
+        "syscall_elapsed_seconds": 0.001861
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426441158-426598606-c791e06013496351.seg",
+        "calls": 5,
+        "returned_bytes": 12883,
+        "syscall_elapsed_seconds": 0.0018609999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416152871-416264809-ccac57fe9c30e0eb.seg",
+        "calls": 5,
+        "returned_bytes": 9359,
+        "syscall_elapsed_seconds": 0.0018599999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422564908-422601262-04ac19626903b5d9.seg",
+        "calls": 5,
+        "returned_bytes": 3363,
+        "syscall_elapsed_seconds": 0.001858
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422487209-422527611-7f7ac57019689ec1.seg",
+        "calls": 5,
+        "returned_bytes": 3587,
+        "syscall_elapsed_seconds": 0.0018579999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421565827-421671054-cf6ec991cdfa51a1.seg",
+        "calls": 5,
+        "returned_bytes": 9103,
+        "syscall_elapsed_seconds": 0.001857
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429198843-429316646-defa3fe21f87c242.seg",
+        "calls": 5,
+        "returned_bytes": 9719,
+        "syscall_elapsed_seconds": 0.001856
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415885561-416057696-53c074dd1a99c045.seg",
+        "calls": 5,
+        "returned_bytes": 11987,
+        "syscall_elapsed_seconds": 0.0018549999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418155176-418325778-4d602ee105d23c24.seg",
+        "calls": 5,
+        "returned_bytes": 14143,
+        "syscall_elapsed_seconds": 0.001853
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420067552-420190018-50c7b472730834ad.seg",
+        "calls": 5,
+        "returned_bytes": 11091,
+        "syscall_elapsed_seconds": 0.001853
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422601263-422641408-c9c24eada575498b.seg",
+        "calls": 5,
+        "returned_bytes": 3555,
+        "syscall_elapsed_seconds": 0.00185
+      },
+      {
+        "path": "history/058042.sst",
+        "calls": 6,
+        "returned_bytes": 9041,
+        "syscall_elapsed_seconds": 0.001846
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417442358-417551382-0de085aeb4c56df5.seg",
+        "calls": 5,
+        "returned_bytes": 8935,
+        "syscall_elapsed_seconds": 0.0018399999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417184086-417340349-7b72926f5661cbb9.seg",
+        "calls": 5,
+        "returned_bytes": 12715,
+        "syscall_elapsed_seconds": 0.001837
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416386311-416532042-61171ad1c3c7adc7.seg",
+        "calls": 5,
+        "returned_bytes": 11735,
+        "syscall_elapsed_seconds": 0.0018349999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422155869-422299167-a99ffa89447e3112.seg",
+        "calls": 5,
+        "returned_bytes": 11063,
+        "syscall_elapsed_seconds": 0.0018340000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424636129-424667222-0f96eae5f7d65261.seg",
+        "calls": 5,
+        "returned_bytes": 2802,
+        "syscall_elapsed_seconds": 0.0018329999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428178768-428349217-6ef28318aa0630d4.seg",
+        "calls": 5,
+        "returned_bytes": 14171,
+        "syscall_elapsed_seconds": 0.0018329999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424598821-424636128-2196453b17003e5c.kv",
+        "calls": 12,
+        "returned_bytes": 15911,
+        "syscall_elapsed_seconds": 0.0018319999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425444742-425532884-a1f73f4a643e1c3b.kv",
+        "calls": 13,
+        "returned_bytes": 19916,
+        "syscall_elapsed_seconds": 0.0018300000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426598607-426646685-5d60cd17992971eb.kv",
+        "calls": 13,
+        "returned_bytes": 19941,
+        "syscall_elapsed_seconds": 0.001827
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426741531-426774305-5c376f79466bbbd7.kv",
+        "calls": 13,
+        "returned_bytes": 19913,
+        "syscall_elapsed_seconds": 0.0018260000000000004
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424356173-424390027-75fdfc4614ce0fc3.kv",
+        "calls": 12,
+        "returned_bytes": 17077,
+        "syscall_elapsed_seconds": 0.001826
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422641409-422678464-17532a9af5a4b269.kv",
+        "calls": 12,
+        "returned_bytes": 16118,
+        "syscall_elapsed_seconds": 0.001825
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422759810-422801978-e67b9904a35f92ea.seg",
+        "calls": 5,
+        "returned_bytes": 3727,
+        "syscall_elapsed_seconds": 0.0018249999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426680720-426741530-b6e76c1b87883018.kv",
+        "calls": 13,
+        "returned_bytes": 19896,
+        "syscall_elapsed_seconds": 0.001823
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426598607-426646685-5d60cd17992971eb.seg",
+        "calls": 5,
+        "returned_bytes": 4343,
+        "syscall_elapsed_seconds": 0.001822
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427826835-427933204-27e348ca077fcb46.seg",
+        "calls": 5,
+        "returned_bytes": 8879,
+        "syscall_elapsed_seconds": 0.00182
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428042336-428178767-804d4d99cfb201b5.seg",
+        "calls": 5,
+        "returned_bytes": 11487,
+        "syscall_elapsed_seconds": 0.00182
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422351721-422399446-3e940b035e9b67a6.seg",
+        "calls": 5,
+        "returned_bytes": 4315,
+        "syscall_elapsed_seconds": 0.001818
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427077100-427167644-ff8800cd9e4649c8.seg",
+        "calls": 5,
+        "returned_bytes": 7843,
+        "syscall_elapsed_seconds": 0.001817
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424806962-424872252-0526424c14af5b34.seg",
+        "calls": 5,
+        "returned_bytes": 5799,
+        "syscall_elapsed_seconds": 0.001815
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417340350-417442357-ab01f2c4672e094e.seg",
+        "calls": 5,
+        "returned_bytes": 8571,
+        "syscall_elapsed_seconds": 0.0018139999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422801979-422843762-c1c852ddce0c6008.seg",
+        "calls": 5,
+        "returned_bytes": 3783,
+        "syscall_elapsed_seconds": 0.0018139999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422041266-422155868-ac1c96bdbf77b684.seg",
+        "calls": 5,
+        "returned_bytes": 9411,
+        "syscall_elapsed_seconds": 0.001813
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430678646-430892075-79a416e6493a0c05.seg",
+        "calls": 5,
+        "returned_bytes": 17895,
+        "syscall_elapsed_seconds": 0.00181
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429316647-429420162-20573530b399bfc4.seg",
+        "calls": 5,
+        "returned_bytes": 8823,
+        "syscall_elapsed_seconds": 0.0018079999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431461539-431561276-6a8517033828b402.seg",
+        "calls": 5,
+        "returned_bytes": 8179,
+        "syscall_elapsed_seconds": 0.001807
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-433553059-433676043-3a1334c9695e666f.seg",
+        "calls": 5,
+        "returned_bytes": 9243,
+        "syscall_elapsed_seconds": 0.0018050000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422641409-422678464-17532a9af5a4b269.seg",
+        "calls": 5,
+        "returned_bytes": 3335,
+        "syscall_elapsed_seconds": 0.001802
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422446422-422487208-14e30e44a7570e8c.seg",
+        "calls": 5,
+        "returned_bytes": 3782,
+        "syscall_elapsed_seconds": 0.0018019999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421465958-421565826-251a739da248c31e.seg",
+        "calls": 5,
+        "returned_bytes": 8179,
+        "syscall_elapsed_seconds": 0.001801
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419106273-419267706-a3828e8a74465dce.seg",
+        "calls": 5,
+        "returned_bytes": 12939,
+        "syscall_elapsed_seconds": 0.0018
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422299168-422351720-986a4dfd01e84480.seg",
+        "calls": 5,
+        "returned_bytes": 4483,
+        "syscall_elapsed_seconds": 0.0017989999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429610404-429701642-c505e906636cb16d.seg",
+        "calls": 5,
+        "returned_bytes": 7731,
+        "syscall_elapsed_seconds": 0.001797
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424263419-424290042-bf959193f6191665.seg",
+        "calls": 5,
+        "returned_bytes": 2607,
+        "syscall_elapsed_seconds": 0.0017960000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429523835-429610403-f72cb613dbc8853b.seg",
+        "calls": 5,
+        "returned_bytes": 7227,
+        "syscall_elapsed_seconds": 0.001796
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432711408-432915877-9fbadb44c7c33b9e.seg",
+        "calls": 5,
+        "returned_bytes": 16439,
+        "syscall_elapsed_seconds": 0.0017959999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422399447-422446421-113fccbc44c2d295.seg",
+        "calls": 5,
+        "returned_bytes": 4203,
+        "syscall_elapsed_seconds": 0.001793
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420830000-420914287-11ff11b5b95b8595.seg",
+        "calls": 5,
+        "returned_bytes": 7703,
+        "syscall_elapsed_seconds": 0.0017929999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422527612-422564907-70db99c3fa7d2766.seg",
+        "calls": 5,
+        "returned_bytes": 3278,
+        "syscall_elapsed_seconds": 0.001792
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430493308-430678645-b25bf767f57d4a4c.seg",
+        "calls": 5,
+        "returned_bytes": 15011,
+        "syscall_elapsed_seconds": 0.001791
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419267707-419469512-3cdec39ecab02db1.seg",
+        "calls": 5,
+        "returned_bytes": 16274,
+        "syscall_elapsed_seconds": 0.001789
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423961911-424010950-8d4d689c851eca32.seg",
+        "calls": 5,
+        "returned_bytes": 3614,
+        "syscall_elapsed_seconds": 0.001789
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427388707-427504839-94e6c77165c098fb.seg",
+        "calls": 5,
+        "returned_bytes": 10195,
+        "syscall_elapsed_seconds": 0.001789
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421007783-421097344-c9f694cd8f14a1f1.seg",
+        "calls": 5,
+        "returned_bytes": 8123,
+        "syscall_elapsed_seconds": 0.0017889999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-421671055-421776847-623db3ffecd67b41.seg",
+        "calls": 5,
+        "returned_bytes": 8739,
+        "syscall_elapsed_seconds": 0.001787
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431123275-431274566-022cf0c4fda2d244.seg",
+        "calls": 5,
+        "returned_bytes": 12659,
+        "syscall_elapsed_seconds": 0.001784
+      },
+      {
+        "path": "ancient/v2/bodies/00000000000008978432-00000000000009043968.gtv2",
+        "calls": 1,
+        "returned_bytes": 570378,
+        "syscall_elapsed_seconds": 0.001783
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-429795055-429901956-b580374dc270d311.seg",
+        "calls": 5,
+        "returned_bytes": 8711,
+        "syscall_elapsed_seconds": 0.001783
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431783444-431898090-539399a9be6de454.seg",
+        "calls": 5,
+        "returned_bytes": 8487,
+        "syscall_elapsed_seconds": 0.001783
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425789131-425900565-d3634744e18e6e75.kv",
+        "calls": 15,
+        "returned_bytes": 27978,
+        "syscall_elapsed_seconds": 0.0017829999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-419953002-420067551-4259c1e70e306c5a.seg",
+        "calls": 5,
+        "returned_bytes": 9915,
+        "syscall_elapsed_seconds": 0.001782
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424560913-424598820-0bfb0e4e61b5fde8.seg",
+        "calls": 5,
+        "returned_bytes": 3306,
+        "syscall_elapsed_seconds": 0.0017819999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425614034-425699845-af34b8d0dbb7ab3c.kv",
+        "calls": 14,
+        "returned_bytes": 24139,
+        "syscall_elapsed_seconds": 0.001781
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431561277-431660016-16820f8375215aa5.seg",
+        "calls": 5,
+        "returned_bytes": 7591,
+        "syscall_elapsed_seconds": 0.001778
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420492230-420626003-bbcd684bb2d3f240.seg",
+        "calls": 5,
+        "returned_bytes": 10979,
+        "syscall_elapsed_seconds": 0.001776
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-417841859-417982515-5450fea50c0e2411.seg",
+        "calls": 5,
+        "returned_bytes": 11515,
+        "syscall_elapsed_seconds": 0.0017749999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424754733-424806961-7afd4613a83db523.seg",
+        "calls": 5,
+        "returned_bytes": 4847,
+        "syscall_elapsed_seconds": 0.0017749999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427933205-428042335-610f524ea68be23b.seg",
+        "calls": 5,
+        "returned_bytes": 8571,
+        "syscall_elapsed_seconds": 0.001774
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415747860-415885560-a4fec3761cf236a7.seg",
+        "calls": 5,
+        "returned_bytes": 10895,
+        "syscall_elapsed_seconds": 0.001766
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416057697-416152870-42ad825c0ddf4da9.seg",
+        "calls": 5,
+        "returned_bytes": 8039,
+        "syscall_elapsed_seconds": 0.001766
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428649500-428723246-5430aef9929500c1.seg",
+        "calls": 5,
+        "returned_bytes": 6359,
+        "syscall_elapsed_seconds": 0.0017649999999999996
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426119291-426205236-165dbba891aa2e15.seg",
+        "calls": 5,
+        "returned_bytes": 7535,
+        "syscall_elapsed_seconds": 0.0017599999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-418325779-418503420-6c3f2a0991963a76.seg",
+        "calls": 5,
+        "returned_bytes": 14983,
+        "syscall_elapsed_seconds": 0.001759
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424010951-424062236-ba6d78bb15451b73.seg",
+        "calls": 5,
+        "returned_bytes": 3615,
+        "syscall_elapsed_seconds": 0.001752
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432270869-432386377-e0433b98cf373467.seg",
+        "calls": 5,
+        "returned_bytes": 8963,
+        "syscall_elapsed_seconds": 0.0017519999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425614034-425699845-af34b8d0dbb7ab3c.seg",
+        "calls": 5,
+        "returned_bytes": 7647,
+        "syscall_elapsed_seconds": 0.0017490000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-420285278-420385309-dbf67d667f0405eb.seg",
+        "calls": 5,
+        "returned_bytes": 8571,
+        "syscall_elapsed_seconds": 0.001743
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424107533-424139563-73bae7ac5dcc129f.seg",
+        "calls": 5,
+        "returned_bytes": 2970,
+        "syscall_elapsed_seconds": 0.001743
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-415524267-415637701-1f926375d5eb2947.seg",
+        "calls": 5,
+        "returned_bytes": 9943,
+        "syscall_elapsed_seconds": 0.0017419999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428551303-428649499-6318df06d245a2b6.seg",
+        "calls": 5,
+        "returned_bytes": 6975,
+        "syscall_elapsed_seconds": 0.0017400000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424706108-424754732-4d0bac4d9b3f764c.seg",
+        "calls": 5,
+        "returned_bytes": 4343,
+        "syscall_elapsed_seconds": 0.0017370000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425262406-425354046-a4d74f05fc144164.seg",
+        "calls": 5,
+        "returned_bytes": 8655,
+        "syscall_elapsed_seconds": 0.001732
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-427732020-427826834-4bb92cb1f0669d9b.seg",
+        "calls": 5,
+        "returned_bytes": 7983,
+        "syscall_elapsed_seconds": 0.00173
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424525244-424560912-3cc98b46cad66b87.seg",
+        "calls": 5,
+        "returned_bytes": 3111,
+        "syscall_elapsed_seconds": 0.0017289999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426205237-426312800-b14c3352ebf1face.seg",
+        "calls": 5,
+        "returned_bytes": 8599,
+        "syscall_elapsed_seconds": 0.001726
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416532043-416714279-534ce7b0930513a6.seg",
+        "calls": 5,
+        "returned_bytes": 15319,
+        "syscall_elapsed_seconds": 0.001717
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432004946-432138531-c8bc339995b9f7a1.seg",
+        "calls": 5,
+        "returned_bytes": 9355,
+        "syscall_elapsed_seconds": 0.001709
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416264810-416386310-13fa4bc362f82c03.seg",
+        "calls": 5,
+        "returned_bytes": 9664,
+        "syscall_elapsed_seconds": 0.001707
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-431898091-432004945-d6c7a0ae54419082.seg",
+        "calls": 5,
+        "returned_bytes": 8515,
+        "syscall_elapsed_seconds": 0.001701
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430345055-430493307-ec34bbc757e942b8.seg",
+        "calls": 5,
+        "returned_bytes": 12351,
+        "syscall_elapsed_seconds": 0.0016999999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-416714280-416902579-6bb6231c183ca7b2.seg",
+        "calls": 5,
+        "returned_bytes": 15571,
+        "syscall_elapsed_seconds": 0.0016989999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430011598-430125674-b94b701bbc4d4cc4.seg",
+        "calls": 5,
+        "returned_bytes": 8683,
+        "syscall_elapsed_seconds": 0.0016959999999999998
+      },
+      {
+        "path": "chaindata/093426.sst",
+        "calls": 6,
+        "returned_bytes": 7780,
+        "syscall_elapsed_seconds": 0.001693
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424422276-424454998-499f6d95275e2f38.kv",
+        "calls": 12,
+        "returned_bytes": 15855,
+        "syscall_elapsed_seconds": 0.001668
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-428349218-428551302-c4a8a8ec3390cc84.seg",
+        "calls": 5,
+        "returned_bytes": 16439,
+        "syscall_elapsed_seconds": 0.001667
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425354047-425444741-42123871c0ef3058.kv",
+        "calls": 13,
+        "returned_bytes": 18897,
+        "syscall_elapsed_seconds": 0.001666
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423875312-423917729-550f9eb44571cf14.kv",
+        "calls": 12,
+        "returned_bytes": 15679,
+        "syscall_elapsed_seconds": 0.0016650000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-432138532-432270868-0398541da333b393.seg",
+        "calls": 5,
+        "returned_bytes": 9915,
+        "syscall_elapsed_seconds": 0.0016640000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424945507-425030407-2471104951638149.seg",
+        "calls": 5,
+        "returned_bytes": 7787,
+        "syscall_elapsed_seconds": 0.0016639999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-430892076-430997269-085da854462e990c.seg",
+        "calls": 5,
+        "returned_bytes": 8991,
+        "syscall_elapsed_seconds": 0.0016389999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423352664-423442540-aaeceb8c47d3c0a9.kv",
+        "calls": 15,
+        "returned_bytes": 28084,
+        "syscall_elapsed_seconds": 0.001612
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423131938-423165856-51a16de82b4054ea.kv",
+        "calls": 12,
+        "returned_bytes": 15257,
+        "syscall_elapsed_seconds": 0.0016090000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426995906-427077099-7194f08714e6cb03.seg",
+        "calls": 5,
+        "returned_bytes": 6107,
+        "syscall_elapsed_seconds": 0.0016009999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423765419-423800639-34bb789a1a6f73b3.kv",
+        "calls": 12,
+        "returned_bytes": 15760,
+        "syscall_elapsed_seconds": 0.001599
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426009476-426119290-bf4c6311dff64310.seg",
+        "calls": 5,
+        "returned_bytes": 9075,
+        "syscall_elapsed_seconds": 0.0015970000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424212726-424263418-1ba8d3e15229e91c.seg",
+        "calls": 5,
+        "returned_bytes": 3335,
+        "syscall_elapsed_seconds": 0.001594
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425532885-425614033-e308016b37f21a3f.kv",
+        "calls": 13,
+        "returned_bytes": 19826,
+        "syscall_elapsed_seconds": 0.001586
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424390028-424422275-9f692f2e1600a326.kv",
+        "calls": 12,
+        "returned_bytes": 16018,
+        "syscall_elapsed_seconds": 0.001555
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423196993-423229827-768f8fb2510dc7e8.kv",
+        "calls": 12,
+        "returned_bytes": 15355,
+        "syscall_elapsed_seconds": 0.001547
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426741531-426774305-5c376f79466bbbd7.seg",
+        "calls": 5,
+        "returned_bytes": 2999,
+        "syscall_elapsed_seconds": 0.001546
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425444742-425532884-a1f73f4a643e1c3b.seg",
+        "calls": 5,
+        "returned_bytes": 8291,
+        "syscall_elapsed_seconds": 0.001531
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426860687-426920782-b3bc76dbba0e4abd.kv",
+        "calls": 13,
+        "returned_bytes": 19983,
+        "syscall_elapsed_seconds": 0.0015300000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424489176-424525243-77d0dcb6778e0f6a.seg",
+        "calls": 5,
+        "returned_bytes": 3082,
+        "syscall_elapsed_seconds": 0.0015249999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423038985-423070038-50ed9beb832b4ebd.kv",
+        "calls": 12,
+        "returned_bytes": 15886,
+        "syscall_elapsed_seconds": 0.0015230000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426920783-426995905-c022d5d3e4881e0d.kv",
+        "calls": 13,
+        "returned_bytes": 19867,
+        "syscall_elapsed_seconds": 0.0015089999999999997
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423487890-423529511-7648519c7764d1d5.kv",
+        "calls": 12,
+        "returned_bytes": 15683,
+        "syscall_elapsed_seconds": 0.0014950000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425900566-426009475-d6ac88f2a03bda99.seg",
+        "calls": 5,
+        "returned_bytes": 9439,
+        "syscall_elapsed_seconds": 0.0014709999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426680720-426741530-b6e76c1b87883018.seg",
+        "calls": 5,
+        "returned_bytes": 4623,
+        "syscall_elapsed_seconds": 0.0014399999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423917730-423961910-3622e32a66b6eee7.seg",
+        "calls": 5,
+        "returned_bytes": 3531,
+        "syscall_elapsed_seconds": 0.001429
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425699846-425789130-cd72033ba7bc7859.kv",
+        "calls": 13,
+        "returned_bytes": 20150,
+        "syscall_elapsed_seconds": 0.0014279999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423666512-423732471-9a1cba460da9f068.kv",
+        "calls": 12,
+        "returned_bytes": 15692,
+        "syscall_elapsed_seconds": 0.0014210000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424062237-424107532-64359f8eaa389534.kv",
+        "calls": 12,
+        "returned_bytes": 15718,
+        "syscall_elapsed_seconds": 0.0014060000000000003
+      },
+      {
+        "path": "state-snapshots/history/system-routing-1-568104018-1305c1698e194491fa089fabacd3e80ec5a6cbf5c9c4e8a3043d33dff0e9ea59.route",
+        "calls": 2,
+        "returned_bytes": 316978,
+        "syscall_elapsed_seconds": 0.0014
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424356173-424390027-75fdfc4614ce0fc3.seg",
+        "calls": 5,
+        "returned_bytes": 3166,
+        "syscall_elapsed_seconds": 0.001376
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424010951-424062236-ba6d78bb15451b73.kv",
+        "calls": 12,
+        "returned_bytes": 15835,
+        "syscall_elapsed_seconds": 0.001375
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423289423-423352663-c55442871fe55e3b.kv",
+        "calls": 13,
+        "returned_bytes": 19768,
+        "syscall_elapsed_seconds": 0.001356
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426646686-426680719-b540e261d3ea8bfc.seg",
+        "calls": 5,
+        "returned_bytes": 2886,
+        "syscall_elapsed_seconds": 0.001344
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423099949-423131937-5d225bd664732f20.kv",
+        "calls": 12,
+        "returned_bytes": 15212,
+        "syscall_elapsed_seconds": 0.0013400000000000003
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423833802-423875311-c323dac850a38bd1.kv",
+        "calls": 12,
+        "returned_bytes": 16202,
+        "syscall_elapsed_seconds": 0.001315
+      },
+      {
+        "path": "history/058056.sst",
+        "calls": 5,
+        "returned_bytes": 37056,
+        "syscall_elapsed_seconds": 0.001313
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426812678-426860686-74fbffdd879e0f69.kv",
+        "calls": 13,
+        "returned_bytes": 20010,
+        "syscall_elapsed_seconds": 0.001308
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426920783-426995905-c022d5d3e4881e0d.seg",
+        "calls": 5,
+        "returned_bytes": 5631,
+        "syscall_elapsed_seconds": 0.001297
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423800640-423833801-f9a17e09ef9e1b4d.seg",
+        "calls": 5,
+        "returned_bytes": 2775,
+        "syscall_elapsed_seconds": 0.0012900000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424212726-424263418-1ba8d3e15229e91c.kv",
+        "calls": 12,
+        "returned_bytes": 16763,
+        "syscall_elapsed_seconds": 0.0012829999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424263419-424290042-bf959193f6191665.kv",
+        "calls": 12,
+        "returned_bytes": 15753,
+        "syscall_elapsed_seconds": 0.0012790000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425699846-425789130-cd72033ba7bc7859.seg",
+        "calls": 5,
+        "returned_bytes": 7170,
+        "syscall_elapsed_seconds": 0.0012599999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423633993-423666511-554b4d050f69449b.seg",
+        "calls": 5,
+        "returned_bytes": 3026,
+        "syscall_elapsed_seconds": 0.001245
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423529512-423574346-f7093656b6a1825d.kv",
+        "calls": 13,
+        "returned_bytes": 19450,
+        "syscall_elapsed_seconds": 0.001234
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-425789131-425900565-d3634744e18e6e75.seg",
+        "calls": 5,
+        "returned_bytes": 9075,
+        "syscall_elapsed_seconds": 0.0012330000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423442541-423487889-3b8aa1440e4129ae.kv",
+        "calls": 12,
+        "returned_bytes": 15976,
+        "syscall_elapsed_seconds": 0.001228
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424290043-424322200-28c8dbd5833cd5ca.seg",
+        "calls": 5,
+        "returned_bytes": 3082,
+        "syscall_elapsed_seconds": 0.0012119999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423196993-423229827-768f8fb2510dc7e8.seg",
+        "calls": 5,
+        "returned_bytes": 3138,
+        "syscall_elapsed_seconds": 0.001211
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423875312-423917729-550f9eb44571cf14.seg",
+        "calls": 5,
+        "returned_bytes": 3587,
+        "syscall_elapsed_seconds": 0.001205
+      },
+      {
+        "path": "chaindata/093437.sst",
+        "calls": 2,
+        "returned_bytes": 5843,
+        "syscall_elapsed_seconds": 0.001193
+      },
+      {
+        "path": "chaindata/093403.sst",
+        "calls": 3,
+        "returned_bytes": 5514,
+        "syscall_elapsed_seconds": 0.001173
+      },
+      {
+        "path": "chaindata/092957.sst",
+        "calls": 2,
+        "returned_bytes": 5343,
+        "syscall_elapsed_seconds": 0.001157
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424598821-424636128-2196453b17003e5c.seg",
+        "calls": 5,
+        "returned_bytes": 3391,
+        "syscall_elapsed_seconds": 0.001149
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423099949-423131937-5d225bd664732f20.seg",
+        "calls": 5,
+        "returned_bytes": 3083,
+        "syscall_elapsed_seconds": 0.0011430000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424172214-424212725-9c1e70a41f89ce8b.kv",
+        "calls": 12,
+        "returned_bytes": 15137,
+        "syscall_elapsed_seconds": 0.001124
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423131938-423165856-51a16de82b4054ea.seg",
+        "calls": 5,
+        "returned_bytes": 3278,
+        "syscall_elapsed_seconds": 0.001107
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424390028-424422275-9f692f2e1600a326.seg",
+        "calls": 5,
+        "returned_bytes": 2887,
+        "syscall_elapsed_seconds": 0.001093
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423038985-423070038-50ed9beb832b4ebd.seg",
+        "calls": 5,
+        "returned_bytes": 3110,
+        "syscall_elapsed_seconds": 0.0010880000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422979782-423009088-ec855e0adedecf97.kv",
+        "calls": 12,
+        "returned_bytes": 15934,
+        "syscall_elapsed_seconds": 0.0010869999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426860687-426920782-b3bc76dbba0e4abd.seg",
+        "calls": 5,
+        "returned_bytes": 5155,
+        "syscall_elapsed_seconds": 0.001079
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423352664-423442540-aaeceb8c47d3c0a9.seg",
+        "calls": 5,
+        "returned_bytes": 3839,
+        "syscall_elapsed_seconds": 0.0010719999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423605295-423633992-b7e677fb100736ea.seg",
+        "calls": 5,
+        "returned_bytes": 2691,
+        "syscall_elapsed_seconds": 0.001063
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422882378-422915536-343fae6cdd144dd0.seg",
+        "calls": 5,
+        "returned_bytes": 3223,
+        "syscall_elapsed_seconds": 0.00106
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-426812678-426860686-74fbffdd879e0f69.seg",
+        "calls": 5,
+        "returned_bytes": 4146,
+        "syscall_elapsed_seconds": 0.00103
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422915537-422948836-0274c625b4627da3.seg",
+        "calls": 5,
+        "returned_bytes": 3138,
+        "syscall_elapsed_seconds": 0.001023
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423229828-423289422-68026babb7682439.seg",
+        "calls": 5,
+        "returned_bytes": 5127,
+        "syscall_elapsed_seconds": 0.00101
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423529512-423574346-f7093656b6a1825d.seg",
+        "calls": 5,
+        "returned_bytes": 4119,
+        "syscall_elapsed_seconds": 0.001008
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423732472-423765418-1b1931b0e034447b.kv",
+        "calls": 12,
+        "returned_bytes": 15945,
+        "syscall_elapsed_seconds": 0.0009980000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423574347-423605294-060faf2bf358b668.seg",
+        "calls": 5,
+        "returned_bytes": 2970,
+        "syscall_elapsed_seconds": 0.000995
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423289423-423352663-c55442871fe55e3b.seg",
+        "calls": 5,
+        "returned_bytes": 4287,
+        "syscall_elapsed_seconds": 0.000991
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423442541-423487889-3b8aa1440e4129ae.seg",
+        "calls": 5,
+        "returned_bytes": 3278,
+        "syscall_elapsed_seconds": 0.000989
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424172214-424212725-9c1e70a41f89ce8b.seg",
+        "calls": 5,
+        "returned_bytes": 2858,
+        "syscall_elapsed_seconds": 0.000976
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423666512-423732471-9a1cba460da9f068.seg",
+        "calls": 5,
+        "returned_bytes": 5099,
+        "syscall_elapsed_seconds": 0.0009630000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423765419-423800639-34bb789a1a6f73b3.seg",
+        "calls": 5,
+        "returned_bytes": 2774,
+        "syscall_elapsed_seconds": 0.000963
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-422979782-423009088-ec855e0adedecf97.seg",
+        "calls": 5,
+        "returned_bytes": 2914,
+        "syscall_elapsed_seconds": 0.0009479999999999998
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423070039-423099948-5b691429d04bc6cb.seg",
+        "calls": 5,
+        "returned_bytes": 2942,
+        "syscall_elapsed_seconds": 0.0009409999999999999
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423165857-423196992-2a81b8019e607843.kv",
+        "calls": 12,
+        "returned_bytes": 15276,
+        "syscall_elapsed_seconds": 0.000937
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423165857-423196992-2a81b8019e607843.seg",
+        "calls": 5,
+        "returned_bytes": 3027,
+        "syscall_elapsed_seconds": 0.000929
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423800640-423833801-f9a17e09ef9e1b4d.kv",
+        "calls": 11,
+        "returned_bytes": 11803,
+        "syscall_elapsed_seconds": 0.0009130000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423574347-423605294-060faf2bf358b668.kv",
+        "calls": 12,
+        "returned_bytes": 15110,
+        "syscall_elapsed_seconds": 0.0008860000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-424422276-424454998-499f6d95275e2f38.seg",
+        "calls": 5,
+        "returned_bytes": 2914,
+        "syscall_elapsed_seconds": 0.000871
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423070039-423099948-5b691429d04bc6cb.kv",
+        "calls": 11,
+        "returned_bytes": 11783,
+        "syscall_elapsed_seconds": 0.0008570000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423633993-423666511-554b4d050f69449b.kv",
+        "calls": 12,
+        "returned_bytes": 15249,
+        "syscall_elapsed_seconds": 0.000844
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423732472-423765418-1b1931b0e034447b.seg",
+        "calls": 5,
+        "returned_bytes": 2859,
+        "syscall_elapsed_seconds": 0.000844
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423009089-423038984-2a53b0cec65cc8d2.kv",
+        "calls": 11,
+        "returned_bytes": 11801,
+        "syscall_elapsed_seconds": 0.0007880000000000001
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423605295-423633992-b7e677fb100736ea.kv",
+        "calls": 12,
+        "returned_bytes": 15699,
+        "syscall_elapsed_seconds": 0.0007870000000000002
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423009089-423038984-2a53b0cec65cc8d2.seg",
+        "calls": 5,
+        "returned_bytes": 2971,
+        "syscall_elapsed_seconds": 0.000768
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423487890-423529511-7648519c7764d1d5.seg",
+        "calls": 5,
+        "returned_bytes": 3671,
+        "syscall_elapsed_seconds": 0.000705
+      },
+      {
+        "path": "state-snapshots/history/state-domain-change-423833802-423875311-c323dac850a38bd1.seg",
+        "calls": 5,
+        "returned_bytes": 3362,
+        "syscall_elapsed_seconds": 0.000644
+      },
+      {
+        "path": "ancient/v2/state_roots/00000000000008978432-00000000000009043968.gtv2",
+        "calls": 1,
+        "returned_bytes": 2126,
+        "syscall_elapsed_seconds": 0.000636
+      }
+    ]
+  },
+  "attributed_calls": 5647,
+  "unparsed_window_lines": 100
+}

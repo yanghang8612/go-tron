@@ -1,0 +1,9 @@
+{
+  "source_commit": "2e403c3d937922fdbe63b60dffbdbe8a68ae3eb3",
+  "production_sources": 1069,
+  "responses": 154,
+  "summary_groups": 42,
+  "residency_proofs": 28,
+  "max_resident_fraction": 1.5774575013230925e-06,
+  "all_verified": true
+}

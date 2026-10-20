@@ -1,0 +1,20 @@
+[
+  {
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 13762.257106602192,
+    "diagnostic_excluded_from_performance": true
+  },
+  {
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 770.0994163751602,
+    "diagnostic_excluded_from_performance": true
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "complete": true,
+  "utc": "2026-10-20T17:44:36.582884+00:00",
+  "stopped_only_waiters": [
+    "gtron-cold-account2-verify-20261020.service",
+    "gtron-cold-account2-diagnostic-20261020.service"
+  ],
+  "reason": "add bounded auxiliary-generation retirement, then audit the final exact binary on an isolated copy; comparison remains unchanged",
+  "production_mutations": false
+}

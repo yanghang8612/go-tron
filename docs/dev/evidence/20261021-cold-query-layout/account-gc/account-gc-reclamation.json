@@ -1,0 +1,177 @@
+{
+  "canonical_paths_unchanged": 23691,
+  "complete": true,
+  "copy_originals_preserved": true,
+  "exclusive_allocated_bytes_before_unlink": 3914711040,
+  "exclusive_link_count": 1,
+  "files_deleted": 144,
+  "logical_bytes_deleted": 3914238960,
+  "manifest_bytes_unchanged": true,
+  "manifest_sha256": "sha256:6049a24546d4caa4f14c4f0d5cbb3d359de0ddcceac4b571ba0c7c48758f8541",
+  "passes": [
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 272731393,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 488518804,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 344808165,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 292769038,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 461577594,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 417725639,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 376102362,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 708216944,
+      "Deferred": false
+    },
+    {
+      "Next": {
+        "Key": {
+          "Dataset": "state-domain-change",
+          "Domain": 0,
+          "Kind": "system-history-routing",
+          "From": 1,
+          "To": 567993007,
+          "Path": "history/system-routing-1-567993007-d9c14df192585149d350737aac9bda064696da5ad3c3ef8287b6a43b8f917946.route"
+        },
+        "Offset": 1,
+        "Valid": true
+      },
+      "Scanned": 144,
+      "FilesDeleted": 16,
+      "BytesDeleted": 551789021,
+      "Deferred": false
+    }
+  ],
+  "production_mutations": false,
+  "seconds": 0.223332657
+}

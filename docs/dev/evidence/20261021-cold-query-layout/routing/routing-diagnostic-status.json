@@ -1,0 +1,8 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "utc": "2026-10-20T16:44:51.540143+00:00",
+  "diagnostic_binary_sha256": "f67acddc73202f875d604d93b7ed2ff31a4a590465c14327181748dcfb443f91",
+  "overlay_source_sha256": "a6265e5ddb173486aebf25a42fab4c58558f66bd101d4bae0206dfa1ccefec4f"
+}

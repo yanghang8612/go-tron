@@ -1,0 +1,14 @@
+{
+  "before": {
+    "complete": false,
+    "production_mutations": false,
+    "phase": "waiting-for-comparison",
+    "before_identity": {
+      "pid": 28737,
+      "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+    },
+    "utc": "2026-10-20T16:10:14.536523+00:00"
+  },
+  "reason": "Use separately built diagnostic to hydrate direct block-read BlockHash from its verified StateTxRange; no production source change",
+  "utc": "2026-10-20T16:22:08.285320Z"
+}

@@ -1,0 +1,110 @@
+[
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "cpu_ms": 2728.7129999999997,
+    "alloc_MB": 1406.367624,
+    "read_calls": 173059,
+    "read_MB": 893.029087,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "cpu_ms": 2829.189000000002,
+    "alloc_MB": 1406.4062,
+    "read_calls": 173059,
+    "read_MB": 893.029089,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "cpu_ms": 1841.2340000000013,
+    "alloc_MB": 818.1628,
+    "read_calls": 173059,
+    "read_MB": 330.99815,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "cpu_ms": 1887.8790000000008,
+    "alloc_MB": 818.236608,
+    "read_calls": 173059,
+    "read_MB": 330.998152,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "cpu_ms": 1817.387999999999,
+    "alloc_MB": 818.147896,
+    "read_calls": 173059,
+    "read_MB": 330.99815,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "cpu_ms": 1794.112000000001,
+    "alloc_MB": 818.14,
+    "read_calls": 173059,
+    "read_MB": 330.998152,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "cpu_ms": 2768.1679999999997,
+    "alloc_MB": 1406.427544,
+    "read_calls": 173059,
+    "read_MB": 893.029079,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "cpu_ms": 2850.1370000000024,
+    "alloc_MB": 1406.466216,
+    "read_calls": 173059,
+    "read_MB": 893.029081,
+    "physical_MB": 0.0
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "cpu_ms": 5897.507,
+    "alloc_MB": 1958.926696,
+    "read_calls": 174659,
+    "read_MB": 905.087059,
+    "physical_MB": 2221.81376
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "cpu_ms": 3748.8849999999998,
+    "alloc_MB": 823.617344,
+    "read_calls": 174706,
+    "read_MB": 346.550218,
+    "physical_MB": 1974.317056
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "cpu_ms": 3710.338,
+    "alloc_MB": 823.665248,
+    "read_calls": 174706,
+    "read_MB": 346.550218,
+    "physical_MB": 1956.306944
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "cpu_ms": 5534.701,
+    "alloc_MB": 1958.584272,
+    "read_calls": 174659,
+    "read_MB": 905.087059,
+    "physical_MB": 2182.918144
+  }
+]

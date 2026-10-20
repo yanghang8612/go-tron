@@ -1,0 +1,19 @@
+{
+  "complete": false,
+  "expected": 4609,
+  "keys": 34,
+  "pass": 73,
+  "pass_seconds": 0.141014293,
+  "ref": {
+    "rows": 34,
+    "dataset": "state-domain-change",
+    "kind": "system-history-routing",
+    "fromTxNum": 1,
+    "toTxNum": 568104018,
+    "path": "history/system-routing-1-568104018-1305c1698e194491fa089fabacd3e80ec5a6cbf5c9c4e8a3043d33dff0e9ea59.route",
+    "size": 158489,
+    "checksum": "sha256:1305c1698e194491fa089fabacd3e80ec5a6cbf5c9c4e8a3043d33dff0e9ea59"
+  },
+  "seconds": 184.829374709,
+  "sources": 4609
+}

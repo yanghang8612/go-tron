@@ -1,0 +1,8 @@
+{
+  "complete": true,
+  "excluded_from_primary_performance": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "utc": "2026-10-20T19:03:24.617598+00:00",
+  "candidate_sha256": "98473c753fd5327418048a1176986e773ece53447f2c9a624adee0438a38245e"
+}

@@ -1,0 +1,310 @@
+[
+  {
+    "mode": "baseline",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 1297.1998006105423,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 3144021,
+    "tag": "0x2ff955",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000007",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+    },
+    "milliseconds": 438.17288428545,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 5000000,
+    "tag": "0x4c4b40",
+    "expected": "0x000000000000000000000000000000000000000000000000000000000000003f",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x000000000000000000000000000000000000000000000000000000000000003f"
+    },
+    "milliseconds": 458.80135893821716,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 9000000,
+    "tag": "0x895440",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000cf",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "milliseconds": 773.8797217607498,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 11817936,
+    "tag": "0xb453d0",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "milliseconds": 93.26660633087158,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 11818191,
+    "tag": "0xb454cf",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "milliseconds": 25.353819131851196,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 11818192,
+    "tag": "latest",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "root-verified live storage in fixed input",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "milliseconds": 3.541231155395508,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 460.2186754345894,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 419.3476662039757,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 417.9543927311897,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "baseline",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 390.02978056669235,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 319.95315849781036,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 3144021,
+    "tag": "0x2ff955",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000007",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000007"
+    },
+    "milliseconds": 278.00585329532623,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 5000000,
+    "tag": "0x4c4b40",
+    "expected": "0x000000000000000000000000000000000000000000000000000000000000003f",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "result": "0x000000000000000000000000000000000000000000000000000000000000003f"
+    },
+    "milliseconds": 259.5551982522011,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 9000000,
+    "tag": "0x895440",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000cf",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "milliseconds": 267.53777265548706,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 11817936,
+    "tag": "0xb453d0",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "milliseconds": 92.42823719978333,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 11818191,
+    "tag": "0xb454cf",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "milliseconds": 25.074705481529236,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 11818192,
+    "tag": "latest",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "root-verified live storage in fixed input",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 18,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000e1"
+    },
+    "milliseconds": 3.2314807176589966,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 19,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 277.2422805428505,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 274.3627727031708,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 21,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 264.00038599967957,
+    "diagnostic_excluded_from_primary_comparison": true
+  },
+  {
+    "mode": "candidate",
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 22,
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    "milliseconds": 292.6524132490158,
+    "diagnostic_excluded_from_primary_comparison": true
+  }
+]

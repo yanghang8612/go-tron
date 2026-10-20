@@ -1,0 +1,13 @@
+{
+  "commit": "0b57081f8b24549170523e5ebea4a3a5c1e74353",
+  "production_mutations": false,
+  "local_validation_logs": {
+    "routing-accepted-snapshots.log": "f05181c6edaebefcbd6d1255d8d9a6aa5d217a20432679ff86900c51b7b6f690",
+    "routing-accepted-race.log": "c7b84d9a34c184935ff47d62a7f927a8b21737b446e5b00e4a7f86659f9296ed",
+    "routing-accepted-correctness.log": "554892c85e58c19e6c4765c121f8c3e8b1d60a41da2903c00b6d99909d473184",
+    "routing-accepted-vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "routing-accepted-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native_sapling": true,
+  "source_base": "e4805af5fafe8829bc2f7669f4820a961758e45f"
+}

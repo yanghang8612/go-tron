@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/state/snapshots
+cpu: Apple M1 Max
+BenchmarkHistorySmallPrefixHeaderReopen/false-10         	    5774	    203260 ns/op	  140830 B/op	      15 allocs/op
+BenchmarkHistorySmallPrefixHeaderReopen/false-10         	    5733	    200519 ns/op	  140831 B/op	      15 allocs/op
+BenchmarkHistorySmallPrefixHeaderReopen/false-10         	    5496	    209119 ns/op	  140832 B/op	      15 allocs/op
+BenchmarkHistorySmallPrefixHeaderReopen/true-10          	   66868	     17855 ns/op	    1752 B/op	      15 allocs/op
+BenchmarkHistorySmallPrefixHeaderReopen/true-10          	   66124	     18179 ns/op	    1752 B/op	      15 allocs/op
+BenchmarkHistorySmallPrefixHeaderReopen/true-10          	   67549	     17291 ns/op	    1752 B/op	      15 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	10.239s
