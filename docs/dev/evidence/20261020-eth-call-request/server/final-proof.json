@@ -1,0 +1,51 @@
+{
+  "identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "node": {
+    "version": "0.2.0-dev",
+    "currentBlock": 13237349,
+    "lastInsertTime": 1792501935295,
+    "syncInfo": {
+      "active": true,
+      "paused": false,
+      "peerCount": 30,
+      "syncPeerCount": 8,
+      "targetHead": 87276284,
+      "appliedTip": 13237360,
+      "sessionBlocks": 2018059,
+      "sessionTransactions": 186452972,
+      "remaining": 74038935,
+      "inflight": 0,
+      "bufferedBlocks": 1289,
+      "bufferedBytes": 36958195,
+      "fetchBackpressured": false,
+      "requestedBlocks": 0,
+      "retryBlocks": 0,
+      "retainedDecodedBlocks": 0,
+      "retainedDecodedBytes": 0
+    }
+  },
+  "data_dir_inode": 94642617,
+  "old_database_retained": true,
+  "fixed_head": 11818192,
+  "fixed_root": "8fbf149684146a59b1650b318a768f0edbae0c8c1c3ceb2c5c610129c10f76a5",
+  "source_rows": [
+    3484117,
+    481,
+    141418493
+  ],
+  "muhash_verified": true,
+  "http_requests_verified": 238,
+  "performance_samples": 140,
+  "diagnostic_requests_verified": 14,
+  "read_only_host_runs": 79,
+  "private_file_count": 11428,
+  "private_file_bytes": 157021873555,
+  "os_cold_rounds": 28,
+  "maximum_resident_fraction_before_startup": 5.737952009125639e-07,
+  "utc": "2026-10-20T13:12:15.305560+00:00",
+  "no_production_restart": true,
+  "no_deployment": true
+}

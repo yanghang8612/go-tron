@@ -1,0 +1,195 @@
+package state
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+)
+
+// A materialized, sorted before-image fold, compiled only against the owning
+// baseline. It does not call PersistentHistoryReader, optimized first-match
+// functions, the query-tail cache, TVM, or HTTP. Cold companion authentication
+// and existing complete-key iterators are shared source verification helpers.
+func TestOfflineFixedCounterBeforeImageOracle(t *testing.T) {
+	dir := os.Getenv("GTRON_FIXED_INPUT")
+	if dir == "" {
+		t.Skip("fixed input required")
+	}
+	hot, err := rawdb.NewPebbleDBReadOnly(filepath.Join(dir, "chaindata"), 256, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hot.Close()
+	hist, err := rawdb.NewHistoryStagingPebbleDB(filepath.Join(dir, "history"), 256, 512, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hist.Close()
+	db := rawdb.NewDirectHistoryStore(hot, hist)
+	head, ok, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	manager, err := snapshots.OpenManager(filepath.Join(dir, "state-snapshots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexed, hasIndex, err := rawdb.ReadStageProgress(db, rawdb.StageStateHistoryIndex)
+	if err != nil || !hasIndex || indexed > head.BlockNum {
+		t.Fatalf("index boundary invalid: %d %v", indexed, err)
+	}
+	tailRows := uint64(0)
+	tailOwners := map[string]map[string]uint64{}
+	tailSystemKeys := map[string]uint64{}
+	if indexed < head.BlockNum {
+		err = rawdb.IterateStateDomainChangesByBlockRangeContext(context.Background(), db, indexed+1, head.BlockNum, func(row *rawdb.StateDomainChange) (bool, error) {
+			tailRows++
+			if row.Owner == common.SystemAccountAddress {
+				name := "system"
+				if tailOwners[name] == nil {
+					tailOwners[name] = map[string]uint64{"retention_bytes": 128}
+				}
+				tailOwners[name]["rows"]++
+				tailOwners[name]["retention_bytes"] += uint64(256 + len(row.Key) + len(row.Prev) + len(row.Next))
+				tailSystemKeys[fmt.Sprintf("%d/%d/%x", row.FlatDomain, row.Domain, row.Key)]++
+			}
+			return true, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := hex.DecodeString("41a4997124a328a4615eab437cede31da47a31b375")
+	owner := common.BytesToAddress(raw)
+	latest := defaultHotLatest(db)
+	envelope, ok, err := readFlatAccountLatestEnvelopeWithReader(latest, owner)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	generation := envelope.AccountKVGeneration
+	key, err := storageRowKeyFromFlatLatest(latest, owner, generation, common.Hash{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := readFlatStorageLatestWithReader(latest, owner, common.Hash{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect := func(flat rawdb.StateFlatDomain, gen uint64, domain kvdomains.KVDomain, key_ []byte) []rawdb.StateDomainChange {
+		unique := map[string]rawdb.StateDomainChange{}
+		add := func(row *rawdb.StateDomainChange) (bool, error) {
+			if row.TxNum > head.TxNum {
+				return true, nil
+			}
+			id := fmt.Sprintf("%d/%d", row.TxNum, row.Seq)
+			if previous, ok := unique[id]; ok && (previous.PrevExists != row.PrevExists || !bytes.Equal(previous.Prev, row.Prev)) {
+				return false, fmt.Errorf("hot/cold before-image mismatch %s", id)
+			}
+			copy_ := *row
+			copy_.Prev = bytes.Clone(row.Prev)
+			copy_.Key = bytes.Clone(row.Key)
+			unique[id] = copy_
+			return true, nil
+		}
+		if err := manager.IterateStateDomainChangesByKey(1, head.TxNum, flat, owner, gen, domain, key_, add); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.IterateStateDomainChangesByKeyBlockRange(db, 0, head.BlockNum, 0, head.TxNum, flat, owner, gen, domain, key_, add); err != nil {
+			t.Fatal(err)
+		}
+		rows := make([]rawdb.StateDomainChange, 0, len(unique))
+		for _, row := range unique {
+			rows = append(rows, row)
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].TxNum != rows[j].TxNum {
+				return rows[i].TxNum < rows[j].TxNum
+			}
+			return rows[i].Seq < rows[j].Seq
+		})
+		return rows
+	}
+	// The simple scalar fold below is admitted only when generation and the
+	// Java storage row layout are unchanged for the entire contract lifetime.
+	accounts := collect(rawdb.StateFlatDomainAccountLatest, 0, 0, nil)
+	for _, row := range accounts {
+		if row.PrevExists {
+			env, e := DecodeStateAccountV2(row.Prev)
+			if e != nil || env.AccountKVGeneration != generation {
+				t.Fatalf("generation changed; scalar oracle invalid: %v", e)
+			}
+		}
+	}
+	metadata := collect(rawdb.StateFlatDomainKVLatest, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+	for _, row := range metadata {
+		if row.PrevExists && len(row.Prev) > 0 {
+			var sc contractpb.SmartContract
+			if e := statecodec.Unmarshal(row.Prev, &sc); e != nil {
+				t.Fatal(e)
+			}
+			if k := javaStorageRowKey(owner, common.Hash{}, &sc); k != key {
+				t.Fatal("storage layout changed; scalar oracle invalid")
+			}
+		}
+	}
+	rows := collect(rawdb.StateFlatDomainKVLatest, generation, kvdomains.ContractStorage, key[:])
+	heights := []uint64{3144020, 3144021, 5000000, 9000000, head.BlockNum - 256, head.BlockNum - 1, head.BlockNum}
+	var expected []map[string]any
+	for _, height := range heights {
+		tr, ok, e := rawdb.ReadStateTxRange(db, height)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if !ok {
+			tr, ok, e = manager.StateTxRangeForBlock(height)
+			if e != nil || !ok {
+				t.Fatalf("tx range %d: %v", height, e)
+			}
+		}
+		value := current
+		for _, row := range rows {
+			if row.TxNum > tr.EndTxNum {
+				value = common.Hash{}
+				if row.PrevExists {
+					value, e = decodeStorageValueHash("offline before-image oracle", row.Prev)
+					if e != nil {
+						t.Fatal(e)
+					}
+				}
+				break
+			}
+		}
+		if height == 3144020 && value[31] != 6 {
+			t.Fatal("known witness 6 mismatch")
+		}
+		if height == 3144021 && value[31] != 7 {
+			t.Fatal("known witness 7 mismatch")
+		}
+		expected = append(expected, map[string]any{"height": height, "tx_num": tr.EndTxNum, "expected": "0x" + hex.EncodeToString(value[:])})
+	}
+	after, ok, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil || !ok || after != head {
+		t.Fatal("oracle mutated HEAD")
+	}
+	result := map[string]any{"head": head.BlockNum, "head_tx": head.TxNum, "generation": generation, "storage_key": hex.EncodeToString(key[:]), "account_versions": len(accounts), "metadata_versions": len(metadata), "storage_versions": rows, "expected": expected, "unchanged_head": true, "hot_tail": map[string]any{"index_height": indexed, "head_height": head.BlockNum, "logical_rows": tailRows, "owners": tailOwners, "system_keys": tailSystemKeys, "candidate_limits": map[string]any{"rows": 16384, "bytes": 8 << 20, "owners": 16}}, "note": "Independent materialized before-image fold using authenticated complete cold key iterations and baseline owning hot-key iteration; generation/layout invariance checked. It shares source codecs, not optimized point reads."}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("GTRON_ORACLE_OUTPUT"), encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

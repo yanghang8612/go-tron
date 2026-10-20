@@ -1,0 +1,133 @@
+PASS: exact baseline/candidate sources; identical HTTP host; complete source-fold MuHash; 238 HTTP calls and 140 latency samples; before-image oracle; 28 cold-cache residency proofs and independent inodes; bounded request memo; final candidate source-fold recheck; original production PID/SHA and retained old database
+{
+  "warm_medians_ms": [
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0x2ff954",
+      "n": 5,
+      "median_ms": 6640.732571482658,
+      "min_ms": 6588.134631514549,
+      "max_ms": 6704.291887581348
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0x2ff955",
+      "n": 5,
+      "median_ms": 6712.620168924332,
+      "min_ms": 6582.153841853142,
+      "max_ms": 6781.8649262189865
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0x4c4b40",
+      "n": 5,
+      "median_ms": 5352.633625268936,
+      "min_ms": 5264.9345844984055,
+      "max_ms": 5408.8388457894325
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0x895440",
+      "n": 5,
+      "median_ms": 2071.8706250190735,
+      "min_ms": 2025.3733173012733,
+      "max_ms": 2134.3107894062996
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0xb453d0",
+      "n": 5,
+      "median_ms": 83.68949592113495,
+      "min_ms": 82.6789140701294,
+      "max_ms": 87.46485412120819
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0xb454cf",
+      "n": 5,
+      "median_ms": 19.588246941566467,
+      "min_ms": 18.987439572811127,
+      "max_ms": 26.976361870765686
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "latest",
+      "n": 5,
+      "median_ms": 1.5666782855987549,
+      "min_ms": 1.3823062181472778,
+      "max_ms": 2.9683858156204224
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0x2ff954",
+      "n": 5,
+      "median_ms": 2643.2865858078003,
+      "min_ms": 2608.1763729453087,
+      "max_ms": 2675.4653602838516
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0x2ff955",
+      "n": 5,
+      "median_ms": 2650.7868617773056,
+      "min_ms": 2647.5273445248604,
+      "max_ms": 2726.3814955949783
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0x4c4b40",
+      "n": 5,
+      "median_ms": 2243.7980696558952,
+      "min_ms": 2213.0331620573997,
+      "max_ms": 2263.4186521172523
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0x895440",
+      "n": 5,
+      "median_ms": 1003.1199529767036,
+      "min_ms": 962.1547609567642,
+      "max_ms": 1026.2190476059914
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0xb453d0",
+      "n": 5,
+      "median_ms": 85.57174354791641,
+      "min_ms": 84.57018435001373,
+      "max_ms": 96.9456434249878
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0xb454cf",
+      "n": 5,
+      "median_ms": 21.67282998561859,
+      "min_ms": 20.444318652153015,
+      "max_ms": 35.9419509768486
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "latest",
+      "n": 5,
+      "median_ms": 1.3591498136520386,
+      "min_ms": 1.2495145201683044,
+      "max_ms": 3.5709217190742493
+    }
+  ],
+  "private_cache_files": 11428,
+  "maximum_resident_fraction_before_startup": 5.737952009125639e-07
+}

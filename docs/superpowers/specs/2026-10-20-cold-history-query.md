@@ -66,6 +66,10 @@ Batch heterogeneous account/KV queries against one validated cold pair per
 segment, preserving earliest TxNum/Seq and cold/hot overlap. Constant-call
 prefetch is optional: failures leave demand reads authoritative, cancellation
 still propagates, and generation-dependent metadata follows account resolution.
+Keep hot KV keys with identical owner/generation/domain and inclusive cold
+first-match bounds in one tail pass. If the pinned manifest has no intersecting
+cold history range, omit optional planning; this hint must never publish an
+absence or bypass the ordinary authenticated demand path.
 
 Coalesce accessor directory offsets/entries, and reuse at most eight 4 KiB
 directory pages for one open batch. No retained file handles, global directory

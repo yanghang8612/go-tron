@@ -1,0 +1,16 @@
+{
+  "complete": true,
+  "phase": "diagnosed",
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "utc": "2026-10-20T13:08:52.376655+00:00",
+  "muhash_verified": true,
+  "oracle_verified_requests": 238,
+  "after_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "diagnostic_queries": 14
+}

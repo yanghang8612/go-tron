@@ -1,0 +1,59 @@
+File: baseline.test
+Build ID: df8660afe943479d08cfc55fa8aac9ce9c1c2e7a
+Type: cpu
+Time: 2026-10-20 12:50:52 UTC
+Duration: 20.14s, Total samples = 20.69s (102.73%)
+Showing nodes accounting for 17.65s, 85.31% of 20.69s total
+Dropped 359 nodes (cum <= 0.10s)
+Showing top 50 nodes out of 194
+      flat  flat%   sum%        cum   cum%
+     6.19s 29.92% 29.92%      6.19s 29.92%  internal/runtime/syscall.Syscall6
+     6.01s 29.05% 58.97%      6.01s 29.05%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     1.51s  7.30% 66.26%      1.51s  7.30%  runtime.memclrNoHeapPointers
+     0.27s  1.30% 67.57%      0.27s  1.30%  cmpbody
+     0.25s  1.21% 68.78%      0.84s  4.06%  io.ReadAtLeast
+     0.25s  1.21% 69.99%      0.54s  2.61%  runtime.scanobject
+     0.23s  1.11% 71.10%      0.23s  1.11%  runtime.memmove
+     0.22s  1.06% 72.16%      0.41s  1.98%  encoding/binary.ReadUvarint
+     0.20s  0.97% 73.13%      0.20s  0.97%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.19s  0.92% 74.05%      0.19s  0.92%  bytes.(*Reader).ReadByte
+     0.16s  0.77% 74.82%      0.17s  0.82%  github.com/golang/snappy.decode
+     0.16s  0.77% 75.59%         2s  9.67%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlock
+     0.14s  0.68% 76.27%      0.14s  0.68%  context.value
+     0.12s  0.58% 76.85%      0.15s  0.72%  github.com/tronprotocol/go-tron/core/state/snapshots.validateCompressedBlockPhysicalTableContext
+     0.11s  0.53% 77.38%      0.44s  2.13%  bufio.(*Reader).Read
+     0.11s  0.53% 77.91%      0.11s  0.53%  internal/poll.(*fdMutex).incref (inline)
+     0.10s  0.48% 78.40%      0.15s  0.72%  runtime.exitsyscallfast
+     0.09s  0.43% 78.83%      0.20s  0.97%  github.com/ethereum/go-ethereum/rlp.Split
+     0.09s  0.43% 79.27%      0.11s  0.53%  github.com/ethereum/go-ethereum/rlp.readKind
+     0.09s  0.43% 79.70%      6.05s 29.24%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext
+     0.08s  0.39% 80.09%      0.17s  0.82%  runtime.greyobject
+     0.08s  0.39% 80.47%      0.66s  3.19%  runtime.mallocgcSmallNoscan
+     0.07s  0.34% 80.81%     12.32s 59.55%  github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt
+     0.07s  0.34% 81.15%      2.51s 12.13%  runtime.mallocgc
+     0.07s  0.34% 81.49%      0.21s  1.01%  runtime.sweepone
+     0.06s  0.29% 81.78%      0.13s  0.63%  runtime.pcvalue
+     0.06s  0.29% 82.07%      6.13s 29.63%  syscall.RawSyscall6
+     0.05s  0.24% 82.31%      1.83s  8.84%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.05s  0.24% 82.55%      0.15s  0.72%  runtime.casgstatus
+     0.04s  0.19% 82.75%      0.15s  0.72%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func1
+     0.04s  0.19% 82.94%      3.27s 15.80%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func2 (inline)
+     0.04s  0.19% 83.13%      3.09s 14.93%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry
+     0.04s  0.19% 83.33%      0.27s  1.30%  runtime.exitsyscall
+     0.04s  0.19% 83.52%      5.63s 27.21%  syscall.Syscall6
+     0.03s  0.14% 83.66%      0.17s  0.82%  github.com/ethereum/go-ethereum/rlp.SplitString
+     0.03s  0.14% 83.81%      5.26s 25.42%  os.(*File).ReadAt
+     0.03s  0.14% 83.95%      0.24s  1.16%  runtime.(*mheap).allocSpan
+     0.03s  0.14% 84.10%      2.29s 11.07%  runtime.makeslice
+     0.03s  0.14% 84.24%      0.25s  1.21%  runtime.tracebackPCs
+     0.02s 0.097% 84.34%      0.28s  1.35%  bytes.Compare (inline)
+     0.02s 0.097% 84.44%      0.19s  0.92%  github.com/ethereum/go-ethereum/rlp.SplitUint64
+     0.02s 0.097% 84.53%      0.55s  2.66%  github.com/tronprotocol/go-tron/core/rawdb.iterateMaterializedStateHistoryBlock
+     0.02s 0.097% 84.63%      0.21s  1.01%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint
+     0.02s 0.097% 84.73%      5.23s 25.28%  internal/poll.(*FD).Pread
+     0.02s 0.097% 84.82%      0.26s  1.26%  internal/poll.(*FD).decref
+     0.02s 0.097% 84.92%      5.11s 24.70%  internal/poll.ignoringEINTR2[go.shape.int] (inline)
+     0.02s 0.097% 85.02%      0.77s  3.72%  os.newFile
+     0.02s 0.097% 85.11%      0.12s  0.58%  runtime.(*sweepLocked).sweep
+     0.02s 0.097% 85.21%      0.15s  0.72%  runtime.reentersyscall
+     0.02s 0.097% 85.31%      0.14s  0.68%  sort.insertionSort_func

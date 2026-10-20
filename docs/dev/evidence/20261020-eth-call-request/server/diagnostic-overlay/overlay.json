@@ -1,0 +1,9 @@
+{
+  "Replace": {
+    "/data/gtron/eth-call-request-20261020-04/source/core/state/snapshots/history_header_cache.go": "/data/gtron/eth-call-request-20261020-04/diagnostic-overlay/snapshots-history_header_cache.go",
+    "/data/gtron/eth-call-request-20261020-04/source/core/rawdb/state_history_query_tail.go": "/data/gtron/eth-call-request-20261020-04/diagnostic-overlay/rawdb-state_history_query_tail.go",
+    "/data/gtron/eth-call-request-20261020-04/source/core/state/history_request_cache.go": "/data/gtron/eth-call-request-20261020-04/diagnostic-overlay/state-history_request_cache.go",
+    "/data/gtron/eth-call-request-20261020-04/source/core/state/snapshots/history_segment.go": "/data/gtron/eth-call-request-20261020-04/diagnostic-overlay/snapshots-history_segment.go",
+    "/data/gtron/eth-call-request-20261020-04/source/core/offline_fixed_http_test.go": "/data/gtron/eth-call-request-20261020-04/diagnostic-overlay/core-offline_fixed_http_test.go"
+  }
+}

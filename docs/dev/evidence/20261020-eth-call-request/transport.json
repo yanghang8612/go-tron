@@ -1,0 +1,13 @@
+{
+  "sha256": "fab8f84225192301da1267d4f7f515b11c4f4fcfd5aa1c87ba5f3e71ecf1ef82",
+  "bytes": 5096704,
+  "server_path": "/tmp/gtron-eth-call-request-final-20261020.zip",
+  "aliases": {
+    "diagnostic-overlay/core-offline_fixed_http_test.go": "diagnostic-overlay/core-offline_fixed_http_test.go.txt",
+    "diagnostic-overlay/rawdb-state_history_query_tail.go": "diagnostic-overlay/rawdb-state_history_query_tail.go.txt",
+    "diagnostic-overlay/snapshots-history_segment.go": "diagnostic-overlay/snapshots-history_segment.go.txt",
+    "diagnostic-overlay/snapshots-history_header_cache.go": "diagnostic-overlay/snapshots-history_header_cache.go.txt",
+    "diagnostic-overlay/state-history_request_cache.go": "diagnostic-overlay/state-history_request_cache.go.txt"
+  },
+  "proof_image_sha256": "8de1b7a6b12c1e78e4e308c9ccf228703410dd6a01dfdd1935de5c83e978eced"
+}

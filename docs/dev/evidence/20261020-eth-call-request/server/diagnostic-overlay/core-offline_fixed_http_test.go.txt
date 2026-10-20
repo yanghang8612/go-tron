@@ -1,0 +1,165 @@
+package core
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/internal/jsonrpc"
+	"github.com/tronprotocol/go-tron/params"
+)
+
+// Identical test-only HTTP host in both revisions; no P2P, importer, indexer,
+// publication, pruning, production startup, format repair or mutable DB open.
+func TestOfflineFixedEthCallHTTP(t *testing.T) {
+	dir := os.Getenv("GTRON_FIXED_INPUT")
+	if dir == "" {
+		t.Skip("explicit fixed diagnostic input required")
+	}
+	out := os.Getenv("GTRON_FIXED_OUTPUT")
+	if err := os.MkdirAll(out, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hot, err := rawdb.NewPebbleDBReadOnly(filepath.Join(dir, "chaindata"), 512, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hot.Close()
+	history, err := rawdb.NewHistoryStagingPebbleDB(filepath.Join(dir, "history"), 512, 1024, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer history.Close()
+	if err := rawdb.EnsureDirectHistoryPair(hot, history, false); err != nil {
+		t.Fatal(err)
+	}
+	db := rawdb.NewDirectHistoryStore(hot, history)
+	before, present, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil || !present {
+		t.Fatalf("HEAD: %v %v", present, err)
+	}
+	ancient, err := rawdbfreezer.NewFreezer(filepath.Join(dir, "ancient"), "", true, 2_000_000_000, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ancient.Close()
+	manager, err := snapshots.OpenManager(filepath.Join(dir, "state-snapshots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := *params.MainnetChainConfig
+	cfg.HistoryEnabled = true
+	cfg.HistoryMode = params.HistoryModeSnap
+	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
+	bc, err := NewBlockChainWithAncient(db, sdb, &cfg, rawdb.NewFreezerReader(ancient))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Normal Close writes shutdown metadata. Join the idle workers explicitly
+	// instead, retaining the read-only open for all file bytes.
+	defer func() {
+		bc.chainmu.Lock()
+		bc.stopCommitWorkerLocked()
+		bc.stopFlushWorkerLocked()
+		bc.chainmu.Unlock()
+		_ = sdb.Close()
+		after, ok, e := rawdb.ReadStateCommitmentHead(db)
+		if e != nil || !ok || after != before {
+			t.Errorf("HEAD changed: %v", e)
+		}
+	}()
+	bc.SetStateLatestCacheSize(128 << 20)
+	backend := NewTronBackend(bc, txpool.New())
+	bc.SetStateCodeColdHistory(manager)
+	bc.ChainDB().SetChainIndexReader(manager)
+	bc.ChainDB().SetEventLogReader(manager)
+	backend.SetStateColdHistory(manager)
+	rpc := jsonrpc.NewServer(backend, 0)
+	defer rpc.Stop()
+	logFile, err := os.Create(filepath.Join(out, "server-requests.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logFile.Close()
+	encoder := json.NewEncoder(logFile)
+	var mu sync.Mutex
+	mux := http.NewServeMux()
+ mux.HandleFunc("/diag/reset",func(w http.ResponseWriter,r *http.Request){snapshots.DiagnosticFixedHeaderReset();rawdb.DiagnosticFixedTailReset();state.DiagnosticFixedMemoReset();snapshots.DiagnosticFixedColdReset();w.Write([]byte("{}"))})
+ mux.HandleFunc("/diag/cache",func(w http.ResponseWriter,r *http.Request){json.NewEncoder(w).Encode(map[string]any{"header":snapshots.DiagnosticFixedHeaderStats(),"tail":rawdb.DiagnosticFixedTailStats(),"memo":state.DiagnosticFixedMemoStats(),"cold_batches":snapshots.DiagnosticFixedColdBatches()})})
+
+	mux.Handle("/debug/pprof/", http.DefaultServeMux)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		body, e := io.ReadAll(r.Body)
+		if e != nil {
+			http.Error(w, e.Error(), 400)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var req struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+			ID     any             `json:"id"`
+		}
+		_ = json.Unmarshal(body, &req)
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
+		var u0, u1 syscall.Rusage
+		_ = syscall.Getrusage(syscall.RUSAGE_SELF, &u0)
+		io0, _ := os.ReadFile("/proc/self/io")
+		start := time.Now()
+		pprof.Do(r.Context(), pprof.Labels("rpc", req.Method, "params", string(req.Params)), func(ctx context.Context) { rpc.Handler().ServeHTTP(w, r.WithContext(ctx)) })
+		elapsed := time.Since(start)
+		_ = syscall.Getrusage(syscall.RUSAGE_SELF, &u1)
+		io1, _ := os.ReadFile("/proc/self/io")
+		runtime.ReadMemStats(&m1)
+		mu.Lock()
+		defer mu.Unlock()
+		_ = encoder.Encode(map[string]any{"id": req.ID, "method": req.Method, "params": req.Params, "elapsed_ns": elapsed.Nanoseconds(), "alloc_bytes": m1.TotalAlloc - m0.TotalAlloc, "num_gc": m1.NumGC - m0.NumGC, "usage_before": u0, "usage_after": u1, "io_before": string(io0), "io_after": string(io1)})
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if e := server.Serve(listener); e != nil && e != http.ErrServerClosed {
+			t.Error(e)
+		}
+	}()
+	ready := map[string]any{"pid": os.Getpid(), "url": "http://" + listener.Addr().String() + "/", "head": before.BlockNum, "head_tx": before.TxNum, "head_hash": fmt.Sprintf("%x", before.BlockHash), "root": fmt.Sprintf("%x", before.Root), "manifest_generation": manager.Manifest().Generation, "gomaxprocs": runtime.GOMAXPROCS(0), "read_only": true, "hot_cache_mib": 512, "history_cache_mib": 512}
+	data, _ := json.MarshalIndent(ready, "", "  ")
+	if err := os.WriteFile(filepath.Join(out, "ready.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("READY %s", data)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(30 * time.Minute):
+		t.Error("bounded host lifetime elapsed")
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = server.Shutdown(shutdown)
+}

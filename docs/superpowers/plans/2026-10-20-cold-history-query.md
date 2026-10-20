@@ -58,9 +58,15 @@ already completed does not cause another automatic push or production restart.
       pages within one open batch; retain CRC, bounds and context checks.
 - [x] Run affected packages, race, vet and native Sapling archive/MuHash/CLI
       restore/continued-execution regressions and build.
-- [ ] Recompare complete HTTP eth_call against 4e6978dd on the unchanged
+- [x] Recompare complete HTTP eth_call against 4e6978dd on the unchanged
       11818192 capture with warm, fresh-process and private OS-cold conditions.
-- [ ] Record read/CPU/allocation amplification, recheck fixed-copy MuHash and
+- [x] Record read/CPU/allocation amplification, recheck fixed-copy MuHash and
       production identity, seal source/binary/input/oracle evidence.
 
 No push, deployment, service restart or online parameter/database change.
+
+Final candidate b6db66fc; 238 primary HTTP results, 140 timed observations and
+14 separate counter requests matched the independent oracle. Full fixed-copy
+MuHash rechecked; native restore/continued-execution regressions passed.
+See [request optimization report](../../dev/eth-call-request-optimization-20261020.md)
+and its sealed, locally verified evidence bundle.

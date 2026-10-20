@@ -1,0 +1,59 @@
+File: candidate.test
+Build ID: 0a073d90f00e1d3b4301a1e2ec7b8ba6bc8afcb5
+Type: cpu
+Time: 2026-10-20 12:52:08 UTC
+Duration: 20.13s, Total samples = 20.66s (102.64%)
+Showing nodes accounting for 17.38s, 84.12% of 20.66s total
+Dropped 332 nodes (cum <= 0.10s)
+Showing top 50 nodes out of 227
+      flat  flat%   sum%        cum   cum%
+     4.81s 23.28% 23.28%      4.81s 23.28%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     3.74s 18.10% 41.38%      3.74s 18.10%  internal/runtime/syscall.Syscall6
+     1.06s  5.13% 46.52%      1.06s  5.13%  runtime.memclrNoHeapPointers
+     0.73s  3.53% 50.05%      0.73s  3.53%  cmpbody
+     0.67s  3.24% 53.29%      0.68s  3.29%  github.com/golang/snappy.decode
+     0.63s  3.05% 56.34%      0.63s  3.05%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.42s  2.03% 58.37%      0.80s  3.87%  github.com/ethereum/go-ethereum/rlp.Split
+     0.41s  1.98% 60.36%      0.41s  1.98%  runtime.memmove
+     0.36s  1.74% 62.10%      0.38s  1.84%  github.com/ethereum/go-ethereum/rlp.readKind
+     0.34s  1.65% 63.75%      0.63s  3.05%  encoding/binary.ReadUvarint
+     0.30s  1.45% 65.20%      3.05s 14.76%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlock
+     0.29s  1.40% 66.60%      0.29s  1.40%  bytes.(*Reader).ReadByte
+     0.20s  0.97% 67.57%      6.74s 32.62%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext
+     0.20s  0.97% 68.54%      0.20s  0.97%  runtime.duffcopy
+     0.20s  0.97% 69.51%      0.35s  1.69%  runtime.mapaccess2_fast64
+     0.19s  0.92% 70.43%      0.99s  4.79%  runtime.mallocgcSmallNoscan
+     0.19s  0.92% 71.35%      0.49s  2.37%  runtime.scanobject
+     0.17s  0.82% 72.17%      0.72s  3.48%  io.ReadAtLeast
+     0.16s  0.77% 72.94%      1.38s  6.68%  github.com/tronprotocol/go-tron/core/rawdb.decodeBorrowedStateDomainChangeRow
+     0.16s  0.77% 73.72%      0.16s  0.77%  runtime.nextFreeFast (inline)
+     0.15s  0.73% 74.44%      0.80s  3.87%  github.com/ethereum/go-ethereum/rlp.SplitString
+     0.15s  0.73% 75.17%      0.60s  2.90%  github.com/ethereum/go-ethereum/rlp.SplitUint64
+     0.11s  0.53% 75.70%      2.57s 12.44%  runtime.mallocgc
+     0.11s  0.53% 76.23%      0.27s  1.31%  runtime.typedmemmove
+     0.10s  0.48% 76.72%      0.70s  3.39%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint
+     0.10s  0.48% 77.20%      0.13s  0.63%  runtime.findObject
+     0.10s  0.48% 77.69%      0.12s  0.58%  runtime.step
+     0.09s  0.44% 78.12%      0.39s  1.89%  bufio.(*Reader).Read
+     0.09s  0.44% 78.56%      0.27s  1.31%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeString
+     0.09s  0.44% 78.99%      1.42s  6.87%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.09s  0.44% 79.43%      0.11s  0.53%  runtime.(*spanSet).push
+     0.08s  0.39% 79.82%      0.18s  0.87%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).latestSegmentRef
+     0.07s  0.34% 80.15%      0.32s  1.55%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func1
+     0.07s  0.34% 80.49%      0.12s  0.58%  runtime.exitsyscall
+     0.06s  0.29% 80.78%      0.81s  3.92%  bytes.Compare (inline)
+     0.06s  0.29% 81.07%      1.70s  8.23%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext.func2 (inline)
+     0.06s  0.29% 81.36%      0.13s  0.63%  hash/crc32.slicingUpdate
+     0.06s  0.29% 81.66%      0.22s  1.06%  runtime.pcvalue
+     0.05s  0.24% 81.90%      0.12s  0.58%  github.com/klauspost/compress/zstd.(*fseDecoder).readNCount
+     0.05s  0.24% 82.14%      2.35s 11.37%  github.com/tronprotocol/go-tron/core/rawdb.iterateMaterializedStateHistoryBlock
+     0.05s  0.24% 82.38%      0.38s  1.84%  sort.insertionSort_func
+     0.05s  0.24% 82.62%      0.33s  1.60%  sort.partition_func
+     0.04s  0.19% 82.82%     17.14s 82.96%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.04s  0.19% 83.01%      1.12s  5.42%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry
+     0.04s  0.19% 83.20%      0.30s  1.45%  internal/reflectlite.Swapper.func9
+     0.04s  0.19% 83.40%      0.76s  3.68%  io.ReadFull (inline)
+     0.04s  0.19% 83.59%      0.12s  0.58%  runtime.(*mheap).initSpan
+     0.04s  0.19% 83.79%      0.25s  1.21%  runtime.newobject
+     0.04s  0.19% 83.98%      0.28s  1.36%  runtime.tracebackPCs
+     0.03s  0.15% 84.12%      0.87s  4.21%  github.com/klauspost/compress/zstd.(*Decoder).DecodeAll

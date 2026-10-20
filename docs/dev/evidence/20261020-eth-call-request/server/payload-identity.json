@@ -1,0 +1,18 @@
+{
+  "candidate": "b6db66fcbde2d17f4b8fca099e5fd642e4435308",
+  "baseline": "4e6978dd",
+  "files": [
+    "core/state/history.go",
+    "core/state/history_point_bound_test.go",
+    "core/state/history_request_cache.go",
+    "core/state/history_request_cache_test.go",
+    "core/state/snapshots/history_directory_pages.go",
+    "core/state/snapshots/history_directory_pages_test.go",
+    "core/state/snapshots/history_key_oriented_v6.go",
+    "core/state/snapshots/history_key_oriented_v7.go",
+    "core/state/snapshots/history_mixed_batch_test.go",
+    "core/state/snapshots/history_segment.go",
+    "core/tron_backend.go"
+  ],
+  "tar_sha256": "7349f5fed9dea3ef36ad0760d5525bb04bc3c8bb9223f4154659ac991959bd9d"
+}

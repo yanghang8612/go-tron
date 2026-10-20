@@ -1,0 +1,32 @@
+[
+  {
+    "path": "capture-1/history/MANIFEST-052143",
+    "bytes": 1147854,
+    "source_inode": 94668687,
+    "sha256": "3d14bb68c44b334fddfa97226fd39a83ca712106551ed7d2ece04b0509d4e9a3"
+  },
+  {
+    "path": "capture-1/history/OPTIONS-052144",
+    "bytes": 2554,
+    "source_inode": 94668689,
+    "sha256": "03e15456ba1c041a127b20c47fca4666b42674d972910473d29f9e1e10828968"
+  },
+  {
+    "path": "capture-1/history/058034.log",
+    "bytes": 126674326,
+    "source_inode": 94642717,
+    "sha256": "efe11cffb441aba7b832d46369b767258ba700fcc14ac6f40e01cc0c21ee3a04"
+  },
+  {
+    "path": "capture-1/history/057979.log",
+    "bytes": 126444747,
+    "source_inode": 94642634,
+    "sha256": "e145f3dae73ec91b5c89446497d8ba04fcf9ad25f08118cd16cd67947f7978f8"
+  },
+  {
+    "path": "capture-1/history/057956.log",
+    "bytes": 124599922,
+    "source_inode": 94666305,
+    "sha256": "c6ceee0042e4e5d586523aa933884e5f574b8a787a4b13dd648a504410721060"
+  }
+]
