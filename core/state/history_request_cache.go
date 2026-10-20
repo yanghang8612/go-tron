@@ -200,7 +200,14 @@ func (r *PersistentHistoryReader) PrefetchExecutionAt(block uint64, caller, cont
 			return nil
 		}
 	}
-	accounts := []common.Address{common.SystemAccountAddress, caller, contract}
+	accounts := []common.Address{common.SystemAccountAddress, contract}
+	// An omitted eth_call sender is the empty address. Its optional prefetch
+	// cannot supply the system/contract generations needed below and can walk
+	// every AccountID-zero candidate without an exact owner match. Leave that
+	// address to ordinary demand reads, including any actual caller-state use.
+	if caller != (common.Address{}) {
+		accounts = append(accounts, caller)
+	}
 	queries := make([]snapshots.StateHistoryQuery, 0, 3)
 	for _, owner := range accounts {
 		queries = append(queries, snapshots.StateHistoryQuery{FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: owner})
