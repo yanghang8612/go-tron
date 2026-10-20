@@ -81,4 +81,9 @@ func TestHistoryMixedBatchMatchesScalarAcrossOwnersDomainsAndCuts(t *testing.T) 
 	if _, e := m.FirstStateDomainChangesContext(context.Background(), 6, 1, queries); e == nil {
 		t.Fatal("inverted range accepted")
 	}
+	aliased := queries[0]
+	aliased.Owner[0] = 0
+	if _, e := m.FirstStateDomainChangesContext(context.Background(), 1, 6, []StateHistoryQuery{queries[0], aliased}); e == nil {
+		t.Fatal("different full owners sharing an accessor key were merged")
+	}
 }

@@ -481,6 +481,13 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		}
 		lookup := stateDomainChangeBinaryAccessorLookupKey(query.FlatDomain, query.Owner, query.Generation, query.Domain, query.Key)
 		entry := byLookup[string(lookup)]
+		// Accessors omit the address prefix, while the authoritative match
+		// predicate retains it. Do not merge two different full owners merely
+		// because they encode the same AccountID. Advisory callers can retry
+		// those unusual identities through independent demand reads.
+		if entry != nil && entry.query.Owner != query.Owner {
+			return nil, errors.New("snapshots: mixed history batch contains aliased owners")
+		}
 		if entry == nil {
 			query.Key = append([]byte(nil), query.Key...)
 			entry = &queryEntry{query: query, lookup: lookup}
