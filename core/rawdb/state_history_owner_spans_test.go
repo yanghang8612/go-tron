@@ -310,3 +310,72 @@ func TestHistoryOwnerSpansDenseFallbackAndPruneSelection(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoryOwnerSpansPostingRetirementBoundedAndAtomic(t *testing.T) {
+	for _, coarse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "points", true: "coarse"}[coarse], func(t *testing.T) {
+			f := &historyViewTestFactory{KeyValueStore: NewMemoryDatabase()}
+			defer f.Close()
+			for block := uint64(1); block <= 600; block++ {
+				if err := f.Put(stateChangeOwnerSpansKey(block), []byte("derived")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			canonical := stateChangeSetKey(1, 0)
+			f.Put(canonical, []byte("untouched"))
+			old, release, err := AcquireStateHistoryReadView(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			batch := f.NewBatch()
+			defer batch.Close()
+			if err := RetireStateHistoryOwnerSpans(f, batch, 590, coarse); err != nil {
+				t.Fatal(err)
+			}
+			if present, _ := f.Has(stateChangeOwnerSpansKey(1)); !present {
+				t.Fatal("retirement escaped batch")
+			}
+			if err := WriteStageProgressWithHash(batch, StageStateHistoryIndex, 590, common.Hash{5}); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Write(); err != nil {
+				t.Fatal(err)
+			}
+			through := uint64(512)
+			if coarse {
+				through = 590
+			}
+			for block := uint64(1); block <= 600; block++ {
+				present, e := f.Has(stateChangeOwnerSpansKey(block))
+				if e != nil || present != (block > through) {
+					t.Fatal("retirement crossed bound", block, present, e)
+				}
+			}
+			if present, _ := old.Has(stateChangeOwnerSpansKey(1)); !present {
+				t.Fatal("old pinned index disappeared")
+			}
+			if got, _ := f.Get(canonical); !bytes.Equal(got, []byte("untouched")) {
+				t.Fatal("canonical rows modified")
+			}
+			// A late overlay flush is caught without any new watermark advance.
+			if err := f.Put(stateChangeOwnerSpansKey(1), []byte("late")); err != nil {
+				t.Fatal(err)
+			}
+			batch.Reset()
+			if err := RetireStateHistoryOwnerSpans(f, batch, 590, false); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Write(); err != nil {
+				t.Fatal(err)
+			}
+			if present, _ := f.Has(stateChangeOwnerSpansKey(1)); present {
+				t.Fatal("late covered index leaked")
+			}
+			row, ok, err := ReadStageProgressRow(f, StageStateHistoryIndex)
+			if err != nil || !ok || row.BlockNum != 590 {
+				t.Fatal("cleanup advanced or rewound posting watermark", row, err)
+			}
+		})
+	}
+}

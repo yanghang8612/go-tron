@@ -511,3 +511,39 @@ func deleteHistoryOwnerSpans(db StateKVLatestStore, blocks []uint64) error {
 	}
 	return it.Error()
 }
+
+// RetireStateHistoryOwnerSpans removes only an optional accelerator at or below
+// a verified posting watermark. Coarse publication uses one schema-contained
+// range in the caller's batch. Small/no-progress passes use at most 512 point
+// deletes and 4MiB plus one complete value, avoiding per-block range fragments.
+// Starting at the prefix also catches old buffered writes flushed after an
+// earlier retirement. The caller serializes publication and owns batch commit.
+func RetireStateHistoryOwnerSpans(source ethdb.Iteratee, target ethdb.KeyValueWriter, through uint64, coarse bool) error {
+	if coarse {
+		if ranges, ok := target.(interface{ DeleteRange([]byte, []byte) error }); ok {
+			end := prefixUpperBound(stateChangeOwnerSpansPrefix)
+			if through != ^uint64(0) {
+				end = stateChangeOwnerSpansKey(through + 1)
+			}
+			return ranges.DeleteRange(bytes.Clone(stateChangeOwnerSpansPrefix), end)
+		}
+	}
+	it := source.NewIterator(stateChangeOwnerSpansPrefix, nil)
+	defer it.Release()
+	scanned, work := 0, 0
+	for scanned < 512 && work < 4<<20 && it.Next() {
+		scanned++
+		key := it.Key()
+		if len(key) != len(stateChangeOwnerSpansPrefix)+8 || !bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) {
+			continue
+		}
+		if binary.BigEndian.Uint64(key[len(stateChangeOwnerSpansPrefix):]) > through {
+			break
+		}
+		work += len(key) + len(it.Value())
+		if err := target.Delete(key); err != nil {
+			return err
+		}
+	}
+	return it.Error()
+}

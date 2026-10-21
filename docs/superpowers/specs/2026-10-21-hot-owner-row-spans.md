@@ -38,6 +38,16 @@ advance any publishing/pruning watermark. Snapshot/history restore remains
 authoritative on canonical rows and can rebuild or omit sidecars. Latest-state
 keys and MuHash inputs remain untouched.
 
+Owner spans serve the unindexed tail, not the entire coldization backlog.
+Posting publication retires covered spans in the same history batch as its
+watermark. Large advances use one coarse auxiliary-prefix range; small/no-work
+passes sweep at most 512 keys and 4 MiB plus one whole value. Repeated sweeps
+catch older buffered index puts flushed after a prior retirement; old MVCC
+views retain their source and index. The fixed-copy build is restricted to
+11,817,531..11,818,192 (662 blocks), with before/after hashes of that source
+range and all index writes constrained to the derived key family. The broad
+first experiment is preserved separately and is not an accepted performance run.
+
 Admission is bounded to 4 MiB metadata, 65,536 owners/spans, at least 32 rows,
 at least 16 KiB decoded data, at least two owners and at most 4 KiB average row
 size. Encoded sources larger than half the decoded bytes are not indexed; stored

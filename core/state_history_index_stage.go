@@ -183,12 +183,14 @@ func (bc *BlockChain) advanceStateHistoryIndexStageInterruptible(minBlocks, maxB
 	}
 	indexedBlock := indexedRow.BlockNum
 	if indexedBlock >= targetBlock {
+		err := bc.retireStateHistoryOwnerSpansLocked(indexedBlock)
 		bc.chainmu.Unlock()
-		return StateHistoryIndexStageResult{}, nil
+		return StateHistoryIndexStageResult{}, err
 	}
 	if available := targetBlock - indexedBlock; minBlocks > 1 && available < minBlocks {
+		err := bc.retireStateHistoryOwnerSpansLocked(indexedBlock)
 		bc.chainmu.Unlock()
-		return StateHistoryIndexStageResult{}, nil
+		return StateHistoryIndexStageResult{}, err
 	}
 	fromBlock := indexedBlock + 1
 	toBlock := targetBlock
@@ -317,10 +319,32 @@ func (bc *BlockChain) publishStateHistoryIndexStageLocked(indexedRow rawdb.Stage
 	if !ok {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: canonical block %d disappeared", toBlock)
 	}
-	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageStateHistoryIndex, toBlock, hash); err != nil {
+	batch := bc.db.NewBatch()
+	defer batch.Close()
+	if err := rawdb.RetireStateHistoryOwnerSpans(bc.db, batch, toBlock, toBlock-indexedRow.BlockNum >= 64); err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: retire owner spans: %w", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(batch, rawdb.StageStateHistoryIndex, toBlock, hash); err != nil {
 		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: write progress: %w", err)
 	}
+	if err := batch.Write(); err != nil {
+		return StateHistoryIndexStageResult{}, fmt.Errorf("state history index stage: publish progress and owner retirement: %w", err)
+	}
 	return StateHistoryIndexStageResult{Advanced: true, Rebuilt: rebuilt}, nil
+}
+
+// Verified/no-work passes still drain late base flushes and partial retirement.
+// Only derived owner indexes are affected; canonical rows and progress stay put.
+func (bc *BlockChain) retireStateHistoryOwnerSpansLocked(through uint64) error {
+	batch := bc.db.NewBatch()
+	defer batch.Close()
+	if err := rawdb.RetireStateHistoryOwnerSpans(bc.db, batch, through, false); err != nil {
+		return fmt.Errorf("state history index stage: retire covered owner spans: %w", err)
+	}
+	if batch.ValueSize() == 0 {
+		return nil
+	}
+	return batch.Write()
 }
 
 func (bc *BlockChain) rewindStateHistoryIndexStageLocked(blockNum uint64, hash tcommon.Hash) error {
