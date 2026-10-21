@@ -98,7 +98,7 @@ func TestDirectHistoryCursorPrefixPartition(t *testing.T) {
 		{"singleton", singleton, 1, 1}, {"singleton_extension", append(bytes.Clone(singleton), 0), 1, 0},
 		{"storage", stateKVLatestPrefix, 1, 0}, {"branch", []byte(CommitmentBranchKeyPrefix), 1, 0}, {"ff", []byte{0xff}, 1, 0},
 	}
-	for _, r := range DirectHistoryRanges()[:6] {
+	for _, r := range DirectHistoryRanges()[:len(DirectHistoryRanges())-1] {
 		tests = append(tests, struct {
 			name         string
 			prefix       []byte

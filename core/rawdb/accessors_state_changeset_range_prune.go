@@ -17,7 +17,8 @@ type StateDomainChangeDeleteOptions struct {
 // StateDomainChangeDeleteStats counts authoritative changeset rows accepted by
 // the supplied writer, not durable commits or reclaimed physical disk space.
 // The caller must publish these statistics only after its batch flush succeeds.
-// Inverse posting deletes are excluded. Any error returns zero statistics, even
+// Inverse posting and auxiliary owner-index deletes are excluded. Any error
+// returns zero statistics, even
 // when the writer accepted earlier operations; retrying those is idempotent.
 type StateDomainChangeDeleteStats struct {
 	RangeRuns  uint64
@@ -90,6 +91,9 @@ func DeleteStateDomainChangeBlocksWithOptions(db StateKVLatestStore, blockNums [
 		if err := deletes.flushRun(); err != nil {
 			return zero, err
 		}
+	}
+	if err := deleteHistoryOwnerSpans(db, blockNums); err != nil {
+		return zero, err
 	}
 	return deletes.stats, nil
 }

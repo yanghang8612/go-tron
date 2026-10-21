@@ -387,6 +387,19 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 	if shared != nil {
 		compressed = true
 	}
+	var ownerSpans []byte
+	if writer, ok := db.(StateHistoryChunkAtomicWriter); ok && writer.StateHistoryChunkWritesAtomic() && len(data) <= rawBuffer.Len()/2 {
+		ownerSpans, err = buildHistoryOwnerSpans(rawBuffer.Bytes(), data, blockNum, changes)
+		if err != nil {
+			if rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
+				stateChangeBlockRawBufferPool.Put(rawBuffer)
+			}
+			return err
+		}
+		if len(ownerSpans) > 4096+len(data)/2 {
+			ownerSpans = nil // The optional index must not expand a tiny pack unboundedly.
+		}
+	}
 	if compressed && rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
 		stateChangeBlockRawBufferPool.Put(rawBuffer)
 	}
@@ -394,15 +407,24 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 	if err := db.Put(physicalKey, data); err != nil {
 		return err
 	}
+	if len(ownerSpans) != 0 {
+		if err := db.Put(stateChangeOwnerSpansKey(blockNum), ownerSpans); err != nil {
+			return err
+		}
+	}
 	shared.observe()
 	// Include newly stored out-of-line chunk values in encoding accounting;
 	// counting only tiny reference packs would falsely report near-total
 	// savings on the bucket's first, full-content seed. Keys/metadata belong
 	// to logical KV bytes; these remain staged counters, not fsync receipts.
 	encodedBytes, extraKeyBytes := len(data), 0
+	if len(ownerSpans) != 0 {
+		encodedBytes += len(ownerSpans)
+		extraKeyBytes += len(stateChangeOwnerSpansKey(blockNum))
+	}
 	if shared != nil {
 		encodedBytes += shared.chunks
-		extraKeyBytes = shared.chunkKeys + shared.metadata
+		extraKeyBytes += shared.chunkKeys + shared.metadata
 	}
 	stateChangeBlockPackBlocksCounter.Inc(1)
 	stateChangeBlockPackRowsCounter.Inc(int64(len(changes)))
@@ -1218,7 +1240,10 @@ func deleteStateDomainChanges(db stateKVLatestStore, blockNum uint64, skipPostin
 		// The derived posting stage and verified cold-history prune gate already
 		// cover this block. No value decoding is needed to remove the physical
 		// changeset rows themselves.
-		return deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum))
+		if err := deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum)); err != nil {
+			return err
+		}
+		return deleteHistoryOwnerSpans(db, []uint64{blockNum})
 	}
 	// A block records every mutation, but its posting index contains only one
 	// candidate per physical latest key. Collapse repeated writes before doing
@@ -1253,7 +1278,10 @@ func deleteStateDomainChanges(db stateKVLatestStore, blockNum uint64, skipPostin
 	// is syncing. Use point deletes here: Pebble range tombstones are excellent
 	// for one-shot resets, but high-frequency per-block DeleteRange calls make
 	// every later iterator pay keyspan-fragment costs.
-	return deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum))
+	if err := deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum)); err != nil {
+		return err
+	}
+	return deleteHistoryOwnerSpans(db, []uint64{blockNum})
 }
 
 // DeleteStateDomainChangeBlocks deletes an increasing set of physical history
@@ -1287,7 +1315,10 @@ func DeleteStateDomainChangeBlocks(db stateKVLatestStore, blockNums []uint64) er
 		}
 		return nil
 	}
-	return deleteStateDomainChangeBlocksScan(db, blockNums, indexedHead, staged, nil)
+	if err := deleteStateDomainChangeBlocksScan(db, blockNums, indexedHead, staged, nil); err != nil {
+		return err
+	}
+	return deleteHistoryOwnerSpans(db, blockNums)
 }
 
 func deleteStateDomainChangeBlocksScan(db stateKVLatestStore, blockNums []uint64, indexedHead uint64, staged bool, deletes *stateDomainChangeRangeDeleter) error {

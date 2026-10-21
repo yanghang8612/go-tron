@@ -222,7 +222,18 @@ func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistor
 		haveBlock = true
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		if seq == 0 {
-			_, err := iteratePersistedStateDomainChangeBlockBorrowedWithScratch(it.Value(), num, &scratch, func(row *StateDomainChange) (bool, error) {
+			value := it.Value()
+			used, err := iterateHistoryOwnerSpans(ctx, db, value, num, selected, &scratch, func(row *StateDomainChange) (bool, error) {
+				rows[row.Seq] = cloneStateDomainChange(row)
+				return true, nil
+			})
+			if err != nil {
+				return err
+			}
+			if used {
+				continue
+			}
+			_, err = iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, num, &scratch, func(row *StateDomainChange) (bool, error) {
 				if err := ctx.Err(); err != nil {
 					return false, err
 				}
@@ -237,11 +248,11 @@ func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistor
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if isStateHistorySharedPack(it.Value()) {
+			if isStateHistorySharedPack(value) {
 				return err
 			}
 			clear(rows)
-			row, legacyErr := decodePersistedStateDomainChange(it.Value(), num, 0)
+			row, legacyErr := decodePersistedStateDomainChange(value, num, 0)
 			if legacyErr != nil {
 				return err
 			}

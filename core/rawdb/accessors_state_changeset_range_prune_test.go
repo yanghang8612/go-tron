@@ -135,7 +135,7 @@ func TestDeleteStateDomainChangeRangeSchemaHolesAndBatch(t *testing.T) {
 	}
 	// Submitting ranges must not mutate the underlying database before Write.
 	assertPostingChunkExists(t, base, stateChangeSetKey(1, 0), true)
-	if db.releases != db.iterators || db.iterators != 1 {
+	if db.releases != db.iterators || db.iterators != 2 {
 		t.Fatalf("iterator lifecycle = %d/%d", db.releases, db.iterators)
 	}
 	if db.getCalls != 1 {
@@ -211,7 +211,7 @@ func TestDeleteStateDomainChangeRangeSparseAndMaxHeight(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if last == ^uint64(0) && got.RangeRows != 2 || last != ^uint64(0) && (got.PointRows != 2 || db.iterators != 2) {
+		if last == ^uint64(0) && got.RangeRows != 2 || last != ^uint64(0) && (got.PointRows != 2 || db.iterators != 4) {
 			t.Fatalf("sparse/max boundary stats=%+v iterators=%d", got, db.iterators)
 		}
 		if db.getCalls != 1 {

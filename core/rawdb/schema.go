@@ -93,6 +93,7 @@ func DirectHistoryRanges() []PhysicalSpaceRange {
 		{"state_history_chunk_bucket", stateHistorySharedBucketPrefix},
 		{"state_change_posting", stateChangePostingPrefix},
 		{"state_change_directory", stateChangeKeyDirectoryPrefix},
+		{"state_change_owner_spans", stateChangeOwnerSpansPrefix},
 	}
 	ranges := make([]PhysicalSpaceRange, 0, len(groups)+1)
 	for _, group := range groups {
@@ -113,6 +114,7 @@ func IsDirectHistoryKey(key []byte) bool {
 		bytes.HasPrefix(key, stateHistorySharedBucketPrefix) ||
 		bytes.HasPrefix(key, stateChangePostingPrefix) ||
 		bytes.HasPrefix(key, stateChangeKeyDirectoryPrefix) ||
+		bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) ||
 		bytes.Equal(key, []byte(stageProgressPrefixString+string(StageStateHistoryIndex)))
 }
 
@@ -122,7 +124,7 @@ func IsDirectHistoryKey(key []byte) bool {
 func directHistoryPrefixPartition(prefix []byte) (history, exclusive bool) {
 	for _, family := range [...][]byte{
 		stateChangeSetPrefix, stateTxRangePrefix, stateHistorySharedChunkPrefix,
-		stateHistorySharedBucketPrefix, stateChangePostingPrefix, stateChangeKeyDirectoryPrefix,
+		stateHistorySharedBucketPrefix, stateChangePostingPrefix, stateChangeKeyDirectoryPrefix, stateChangeOwnerSpansPrefix,
 	} {
 		if bytes.HasPrefix(prefix, family) {
 			return true, true
@@ -144,6 +146,7 @@ func isDirectHistoryKeyString(key string) bool {
 		strings.HasPrefix(key, string(stateHistorySharedBucketPrefix)) ||
 		strings.HasPrefix(key, string(stateChangePostingPrefix)) ||
 		strings.HasPrefix(key, string(stateChangeKeyDirectoryPrefix)) ||
+		strings.HasPrefix(key, string(stateChangeOwnerSpansPrefix)) ||
 		key == stageProgressPrefixString+string(StageStateHistoryIndex)
 }
 
@@ -234,6 +237,7 @@ func HotMaintenanceRanges() []PhysicalSpaceRange {
 		{"state_history_chunk_bucket", stateHistorySharedBucketPrefix},
 		{"state_change_posting", stateChangePostingPrefix},
 		{"state_change_directory", stateChangeKeyDirectoryPrefix},
+		{"state_change_owner_spans", stateChangeOwnerSpansPrefix},
 		{"state_kv_latest", stateKVLatestPrefix},
 		{"state_kv_generation", stateKVGenerationPrefix},
 		{"state_account_latest", stateAccountLatestPrefix},
@@ -307,7 +311,8 @@ func ClassifyPhysicalKeyString(key string) PhysicalKeyFamily {
 	case strings.HasPrefix(key, "state-changeset-v2-"):
 		return PhysicalKeyFamilyStateChangeSet
 	case strings.HasPrefix(key, "state-change-posting-v3-"),
-		strings.HasPrefix(key, "state-change-keys-v3-"):
+		strings.HasPrefix(key, "state-change-keys-v3-"),
+		strings.HasPrefix(key, string(stateChangeOwnerSpansPrefix)):
 		return PhysicalKeyFamilyStateChangeIndex
 	case strings.HasPrefix(key, "sync-staged-block-v1-"):
 		return PhysicalKeyFamilyStagedBody
@@ -594,6 +599,11 @@ var (
 	// Key:   state-changeset-v2- || blockNum u64 || seq u64 (0 = block pack)
 	// Value: RLP(block pack) or RLP(StateDomainChange)
 	stateChangeSetPrefix = []byte("state-changeset-v2-")
+
+	// Optional, complete same-owner RLP row spans bound to a canonical pack's
+	// exact encoded SHA256. Derived keys do not enter MuHash or history exports.
+	// Key: state-change-owner-spans-v1- || blockNum BE64
+	stateChangeOwnerSpansPrefix = []byte("state-change-owner-spans-v1-")
 
 	// stateChangePostingPrefix is the compact exact-key history index. The
 	// SHA-256 digest narrows a lookup to candidate blocks; readers must still
@@ -1150,6 +1160,18 @@ func stateChangeSetKey(blockNum, seq uint64) []byte {
 	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix):], blockNum)
 	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix)+8:], seq)
 	return k
+}
+
+func stateChangeOwnerSpansKey(blockNum uint64) []byte {
+	k := make([]byte, len(stateChangeOwnerSpansPrefix)+8)
+	copy(k, stateChangeOwnerSpansPrefix)
+	binary.BigEndian.PutUint64(k[len(stateChangeOwnerSpansPrefix):], blockNum)
+	return k
+}
+
+// StateHistoryOwnerSpansBounds selects only the derived block index family.
+func StateHistoryOwnerSpansBounds() ([]byte, []byte) {
+	return bytes.Clone(stateChangeOwnerSpansPrefix), prefixUpperBound(stateChangeOwnerSpansPrefix)
 }
 
 func stateChangeSetBlockPrefix(blockNum uint64) []byte {
