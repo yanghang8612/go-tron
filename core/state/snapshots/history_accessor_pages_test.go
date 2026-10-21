@@ -11,6 +11,62 @@ import (
 	"testing"
 )
 
+type historyPhysicalProbe struct {
+	historyPageProbe
+	requested int
+}
+
+func (p *historyPhysicalProbe) ReadAt(dst []byte, off int64) (int, error) {
+	p.requested += len(dst)
+	return p.historyPageProbe.ReadAt(dst, off)
+}
+
+func TestHistoryAccessorPagesUnalignedReadAmplificationAndFailedReuse(t *testing.T) {
+	data := bytes.Repeat([]byte{7}, 14*historyDirectoryPageSize)
+	path := filepath.Join(t.TempDir(), "accessor.kv")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newHistoryAccessorPages(context.Background(), file, uint64(len(data)))
+	defer r.Close()
+	probe := &historyPhysicalProbe{historyPageProbe: historyPageProbe{data: data}}
+	r.pages.source = probe
+	for _, size := range []int{8, 36, 12, 120} {
+		if _, err := r.ReadAt(make([]byte, size), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if probe.calls != 1 || probe.requested != 128 {
+		t.Fatal("small header read amplification", probe.calls, probe.requested)
+	}
+	page := make([]byte, 4096)
+	if _, err := r.ReadAt(page, 120); err != nil {
+		t.Fatal(err)
+	}
+	if probe.calls != 2 || probe.requested != 128+4096 {
+		t.Fatal("unaligned directory split into multiple reads", probe.calls, probe.requested)
+	}
+	for i := 1; i < historyDirectoryPageCount; i++ {
+		if _, err := r.ReadAt(page, int64(120+i*4096)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe.fail = true
+	if _, err := r.ReadAt(page, 120+10*4096); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	probe.fail = false
+	data[0] = 9
+	before := probe.calls
+	if _, err := r.ReadAt(page[:8], 0); err != nil || page[0] != 9 || probe.calls != before+1 {
+		t.Fatal("failed window reused stale bytes", err, page[0], probe.calls)
+	}
+}
+
 func TestHistoryAccessorPagesSmallReadsLargeBypassAndClose(t *testing.T) {
 	data := make([]byte, historyDirectoryPageSize*12+31)
 	for i := range data {
@@ -117,5 +173,63 @@ func TestHistoryAccessorPagesFreshOpenRejectsPhysicalCorruption(t *testing.T) {
 	defer fresh.Close()
 	if _, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(fresh, h, 0); err == nil {
 		t.Fatal("new reader reused corrupt directory bytes", size)
+	}
+}
+
+func TestHistoryAccessorPagesCompressedSourceLifetimeAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.seg")
+	raw := bytes.Repeat([]byte("history-physical-prefix-"), 9000)
+	if err := compressBlobToFile(dir, path, raw, historyCompressChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	open := func() (*compressedBlockReader, *historyAccessorPages, error) {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		stat, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return nil, nil, err
+		}
+		pages := newHistoryAccessorPages(context.Background(), file, uint64(stat.Size()))
+		var magic [8]byte
+		if _, err := pages.ReadAt(magic[:], 0); err != nil {
+			pages.Close()
+			return nil, pages, err
+		}
+		reader, err := openCompressedBlockFileWithCacheLimitContext(context.Background(), pages, stat, 1)
+		return reader, pages, err
+	}
+	reader, pages, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 128)
+	if _, err := reader.ReadAt(buf, 0); err != nil || !bytes.Equal(buf, raw[:128]) {
+		t.Fatal("buffered compressed prefix", err)
+	}
+	if err := reader.Close(); err != nil || pages.pages != nil {
+		t.Fatal("physical pages survived compressed close", err)
+	}
+	if _, err := pages.file.ReadAt(buf, 0); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("physical descriptor leaked", err)
+	}
+	// A later open must read changed physical bytes rather than pooled pages.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("BROKEN!!"), 0); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	if reader, pages, err = open(); err == nil {
+		reader.Close()
+		t.Fatal("fresh compressed open accepted stale magic")
+	}
+	if pages != nil && pages.pages != nil {
+		t.Fatal("failed compressed open retained pages")
 	}
 }

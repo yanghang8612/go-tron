@@ -208,6 +208,7 @@ func (r *PersistentHistoryReader) PrefetchExecutionAt(block uint64, caller, cont
 	if caller != (common.Address{}) {
 		accounts = append(accounts, caller)
 	}
+	rawdb.PlanStateHistoryQueryTailOwners(r.db, accounts)
 	queries := make([]snapshots.StateHistoryQuery, 0, 3)
 	for _, owner := range accounts {
 		queries = append(queries, snapshots.StateHistoryQuery{FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: owner})

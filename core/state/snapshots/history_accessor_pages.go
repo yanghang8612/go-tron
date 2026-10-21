@@ -7,19 +7,26 @@ import (
 	"sync"
 )
 
-// A plain immutable accessor repeatedly reads its small header and directory
-// fields. Coalesce only small reads on this open descriptor; large payloads
-// still use one direct read. Validation remains in the existing callers.
+// Immutable history files repeatedly read small physical header, directory and
+// frame fields. Coalesce only small reads on this open descriptor; large
+// payloads still use one direct read. Validation remains in existing callers.
 // Pages never survive Close or cross a descriptor/request boundary.
 type historyAccessorPages struct {
-	mu    sync.Mutex
-	file  *os.File
-	pages *historyDirectoryPages
+	mu     sync.Mutex
+	file   *os.File
+	pages  *historyDirectoryPages
+	prefix int
 }
 
 func newHistoryAccessorPages(ctx context.Context, file *os.File, size uint64) *historyAccessorPages {
-	return &historyAccessorPages{file: file, pages: acquireHistoryDirectoryPages(ctx, file, 0, size)}
+	return newHistoryPhysicalPages(ctx, file, size, historyHeaderPrefixBytes)
 }
+
+func newHistoryPhysicalPages(ctx context.Context, file *os.File, size uint64, prefix int) *historyAccessorPages {
+	return &historyAccessorPages{file: file, pages: acquireHistoryDirectoryPages(ctx, file, 0, size), prefix: prefix}
+}
+
+func (r *historyAccessorPages) Name() string { return r.file.Name() }
 
 func (r *historyAccessorPages) ReadAt(dst []byte, off int64) (int, error) {
 	r.mu.Lock()
@@ -36,13 +43,52 @@ func (r *historyAccessorPages) ReadAt(dst []byte, off int64) (int, error) {
 	// Match ReaderAt EOF semantics without fetching past the sized descriptor.
 	if int64(len(dst)) > r.pages.end-off {
 		count := int(r.pages.end - off)
-		n, err := r.pages.ReadAt(dst[:count], off)
+		n, err := r.readWindow(dst[:count], off)
 		if err == nil {
 			err = io.EOF
 		}
 		return n, err
 	}
-	return r.pages.ReadAt(dst, off)
+	return r.readWindow(dst, off)
+}
+
+// Anchor a miss at the requested offset. Accessor directory pages start after
+// their header, rather than at OS page boundaries; rounding a 4KiB request down
+// would issue two reads and overfetch on every unaligned directory miss.
+// Keep the tiny accessor prefix bounded separately from segment frame headers.
+func (r *historyAccessorPages) readWindow(dst []byte, off int64) (int, error) {
+	p := r.pages
+	for i := 0; i < p.count; i++ {
+		page := &p.pages[i]
+		if page.offset >= 0 && off >= page.offset && off-page.offset <= int64(page.size) && int64(len(dst)) <= int64(page.size)-(off-page.offset) {
+			return copy(dst, page.bytes[off-page.offset:]), nil
+		}
+	}
+	index := p.next
+	if p.count < historyDirectoryPageCount {
+		index = p.count
+	}
+	page := &p.pages[index]
+	page.offset = -1
+	start, length := off, int64(historyDirectoryPageSize)
+	if off < int64(r.prefix) && int64(len(dst)) <= int64(r.prefix)-off {
+		start, length = 0, int64(r.prefix)
+	}
+	size := int(min(length, p.end-start))
+	n, err := p.source.ReadAt(page.bytes[:size], start)
+	if err != nil {
+		return 0, err
+	}
+	if n != size {
+		return 0, io.ErrUnexpectedEOF
+	}
+	page.offset, page.size = start, size
+	if p.count < historyDirectoryPageCount {
+		p.count++
+	} else {
+		p.next = (p.next + 1) % historyDirectoryPageCount
+	}
+	return copy(dst, page.bytes[off-start:]), nil
 }
 
 func (r *historyAccessorPages) Close() error {

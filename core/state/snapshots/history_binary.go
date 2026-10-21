@@ -3940,16 +3940,19 @@ func openHistorySegmentForReadContext(ctx context.Context, dir string, ref Segme
 		_ = file.Close()
 		return nil, 0, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary segment %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
 	}
+	// Keep the initial magic/header and later compressed prefix reads on the
+	// same bounded physical pages. The reader owns this descriptor on all paths.
+	physicalFile := newHistoryPhysicalPages(ctx, file, uint64(stat.Size()), historyDirectoryPageSize)
 	var magic [8]byte
-	if _, err := (contextReaderAt{ctx: ctx, r: file}).ReadAt(magic[:], 0); err != nil {
-		_ = file.Close()
+	if _, err := (contextReaderAt{ctx: ctx, r: physicalFile}).ReadAt(magic[:], 0); err != nil {
+		_ = physicalFile.Close()
 		return nil, 0, stateDomainChangeBinaryHeader{}, err
 	}
 
-	var reader historySegmentReader = file
+	var reader historySegmentReader = physicalFile
 	logicalSize := uint64(stat.Size())
 	if string(magic[:]) == compressedBlockMagic {
-		cr, err := openCompressedBlockFileWithCacheLimitContext(ctx, file, stat, compressedCacheLimit)
+		cr, err := openCompressedBlockFileWithCacheLimitContext(ctx, physicalFile, stat, compressedCacheLimit)
 		if err != nil {
 			return nil, 0, stateDomainChangeBinaryHeader{}, err
 		}
@@ -3957,7 +3960,7 @@ func openHistorySegmentForReadContext(ctx context.Context, dir string, ref Segme
 		reader = cr
 		logicalSize = cr.UncompressedSize()
 	} else if string(magic[:]) == historyReferenceMagic {
-		_ = file.Close()
+		_ = physicalFile.Close()
 		// Reference files retain V6 virtual offsets and own all chunk data.
 		// The reader authenticates the complete bounded metadata directory
 		// before resolving any virtual offset, then checks each decoded chunk.

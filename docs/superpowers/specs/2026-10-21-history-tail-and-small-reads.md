@@ -25,5 +25,28 @@ concurrency, descriptor closure and physical corruption on a fresh open.
 Run rawdb/state/snapshots correctness, race, vet and native Sapling builds;
 recompute the fixed current MuHash, execute real cold history restore windows,
 compare full HTTP values and delays, and retain source/inode/trace evidence.
-If seconds remain at 9M, attribute the remaining I/O before accepting or expanding
-this design. No new persistence, index format, pruning watermark or MuHash input.
+The first frozen trial was neutral in CPU and regressed OS-cold 9M: aligned
+physical pages split unaligned accessor pages and overread tiny headers. Replace
+those with requested-offset windows and a 128-byte accessor prefix; apply 4KiB
+prefix windows to segment physical headers. Retain the same per-open bound.
+
+The real request scans the same 662-block hot tail separately for the system and
+contract owners. Register those owners without I/O; a necessary full scan may
+collect all planned owners within the shared budget. Repair rows override by
+sequence before owner selection. Incomplete scans publish nothing. Unknown,
+unplanned and over-budget cases keep their original authoritative paths.
+
+The excluded cold-open diagnostic attributes 200 of 208 source opens to one
+ContractStorage lookup. Extend the optional authenticated routing object with
+owner/AccountID, generation and domain membership (31-byte canonical prefixes),
+deduplicated across slots. This only excludes pairs having no changes for that
+prefix. Positive slots still use the complete owner/key and existing codec/CRC
+checks. V2 must not reuse a V1 source column without rechecking its dictionary;
+V1 absences never exclude storage. Partial coverage, replacements and budget
+limits fall back to ordinary reads. Strict verification reconstructs membership.
+
+Build V2 in a derived view of the same frozen canonical input. Prove unchanged
+canonical references, hashes/inodes, HEAD and progress. Compare the old reader
+on V1 against the final reader on V2; report the combined code/index change
+explicitly. No production mutation, canonical format, pruning watermark or
+MuHash input changes. Recompute MuHash and restore using the final native build.

@@ -44,10 +44,11 @@ var sharedSystemHistoryRouting struct {
 }
 
 type systemHistoryRouting struct {
-	sources  [][sha256.Size]byte
-	columns  map[[sha256.Size]byte]int
-	keys     map[string][]byte
-	from, to uint64
+	sources         [][sha256.Size]byte
+	columns         map[[sha256.Size]byte]int
+	keys            map[string][]byte
+	from, to        uint64
+	storagePrefixes bool
 }
 
 // Bind all pair fields, not just a range or an inode. Stale coverage can never
@@ -84,14 +85,28 @@ func systemHistoryRoutingKey(key []byte) bool {
 		return false
 	}
 	domain := kvdomains.KVDomain(binary.BigEndian.Uint16(key[29:31]))
+	if domain == kvdomains.ContractStorage {
+		return len(key) == 31 // owner/generation/domain membership, never a slot
+	}
 	return domain == kvdomains.ContractMetadata || bytes.Equal(key[1:21], common.SystemAccountID[:]) && (domain == kvdomains.SystemDynamicProperty || domain == kvdomains.SystemForkVote)
+}
+
+func contractStorageHistoryRoutingKey(key []byte) bool {
+	return len(key) >= 31 && key[0] == byte(rawdb.StateFlatDomainKVLatest) && kvdomains.KVDomain(binary.BigEndian.Uint16(key[29:31])) == kvdomains.ContractStorage
+}
+
+func normalizedHistoryRoutingKey(key []byte) []byte {
+	if contractStorageHistoryRoutingKey(key) {
+		return key[:31]
+	}
+	return key
 }
 
 func systemHistoryRoutingQuery(q StateHistoryQuery) bool {
 	if q.FlatDomain == rawdb.StateFlatDomainAccountLatest || q.FlatDomain == rawdb.StateFlatDomainKVGeneration {
 		return common.IsSystemAccount(q.Owner) || q.Owner.AccountID() == (common.AccountID{})
 	}
-	return q.FlatDomain == rawdb.StateFlatDomainKVLatest && (q.Domain == kvdomains.ContractMetadata || q.Owner == common.SystemAccountAddress && (q.Domain == kvdomains.SystemDynamicProperty || q.Domain == kvdomains.SystemForkVote))
+	return q.FlatDomain == rawdb.StateFlatDomainKVLatest && (q.Domain == kvdomains.ContractStorage || q.Domain == kvdomains.ContractMetadata || q.Owner == common.SystemAccountAddress && (q.Domain == kvdomains.SystemDynamicProperty || q.Domain == kvdomains.SystemForkVote))
 }
 
 // Members are either a dense bitmap (tag zero), or strictly increasing uint32
@@ -126,7 +141,12 @@ func systemHistoryMembersIterate(members []byte, fn func(int)) {
 }
 
 func (r *systemHistoryRouting) mayContain(column int, lookup []byte) bool {
-	return systemHistoryMembersContain(r.keys[string(lookup)], column)
+	if contractStorageHistoryRoutingKey(lookup) && !r.storagePrefixes {
+		// V1 coverage attests only the original families. Missing storage
+		// entries in that object must never prove a storage key absent.
+		return true
+	}
+	return systemHistoryMembersContain(r.keys[string(normalizedHistoryRoutingKey(lookup))], column)
 }
 
 func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifest, window ...TxRange) (*systemHistoryRouting, error) {
@@ -206,7 +226,11 @@ func readSystemHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (
 
 func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRouting, error) {
 	bad := errors.New("snapshots: invalid system history routing encoding")
-	if len(data) < systemHistoryRoutingHeaderSize || len(data) > systemHistoryRoutingMaxBytes || !bytes.Equal(data[:8], systemHistoryRoutingMagic[:]) || binary.BigEndian.Uint32(data[8:12]) != 1 || binary.BigEndian.Uint32(data[20:24]) != 0 {
+	if len(data) < systemHistoryRoutingHeaderSize || len(data) > systemHistoryRoutingMaxBytes || !bytes.Equal(data[:8], systemHistoryRoutingMagic[:]) || binary.BigEndian.Uint32(data[20:24]) != 0 {
+		return nil, bad
+	}
+	version := binary.BigEndian.Uint32(data[8:12])
+	if version != 1 && version != 2 {
 		return nil, bad
 	}
 	n, keys := uint64(binary.BigEndian.Uint32(data[12:16])), uint64(binary.BigEndian.Uint32(data[16:20]))
@@ -215,6 +239,7 @@ func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRout
 		return nil, bad
 	}
 	r := &systemHistoryRouting{sources: make([][32]byte, n), columns: make(map[[32]byte]int, n), keys: make(map[string][]byte, keys), from: ref.FromTxNum, to: ref.ToTxNum}
+	r.storagePrefixes = version == 2
 	off := systemHistoryRoutingHeaderSize
 	for i := range r.sources {
 		copy(r.sources[i][:], data[off:off+32])
@@ -271,7 +296,7 @@ func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRout
 		default:
 			return nil, bad
 		}
-		if !systemHistoryRoutingKey(key) || previous != nil && bytes.Compare(previous, key) >= 0 {
+		if !systemHistoryRoutingKey(key) || !r.storagePrefixes && contractStorageHistoryRoutingKey(key) || previous != nil && bytes.Compare(previous, key) >= 0 {
 			return nil, bad
 		}
 		// Keep the one-byte tag contiguous with its payload without copying it.
@@ -356,16 +381,31 @@ func iterateHistoryRoutingSourceKeys(ctx context.Context, dir string, history, a
 }
 
 func systemHistorySourceKeys(ctx context.Context, dir string, history, accessor SegmentRef) (keys []string, err error) {
+	return systemHistorySourceKeysWithStorage(ctx, dir, history, accessor, true)
+}
+
+func systemHistorySourceKeysWithStorage(ctx context.Context, dir string, history, accessor SegmentRef, storage bool) (keys []string, err error) {
 	keyBytes := 0
+	seen := make(map[string]bool)
 	err = iterateHistoryRoutingSourceKeys(ctx, dir, history, accessor, func(key []byte) error {
+		if contractStorageHistoryRoutingKey(key) {
+			if !storage {
+				return nil
+			}
+			key = normalizedHistoryRoutingKey(key)
+		}
 		if !systemHistoryRoutingKey(key) {
 			return nil
 		}
-		keyBytes += len(key) + 32
+		if seen[string(key)] {
+			return nil
+		}
+		keyBytes += len(key) + 96 // own the dedup map, key bytes and result slice
 		if len(key) > 1024 || len(keys) >= systemHistoryRoutingMaxKeys || keyBytes > systemHistoryRoutingSourceKeyBytes {
 			return errSystemHistoryRoutingBudget
 		}
 		keys = append(keys, string(key))
+		seen[string(key)] = true
 		return nil
 	})
 	if err != nil {
@@ -386,6 +426,11 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 	old, err := loadSystemHistoryRouting(ctx, dir, manifest)
 	if err != nil {
 		return ref, false, err
+	}
+	if old != nil && !old.storagePrefixes {
+		// Reauthenticate dictionaries before making the broader V2 claim.
+		// Uncovered pairs retain ordinary authoritative reads during rebuild.
+		old = nil
 	}
 	manifest = manifestLookupView(manifest)
 	type pair struct {
@@ -516,7 +561,7 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 	}
 	data := make([]byte, systemHistoryRoutingHeaderSize)
 	copy(data, systemHistoryRoutingMagic[:])
-	binary.BigEndian.PutUint32(data[8:12], 1)
+	binary.BigEndian.PutUint32(data[8:12], 2)
 	binary.BigEndian.PutUint32(data[12:16], uint32(len(pairs)))
 	binary.BigEndian.PutUint32(data[16:20], uint32(len(keys)))
 	binary.BigEndian.PutUint64(data[24:32], from)
@@ -614,7 +659,7 @@ func checkSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 		if !covered {
 			continue
 		}
-		keys, err := systemHistorySourceKeys(ctx, dir, history, accessor)
+		keys, err := systemHistorySourceKeysWithStorage(ctx, dir, history, accessor, route.storagePrefixes)
 		if err != nil {
 			return err
 		}

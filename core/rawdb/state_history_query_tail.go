@@ -44,6 +44,7 @@ type stateHistoryQueryTailView struct {
 	entries                     map[common.Address]*stateHistoryQueryTailEntry
 	rejected                    map[common.Address]bool
 	first                       map[common.Address]*stateHistoryQueryTailFirst
+	planned                     map[common.Address]bool
 	used, rows, budget, maxRows int
 }
 
@@ -62,6 +63,9 @@ func (v *stateHistoryQueryTailView) iterateOwnerLocked(ctx context.Context, from
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if from > to {
+		return nil
+	}
 	if v.rejected[owner] {
 		return iterateStateHistoryOwnerTail(ctx, v.StateKVHistoryReader, from, to, owner, fn)
 	}
@@ -69,6 +73,9 @@ func (v *stateHistoryQueryTailView) iterateOwnerLocked(ctx context.Context, from
 	if entry == nil || entry.from > from || entry.to < to {
 		if len(v.entries)+len(v.rejected) >= stateHistoryQueryTailOwners && entry == nil {
 			return iterateStateHistoryOwnerTail(ctx, v.StateKVHistoryReader, from, to, owner, fn)
+		}
+		if len(v.planned) > 1 && v.planned[owner] {
+			return v.iteratePlannedOwnersLocked(ctx, from, to, owner, fn)
 		}
 		oldBytes, oldRows := 0, 0
 		if entry != nil {
@@ -151,6 +158,10 @@ func iterateStateHistoryTailByOwner(ctx context.Context, db StateKVHistoryReader
 // callbacks, including repairs that change the owner and shadow a match.
 // Unrelated values are validated but never copied into millions of objects.
 func iterateStateHistoryOwnerTail(ctx context.Context, db StateKVHistoryReader, from, to uint64, owner common.Address, fn func(*StateDomainChange) (bool, error)) error {
+	return iterateStateHistorySelectedOwnersTail(ctx, db, from, to, func(candidate common.Address) bool { return candidate == owner }, fn)
+}
+
+func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistoryReader, from, to uint64, selected func(common.Address) bool, fn func(*StateDomainChange) (bool, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -215,7 +226,7 @@ func iterateStateHistoryOwnerTail(ctx context.Context, db StateKVHistoryReader, 
 				if err := ctx.Err(); err != nil {
 					return false, err
 				}
-				if row.Owner == owner {
+				if selected(row.Owner) {
 					rows[row.Seq] = cloneStateDomainChange(row)
 				}
 				return true, nil
@@ -234,7 +245,7 @@ func iterateStateHistoryOwnerTail(ctx context.Context, db StateKVHistoryReader, 
 			if legacyErr != nil {
 				return err
 			}
-			if row.Owner == owner {
+			if selected(row.Owner) {
 				rows[0] = row
 			}
 			continue
@@ -243,7 +254,7 @@ func iterateStateHistoryOwnerTail(ctx context.Context, db StateKVHistoryReader, 
 		if err != nil {
 			return err
 		}
-		if row.Owner == owner {
+		if selected(row.Owner) {
 			rows[seq] = row
 		} else {
 			delete(rows, seq)

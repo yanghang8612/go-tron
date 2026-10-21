@@ -487,7 +487,7 @@ type compressedBlockReader struct {
 	cdc          *cdcReader
 	prefixCache  *historyHeaderCache
 	headerPrefix *historyHeaderPrefix
-	f            *os.File
+	f            compressedBlockPhysicalFile
 	dec          *zstd.Decoder
 	blockSize    int
 	recCount     uint64
@@ -500,6 +500,14 @@ type compressedBlockReader struct {
 	cacheLimit int
 	compressed []byte
 	cache      []cbCacheEntry // small MRU-ordered decompressed-block cache (front = newest)
+}
+
+// The owner may coalesce physical reads while preserving the same descriptor
+// identity, diagnostics and Close lifetime. This is below all codec validation.
+type compressedBlockPhysicalFile interface {
+	io.ReaderAt
+	io.Closer
+	Name() string
 }
 
 type cbCacheEntry struct {
@@ -540,7 +548,7 @@ func openCompressedBlockReaderWithCacheLimitContext(ctx context.Context, path st
 // Takes ownership of f on success AND failure. Magic dispatchers pass the
 // same descriptor they already sized/inspected, avoiding a second open/stat
 // and a path-replacement race between physical identity and decoding.
-func openCompressedBlockFileWithCacheLimitContext(ctx context.Context, f *os.File, stat os.FileInfo, cacheLimit int) (*compressedBlockReader, error) {
+func openCompressedBlockFileWithCacheLimitContext(ctx context.Context, f compressedBlockPhysicalFile, stat os.FileInfo, cacheLimit int) (*compressedBlockReader, error) {
 	if cacheLimit < 1 || cacheLimit > cbCacheBlocks {
 		_ = f.Close()
 		return nil, fmt.Errorf("snapshots: compressed-block cache limit %d outside [1,%d]", cacheLimit, cbCacheBlocks)
