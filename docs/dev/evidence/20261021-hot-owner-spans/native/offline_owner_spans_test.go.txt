@@ -1,0 +1,75 @@
+package rawdb
+
+import (
+ "bytes"
+ "context"
+ "crypto/sha256"
+ "encoding/binary"
+ "encoding/hex"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "hash"
+ "os"
+ "path/filepath"
+ "runtime"
+ "sort"
+ "testing"
+ "time"
+
+ "github.com/ethereum/go-ethereum/ethdb"
+ "github.com/tronprotocol/go-tron/common"
+)
+
+const ownerTailFrom uint64 = 11817531
+const ownerTailThrough uint64 = 11818192
+
+type ownerSpansOnlyBatch struct { batch ethdb.Batch; rows, size uint64 }
+func (w *ownerSpansOnlyBatch) Delete(k []byte) error {return errors.New("deletes prohibited in derived builder")}
+func (w *ownerSpansOnlyBatch) Put(k,v []byte) error {
+ if len(k)!=len(stateChangeOwnerSpansPrefix)+8 || !bytes.HasPrefix(k,stateChangeOwnerSpansPrefix) {return errors.New("non-auxiliary write prohibited")}
+ block:=binary.BigEndian.Uint64(k[len(stateChangeOwnerSpansPrefix):]);if block<ownerTailFrom || block>ownerTailThrough{return errors.New("write outside fixed hot tail prohibited")}
+ w.rows++;w.size+=uint64(len(k)+len(v));return w.batch.Put(k,v)
+}
+func ownerWriteDigest(h hash.Hash,k,v []byte) { var n [8]byte;binary.BigEndian.PutUint64(n[:],uint64(len(k)));h.Write(n[:]);h.Write(k);binary.BigEndian.PutUint64(n[:],uint64(len(v)));h.Write(n[:]);h.Write(v) }
+func ownerCanonicalDigest(db StateHistoryReadView) (map[string]any,error) {
+ result:=map[string]any{}
+ for _,family:=range DirectHistoryRanges() {
+  if family.Name!="state_changeset" && family.Name!="state_tx_range" && family.Name!="state_history_chunk" && family.Name!="state_history_chunk_bucket" {continue}
+  first,last:=ownerTailFrom,ownerTailThrough
+  if family.Name=="state_history_chunk" || family.Name=="state_history_chunk_bucket" {first/=StateHistoryChunkBucketBlocks;last/=StateHistoryChunkBucketBlocks}
+  var start [8]byte;binary.BigEndian.PutUint64(start[:],first)
+  h:=sha256.New();var rows,size uint64;it:=db.NewIterator(family.Start,start[:])
+  for it.Next() {k,v:=it.Key(),it.Value();if len(k)<len(family.Start)+8{return nil,errors.New("short canonical key")};ordinal:=binary.BigEndian.Uint64(k[len(family.Start):]);if ordinal>last{break};ownerWriteDigest(h,k,v);rows++;size+=uint64(len(k)+len(v))};e:=it.Error();it.Release();if e!=nil{return nil,e};result[family.Name]=map[string]any{"rows":rows,"logical_bytes":size,"sha256":hex.EncodeToString(h.Sum(nil)),"from":first,"through":last}
+ }
+ return result,nil
+}
+func TestOfflineOwnerSpansBuild(t *testing.T) {
+ root:=os.Getenv("GTRON_OWNER_INDEX_ROOT");if root=="" {t.Skip("explicit fixed offline view required")}
+ input:=filepath.Join(root,"owner-index-input");tune:=DefaultPebbleOptions();tune.EnableL6Filter=false;tune.DisableAutomaticCompactions=true;tune.MaxConcurrentCompactions=1;tune.MemTableSizeBytes=32<<20
+ db,err:=NewPebbleDBWithOptions(filepath.Join(input,"history"),256,1024,tune);if err!=nil{t.Fatal(err)}
+ defer db.Close();view,release,err:=AcquireStateHistoryReadView(db);if err!=nil{t.Fatal(err)};defer release()
+ progress,ok,err:=ReadStageProgressRow(view,StageStateHistoryIndex);if err!=nil || !ok || progress.BlockNum!=ownerTailFrom-1{t.Fatal("fixed posting watermark",progress,ok,err)}
+ before,err:=ownerCanonicalDigest(view);if err!=nil{t.Fatal(err)};start:=time.Now();blocks:=[]uint64{}
+ var first [8]byte;binary.BigEndian.PutUint64(first[:],ownerTailFrom);it:=view.NewIterator(stateChangeSetPrefix,first[:])
+ for it.Next(){k:=it.Key();if len(k)>=len(stateChangeSetPrefix)+8 && binary.BigEndian.Uint64(k[len(stateChangeSetPrefix):])>ownerTailThrough{break};if len(k)==len(stateChangeSetPrefix)+16 && binary.BigEndian.Uint64(k[len(stateChangeSetPrefix)+8:])==0 {blocks=append(blocks,binary.BigEndian.Uint64(k[len(stateChangeSetPrefix):]))}}
+ err=it.Error();it.Release();if err!=nil{t.Fatal(err)}
+ batch:=db.NewBatch();defer batch.Close();writer:=&ownerSpansOnlyBatch{batch:batch};built:=0;log,err:=os.Create(filepath.Join(root,"owner-spans-build.jsonl"));if err!=nil{t.Fatal(err)};defer log.Close()
+ for i,block:=range blocks {ok,e:=BuildStateHistoryOwnerSpans(context.Background(),view,writer,block);if e!=nil{t.Fatal(block,e)};if ok{built++};if batch.ValueSize()>=8<<20 || i+1==len(blocks) {if e:=batch.Write();e!=nil{t.Fatal(e)};batch.Reset();json.NewEncoder(log).Encode(map[string]any{"visited":i+1,"built":built,"bytes":writer.size,"elapsed_seconds":time.Since(start).Seconds()});log.Sync()}}
+ buildSeconds:=time.Since(start).Seconds();current,closeCurrent,err:=AcquireStateHistoryReadView(db);if err!=nil{t.Fatal(err)};defer closeCurrent();after,err:=ownerCanonicalDigest(current);if err!=nil{t.Fatal(err)};a,_:=json.Marshal(before);b,_:=json.Marshal(after);if !bytes.Equal(a,b){t.Fatal("authoritative history changed")}
+ var indexedRows,runCount,ownerCount,encodedBytes,decodedBytes,selectedRows uint64;checked:=0
+ targetBytes,e:=hex.DecodeString("a4997124a328a4615eab437cede31da47a31b375");if e!=nil || len(targetBytes)!=20 {t.Fatal("bad target",e,len(targetBytes))};var target common.Address;target[0]=0x41;copy(target[1:],targetBytes)
+ for _,block:=range blocks {stored,present,e:=readPresentValue(current,stateChangeOwnerSpansKey(block),"offline owner spans");if e!=nil{t.Fatal(e)};if !present{continue};if e=CheckStateHistoryOwnerSpans(context.Background(),current,block);e!=nil{t.Fatal(block,e)};r,e:=decodeHistoryOwnerSpans(stored,block);if e!=nil{t.Fatal(e)};checked++;indexedRows+=r.rows;decodedBytes+=r.rawBytes;runCount+=uint64(len(r.spans));ownerCount+=uint64(len(r.owners));encodedBytes+=uint64(len(stored));for _,s:=range r.spans{who:=r.owners[s.owner];if who==common.SystemAccountAddress || who==target{selectedRows+=uint64(s.rows)}}}
+ if built==0 || built!=checked || writer.rows!=uint64(built) {t.Fatal("incomplete derived coverage",built,checked,writer.rows)}
+ receipt:=map[string]any{"complete":true,"from":ownerTailFrom,"through":ownerTailThrough,"posting_watermark":progress.BlockNum,"block_packs":len(blocks),"built":built,"strictly_checked":checked,"index_key_value_bytes":writer.size,"index_value_bytes":encodedBytes,"indexed_rows":indexedRows,"indexed_raw_bytes":decodedBytes,"owner_entries":ownerCount,"row_spans":runCount,"system_and_counter_rows":selectedRows,"build_seconds":buildSeconds,"with_strict_check_seconds":time.Since(start).Seconds(),"canonical_before":before,"canonical_after":after,"canonical_unchanged":true,"only_auxiliary_writes":true}
+ data,_:=json.MarshalIndent(receipt,"","  ");if e:=os.WriteFile(filepath.Join(root,"owner-spans-build.json"),data,0600);e!=nil{t.Fatal(e)}
+ // Replay the same real row mix through the storage writer in memory. This
+ // isolates index cost; it is not a full importer or durable disk benchmark.
+ var selectedBlocks []uint64
+ for i:=0;i<min(24,len(blocks));i++{selectedBlocks=append(selectedBlocks,blocks[i*(len(blocks)-1)/max(1,min(24,len(blocks))-1)])}
+ metrics:=[]map[string]any{};memory:=NewMemoryDatabase();defer memory.Close();mb:=memory.NewBatch();defer mb.Close()
+ for _,block:=range selectedBlocks {pack,_,e:=readPresentValue(view,stateChangeSetKey(block,0),"replay block");if e!=nil{t.Fatal(e)};rows,e:=decodePersistedStateDomainChangeBlock(pack,block,view);if e!=nil{t.Fatal(e)}
+  for repeat:=0;repeat<4;repeat++{order:=[]bool{false,true};if repeat%2!=0{order=[]bool{true,false}};for _,enabled:=range order{scope:=&ownerSpansWriteBench{KeyValueStore:memory,batch:mb,atomic:enabled};runtime.GC();var before,after runtime.MemStats;runtime.ReadMemStats(&before);begin:=time.Now();var size int;for n:=0;n<30;n++{mb.Reset();if e:=writeStateDomainChangeBlockRows(scope,rows,false,false);e!=nil{t.Fatal(e)};size=mb.ValueSize()};elapsed:=time.Since(begin).Seconds();runtime.ReadMemStats(&after);metrics=append(metrics,map[string]any{"block":block,"rows":len(rows),"index_enabled":enabled,"repeat":repeat,"iterations":30,"ns_per_block":elapsed*1e9/30,"allocated_bytes_per_block":float64(after.TotalAlloc-before.TotalAlloc)/30,"batch_value_bytes":size})}}
+ }
+ sort.Slice(metrics,func(i,j int)bool{return fmt.Sprint(metrics[i]["block"],metrics[i]["repeat"],metrics[i]["index_enabled"])<fmt.Sprint(metrics[j]["block"],metrics[j]["repeat"],metrics[j]["index_enabled"])});data,_=json.MarshalIndent(map[string]any{"complete":true,"dedup_disabled_both":true,"in_memory_batch_only":true,"rows":metrics},"","  ");if e:=os.WriteFile(filepath.Join(root,"writer-replay.json"),data,0600);e!=nil{t.Fatal(e)}
+}

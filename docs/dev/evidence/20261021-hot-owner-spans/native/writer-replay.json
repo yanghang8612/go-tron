@@ -1,0 +1,1927 @@
+{
+  "complete": true,
+  "dedup_disabled_both": true,
+  "in_memory_batch_only": true,
+  "rows": [
+    {
+      "allocated_bytes_per_block": 251144.26666666666,
+      "batch_value_bytes": 16655,
+      "block": 11817531,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 433005.93333333335,
+      "repeat": 0,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 312057.86666666664,
+      "batch_value_bytes": 20572,
+      "block": 11817531,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 556374.4,
+      "repeat": 0,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 238883.46666666667,
+      "batch_value_bytes": 16655,
+      "block": 11817531,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 401367.0333333333,
+      "repeat": 1,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 308445.6,
+      "batch_value_bytes": 20572,
+      "block": 11817531,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 527771.1666666667,
+      "repeat": 1,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 239787.2,
+      "batch_value_bytes": 16655,
+      "block": 11817531,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 396217.3,
+      "repeat": 2,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 314286.13333333336,
+      "batch_value_bytes": 20572,
+      "block": 11817531,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 555250.2333333333,
+      "repeat": 2,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 227697.06666666668,
+      "batch_value_bytes": 16655,
+      "block": 11817531,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 383975,
+      "repeat": 3,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 313645.06666666665,
+      "batch_value_bytes": 20572,
+      "block": 11817531,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 527133.4999999999,
+      "repeat": 3,
+      "rows": 566
+    },
+    {
+      "allocated_bytes_per_block": 199919.73333333334,
+      "batch_value_bytes": 15410,
+      "block": 11817559,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 324310.93333333335,
+      "repeat": 0,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 275372.8,
+      "batch_value_bytes": 19368,
+      "block": 11817559,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 433831.1,
+      "repeat": 0,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 198840.53333333333,
+      "batch_value_bytes": 15410,
+      "block": 11817559,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 256283.46666666667,
+      "repeat": 1,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 269502.93333333335,
+      "batch_value_bytes": 19368,
+      "block": 11817559,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 496758.4666666667,
+      "repeat": 1,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 216483.2,
+      "batch_value_bytes": 15410,
+      "block": 11817559,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 278545.7,
+      "repeat": 2,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 277616,
+      "batch_value_bytes": 19368,
+      "block": 11817559,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 428258.3333333333,
+      "repeat": 2,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 196062.13333333333,
+      "batch_value_bytes": 15410,
+      "block": 11817559,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 252970.1,
+      "repeat": 3,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 277607.4666666667,
+      "batch_value_bytes": 19368,
+      "block": 11817559,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 453154.1666666667,
+      "repeat": 3,
+      "rows": 503
+    },
+    {
+      "allocated_bytes_per_block": 211205.33333333334,
+      "batch_value_bytes": 14351,
+      "block": 11817588,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 275827.56666666665,
+      "repeat": 0,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 266528,
+      "batch_value_bytes": 17984,
+      "block": 11817588,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 434902.5333333333,
+      "repeat": 0,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 195432.26666666666,
+      "batch_value_bytes": 14351,
+      "block": 11817588,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 270906.8333333333,
+      "repeat": 1,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 262163.2,
+      "batch_value_bytes": 17984,
+      "block": 11817588,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 392558.0333333333,
+      "repeat": 1,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 201134.93333333332,
+      "batch_value_bytes": 14351,
+      "block": 11817588,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 249787,
+      "repeat": 2,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 267847.4666666667,
+      "batch_value_bytes": 17984,
+      "block": 11817588,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 432399.93333333335,
+      "repeat": 2,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 191068.53333333333,
+      "batch_value_bytes": 14351,
+      "block": 11817588,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 271113.9666666666,
+      "repeat": 3,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 263489.6,
+      "batch_value_bytes": 17984,
+      "block": 11817588,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 392180.93333333335,
+      "repeat": 3,
+      "rows": 481
+    },
+    {
+      "allocated_bytes_per_block": 210710.4,
+      "batch_value_bytes": 14326,
+      "block": 11817617,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 318226.9666666667,
+      "repeat": 0,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 261672,
+      "batch_value_bytes": 17947,
+      "block": 11817617,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 420093.8,
+      "repeat": 0,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 190571.46666666667,
+      "batch_value_bytes": 14326,
+      "block": 11817617,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 247139.33333333334,
+      "repeat": 1,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 270417.06666666665,
+      "batch_value_bytes": 17947,
+      "block": 11817617,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 448041.1,
+      "repeat": 1,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 190572.53333333333,
+      "batch_value_bytes": 14326,
+      "block": 11817617,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 241577,
+      "repeat": 2,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 257307.2,
+      "batch_value_bytes": 17947,
+      "block": 11817617,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 402192.56666666665,
+      "repeat": 2,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 190571.46666666667,
+      "batch_value_bytes": 14326,
+      "block": 11817617,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 293638.93333333335,
+      "repeat": 3,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 267370.13333333336,
+      "batch_value_bytes": 17947,
+      "block": 11817617,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 416145.7,
+      "repeat": 3,
+      "rows": 475
+    },
+    {
+      "allocated_bytes_per_block": 291813.3333333333,
+      "batch_value_bytes": 20022,
+      "block": 11817645,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 403058,
+      "repeat": 0,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 386534.4,
+      "batch_value_bytes": 24965,
+      "block": 11817645,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 589791.7,
+      "repeat": 0,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 283749.86666666664,
+      "batch_value_bytes": 20022,
+      "block": 11817645,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 428483.1,
+      "repeat": 1,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 382171.73333333334,
+      "batch_value_bytes": 24965,
+      "block": 11817645,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 563777.3666666667,
+      "repeat": 1,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 283759.4666666667,
+      "batch_value_bytes": 20022,
+      "block": 11817645,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 513372.2,
+      "repeat": 2,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 374114.13333333336,
+      "batch_value_bytes": 24965,
+      "block": 11817645,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 632618.2666666667,
+      "repeat": 2,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 279382.4,
+      "batch_value_bytes": 20022,
+      "block": 11817645,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 483052.4666666667,
+      "repeat": 3,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 390225.06666666665,
+      "batch_value_bytes": 24965,
+      "block": 11817645,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 632397.2,
+      "repeat": 3,
+      "rows": 670
+    },
+    {
+      "allocated_bytes_per_block": 239699.73333333334,
+      "batch_value_bytes": 16731,
+      "block": 11817674,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 395626.76666666666,
+      "repeat": 0,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 304616,
+      "batch_value_bytes": 20961,
+      "block": 11817674,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 517586.8333333333,
+      "repeat": 0,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 227286.4,
+      "batch_value_bytes": 16731,
+      "block": 11817674,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 404776.6666666667,
+      "repeat": 1,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 308299.2,
+      "batch_value_bytes": 20961,
+      "block": 11817674,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 558532.7333333333,
+      "repeat": 1,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 244081.06666666668,
+      "batch_value_bytes": 16731,
+      "block": 11817674,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 429651.3,
+      "repeat": 2,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 312669.86666666664,
+      "batch_value_bytes": 20961,
+      "block": 11817674,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 572179.8,
+      "repeat": 2,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 244090.66666666666,
+      "batch_value_bytes": 16731,
+      "block": 11817674,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 418795.76666666666,
+      "repeat": 3,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 320721.06666666665,
+      "batch_value_bytes": 20961,
+      "block": 11817674,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 565301.6,
+      "repeat": 3,
+      "rows": 583
+    },
+    {
+      "allocated_bytes_per_block": 272181.86666666664,
+      "batch_value_bytes": 18911,
+      "block": 11817703,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 388019.6666666667,
+      "repeat": 0,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 363661.3333333333,
+      "batch_value_bytes": 23317,
+      "block": 11817703,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 554401.8333333334,
+      "repeat": 0,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 267836.26666666666,
+      "batch_value_bytes": 18911,
+      "block": 11817703,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 392930.73333333334,
+      "repeat": 1,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 376084.26666666666,
+      "batch_value_bytes": 23317,
+      "block": 11817703,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 537336.9,
+      "repeat": 1,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 272179.2,
+      "batch_value_bytes": 18911,
+      "block": 11817703,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 424469.6666666667,
+      "repeat": 2,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 368022.93333333335,
+      "batch_value_bytes": 23317,
+      "block": 11817703,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 525709.0666666667,
+      "repeat": 2,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 267837.86666666664,
+      "batch_value_bytes": 18911,
+      "block": 11817703,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 427542.56666666665,
+      "repeat": 3,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 376087.4666666667,
+      "batch_value_bytes": 23317,
+      "block": 11817703,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 554927.6333333333,
+      "repeat": 3,
+      "rows": 641
+    },
+    {
+      "allocated_bytes_per_block": 194862.66666666666,
+      "batch_value_bytes": 14402,
+      "block": 11817732,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 244686.13333333333,
+      "repeat": 0,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 269348.26666666666,
+      "batch_value_bytes": 17747,
+      "block": 11817732,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 395776.43333333335,
+      "repeat": 0,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 194868,
+      "batch_value_bytes": 14402,
+      "block": 11817732,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 247859.83333333334,
+      "repeat": 1,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 263674.6666666667,
+      "batch_value_bytes": 17747,
+      "block": 11817732,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 434207.86666666664,
+      "repeat": 1,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 215004.26666666666,
+      "batch_value_bytes": 14402,
+      "block": 11817732,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 268325.2666666667,
+      "repeat": 2,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 269356.26666666666,
+      "batch_value_bytes": 17747,
+      "block": 11817732,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 449331.4,
+      "repeat": 2,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 194866.93333333332,
+      "batch_value_bytes": 14402,
+      "block": 11817732,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 259730.2,
+      "repeat": 3,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 263675.2,
+      "batch_value_bytes": 17747,
+      "block": 11817732,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 445710.0333333333,
+      "repeat": 3,
+      "rows": 487
+    },
+    {
+      "allocated_bytes_per_block": 262392.5333333333,
+      "batch_value_bytes": 17928,
+      "block": 11817760,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 390231.8333333333,
+      "repeat": 0,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 349058.13333333336,
+      "batch_value_bytes": 21964,
+      "block": 11817760,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 551659.3666666667,
+      "repeat": 0,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 249989.33333333334,
+      "batch_value_bytes": 17928,
+      "block": 11817760,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 376710.6,
+      "repeat": 1,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 349052.26666666666,
+      "batch_value_bytes": 21964,
+      "block": 11817760,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 524861.0666666668,
+      "repeat": 1,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 241917.86666666667,
+      "batch_value_bytes": 17928,
+      "block": 11817760,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 335117.06666666665,
+      "repeat": 2,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 369534.93333333335,
+      "batch_value_bytes": 21964,
+      "block": 11817760,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 490768.93333333335,
+      "repeat": 2,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 249977.06666666668,
+      "batch_value_bytes": 17928,
+      "block": 11817760,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 376835.0333333333,
+      "repeat": 3,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 349048.5333333333,
+      "batch_value_bytes": 21964,
+      "block": 11817760,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 522049.60000000003,
+      "repeat": 3,
+      "rows": 594
+    },
+    {
+      "allocated_bytes_per_block": 237588.8,
+      "batch_value_bytes": 17020,
+      "block": 11817789,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 328095.76666666666,
+      "repeat": 0,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 332579.2,
+      "batch_value_bytes": 21014,
+      "block": 11817789,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 483891.63333333336,
+      "repeat": 0,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 241964.8,
+      "batch_value_bytes": 17020,
+      "block": 11817789,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 370623.73333333334,
+      "repeat": 1,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 320155.73333333334,
+      "batch_value_bytes": 21014,
+      "block": 11817789,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 471820.6666666667,
+      "repeat": 1,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 250013.86666666667,
+      "batch_value_bytes": 17020,
+      "block": 11817789,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 344859.0333333333,
+      "repeat": 2,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 315786.6666666667,
+      "batch_value_bytes": 21014,
+      "block": 11817789,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 497225.7,
+      "repeat": 2,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 254388.26666666666,
+      "batch_value_bytes": 17020,
+      "block": 11817789,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 387882.0333333333,
+      "repeat": 3,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 315796.26666666666,
+      "batch_value_bytes": 21014,
+      "block": 11817789,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 468242.56666666665,
+      "repeat": 3,
+      "rows": 577
+    },
+    {
+      "allocated_bytes_per_block": 182666.4,
+      "batch_value_bytes": 13684,
+      "block": 11817818,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 235725.4,
+      "repeat": 0,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 247342.93333333332,
+      "batch_value_bytes": 17166,
+      "block": 11817818,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 377687.06666666665,
+      "repeat": 0,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 188342.66666666666,
+      "batch_value_bytes": 13684,
+      "block": 11817818,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 275453.0333333334,
+      "repeat": 1,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 247349.33333333334,
+      "batch_value_bytes": 17166,
+      "block": 11817818,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 398154.4,
+      "repeat": 1,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 178288.8,
+      "batch_value_bytes": 13684,
+      "block": 11817818,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 228417.46666666667,
+      "repeat": 2,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 247346.13333333333,
+      "batch_value_bytes": 17166,
+      "block": 11817818,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 364665.73333333334,
+      "repeat": 2,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 188346.4,
+      "batch_value_bytes": 13684,
+      "block": 11817818,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 242261.26666666666,
+      "repeat": 3,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 241660.26666666666,
+      "batch_value_bytes": 17166,
+      "block": 11817818,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 359558.8,
+      "repeat": 3,
+      "rows": 453
+    },
+    {
+      "allocated_bytes_per_block": 132374.13333333333,
+      "batch_value_bytes": 10572,
+      "block": 11817847,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 170547.36666666667,
+      "repeat": 0,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 195426.93333333332,
+      "batch_value_bytes": 13474,
+      "block": 11817847,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 260604.06666666668,
+      "repeat": 0,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 138872.26666666666,
+      "batch_value_bytes": 10572,
+      "block": 11817847,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 167754.86666666667,
+      "repeat": 1,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 188916,
+      "batch_value_bytes": 13474,
+      "block": 11817847,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 250204.1,
+      "repeat": 1,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 132369.33333333334,
+      "batch_value_bytes": 10572,
+      "block": 11817847,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 169286.3,
+      "repeat": 2,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 195425.33333333334,
+      "batch_value_bytes": 13474,
+      "block": 11817847,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 257739.4,
+      "repeat": 2,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 132366.13333333333,
+      "batch_value_bytes": 10572,
+      "block": 11817847,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 168041.6,
+      "repeat": 3,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 188919.2,
+      "batch_value_bytes": 13474,
+      "block": 11817847,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 251646.36666666667,
+      "repeat": 3,
+      "rows": 341
+    },
+    {
+      "allocated_bytes_per_block": 206188.8,
+      "batch_value_bytes": 14929,
+      "block": 11817875,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 283204.9,
+      "repeat": 0,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 266442.13333333336,
+      "batch_value_bytes": 18322,
+      "block": 11817875,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 429516.06666666665,
+      "repeat": 0,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 196108,
+      "batch_value_bytes": 14929,
+      "block": 11817875,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 288956.1,
+      "repeat": 1,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 276496,
+      "batch_value_bytes": 18322,
+      "block": 11817875,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 464220.1666666667,
+      "repeat": 1,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 196110.13333333333,
+      "batch_value_bytes": 14929,
+      "block": 11817875,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 251817.4,
+      "repeat": 2,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 280874.13333333336,
+      "batch_value_bytes": 18322,
+      "block": 11817875,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 415545.36666666664,
+      "repeat": 2,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 216242.13333333333,
+      "batch_value_bytes": 14929,
+      "block": 11817875,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 304588.0333333333,
+      "repeat": 3,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 262075.2,
+      "batch_value_bytes": 18322,
+      "block": 11817875,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 457004.63333333336,
+      "repeat": 3,
+      "rows": 494
+    },
+    {
+      "allocated_bytes_per_block": 227456.53333333333,
+      "batch_value_bytes": 16166,
+      "block": 11817904,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 352990.76666666666,
+      "repeat": 0,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 278952,
+      "batch_value_bytes": 20127,
+      "block": 11817904,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 454460.7,
+      "repeat": 0,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 237512.53333333333,
+      "batch_value_bytes": 16166,
+      "block": 11817904,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 331006.4666666667,
+      "repeat": 1,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 295073.6,
+      "batch_value_bytes": 20127,
+      "block": 11817904,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 493295.6666666667,
+      "repeat": 1,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 212649.86666666667,
+      "batch_value_bytes": 16166,
+      "block": 11817904,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 330823.6666666667,
+      "repeat": 2,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 307488.5333333333,
+      "batch_value_bytes": 20127,
+      "block": 11817904,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 452055.86666666664,
+      "repeat": 2,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 229460.26666666666,
+      "batch_value_bytes": 16166,
+      "block": 11817904,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 348037.6,
+      "repeat": 3,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 287005.86666666664,
+      "batch_value_bytes": 20127,
+      "block": 11817904,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 474026.5333333333,
+      "repeat": 3,
+      "rows": 548
+    },
+    {
+      "allocated_bytes_per_block": 219079.46666666667,
+      "batch_value_bytes": 16341,
+      "block": 11817933,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 305229.7,
+      "repeat": 0,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 316892.26666666666,
+      "batch_value_bytes": 20642,
+      "block": 11817933,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 471617.06666666665,
+      "repeat": 0,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 231505.6,
+      "batch_value_bytes": 16341,
+      "block": 11817933,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 345249.23333333334,
+      "repeat": 1,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 308838.4,
+      "batch_value_bytes": 20642,
+      "block": 11817933,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 504601.63333333336,
+      "repeat": 1,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 231505.06666666668,
+      "batch_value_bytes": 16341,
+      "block": 11817933,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 365926.3,
+      "repeat": 2,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 308836.8,
+      "batch_value_bytes": 20642,
+      "block": 11817933,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 469448.9,
+      "repeat": 2,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 235869.86666666667,
+      "batch_value_bytes": 16341,
+      "block": 11817933,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 349679.4666666667,
+      "repeat": 3,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 308831.4666666667,
+      "batch_value_bytes": 20642,
+      "block": 11817933,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 503703.9,
+      "repeat": 3,
+      "rows": 556
+    },
+    {
+      "allocated_bytes_per_block": 198456.26666666666,
+      "batch_value_bytes": 15788,
+      "block": 11817962,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 251808.9,
+      "repeat": 0,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 264438.93333333335,
+      "batch_value_bytes": 19325,
+      "block": 11817962,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 404042.63333333336,
+      "repeat": 0,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 194093.6,
+      "batch_value_bytes": 15788,
+      "block": 11817962,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 290499.1666666667,
+      "repeat": 1,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 270114.13333333336,
+      "batch_value_bytes": 19325,
+      "block": 11817962,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 415740.5,
+      "repeat": 1,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 194087.73333333334,
+      "batch_value_bytes": 15788,
+      "block": 11817962,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 240367.26666666666,
+      "repeat": 2,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 264426.13333333336,
+      "batch_value_bytes": 19325,
+      "block": 11817962,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 391321.73333333334,
+      "repeat": 2,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 194087.73333333334,
+      "batch_value_bytes": 15788,
+      "block": 11817962,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 293172.56666666665,
+      "repeat": 3,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 264429.86666666664,
+      "batch_value_bytes": 19325,
+      "block": 11817962,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 416009.5,
+      "repeat": 3,
+      "rows": 474
+    },
+    {
+      "allocated_bytes_per_block": 227804.26666666666,
+      "batch_value_bytes": 17292,
+      "block": 11817990,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 303549.26666666666,
+      "repeat": 0,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 293625.06666666665,
+      "batch_value_bytes": 21301,
+      "block": 11817990,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 447309.9666666667,
+      "repeat": 0,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 208202.4,
+      "batch_value_bytes": 17292,
+      "block": 11817990,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 287184.9666666667,
+      "repeat": 1,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 294709.86666666664,
+      "batch_value_bytes": 21301,
+      "block": 11817990,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 471850.36666666664,
+      "repeat": 1,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 208196.53333333333,
+      "batch_value_bytes": 17292,
+      "block": 11817990,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 255903.4,
+      "repeat": 2,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 302380.26666666666,
+      "batch_value_bytes": 21301,
+      "block": 11817990,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 424283.8,
+      "repeat": 2,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 208200.26666666666,
+      "batch_value_bytes": 17292,
+      "block": 11817990,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 286092.7,
+      "repeat": 3,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 290335.4666666667,
+      "batch_value_bytes": 21301,
+      "block": 11817990,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 422762.9666666667,
+      "repeat": 3,
+      "rows": 501
+    },
+    {
+      "allocated_bytes_per_block": 271242.13333333336,
+      "batch_value_bytes": 18793,
+      "block": 11818019,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 421054.86666666664,
+      "repeat": 0,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 343782.4,
+      "batch_value_bytes": 23191,
+      "block": 11818019,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 505164.7,
+      "repeat": 0,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 258815.46666666667,
+      "batch_value_bytes": 18793,
+      "block": 11818019,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 402104.56666666665,
+      "repeat": 1,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 356209.6,
+      "batch_value_bytes": 23191,
+      "block": 11818019,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 541146.3666666667,
+      "repeat": 1,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 250080,
+      "batch_value_bytes": 18793,
+      "block": 11818019,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 346851.06666666665,
+      "repeat": 2,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 360586.13333333336,
+      "batch_value_bytes": 23191,
+      "block": 11818019,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 522514.3333333333,
+      "repeat": 2,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 250080,
+      "batch_value_bytes": 18793,
+      "block": 11818019,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 409975.93333333335,
+      "repeat": 3,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 360574.4,
+      "batch_value_bytes": 23191,
+      "block": 11818019,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 500147.36666666664,
+      "repeat": 3,
+      "rows": 614
+    },
+    {
+      "allocated_bytes_per_block": 208409.86666666667,
+      "batch_value_bytes": 15895,
+      "block": 11818048,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 290120.6666666667,
+      "repeat": 0,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 303433.06666666665,
+      "batch_value_bytes": 19419,
+      "block": 11818048,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 444312.8333333333,
+      "repeat": 0,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 208410.93333333332,
+      "batch_value_bytes": 15895,
+      "block": 11818048,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 300960.0333333333,
+      "repeat": 1,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 290995.2,
+      "batch_value_bytes": 19419,
+      "block": 11818048,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 439459.8,
+      "repeat": 1,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 208406.66666666666,
+      "batch_value_bytes": 15895,
+      "block": 11818048,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 264122.86666666664,
+      "repeat": 2,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 303430.93333333335,
+      "batch_value_bytes": 19419,
+      "block": 11818048,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 432887.26666666666,
+      "repeat": 2,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 212776,
+      "batch_value_bytes": 15895,
+      "block": 11818048,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 310495.5,
+      "repeat": 3,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 290997.86666666664,
+      "batch_value_bytes": 19419,
+      "block": 11818048,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 431312.1666666667,
+      "repeat": 3,
+      "rows": 523
+    },
+    {
+      "allocated_bytes_per_block": 275011.2,
+      "batch_value_bytes": 18320,
+      "block": 11818077,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 438380.4666666667,
+      "repeat": 0,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 361275.73333333334,
+      "batch_value_bytes": 22189,
+      "block": 11818077,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 548171.7666666667,
+      "repeat": 0,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 266958.93333333335,
+      "batch_value_bytes": 18320,
+      "block": 11818077,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 380618.43333333335,
+      "repeat": 1,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 386112,
+      "batch_value_bytes": 22189,
+      "block": 11818077,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 525170.7333333333,
+      "repeat": 1,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 266947.73333333334,
+      "batch_value_bytes": 18320,
+      "block": 11818077,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 404460.56666666665,
+      "repeat": 2,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 370013.3333333333,
+      "batch_value_bytes": 22189,
+      "block": 11818077,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 558871.7999999999,
+      "repeat": 2,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 271321.06666666665,
+      "batch_value_bytes": 18320,
+      "block": 11818077,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 412596.2,
+      "repeat": 3,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 365634.6666666667,
+      "batch_value_bytes": 22189,
+      "block": 11818077,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 543261.9333333332,
+      "repeat": 3,
+      "rows": 647
+    },
+    {
+      "allocated_bytes_per_block": 182897.33333333334,
+      "batch_value_bytes": 14786,
+      "block": 11818105,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 247400.43333333332,
+      "repeat": 0,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 267534.93333333335,
+      "batch_value_bytes": 18245,
+      "block": 11818105,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 408063.1666666667,
+      "repeat": 0,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 187256.8,
+      "batch_value_bytes": 14786,
+      "block": 11818105,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 289657.7,
+      "repeat": 1,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 261841.6,
+      "batch_value_bytes": 18245,
+      "block": 11818105,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 430936.43333333335,
+      "repeat": 1,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 192960.8,
+      "batch_value_bytes": 14786,
+      "block": 11818105,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 248255.66666666666,
+      "repeat": 2,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 261840.53333333333,
+      "batch_value_bytes": 18245,
+      "block": 11818105,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 401791.1666666667,
+      "repeat": 2,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 182895.73333333334,
+      "batch_value_bytes": 14786,
+      "block": 11818105,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 287404.36666666664,
+      "repeat": 3,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 266200.5333333333,
+      "batch_value_bytes": 18245,
+      "block": 11818105,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 435235.9666666667,
+      "repeat": 3,
+      "rows": 468
+    },
+    {
+      "allocated_bytes_per_block": 227389.86666666667,
+      "batch_value_bytes": 16559,
+      "block": 11818134,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 320260.6,
+      "repeat": 0,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 295948.8,
+      "batch_value_bytes": 20663,
+      "block": 11818134,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 483482.1666666667,
+      "repeat": 0,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 229393.06666666668,
+      "batch_value_bytes": 16559,
+      "block": 11818134,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 351920.9666666667,
+      "repeat": 1,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 291564.8,
+      "batch_value_bytes": 20663,
+      "block": 11818134,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 456225.8,
+      "repeat": 1,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 229521.86666666667,
+      "batch_value_bytes": 16559,
+      "block": 11818134,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 545239.7999999999,
+      "repeat": 2,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 295949.86666666664,
+      "batch_value_bytes": 20663,
+      "block": 11818134,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 511077.9,
+      "repeat": 2,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 237455.46666666667,
+      "batch_value_bytes": 16559,
+      "block": 11818134,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 321971.4666666667,
+      "repeat": 3,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 295936.5333333333,
+      "batch_value_bytes": 20663,
+      "block": 11818134,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 484050.43333333335,
+      "repeat": 3,
+      "rows": 537
+    },
+    {
+      "allocated_bytes_per_block": 256050.66666666666,
+      "batch_value_bytes": 17269,
+      "block": 11818163,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 386873.4,
+      "repeat": 0,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 320942.93333333335,
+      "batch_value_bytes": 21478,
+      "block": 11818163,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 530575.4666666667,
+      "repeat": 0,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 247993.6,
+      "batch_value_bytes": 17269,
+      "block": 11818163,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 366021.36666666664,
+      "repeat": 1,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 316577.6,
+      "batch_value_bytes": 21478,
+      "block": 11818163,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 525711.0666666667,
+      "repeat": 1,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 247984,
+      "batch_value_bytes": 17269,
+      "block": 11818163,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 388406.8,
+      "repeat": 2,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 325326.93333333335,
+      "batch_value_bytes": 21478,
+      "block": 11818163,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 484861.9,
+      "repeat": 2,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 247981.33333333334,
+      "batch_value_bytes": 17269,
+      "block": 11818163,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 392015.56666666665,
+      "repeat": 3,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 325306.13333333336,
+      "batch_value_bytes": 21478,
+      "block": 11818163,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 568988.0666666667,
+      "repeat": 3,
+      "rows": 579
+    },
+    {
+      "allocated_bytes_per_block": 193760.8,
+      "batch_value_bytes": 14478,
+      "block": 11818192,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 257093.6,
+      "repeat": 0,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 260999.46666666667,
+      "batch_value_bytes": 18160,
+      "block": 11818192,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 418541.1666666667,
+      "repeat": 0,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 193750.66666666666,
+      "batch_value_bytes": 14478,
+      "block": 11818192,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 308118.26666666666,
+      "repeat": 1,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 261005.86666666667,
+      "batch_value_bytes": 18160,
+      "block": 11818192,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 475585.9,
+      "repeat": 1,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 203838.93333333332,
+      "batch_value_bytes": 14478,
+      "block": 11818192,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 270642.1666666667,
+      "repeat": 2,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 271060.8,
+      "batch_value_bytes": 18160,
+      "block": 11818192,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 480145.93333333335,
+      "repeat": 2,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 198121.86666666667,
+      "batch_value_bytes": 14478,
+      "block": 11818192,
+      "index_enabled": false,
+      "iterations": 30,
+      "ns_per_block": 305176.8333333333,
+      "repeat": 3,
+      "rows": 484
+    },
+    {
+      "allocated_bytes_per_block": 269743.4666666667,
+      "batch_value_bytes": 18160,
+      "block": 11818192,
+      "index_enabled": true,
+      "iterations": 30,
+      "ns_per_block": 442714.3333333333,
+      "repeat": 3,
+      "rows": 484
+    }
+  ]
+}

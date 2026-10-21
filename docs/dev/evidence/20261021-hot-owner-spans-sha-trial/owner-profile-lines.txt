@@ -1,0 +1,204 @@
+Total: 20.15s
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.decodeHistoryOwnerSpansInto in core/rawdb/state_history_owner_spans.go
+     420ms      2.13s (flat, cum) 10.57% of Total
+         .          .    178:func decodeHistoryOwnerSpansInto(data []byte, block uint64, work *historyOwnerSpansWork) (*historyOwnerSpans, error) {
+         .       10ms    179:	bad := errors.New("rawdb: invalid optional owner spans")
+         .          .    180:	if len(data) > historyOwnerSpansMaxBytes+64 || len(data) < 42 || !bytes.Equal(data[:8], historyOwnerSpansMagic[:]) {
+         .          .    181:		return nil, bad
+         .          .    182:	}
+         .          .    183:	size, n := binary.Uvarint(data[8:])
+         .          .    184:	if n <= 0 || size == 0 || size > historyOwnerSpansMaxBytes || len(data) < 8+n+32 {
+         .          .    185:		return nil, bad
+         .          .    186:	}
+         .          .    187:	checksum, encoded := data[8+n:8+n+32], data[8+n+32:]
+         .          .    188:	decodedLen, err := snappy.DecodedLen(encoded)
+         .          .    189:	if err != nil || uint64(decodedLen) != size {
+         .          .    190:		return nil, bad
+         .          .    191:	}
+         .          .    192:	var scratch []byte
+         .          .    193:	if work != nil {
+         .          .    194:		scratch = work.payload[:0]
+         .          .    195:	}
+         .      130ms    196:	p, err := snappy.Decode(scratch, encoded)
+         .          .    197:	if err != nil {
+         .          .    198:		return nil, bad
+         .          .    199:	}
+         .          .    200:	if work != nil {
+         .          .    201:		work.payload = p
+         .          .    202:	}
+         .      1.13s    203:	digest := sha256.Sum256(p)
+         .          .    204:	if !bytes.Equal(checksum, digest[:]) {
+         .          .    205:		return nil, bad
+         .          .    206:	}
+         .          .    207:	var fields [8]uint64
+         .          .    208:	for i := range fields {
+         .          .    209:		v, n := binary.Uvarint(p)
+         .          .    210:		if n <= 0 {
+         .          .    211:			return nil, bad
+         .          .    212:		}
+         .          .    213:		fields[i], p = v, p[n:]
+         .          .    214:	}
+         .          .    215:	r := new(historyOwnerSpans)
+         .          .    216:	if work != nil {
+         .          .    217:		r = &work.index
+         .          .    218:	}
+         .       10ms    219:	*r = historyOwnerSpans{block: fields[0], rawBytes: fields[1], firstSeq: fields[2], rowsOffset: fields[3], rowsBytes: fields[4], rows: fields[5]}
+         .          .    220:	owners, spans := fields[6], fields[7]
+         .          .    221:	if r.block != block || r.rawBytes > stateDomainChangeBlockMaxDecodedBytes || r.rawBytes == 0 || r.firstSeq == 0 || r.rows == 0 || r.rows > r.rowsBytes || r.rows-1 > ^uint64(0)-r.firstSeq ||
+         .          .    222:		r.rowsOffset > r.rawBytes || r.rowsBytes == 0 || r.rowsBytes != r.rawBytes-r.rowsOffset || owners == 0 || owners > historyOwnerSpansMaxItems || spans == 0 || spans > historyOwnerSpansMaxItems || uint64(len(p)) < 32+owners*common.AddressLength+spans*3 {
+         .          .    223:		return nil, bad
+         .          .    224:	}
+         .          .    225:	copy(r.digest[:], p[:32])
+         .          .    226:	p = p[32:]
+         .          .    227:	if work != nil && uint64(cap(work.owners)) >= owners {
+         .          .    228:		r.owners = work.owners[:owners]
+         .          .    229:	} else {
+         .          .    230:		r.owners = make([]common.Address, owners)
+         .          .    231:	}
+         .          .    232:	if work != nil {
+         .          .    233:		work.owners = r.owners
+         .          .    234:	}
+      20ms       20ms    235:	for i := range r.owners {
+      10ms       30ms    236:		copy(r.owners[i][:], p[:common.AddressLength])
+         .          .    237:		p = p[common.AddressLength:]
+         .       70ms    238:		if i != 0 && bytes.Compare(r.owners[i-1][:], r.owners[i][:]) >= 0 {
+         .          .    239:			return nil, bad
+         .          .    240:		}
+         .          .    241:	}
+         .          .    242:	if work != nil && uint64(cap(work.spans)) >= spans {
+         .          .    243:		r.spans = work.spans[:spans]
+         .          .    244:	} else {
+         .          .    245:		r.spans = make([]historyOwnerSpan, spans)
+         .          .    246:	}
+         .          .    247:	if work != nil {
+         .          .    248:		work.spans = r.spans
+         .          .    249:	}
+         .          .    250:	var totalRows, totalBytes uint64
+      30ms       30ms    251:	for i := range r.spans {
+      10ms       10ms    252:		var entry [3]uint64
+      20ms       20ms    253:		for j := range entry {
+      60ms      400ms    254:			v, n := binary.Uvarint(p)
+      20ms       20ms    255:			if n <= 0 || v > uint64(^uint32(0)) {
+         .          .    256:				return nil, bad
+         .          .    257:			}
+     130ms      130ms    258:			entry[j], p = v, p[n:]
+         .          .    259:		}
+      60ms       60ms    260:		if entry[0] >= owners || entry[1] == 0 || entry[1] > r.rows-totalRows || entry[2] == 0 || entry[2] > r.rowsBytes-totalBytes {
+         .          .    261:			return nil, bad
+         .          .    262:		}
+         .          .    263:		totalRows += entry[1]
+         .          .    264:		totalBytes += entry[2]
+      60ms       60ms    265:		r.spans[i] = historyOwnerSpan{uint32(entry[0]), uint32(entry[1]), uint32(entry[2])}
+         .          .    266:	}
+         .          .    267:	if len(p) != 0 || totalRows != r.rows || totalBytes != r.rowsBytes {
+         .          .    268:		return nil, bad
+         .          .    269:	}
+         .          .    270:	return r, nil
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateHistoryOwnerSpans in core/rawdb/state_history_owner_spans.go
+     390ms     10.75s (flat, cum) 53.35% of Total
+         .          .    322:func iterateHistoryOwnerSpans(ctx context.Context, db StateKVHistoryReader, pack []byte, block uint64, selected func(common.Address) bool, scratch *StateDomainChange, fn func(*StateDomainChange) (bool, error)) (used bool, err error) {
+         .          .    323:	if err := ctx.Err(); err != nil {
+         .          .    324:		return true, err
+         .          .    325:	}
+      10ms       10ms    326:	marker, ok := db.(pointread.PinnedKeyValueView)
+         .          .    327:	if !ok || !marker.IsPinnedKeyValueView() {
+         .          .    328:		return false, nil
+         .          .    329:	}
+         .      260ms    330:	index, present, err := readPresentValue(db, stateChangeOwnerSpansKey(block), "owner spans")
+         .          .    331:	if err != nil {
+         .          .    332:		return true, err
+         .          .    333:	}
+         .          .    334:	if !present {
+         .          .    335:		return false, nil
+         .          .    336:	}
+         .          .    337:	// This pool holds scratch capacity only. No parsed entry is trusted across
+         .          .    338:	// calls: current bytes/checksum/source are re-read and verified every time.
+         .          .    339:	work := historyOwnerSpansWorkPool.Get().(*historyOwnerSpansWork)
+         .          .    340:	defer func() {
+         .          .    341:		work.index = historyOwnerSpans{}
+         .          .    342:		if cap(work.payload) <= 256<<10 && cap(work.owners)*common.AddressLength <= 256<<10 && cap(work.spans)*12 <= 256<<10 {
+         .          .    343:			historyOwnerSpansWorkPool.Put(work)
+         .          .    344:		}
+         .          .    345:	}()
+         .      2.13s    346:	r, err := decodeHistoryOwnerSpansInto(index, block, work)
+         .          .    347:	if err != nil {
+         .          .    348:		return false, nil
+         .          .    349:	}
+         .       10ms    350:	wanted := make([]bool, len(r.owners))
+      10ms       10ms    351:	for i, owner := range r.owners {
+      70ms      240ms    352:		wanted[i] = selected(owner)
+         .          .    353:	}
+         .          .    354:	var selectedRows uint64
+      10ms       10ms    355:	for _, span := range r.spans {
+      20ms       20ms    356:		if wanted[span.owner] {
+      10ms       10ms    357:			selectedRows += uint64(span.rows)
+         .          .    358:		}
+         .          .    359:	}
+         .          .    360:	if selectedRows > r.rows/3 {
+         .          .    361:		return false, nil // Two sparse validation passes must beat a full decode.
+         .          .    362:	}
+         .      4.08s    363:	if sha256.Sum256(pack) != r.digest {
+         .          .    364:		return false, nil
+         .          .    365:	}
+         .          .    366:	materialized, err := materializeStateHistorySharedPack(pack, block, []ethdb.KeyValueReader{db})
+         .          .    367:	if err != nil {
+         .          .    368:		return true, err
+         .          .    369:	}
+         .      3.25s    370:	raw, pooled, err := borrowStateDomainChangeBlockPayload(materialized)
+         .          .    371:	if pooled != nil {
+         .          .    372:		defer releaseBorrowedStateDomainChangeBlockPayload(pooled)
+         .          .    373:	}
+         .          .    374:	if err != nil {
+         .          .    375:		return true, err
+         .          .    376:	}
+         .          .    377:	if uint64(len(raw)) != r.rawBytes {
+         .          .    378:		return false, nil
+         .          .    379:	}
+         .          .    380:	first, rows, err := splitHistoryOwnerRows(raw)
+         .          .    381:	if err != nil || first != r.firstSeq || uint64(len(rows)) != r.rowsBytes || uint64(len(raw)-len(rows)) != r.rowsOffset {
+         .          .    382:		return false, nil
+         .          .    383:	}
+         .          .    384:	// Pass zero validates selected rows without publishing any result. Pass one
+         .          .    385:	// borrows those same immutable bytes to preserve ordinary early callbacks.
+         .          .    386:	for pass := 0; pass < 2; pass++ {
+         .          .    387:		var offset, ordinal, previousTx uint64
+         .          .    388:		haveTx := false
+      70ms       70ms    389:		for _, span := range r.spans {
+      70ms      290ms    390:			if err := ctx.Err(); err != nil {
+         .          .    391:				return true, err
+         .          .    392:			}
+      50ms       50ms    393:			if wanted[span.owner] {
+         .          .    394:				payload := rows[offset : offset+uint64(span.size)]
+         .          .    395:				for i := uint32(0); i < span.rows; i++ {
+         .          .    396:					if err := ctx.Err(); err != nil {
+         .          .    397:						return true, err
+         .          .    398:					}
+         .       10ms    399:					row, rest, decodeErr := rlp.SplitList(payload)
+      30ms      110ms    400:					if decodeErr != nil || decodeBorrowedStateDomainChangeRow(row, block, first+ordinal+uint64(i), scratch) != nil || scratch.Owner != r.owners[span.owner] || haveTx && scratch.TxNum < previousTx {
+         .          .    401:						if pass != 0 {
+         .          .    402:							return true, errors.New("rawdb: owner span callback changed validated source bytes")
+         .          .    403:						}
+         .          .    404:						return false, nil
+         .          .    405:					}
+         .          .    406:					previousTx, haveTx = scratch.TxNum, true
+         .          .    407:					if pass != 0 {
+         .      150ms    408:						cont, err := fn(scratch)
+         .          .    409:						if err != nil || !cont {
+         .          .    410:							return true, err
+         .          .    411:						}
+         .          .    412:					}
+         .          .    413:					payload = rest
+         .          .    414:				}
+         .          .    415:				if len(payload) != 0 {
+         .          .    416:					if pass != 0 {
+         .          .    417:						return true, errors.New("rawdb: owner span source changed after validation")
+         .          .    418:					}
+         .          .    419:					return false, nil
+         .          .    420:				}
+         .          .    421:			}
+      40ms       40ms    422:			offset += uint64(span.size)
+         .          .    423:			ordinal += uint64(span.rows)
+         .          .    424:		}
+         .          .    425:		if pass == 0 {
+         .          .    426:			historyOwnerSpansHits.Inc(1)
+         .          .    427:			historyOwnerSpansSelectedRows.Inc(int64(selectedRows))

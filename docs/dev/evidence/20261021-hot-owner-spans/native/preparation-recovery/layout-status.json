@@ -1,0 +1,12 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "phase": "failed",
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "utc": "2026-10-21T07:27:16.523672+00:00",
+  "error": "RuntimeError('native preparation failed',)",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/layout-native.py\", line 12, in <module>\n    if s.get('phase')=='failed':raise RuntimeError('native preparation failed')\nRuntimeError: native preparation failed\n"
+}

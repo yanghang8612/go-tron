@@ -1,0 +1,34 @@
+{
+  "complete": true,
+  "source_commit": "43c3d47bc1229223af677ff4c56462744cf54631",
+  "production_files_checked": 1074,
+  "binaries_checked": {
+    "candidate.test": "818bc34e3ed5c0f571b9d1ff719dd8567c9c30c4a766c74fdff5794d8d028af8",
+    "snapshots.test": "06b44c8c268c7fc7255d735d56e8213d0f483412c31ba095abfd32d2854a5847",
+    "rawdb.test": "cc2370af6575d9575abd59718b6314655e742463bb1f6292a01529b76e6ccf28",
+    "gtron-candidate": "aace53735a29d4da727d012c4d24b3f0afe2235f5af9627aaeb9ce9d2b617126"
+  },
+  "native_log_sha256": {
+    "native-packages.log": "7287a7d1f6e21a80c577f6c589f5bfbf37b77372b7f100c84ecc53cf25b6dde6",
+    "native-race.log": "9802c9146cfeaf745c94432c0ae562c9149334cbf30ddf8a8003c8f37a3b52c0",
+    "native-core-correctness.log": "05a6e41e6c49e819b398cbcf5fa1f70cc9efce3db41cb1677f6b267b9724461c",
+    "native-vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "http-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rawdb-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "snapshots-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "reason": "Native tests/build completed; final production identity guard encountered an independently observed clean service stop. Zero HTTP samples had run. Resume offline validation with the service remaining inactive.",
+  "before_identity": {
+    "pid": 0,
+    "sha256": null,
+    "active_state": "inactive"
+  },
+  "after_identity": {
+    "pid": 0,
+    "sha256": null,
+    "active_state": "inactive"
+  },
+  "production_mutations": false,
+  "utc": "2026-10-21T07:36:57.753457+00:00"
+}

@@ -1,0 +1,12 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "phase": "failed",
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "utc": "2026-10-21T07:27:16.721450+00:00",
+  "error": "RuntimeError('final source preparation failed',)",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/compare-native.py\", line 167, in <module>\n    waitfor(prepared,4000)\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/compare-native.py\", line 24, in waitfor\n    while not predicate():\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/compare-native.py\", line 165, in prepared\n    if x.get('phase')=='failed':raise RuntimeError('final source preparation failed')\nRuntimeError: final source preparation failed\n"
+}

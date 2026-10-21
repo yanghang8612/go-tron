@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-21T06:14:10.127536+00:00",
+  "reason": "Broad offline experiment covered already-posted old hot blocks. Preserve it; restrict the acceptance copy to the 662-block unindexed tail and add retirement with posting publication.",
+  "production_mutations": false,
+  "last_progress": "{\"built\":323435,\"bytes\":1398781282,\"elapsed_seconds\":358.177455765,\"visited\":329970}",
+  "stopped_units": [
+    "gtron-owner-spans-layout-20261021.service",
+    "gtron-owner-spans-compare-20261021.service",
+    "gtron-owner-spans-audit-20261021.service",
+    "gtron-owner-spans-diagnostic-20261021.service",
+    "gtron-owner-spans-resources-20261021.service",
+    "gtron-owner-spans-seal-20261021.service"
+  ]
+}

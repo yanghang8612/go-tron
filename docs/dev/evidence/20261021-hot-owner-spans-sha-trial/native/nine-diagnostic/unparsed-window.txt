@@ -1,0 +1,47 @@
+27847 1792566555.621337 read(1974<TCP:[127.0.0.1:18927->127.0.0.1:55663]>, 0xc000422f61, 1) = -1 EAGAIN (Resource temporarily unavailable) <0.000012>
+27848 1792566555.648209 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.670459 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.698260 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.715294 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.732393 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.753228 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.764352 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.785886 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.801850 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27847 1792566555.817234 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27847 1792566555.837697 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.856693 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.877123 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.893982 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.914922 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.941766 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.964285 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566555.992457 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.019220 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.046697 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.073997 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.103487 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.131555 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.158816 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.185936 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.212885 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.240604 pread64(2007</data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-02/tail-read-comparison/candidate-cache-input/history/052954.sst>,  <unfinished ...>
+27847 1792566556.240662 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.241171 <... pread64 resumed>"\340\37|\0#\6state-change-posting-v3-\0\242"..., 2090, 58969231) = 2090 <0.000556>
+27848 1792566556.267509 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.279484 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.294745 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.322068 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.349818 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.379012 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.407469 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.434352 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.462384 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.490881 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.518907 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.547642 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.559021 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.579677 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.591152 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.606581 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---
+27848 1792566556.626871 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=27807, si_uid=0} ---

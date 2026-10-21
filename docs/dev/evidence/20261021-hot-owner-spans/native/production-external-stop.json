@@ -1,0 +1,32 @@
+{
+  "utc": "2026-10-21T07:32:17.404851+00:00",
+  "service_fields": {
+    "MainPID": "0",
+    "ControlPID": "0",
+    "ExecMainStartTimestamp": "Tue 2026-10-20 05:36:07 UTC",
+    "ExecMainExitTimestamp": "Wed 2026-10-21 07:20:51 UTC",
+    "ExecMainStatus": "0",
+    "ActiveState": "inactive",
+    "SubState": "dead"
+  },
+  "events": [
+    {
+      "realtime_us": "1792567246875200",
+      "message": "Stopping gtron mainnet snap node..."
+    },
+    {
+      "realtime_us": "1792567246875433",
+      "message": "INFO [10-21|15:20:46.874] Shutting down"
+    },
+    {
+      "realtime_us": "1792567247193623",
+      "message": "INFO [10-21|15:20:47.193] Clean shutdown                           module=core/chain           head=21,114,254 root=2bbd0e9b3519f0c8e99a66769b91bbad9340a6378fdc60372a8cdc01168fca4b"
+    },
+    {
+      "realtime_us": "1792567252323615",
+      "message": "Stopped gtron mainnet snap node."
+    }
+  ],
+  "production_mutations_by_this_pipeline": false,
+  "actor": "unknown"
+}

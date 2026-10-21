@@ -1,0 +1,80 @@
+{
+  "block_packs": 662,
+  "build_seconds": 0.260215634,
+  "built": 662,
+  "canonical_after": {
+    "state_changeset": {
+      "from": 11817531,
+      "logical_bytes": 11255555,
+      "rows": 662,
+      "sha256": "aa415f1606b72c38b6e9f4c12bddf2849f895968ea0c7737c64da5db7e19fc26",
+      "through": 11818192
+    },
+    "state_history_chunk": {
+      "from": 11540,
+      "logical_bytes": 0,
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "through": 11541
+    },
+    "state_history_chunk_bucket": {
+      "from": 11540,
+      "logical_bytes": 0,
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "through": 11541
+    },
+    "state_tx_range": {
+      "from": 11817531,
+      "logical_bytes": 48988,
+      "rows": 662,
+      "sha256": "091cc3625f3328648307f3e9f14111aa7dbff915bad1139cf68d818dd425bc76",
+      "through": 11818192
+    }
+  },
+  "canonical_before": {
+    "state_changeset": {
+      "from": 11817531,
+      "logical_bytes": 11255555,
+      "rows": 662,
+      "sha256": "aa415f1606b72c38b6e9f4c12bddf2849f895968ea0c7737c64da5db7e19fc26",
+      "through": 11818192
+    },
+    "state_history_chunk": {
+      "from": 11540,
+      "logical_bytes": 0,
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "through": 11541
+    },
+    "state_history_chunk_bucket": {
+      "from": 11540,
+      "logical_bytes": 0,
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "through": 11541
+    },
+    "state_tx_range": {
+      "from": 11817531,
+      "logical_bytes": 48988,
+      "rows": 662,
+      "sha256": "091cc3625f3328648307f3e9f14111aa7dbff915bad1139cf68d818dd425bc76",
+      "through": 11818192
+    }
+  },
+  "canonical_unchanged": true,
+  "complete": true,
+  "from": 11817531,
+  "index_key_value_bytes": 2718757,
+  "index_value_bytes": 2694925,
+  "indexed_raw_bytes": 32117941,
+  "indexed_rows": 379603,
+  "only_auxiliary_writes": true,
+  "owner_entries": 80155,
+  "posting_watermark": 11817530,
+  "row_spans": 322442,
+  "strictly_checked": 662,
+  "system_and_counter_rows": 3083,
+  "through": 11818192,
+  "with_strict_check_seconds": 0.525890479
+}

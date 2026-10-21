@@ -1,0 +1,84 @@
+{
+  "source_commit": "4693a15485cbc0db810e331d21aab418baf22e38",
+  "env": {
+    "GOTOOLCHAIN": "go1.25.5",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "GOMEMLIMIT": "3GiB"
+  },
+  "commands": [
+    [
+      "final-packages.log",
+      [
+        "go",
+        "test",
+        "-p=2",
+        "-tags=sapling",
+        "./core/rawdb",
+        "./core/state",
+        "./core/state/snapshots",
+        "-count=1",
+        "-timeout=20m"
+      ]
+    ],
+    [
+      "final-race.log",
+      [
+        "go",
+        "test",
+        "-p=2",
+        "-race",
+        "-tags=sapling",
+        "./core/rawdb",
+        "./core/state",
+        "./core/state/snapshots",
+        "./core",
+        "-run",
+        "TestHistoryOwnerSpans|TestQueryTail|TestQueryFirstTail|TestHistoryColdFirst|TestDeleteStateDomainChangeRange|TestDirectHistory|TestStateHistoryIndex",
+        "-count=1",
+        "-timeout=10m"
+      ]
+    ],
+    [
+      "final-core.log",
+      [
+        "go",
+        "test",
+        "-p=2",
+        "-tags=sapling",
+        "./core",
+        "./cmd/gtron",
+        "-run",
+        "^(TestStateHistoryIndex|TestMuHash|TestArchiveQuery_|TestSnapshot|TestRestore)",
+        "-count=1",
+        "-timeout=15m"
+      ]
+    ],
+    [
+      "final-vet.log",
+      [
+        "go",
+        "vet",
+        "-p=2",
+        "-tags=sapling",
+        "./core/rawdb",
+        "./core/state",
+        "./core/state/snapshots",
+        "./core",
+        "./cmd/gtron"
+      ]
+    ],
+    [
+      "final-build.log",
+      [
+        "go",
+        "build",
+        "-p=2",
+        "-tags=sapling",
+        "-o",
+        "/Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/benchmarks/20261021-hot-owner-spans/gtron-candidate",
+        "./cmd/gtron"
+      ]
+    ]
+  ]
+}

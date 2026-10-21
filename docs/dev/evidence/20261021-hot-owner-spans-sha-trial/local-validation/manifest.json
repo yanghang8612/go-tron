@@ -1,0 +1,57 @@
+{
+  "commit": "4693a15485cbc0db810e331d21aab418baf22e38",
+  "logs": {
+    "local-status.json": {
+      "bytes": 146,
+      "sha256": "db98622e7961ef901765bf00a2bad01674acbed0e31121ed0d0014f494f0886f"
+    },
+    "local-commands.json": {
+      "bytes": 1769,
+      "sha256": "ae5f887cc72e8bfc1fe56bac3bc6d55571ddfbe8ff9878cf68b5a30286edcb73"
+    },
+    "final-packages.log": {
+      "bytes": 178,
+      "sha256": "54faabe58ad2011d57d8f03cdc3051239d28e96e2bc7a0e5c95158d0bec84afd"
+    },
+    "final-race.log": {
+      "bytes": 242,
+      "sha256": "53c07a74f8273457af4ddec50faee8152c450899b5f9aaaae825d7e5990597ac"
+    },
+    "final-core.log": {
+      "bytes": 105,
+      "sha256": "a4b94655d6ad03b44580e631613dd482f4bb9848b2afe43b310ac36615a8994a"
+    },
+    "final-vet.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "final-build.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retirement-tests.log": {
+      "bytes": 104,
+      "sha256": "1f1dad793c38fd3857d600bf625072668353c0b3bf4cdc7ada1e43d9b57b915c"
+    },
+    "offline-compile.log": {
+      "bytes": 55,
+      "sha256": "048912e3977114f055c15e79ca37403b39e90b7faaf30b71712101a8e21e6e49"
+    },
+    "pooled-microbench.log": {
+      "bytes": 645,
+      "sha256": "487c47710291a5f9e46ccda073dbdad027eaabb3ae85f06bf078b2a5000c2882"
+    },
+    "encoded-hash-microbench.log": {
+      "bytes": 1552,
+      "sha256": "c24880f7cdf052ccd341fc4075be1ca266946ce1fd173011acae243e22c25324"
+    },
+    "first-raw-hash-microbench.log": {
+      "bytes": 1552,
+      "sha256": "0ce3505c74f73a83490c9a401fdeae48b6006ea39ba2ef80b900b501ffed2e31"
+    }
+  },
+  "notes": {
+    "frozen_checks": "final-* logs are from the manifest commit. retirement-tests is the same code immediately before its commit. offline-compile only compiles/skips the bounded offline harness without its required input environment.",
+    "exploratory_microbenchmarks": "pooled/encoded-hash/first-raw-hash logs are exploratory pre-freeze experiments. The raw-hash prototype and final fixture differ; do not compare cross-file ratios or certify them as performance samples of this commit."
+  }
+}

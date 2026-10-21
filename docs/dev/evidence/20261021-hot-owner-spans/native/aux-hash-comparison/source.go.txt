@@ -1,0 +1,3 @@
+package main
+import ("crypto/sha256";"encoding/json";"os";"time";"golang.org/x/crypto/blake2b")
+func main(){out:=[]map[string]any{};for rep:=0;rep<4;rep++{for _,n:=range []int{4096,16384,65536,1048576}{b:=make([]byte,n);for i:=range b{b[i]=byte(i*73+i/19)};for _,mode:=range []string{"sha256","blake2b256"}{start:=time.Now();var sum [32]byte;for k:=0;k<1000;k++{if mode=="sha256"{sum=sha256.Sum256(b)}else{sum=blake2b.Sum256(b)}};out=append(out,map[string]any{"repeat":rep,"bytes":n,"mode":mode,"ns_per_hash":float64(time.Since(start).Nanoseconds())/1000,"digest":sum})}}};json.NewEncoder(os.Stdout).Encode(out)}

@@ -1,0 +1,38 @@
+{
+  "commit": "43c3d47bc1229223af677ff4c56462744cf54631",
+  "logs": {
+    "local-status.json": {
+      "bytes": 146,
+      "sha256": "5d38d850daf33aff24337dab7211c914bd546e7070830b2d35355e841d00492a"
+    },
+    "local-commands.json": {
+      "bytes": 1769,
+      "sha256": "0dfdb61b46f501db05dab9988418f1d422c8b816ef382b22cc16faa341be209b"
+    },
+    "final-packages.log": {
+      "bytes": 178,
+      "sha256": "f127345603b7cfa84a186eb39e30ceaaa1f9cbae8f7f24724855d16993c825a2"
+    },
+    "final-race.log": {
+      "bytes": 242,
+      "sha256": "e7757800ceff85940109c9c76300315db4ac81b22294518f4464cf34b29802c0"
+    },
+    "final-core.log": {
+      "bytes": 104,
+      "sha256": "ec8311f637136a568ea03c80df75ed45bebbe9d5b3af31f5a651096e9a370629"
+    },
+    "final-vet.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "final-build.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "blake-targeted.log": {
+      "bytes": 55,
+      "sha256": "2a4bed6f5330ca10f83fad4e66fd42711322ab7d01b0c32bd856e3f6a1639d51"
+    }
+  },
+  "notes": "final-* logs are frozen candidate checks. blake-targeted ran the same Go source immediately before commit. Earlier SHA prototype/microbench logs remain only in the separate SHA-trial evidence."
+}

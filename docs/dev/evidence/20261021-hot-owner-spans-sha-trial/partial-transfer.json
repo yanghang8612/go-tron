@@ -1,0 +1,8 @@
+{
+  "archive": "/tmp/gtron-hot-owner-spans-20261021-http-partial.zip",
+  "bytes": 2233913,
+  "sha256": "009d161c0e2618a7701c01a4fcc60e7ad62c6f70d50bfd19b7f1926235fe2376",
+  "purpose": "Interim HTTP/source analysis while full correctness audit ran; not final all-phase evidence",
+  "local_zip_crc_verified": true,
+  "source_and_http_verified": true
+}

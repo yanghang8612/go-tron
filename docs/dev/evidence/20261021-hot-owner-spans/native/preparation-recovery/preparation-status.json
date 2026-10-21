@@ -1,0 +1,12 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "phase": "failed",
+  "utc": "2026-10-21T07:27:15.378353+00:00",
+  "error": "FileNotFoundError(2, 'No such file or directory')",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/prepare-native.py\", line 43, in <module>\n    state['after_identity']=identity();assert state['before_identity']==state['after_identity'];state.update(complete=True,phase='complete');save()\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/prepare-native.py\", line 7, in identity\n    pid=int(subprocess.check_output(['systemctl','show','gtron','-p','MainPID']).decode().split('=')[1]);return {'pid':pid,'sha256':sha(pathlib.Path('/proc/%d/exe'%pid))}\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/prepare-native.py\", line 4, in sha\n    def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()\n  File \"/usr/lib64/python3.6/pathlib.py\", line 1189, in read_bytes\n    with self.open(mode='rb') as f:\n  File \"/usr/lib64/python3.6/pathlib.py\", line 1183, in open\n    opener=self._opener)\n  File \"/usr/lib64/python3.6/pathlib.py\", line 1037, in _opener\n    return self._accessor.open(self, flags, mode)\n  File \"/usr/lib64/python3.6/pathlib.py\", line 387, in wrapped\n    return strfunc(str(pathobj), *args)\nFileNotFoundError: [Errno 2] No such file or directory: '/proc/0/exe'\n"
+}

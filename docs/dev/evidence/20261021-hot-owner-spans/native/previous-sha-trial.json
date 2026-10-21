@@ -1,0 +1,15 @@
+{
+  "source_commit": "4693a15485cbc0db810e331d21aab418baf22e38",
+  "evidence_archive": "/tmp/gtron-hot-owner-spans-20261021-02.zip",
+  "archive_bytes": 2644478,
+  "archive_sha256": "20009df52574cf5eb180f7a66a8ab570c20cc03f4ba07d1e8542d420d73e8ae6",
+  "full_correctness_verified": true,
+  "warm_nine_ms": [
+    165.29002413153648,
+    153.31127122044563
+  ],
+  "os_cold_nine_ms": [
+    824.9819688498974,
+    853.0813008546829
+  ]
+}

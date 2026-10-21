@@ -1,0 +1,56 @@
+{
+  "complete": true,
+  "windows": [
+    {
+      "candidate_row_sha256": "f23e20a026d82f08e0eff3b6ff298930893b23a4316a322bb598f929343a9b0b",
+      "from_block": 3144020,
+      "from_tx": 20587116,
+      "full_row_sha256": "f23e20a026d82f08e0eff3b6ff298930893b23a4316a322bb598f929343a9b0b",
+      "range_rows_verified": 20,
+      "restored_row_sha256": "f23e20a026d82f08e0eff3b6ff298930893b23a4316a322bb598f929343a9b0b",
+      "result": {
+        "FromTxNum": 20587116,
+        "ToTxNum": 20587214,
+        "ChangesRestored": 387,
+        "TxRangesRestored": 20
+      },
+      "rows": 387,
+      "to_block": 3144039,
+      "to_tx": 20587214
+    },
+    {
+      "candidate_row_sha256": "9ff45e731ef189990f2008680ca7b7e08ffef40de02de30a8619f5105a83aa24",
+      "from_block": 5000000,
+      "from_tx": 109552309,
+      "full_row_sha256": "9ff45e731ef189990f2008680ca7b7e08ffef40de02de30a8619f5105a83aa24",
+      "range_rows_verified": 20,
+      "restored_row_sha256": "9ff45e731ef189990f2008680ca7b7e08ffef40de02de30a8619f5105a83aa24",
+      "result": {
+        "FromTxNum": 109552309,
+        "ToTxNum": 109554212,
+        "ChangesRestored": 11845,
+        "TxRangesRestored": 20
+      },
+      "rows": 11845,
+      "to_block": 5000019,
+      "to_tx": 109554212
+    },
+    {
+      "candidate_row_sha256": "a194c2b67818511ea8d039826888cad4aa064d929fbacfafdaf7db94ff7d6383",
+      "from_block": 9000000,
+      "from_tx": 415034995,
+      "full_row_sha256": "a194c2b67818511ea8d039826888cad4aa064d929fbacfafdaf7db94ff7d6383",
+      "range_rows_verified": 20,
+      "restored_row_sha256": "a194c2b67818511ea8d039826888cad4aa064d929fbacfafdaf7db94ff7d6383",
+      "result": {
+        "FromTxNum": 415034995,
+        "ToTxNum": 415036430,
+        "ChangesRestored": 10264,
+        "TxRangesRestored": 20
+      },
+      "rows": 10264,
+      "to_block": 9000019,
+      "to_tx": 415036430
+    }
+  ]
+}

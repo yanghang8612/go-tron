@@ -1,0 +1,9 @@
+{
+  "complete": false,
+  "excluded_from_primary_performance": true,
+  "production_mutations": false,
+  "phase": "failed",
+  "utc": "2026-10-21T07:27:19.569243+00:00",
+  "error": "AssertionError({'complete': False, 'production_mutations': False, 'phase': 'failed', 'before_identity': {'pid': 28737, 'sha256': '5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4'}, 'utc': '2026-10-21T07:27:18.552823+00:00', 'error': \"RuntimeError('HTTP comparison failed',)\", 'traceback': 'Traceback (most recent call last):\\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/audit-native.py\", line 11, in <module>\\n    if s.get(\\'phase\\')==\\'failed\\':raise RuntimeError(\\'HTTP comparison failed\\')\\nRuntimeError: HTTP comparison failed\\n'},)",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/diagnose-nine.py\", line 10, in <module>\n    x=json.loads(q.read_text());assert x.get('phase')!='failed',x\nAssertionError: {'complete': False, 'production_mutations': False, 'phase': 'failed', 'before_identity': {'pid': 28737, 'sha256': '5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4'}, 'utc': '2026-10-21T07:27:18.552823+00:00', 'error': \"RuntimeError('HTTP comparison failed',)\", 'traceback': 'Traceback (most recent call last):\\n  File \"/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/audit-native.py\", line 11, in <module>\\n    if s.get(\\'phase\\')==\\'failed\\':raise RuntimeError(\\'HTTP comparison failed\\')\\nRuntimeError: HTTP comparison failed\\n'}\n"
+}

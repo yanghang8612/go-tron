@@ -1,0 +1,10 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/rawdb
+cpu: Apple M1 Max
+BenchmarkHistoryOwnerSpansSelected/full-2         	    5968	    184597 ns/op	2220.29 MB/s	     192 B/op	       1 allocs/op
+BenchmarkHistoryOwnerSpansSelected/full-2         	    6618	    188646 ns/op	2172.63 MB/s	     255 B/op	       1 allocs/op
+BenchmarkHistoryOwnerSpansSelected/spans-2        	    8499	    144003 ns/op	2846.17 MB/s	    8647 B/op	       7 allocs/op
+BenchmarkHistoryOwnerSpansSelected/spans-2        	    8466	    143166 ns/op	2862.82 MB/s	    8648 B/op	       7 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	6.629s

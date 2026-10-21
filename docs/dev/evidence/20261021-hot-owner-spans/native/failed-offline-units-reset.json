@@ -1,0 +1,84 @@
+{
+  "utc": "2026-10-21T07:54:08.972445+00:00",
+  "production_mutations": false,
+  "note": "Only failed transient lab units from zero-sample orchestration attempts. Original files/statuses retained. No service was started.",
+  "records": [
+    {
+      "unit": "gtron-owner-blake-prepare-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-layout-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-compare-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-audit-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-diagnostic-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-seal-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-r-layout-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-r-compare-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-r-audit-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-r-diagnostic-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    },
+    {
+      "unit": "gtron-owner-blake-r-seal-20261021.service",
+      "before": "Result=exit-code\nActiveState=failed\n",
+      "returncode": 0,
+      "output": "",
+      "after": "ActiveState=inactive\n"
+    }
+  ]
+}

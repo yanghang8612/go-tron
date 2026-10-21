@@ -1,0 +1,8 @@
+{
+  "archive": "/tmp/gtron-hot-owner-spans-20261021-blake-http-partial.zip",
+  "bytes": 2280836,
+  "sha256": "7f30942c6d815e2dc7434a04e8fc4dddfdd4f160bfe4d8b8181230124e2370c6",
+  "purpose": "Interim source/HTTP analysis while the final exact candidate full audit was running; not final evidence",
+  "zip_crc_verified": true,
+  "source_and_http_verified": true
+}

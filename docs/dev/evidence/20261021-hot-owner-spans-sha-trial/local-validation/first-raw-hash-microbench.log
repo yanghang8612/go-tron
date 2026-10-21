@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/rawdb
+cpu: Apple M1 Max
+BenchmarkHistoryOwnerSpansSelected/full-2         	   14217	    169586 ns/op	2289.45 MB/s	     219 B/op	       1 allocs/op
+BenchmarkHistoryOwnerSpansSelected/full-2         	   14244	    169660 ns/op	2288.45 MB/s	     192 B/op	       1 allocs/op
+BenchmarkHistoryOwnerSpansSelected/full-2         	   14128	    168892 ns/op	2298.86 MB/s	     192 B/op	       1 allocs/op
+BenchmarkHistoryOwnerSpansSelected/spans-2        	    9094	    266259 ns/op	1458.20 MB/s	   26652 B/op	       9 allocs/op
+BenchmarkHistoryOwnerSpansSelected/spans-2        	    9117	    264018 ns/op	1470.57 MB/s	   27083 B/op	       9 allocs/op
+BenchmarkHistoryOwnerSpansSelected/spans-2        	    9121	    264444 ns/op	1468.21 MB/s	   26824 B/op	       9 allocs/op
+BenchmarkHistoryOwnerSpansWriter/without-index-2  	   29601	     81304 ns/op	  275155 B/op	     650 allocs/op
+BenchmarkHistoryOwnerSpansWriter/without-index-2  	   30049	     82144 ns/op	  275317 B/op	     650 allocs/op
+BenchmarkHistoryOwnerSpansWriter/without-index-2  	   29670	     78843 ns/op	  274233 B/op	     650 allocs/op
+BenchmarkHistoryOwnerSpansWriter/with-index-2     	   22050	    107066 ns/op	  294766 B/op	     672 allocs/op
+BenchmarkHistoryOwnerSpansWriter/with-index-2     	   22352	    108647 ns/op	  295446 B/op	     673 allocs/op
+BenchmarkHistoryOwnerSpansWriter/with-index-2     	   22970	    111031 ns/op	  296059 B/op	     673 allocs/op
+PASS
+ok  	github.com/tronprotocol/go-tron/core/rawdb	41.563s

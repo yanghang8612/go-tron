@@ -1,0 +1,51 @@
+{
+  "note": "New private history files include WAL recovery/metadata and owner-index output. File bytes are not exclusively attributable to the index; exact auxiliary logical key/value bytes are separately counted. Both compared readers use this same final physical input.",
+  "files": [
+    {
+      "path": "history/058062.log",
+      "bytes": 2722352,
+      "allocated_bytes": 36913152
+    },
+    {
+      "path": "history/CURRENT",
+      "bytes": 16,
+      "allocated_bytes": 4096
+    },
+    {
+      "path": "history/LOCK",
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    {
+      "path": "history/OPTIONS-058061",
+      "bytes": 2552,
+      "allocated_bytes": 4096
+    },
+    {
+      "path": "history/058057.sst",
+      "bytes": 534292,
+      "allocated_bytes": 536576
+    },
+    {
+      "path": "history/058059.log",
+      "bytes": 11,
+      "allocated_bytes": 4096
+    },
+    {
+      "path": "history/MANIFEST-052143",
+      "bytes": 1147854,
+      "allocated_bytes": 1150976
+    },
+    {
+      "path": "history/MANIFEST-058060",
+      "bytes": 125775,
+      "allocated_bytes": 126976
+    },
+    {
+      "path": "history/058058.sst",
+      "bytes": 2145920,
+      "allocated_bytes": 2146304
+    }
+  ],
+  "retired_derived_sst_paths": []
+}

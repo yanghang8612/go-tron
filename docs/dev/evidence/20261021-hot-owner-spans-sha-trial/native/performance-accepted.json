@@ -1,0 +1,7 @@
+{
+  "accepted": true,
+  "scope": "Proceed to full correctness audit and residual diagnostic only; no deployment approval or claim of universal speedup",
+  "observed": "Warm 9M median 165.290 to 153.311 ms; fresh 202.207 to 202.073 ms; private OS-cold 824.982 to 853.081 ms. Full matrix retained, mixed cold outcomes.",
+  "utc": "2026-10-21T06:53:03.065807+00:00",
+  "production_mutations": false
+}

@@ -1,0 +1,3 @@
+ok  	github.com/tronprotocol/go-tron/core/rawdb	37.417s
+ok  	github.com/tronprotocol/go-tron/core/state	3.304s
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	146.485s
