@@ -9,7 +9,7 @@ The remaining first hot scan spends most CPU decoding all fields of unrelated
 rows. Add a derived per-block sidecar in a schema-owned history key family.
 It describes consecutive same-owner byte spans in the original RLP row list,
 with row counts/sequence positions, a sorted full 21-byte owner dictionary,
-decoded size and SHA256 of the exact encoded canonical pack. A checksum covers
+decoded size and BLAKE2b-256 of the exact encoded canonical pack. A checksum covers
 the entire bounded sidecar. Span lengths and row counts must partition the
 complete row list, without holes, overlap, trailing bytes or sequence overflow.
 
@@ -65,3 +65,11 @@ HTTP return values and cache conditions, recompute full latest-state MuHash and
 exercise the same three real history restore windows. Attribute residual CPU
 and I/O separately from the primary performance samples; seal reproducible
 source, input, per-request, index-space and correctness evidence.
+
+The first SHA256 sidecar prototype was correct but its extra source hashing
+consumed 20.25% of a warm full-HTTP CPU profile on the server, with metadata
+checksum another 5.61%. The version-2 body magic uses BLAKE2b-256 for both
+auxiliary digests. The key namespace is retained; retired version-1 bodies fall
+back as optional misses. Normal canonical chunk/pack SHA, MuHash and consensus
+hashes are unchanged. A native bounded hash microbenchmark precedes the full
+new HTTP comparison; algorithm-only speed does not establish query benefit.

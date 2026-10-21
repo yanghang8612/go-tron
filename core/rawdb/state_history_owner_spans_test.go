@@ -117,7 +117,7 @@ func TestHistoryOwnerSpansCodecAndSelectedOracle(t *testing.T) {
 }
 
 func TestHistoryOwnerSpansStaleCorruptMissingAndPinned(t *testing.T) {
-	for _, mode := range []string{"missing", "truncated", "checksum", "stale", "unmarked"} {
+	for _, mode := range []string{"missing", "truncated", "checksum", "stale", "unmarked", "retired-sha"} {
 		t.Run(mode, func(t *testing.T) {
 			f, input := ownerSpansFixture(t, "snappy")
 			index, _ := f.Get(stateChangeOwnerSpansKey(9))
@@ -128,6 +128,9 @@ func TestHistoryOwnerSpansStaleCorruptMissingAndPinned(t *testing.T) {
 				f.Put(stateChangeOwnerSpansKey(9), index[:len(index)/2])
 			case "checksum":
 				index[20] ^= 1
+				f.Put(stateChangeOwnerSpansKey(9), index)
+			case "retired-sha":
+				index[7] = '1'
 				f.Put(stateChangeOwnerSpansKey(9), index)
 			case "stale":
 				input[0].Prev = []byte("replacement pack")

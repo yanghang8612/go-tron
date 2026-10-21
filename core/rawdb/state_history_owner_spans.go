@@ -3,7 +3,6 @@ package rawdb
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
+	"golang.org/x/crypto/blake2b"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 	historyOwnerSpansMinRaw   = 16 << 10
 )
 
-var historyOwnerSpansMagic = [8]byte{'G', 'T', 'H', 'O', 'S', '0', '0', '1'}
+var historyOwnerSpansMagic = [8]byte{'G', 'T', 'H', 'O', 'S', '0', '0', '2'}
 
 var historyOwnerSpansHits = metrics.NewRegisteredCounter("state/history/query/owner_spans/validated_hits", nil)
 var historyOwnerSpansSelectedRows = metrics.NewRegisteredCounter("state/history/query/owner_spans/selected_rows", nil)
@@ -45,6 +45,8 @@ type historyOwnerSpans struct {
 // Owner spans are optional derived data, never authoritative rows. Their source
 // is the exact encoded canonical pack, not a block number or a mutable head.
 // Its normal materializer still authenticates all shared chunks and pack SHA.
+// Version 2 uses BLAKE2b-256 only for auxiliary binding/checksum; canonical
+// history, commitments and consensus hashes keep their original algorithms.
 func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomainChange) ([]byte, error) {
 	if len(raw) < historyOwnerSpansMinRaw || len(raw) > stateDomainChangeBlockMaxDecodedBytes {
 		return nil, nil
@@ -122,7 +124,7 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 	for _, n := range []uint64{block, uint64(len(raw)), first, uint64(len(raw) - len(rowBytes)), uint64(len(rowBytes)), index, uint64(len(ordered)), uint64(len(runs))} {
 		payload = binary.AppendUvarint(payload, n)
 	}
-	digest := sha256.Sum256(pack)
+	digest := blake2b.Sum256(pack)
 	payload = append(payload, digest[:]...)
 	for _, owner := range ordered {
 		payload = append(payload, owner[:]...)
@@ -135,7 +137,7 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 	if len(payload) > historyOwnerSpansMaxBytes {
 		return nil, nil
 	}
-	digest = sha256.Sum256(payload)
+	digest = blake2b.Sum256(payload)
 	encoded := append([]byte(nil), historyOwnerSpansMagic[:]...)
 	encoded = binary.AppendUvarint(encoded, uint64(len(payload)))
 	encoded = append(encoded, digest[:]...)
@@ -200,7 +202,7 @@ func decodeHistoryOwnerSpansInto(data []byte, block uint64, work *historyOwnerSp
 	if work != nil {
 		work.payload = p
 	}
-	digest := sha256.Sum256(p)
+	digest := blake2b.Sum256(p)
 	if !bytes.Equal(checksum, digest[:]) {
 		return nil, bad
 	}
@@ -360,7 +362,7 @@ func iterateHistoryOwnerSpans(ctx context.Context, db StateKVHistoryReader, pack
 	if selectedRows > r.rows/3 {
 		return false, nil // Two sparse validation passes must beat a full decode.
 	}
-	if sha256.Sum256(pack) != r.digest {
+	if blake2b.Sum256(pack) != r.digest {
 		return false, nil
 	}
 	materialized, err := materializeStateHistorySharedPack(pack, block, []ethdb.KeyValueReader{db})
