@@ -4156,6 +4156,8 @@ func openStateDomainChangeBinaryAccessorReaderContext(ctx context.Context, dir s
 		cr.prefixCache = sharedHistoryHeaderCache
 		reader = cr
 		logicalSize = cr.UncompressedSize()
+	} else {
+		reader = newHistoryAccessorPages(ctx, file, logicalSize)
 	}
 	header, err := readStateDomainChangeBinaryHeaderAt(contextReaderAt{ctx: ctx, r: reader}, stateDomainChangeBinaryAccessorMagic)
 	if err != nil {

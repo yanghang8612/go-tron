@@ -29,7 +29,7 @@ func WithStateHistoryQueryTailCache(source StateKVHistoryReader) StateKVHistoryR
 	if _, ok := source.(*stateHistoryQueryTailView); ok {
 		return source
 	}
-	return &stateHistoryQueryTailView{StateKVHistoryReader: source, entries: make(map[common.Address]*stateHistoryQueryTailEntry), rejected: make(map[common.Address]bool), budget: stateHistoryQueryTailBytes, maxRows: stateHistoryQueryTailRows}
+	return &stateHistoryQueryTailView{StateKVHistoryReader: source, entries: make(map[common.Address]*stateHistoryQueryTailEntry), rejected: make(map[common.Address]bool), first: make(map[common.Address]*stateHistoryQueryTailFirst), budget: stateHistoryQueryTailBytes, maxRows: stateHistoryQueryTailRows}
 }
 
 type stateHistoryQueryTailEntry struct {
@@ -43,6 +43,7 @@ type stateHistoryQueryTailView struct {
 	mu                          sync.Mutex
 	entries                     map[common.Address]*stateHistoryQueryTailEntry
 	rejected                    map[common.Address]bool
+	first                       map[common.Address]*stateHistoryQueryTailFirst
 	used, rows, budget, maxRows int
 }
 
@@ -54,6 +55,10 @@ func (*stateHistoryQueryTailView) IsPinnedKeyValueView() bool { return true }
 func (v *stateHistoryQueryTailView) iterateOwner(ctx context.Context, from, to uint64, owner common.Address, fn func(*StateDomainChange) (bool, error)) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.iterateOwnerLocked(ctx, from, to, owner, fn)
+}
+
+func (v *stateHistoryQueryTailView) iterateOwnerLocked(ctx context.Context, from, to uint64, owner common.Address, fn func(*StateDomainChange) (bool, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
