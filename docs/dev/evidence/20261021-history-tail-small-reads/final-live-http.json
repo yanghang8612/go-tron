@@ -1,0 +1,17 @@
+{
+  "utc": "2026-10-21T04:07:47.760367+00:00",
+  "gateway": "http://3.12.206.71:6060/gmr/",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "eth_blockNumber",
+    "params": []
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x12ab7c1"
+  },
+  "height": 19576769,
+  "production_mutations": false
+}

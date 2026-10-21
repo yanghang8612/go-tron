@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "phase": "failed",
+  "production_mutations": false,
+  "utc": "2026-10-21T03:29:50.251651+00:00",
+  "error": "JSONDecodeError('Expecting value: line 1 column 1 (char 0)',)",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/cold-query-layout-20261020-01/tail-read-final-20261021-02/seal-native.py\", line 15, in <module>\n    x=json.loads(p.read_text());assert x.get('phase')!='failed',(unit,x)\n  File \"/usr/lib64/python3.6/json/__init__.py\", line 354, in loads\n    return _default_decoder.decode(s)\n  File \"/usr/lib64/python3.6/json/decoder.py\", line 339, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n  File \"/usr/lib64/python3.6/json/decoder.py\", line 357, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n"
+}

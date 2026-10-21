@@ -1,0 +1,40 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "utc": "2026-10-21T03:40:39.114185+00:00",
+  "after_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "canonical_files_unchanged": 41486,
+  "build": {
+    "active_route": {
+      "rows": 16703,
+      "dataset": "state-domain-change",
+      "kind": "system-history-routing",
+      "fromTxNum": 1,
+      "toTxNum": 568104018,
+      "path": "history/system-routing-1-568104018-9fb18f02b97d595716fcdf87932e373b6785f49e4e82d4bf7fd421cb8c5d7127.route",
+      "size": 1515200,
+      "checksum": "sha256:9fb18f02b97d595716fcdf87932e373b6785f49e4e82d4bf7fd421cb8c5d7127"
+    },
+    "active_route_bytes": 1515200,
+    "all_keys": 16703,
+    "all_pairs_covered": true,
+    "batches": 73,
+    "build_seconds": 191.779675649,
+    "canonical_references_unchanged": true,
+    "complete": true,
+    "covered_pairs": 4609,
+    "manifest_generation": 5321,
+    "progress_unchanged": true,
+    "storage_memberships": 595112,
+    "storage_prefixes": 16669,
+    "with_strict_check_seconds": 370.197403496
+  }
+}

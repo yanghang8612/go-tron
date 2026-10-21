@@ -1,0 +1,175 @@
+{
+  "complete": true,
+  "inventory_files": 563,
+  "source_identities": {
+    "first-trial": {
+      "commit": "d2e41fc5f4f1961ce5823e8776f0665953cbc77c",
+      "production_files": 1072,
+      "binaries": {
+        "candidate.test": "de2b1b2e1531d670aa68a14dc8ce99de1cbec9480eb1b8e7fd5151119ff421ff",
+        "snapshots.test": "584578beecdf8c86390208277efb1d87f3460daa197d3f241a6d8cb2a9e93249",
+        "gtron-candidate": "458a5156d4c873709eba074bb03a2381911221da141f038881cf0b78b0232153"
+      }
+    },
+    "final": {
+      "commit": "4d34e751f0d37add20451ca9aae2d68e0c930b6e",
+      "production_files": 1073,
+      "binaries": {
+        "candidate.test": "ac0900c54a12e3a8b685abe6f154b5ad15972f9ef6c7d4fa24f86985d0eea41f",
+        "snapshots.test": "d6d0147ba82d9b5c8491e65843a0fb61c5cb9db20675e6acfe9a7cffd7fb1c15",
+        "gtron-candidate": "f1345589c50428df1eda3d864104c4c22012c2e571ea3792d2c3feef207e4f0d"
+      }
+    }
+  },
+  "http_requests_per_comparison": 154,
+  "timed_requests_per_comparison": 112,
+  "final_9m": [
+    {
+      "mode": "baseline",
+      "cache": "fresh-process-os-uncontrolled",
+      "tag": "0x895440",
+      "n": 2,
+      "median_ms": 290.6573563814163,
+      "min_ms": 276.57247334718704,
+      "max_ms": 304.7422394156456
+    },
+    {
+      "mode": "baseline",
+      "cache": "private-os-cold-fresh-process",
+      "tag": "0x895440",
+      "n": 2,
+      "median_ms": 1616.219487041235,
+      "min_ms": 1614.2254769802094,
+      "max_ms": 1618.2134971022606
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0x895440",
+      "n": 4,
+      "median_ms": 236.37479171156883,
+      "min_ms": 233.0676093697548,
+      "max_ms": 246.09234184026718
+    },
+    {
+      "mode": "candidate",
+      "cache": "fresh-process-os-uncontrolled",
+      "tag": "0x895440",
+      "n": 2,
+      "median_ms": 200.32835751771927,
+      "min_ms": 199.21665638685226,
+      "max_ms": 201.44005864858627
+    },
+    {
+      "mode": "candidate",
+      "cache": "private-os-cold-fresh-process",
+      "tag": "0x895440",
+      "n": 2,
+      "median_ms": 835.3883139789104,
+      "min_ms": 832.5422629714012,
+      "max_ms": 838.2343649864197
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0x895440",
+      "n": 4,
+      "median_ms": 167.230062186718,
+      "min_ms": 155.20670264959335,
+      "max_ms": 179.48898673057556
+    }
+  ],
+  "final_9m_aggregate": [
+    {
+      "mode": "baseline",
+      "cache": "fresh-process-os-uncontrolled",
+      "tag": "0x895440",
+      "n": 2,
+      "client_ms": 290.6573563814163,
+      "handler_ms": 288.57460449999996,
+      "cpu_ms": 290.69100000000003,
+      "alloc_bytes": 26531696.0,
+      "num_gc": 0.0,
+      "syscr": 5651.0,
+      "rchar": 24025605.0,
+      "read_bytes": 0.0
+    },
+    {
+      "mode": "baseline",
+      "cache": "private-os-cold-fresh-process",
+      "tag": "0x895440",
+      "n": 2,
+      "client_ms": 1616.219487041235,
+      "handler_ms": 1614.223034,
+      "cpu_ms": 366.2585,
+      "alloc_bytes": 26638056.0,
+      "num_gc": 0.5,
+      "syscr": 5651.0,
+      "rchar": 24025614.0,
+      "read_bytes": 72441856.0
+    },
+    {
+      "mode": "baseline",
+      "cache": "warm",
+      "tag": "0x895440",
+      "n": 4,
+      "client_ms": 236.37479171156883,
+      "handler_ms": 235.229669,
+      "cpu_ms": 236.09550000000002,
+      "alloc_bytes": 21978304.0,
+      "num_gc": 0.0,
+      "syscr": 3947.0,
+      "rchar": 7735994.5,
+      "read_bytes": 0.0
+    },
+    {
+      "mode": "candidate",
+      "cache": "fresh-process-os-uncontrolled",
+      "tag": "0x895440",
+      "n": 2,
+      "client_ms": 200.32835751771927,
+      "handler_ms": 198.33473049999998,
+      "cpu_ms": 199.1845,
+      "alloc_bytes": 25481928.0,
+      "num_gc": 0.0,
+      "syscr": 1869.0,
+      "rchar": 22657696.0,
+      "read_bytes": 0.0
+    },
+    {
+      "mode": "candidate",
+      "cache": "private-os-cold-fresh-process",
+      "tag": "0x895440",
+      "n": 2,
+      "client_ms": 835.3883139789104,
+      "handler_ms": 833.348467,
+      "cpu_ms": 243.3715,
+      "alloc_bytes": 25483932.0,
+      "num_gc": 0.5,
+      "syscr": 1869.0,
+      "rchar": 22657705.0,
+      "read_bytes": 28002304.0
+    },
+    {
+      "mode": "candidate",
+      "cache": "warm",
+      "tag": "0x895440",
+      "n": 4,
+      "client_ms": 167.230062186718,
+      "handler_ms": 166.10866149999998,
+      "cpu_ms": 167.00400000000002,
+      "alloc_bytes": 18032048.0,
+      "num_gc": 0.0,
+      "syscr": 165.0,
+      "rchar": 6368082.0,
+      "read_bytes": 0.0
+    }
+  ],
+  "final_9m_trace": {
+    "attributed_calls": 1867,
+    "unparsed_window_lines": 44
+  },
+  "muhash_verified": true,
+  "restored_rows": 22496,
+  "storage_route_bytes": 1515200
+}

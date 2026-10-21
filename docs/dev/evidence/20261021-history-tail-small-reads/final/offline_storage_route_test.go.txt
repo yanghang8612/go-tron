@@ -1,0 +1,108 @@
+package snapshots
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+)
+
+func TestOfflineStorageHistoryRoute(t *testing.T) {
+	root := os.Getenv("GTRON_LAYOUT_EVIDENCE_DIR")
+	if root == "" {
+		t.Skip("explicit private fixed-input layout required")
+	}
+	dir := filepath.Join(root, "storage-route-input", "state-snapshots")
+	m, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := func(m *Manifest) map[string]SegmentRef {
+		out := make(map[string]SegmentRef)
+		for _, ref := range m.Segments {
+			if ref.Kind != SegmentSystemHistoryRouting {
+				out[fmt.Sprintf("%s/%s/%s", ref.Dataset, ref.Kind, ref.Path)] = ref
+			}
+		}
+		return out
+	}
+	before := canonical(m)
+	progress := m.Progress
+	start := time.Now()
+	batch := 0
+	log, err := os.Create(filepath.Join(root, "storage-route-build.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	for {
+		ref, built, e := BuildSystemHistoryRoutingContext(context.Background(), dir, m, 64)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if !built {
+			break
+		}
+		m, e = NewAggregator(dir).Integrate(m.VisibleTxStart, m.VisibleTxEnd, []SegmentRef{ref})
+		if e != nil {
+			t.Fatal(e)
+		}
+		batch++
+		route, e := loadSystemHistoryRouting(context.Background(), dir, m)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if !route.storagePrefixes {
+			t.Fatal("not V2")
+		}
+		json.NewEncoder(log).Encode(map[string]any{"batch": batch, "covered": len(route.sources), "keys": len(route.keys), "bytes": ref.Size, "elapsed_seconds": time.Since(start).Seconds()})
+		log.Sync()
+		if batch > 1024 {
+			t.Fatal("bounded build failed to finish")
+		}
+	}
+	route, err := loadSystemHistoryRouting(context.Background(), dir, m)
+	if err != nil || route == nil || !route.storagePrefixes {
+		t.Fatal("missing complete V2", err)
+	}
+	pairs := 0
+	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	for _, h := range m.Segments {
+		if h.Kind != SegmentHistory || h.normalizedDataset() != SegmentDatasetStateDomainChange {
+			continue
+		}
+		a, ok := cfg.HistoryAccessorRef(m, h)
+		if !ok {
+			t.Fatal("missing accessor")
+		}
+		if _, ok = route.columns[systemHistoryRoutingPairID(h, a)]; !ok {
+			t.Fatal("uncovered source", h.Path)
+		}
+		pairs++
+	}
+	buildSeconds := time.Since(start).Seconds()
+	ref := mustRoutingRef(t, m)
+	if err := checkSystemHistoryRoutingContext(context.Background(), dir, m, ref); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, canonical(m)) || !reflect.DeepEqual(progress, m.Progress) {
+		t.Fatal("canonical refs or frontiers changed")
+	}
+	storage := 0
+	members := 0
+	for key, columns := range route.keys {
+		if contractStorageHistoryRoutingKey([]byte(key)) {
+			storage++
+			systemHistoryMembersIterate(columns, func(int) { members++ })
+		}
+	}
+	receipt := map[string]any{"complete": true, "all_pairs_covered": true, "covered_pairs": pairs, "storage_prefixes": storage, "storage_memberships": members, "all_keys": len(route.keys), "batches": batch, "active_route_bytes": ref.Size, "active_route": ref, "build_seconds": buildSeconds, "with_strict_check_seconds": time.Since(start).Seconds(), "canonical_references_unchanged": true, "progress_unchanged": true, "manifest_generation": m.Generation}
+	data, _ := json.MarshalIndent(receipt, "", "  ")
+	if err := os.WriteFile(filepath.Join(root, "storage-route-build.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

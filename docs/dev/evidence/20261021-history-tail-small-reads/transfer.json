@@ -1,0 +1,10 @@
+{
+  "complete": true,
+  "archive_name": "gtron-tail-small-reads-final-20261021-02.zip",
+  "bytes": 4234737,
+  "sha256": "5284aa94b2413a98e8e19eca18e300328b00ff02b9b746a7a96521455a0a0703",
+  "files": 563,
+  "uncompressed_bytes": 33737903,
+  "method": "JumpServer normal SFTP UI download; server SHA256 visually read in four 16-character groups and matched locally; ZIP CRC and every entry SHA256 checked.",
+  "utc": "2026-10-21T04:05:50.365509+00:00"
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "height": 3144020,
+    "tag": "0x2ff954",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000006",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage"
+  },
+  {
+    "height": 3144021,
+    "tag": "0x2ff955",
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000007",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage"
+  },
+  {
+    "height": 5000000,
+    "tag": "0x4c4b40",
+    "expected": "0x000000000000000000000000000000000000000000000000000000000000003f",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage"
+  },
+  {
+    "height": 9000000,
+    "tag": "0x895440",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000cf",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage"
+  },
+  {
+    "height": 11817936,
+    "tag": "0xb453d0",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage"
+  },
+  {
+    "height": 11818191,
+    "tag": "0xb454cf",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage"
+  },
+  {
+    "height": 11818192,
+    "tag": "latest",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "root-verified live storage in fixed input"
+  }
+]

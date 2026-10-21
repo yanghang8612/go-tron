@@ -1,0 +1,44 @@
+File: candidate.test
+Build ID: 9359b8abf66a2807a684ba152331740c92e3b6f2
+Type: cpu
+Time: 2026-10-21 02:42:21 UTC
+Duration: 20.16s, Total samples = 19.99s (99.18%)
+Showing nodes accounting for 17.86s, 89.34% of 19.99s total
+Dropped 415 nodes (cum <= 0.10s)
+Showing top 35 nodes out of 187
+      flat  flat%   sum%        cum   cum%
+     4.14s 20.71% 20.71%      4.23s 21.16%  github.com/golang/snappy.decode
+     1.98s  9.90% 30.62%      3.99s 19.96%  github.com/ethereum/go-ethereum/rlp.Split
+     1.83s  9.15% 39.77%      2.01s 10.06%  github.com/ethereum/go-ethereum/rlp.readKind
+     1.20s  6.00% 45.77%      4.56s 22.81%  github.com/ethereum/go-ethereum/rlp.SplitString
+     1.14s  5.70% 51.48%      1.14s  5.70%  runtime.duffcopy
+     0.85s  4.25% 55.73%      7.80s 39.02%  github.com/tronprotocol/go-tron/core/rawdb.decodeBorrowedStateDomainChangeRow
+     0.84s  4.20% 59.93%      4.13s 20.66%  github.com/ethereum/go-ethereum/rlp.SplitUint64
+     0.67s  3.35% 63.28%      0.67s  3.35%  internal/runtime/syscall.Syscall6
+     0.64s  3.20% 66.48%      4.77s 23.86%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint
+     0.50s  2.50% 68.98%      0.50s  2.50%  crypto/internal/fips140/sha256.blockAVX2
+     0.49s  2.45% 71.44%      0.49s  2.45%  github.com/ethereum/go-ethereum/rlp.readSize
+     0.48s  2.40% 73.84%      0.48s  2.40%  runtime.memmove
+     0.47s  2.35% 76.19%      0.47s  2.35%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.27s  1.35% 77.54%      1.31s  6.55%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).latestSegmentRef
+     0.24s  1.20% 78.74%      0.51s  2.55%  github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistoryOwnerTail.func2
+     0.24s  1.20% 79.94%      0.24s  1.20%  runtime.duffzero
+     0.23s  1.15% 81.09%      1.30s  6.50%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeString
+     0.21s  1.05% 82.14%     13.57s 67.88%  github.com/tronprotocol/go-tron/core/rawdb.iterateMaterializedStateHistoryBlock
+     0.20s  1.00% 83.14%      0.20s  1.00%  runtime.memclrNoHeapPointers
+     0.19s  0.95% 84.09%      0.22s  1.10%  context.(*cancelCtx).Err
+     0.18s   0.9% 84.99%      0.81s  4.05%  github.com/ethereum/go-ethereum/rlp.SplitList
+     0.16s   0.8% 85.79%      0.16s   0.8%  memeqbody
+     0.12s   0.6% 86.39%      3.42s 17.11%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.11s  0.55% 86.94%      0.11s  0.55%  aeshashbody
+     0.07s  0.35% 87.29%     14.12s 70.64%  github.com/tronprotocol/go-tron/core/rawdb.(*stateHistoryQueryTailView).iterateOwnerLocked
+     0.05s  0.25% 87.54%      0.12s   0.6%  github.com/cockroachdb/pebble/sstable.(*blockIter).SeekGE
+     0.05s  0.25% 87.79%      0.27s  1.35%  runtime.mallocgcSmallNoscan
+     0.05s  0.25% 88.04%      0.14s   0.7%  sort.Search (inline)
+     0.04s   0.2% 88.24%      0.12s   0.6%  github.com/tronprotocol/go-tron/core/state/snapshots.loadSystemHistoryRouting
+     0.04s   0.2% 88.44%      0.30s  1.50%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.04s   0.2% 88.64%      0.57s  2.85%  runtime.mallocgc
+     0.04s   0.2% 88.84%      0.12s   0.6%  runtime.mallocgcSmallScanNoHeader
+     0.04s   0.2% 89.04%      0.17s  0.85%  runtime.mapaccess1_faststr
+     0.03s  0.15% 89.19%      0.10s   0.5%  github.com/tronprotocol/go-tron/core/state/snapshots.systemHistoryRoutingQuery (inline)
+     0.03s  0.15% 89.34%      0.15s  0.75%  runtime.growslice

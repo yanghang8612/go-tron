@@ -1,0 +1,44 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "before_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "utc": "2026-10-21T03:47:15.680355+00:00",
+  "baseline_binary_sha256": "98473c753fd5327418048a1176986e773ece53447f2c9a624adee0438a38245e",
+  "candidate_binary_sha256": "ac0900c54a12e3a8b685abe6f154b5ad15972f9ef6c7d4fa24f86985d0eea41f",
+  "query_code": "0b370448-versus-4d34e751-planned-tail-and-v2-storage-route",
+  "head": {
+    "gomaxprocs": 2,
+    "head": 11818192,
+    "head_hash": "30303030303030303030623435346430396134363838366134306430396438636265633733383132643031336635376465316663383033373834616366646636",
+    "head_tx": 601386177,
+    "history_cache_mib": 512,
+    "hot_cache_mib": 512,
+    "manifest_generation": 5248,
+    "pid": 12551,
+    "read_only": true,
+    "root": "38666266313439363834313436613539623136353062333138613736386630656462616530633863316333636562326335633631303132396331306637366135",
+    "url": "http://127.0.0.1:11404/"
+  },
+  "last_result": {
+    "id": 154,
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "repeat": 1,
+    "height": 11818192,
+    "tag": "latest",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000e1",
+    "reference": "root-verified live storage in fixed input",
+    "milliseconds": 13.847015798091888,
+    "correct": true
+  },
+  "after_identity": {
+    "pid": 28737,
+    "sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4"
+  },
+  "requests": 154,
+  "all_responses_correct": true
+}

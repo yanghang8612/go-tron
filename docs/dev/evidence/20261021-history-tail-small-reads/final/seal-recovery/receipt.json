@@ -1,0 +1,7 @@
+{
+  "reason": "Status-file read overlapped a non-atomic writer update. Retry incomplete JSON; retain all completed and failed validation assertions.",
+  "original_sha256": "bb9700a00273337e173174c00293ebb3fa895b665274001be8fedb9f7c303926",
+  "recovered_sha256": "85ccf5828f3aa8e6fe8526a902f3c4722e3b66aa668931155ba0f18f6389ae83",
+  "utc": "2026-10-21T03:52:44.812276+00:00",
+  "production_mutations": false
+}

@@ -1,0 +1,12 @@
+{
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+  },
+  "correct": true,
+  "start_unix": 1792555407.7802467,
+  "end_unix": 1792555408.781864,
+  "milliseconds": 1001.6552582383156,
+  "excluded_from_primary_performance": true
+}

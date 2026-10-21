@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-21T02:40:25.545177+00:00",
+  "stopped_waiting_units": [
+    "gtron-tail-read-audit-20261021.service",
+    "gtron-tail-read-diagnostic-20261021.service",
+    "gtron-tail-read-seal-20261021.service"
+  ],
+  "reason": "Audit final physical-reader candidate once after both HTTP comparisons; first comparison remains immutable and running.",
+  "audit_phase_before": "waiting-for-comparison",
+  "comparison_complete_before": false,
+  "production_mutations": false
+}

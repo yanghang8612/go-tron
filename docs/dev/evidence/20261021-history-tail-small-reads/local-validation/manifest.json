@@ -1,0 +1,35 @@
+{
+  "source_commit": "4d34e751f0d37add20451ca9aae2d68e0c930b6e",
+  "toolchain": "go1.25.5",
+  "CGO_ENABLED": "1",
+  "build_tags": [
+    "sapling"
+  ],
+  "logs": {
+    "final-build.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "final-core.log": {
+      "bytes": 105,
+      "sha256": "dd5aa8cf4294b673a81e0163c8e25b15c134738774812e235c26ab2292adc24b"
+    },
+    "final-local-status.json": {
+      "bytes": 146,
+      "sha256": "50f08e60c86f7bdd0dfe5e0fe6f6d40cf02250d0ac61c51f63067c98e5e6cd2d"
+    },
+    "final-packages.log": {
+      "bytes": 178,
+      "sha256": "3407eaace419da83dbc1a61b7a21454ad1fbcc95584de407876bbc350a251df3"
+    },
+    "final-race.log": {
+      "bytes": 176,
+      "sha256": "51652c21f552a3b6c8d20a47abd3d94e162702dda2cee0634ed7755f0077ec74"
+    },
+    "final-vet.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "note": "The server native prepare-native.py records exact native commands; these are the completed local validation logs and frozen-source receipt."
+}

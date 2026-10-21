@@ -1,0 +1,10 @@
+{
+  "complete": false,
+  "excluded_from_primary_performance": true,
+  "production_mutations": false,
+  "phase": "failed",
+  "utc": "2026-10-21T02:42:43.583732+00:00",
+  "candidate_sha256": "de2b1b2e1531d670aa68a14dc8ce99de1cbec9480eb1b8e7fd5151119ff421ff",
+  "error": "CalledProcessError(1, ['/data/go/bin/go', 'tool', 'pprof', '-top', '-nodecount=40', '/data/gtron/cold-query-layout-20261020-01/tail-read-20261021-01/candidate.test', '/data/gtron/cold-query-layout-20261020-01/tail-read-20261021-01/first-nine-quick/profile/cpu.pb.gz'])",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/cold-query-layout-20261020-01/tail-read-20261021-01/quick-diagnose.py\", line 87, in <module>\n    with (prof/name).open('wb') as out:subprocess.run(['/data/go/bin/go','tool','pprof',*args,str(binary),str(prof/'cpu.pb.gz')],stdout=out,stderr=subprocess.STDOUT,check=True,env=env,timeout=120)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 438, in run\n    output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/data/go/bin/go', 'tool', 'pprof', '-top', '-nodecount=40', '/data/gtron/cold-query-layout-20261020-01/tail-read-20261021-01/candidate.test', '/data/gtron/cold-query-layout-20261020-01/tail-read-20261021-01/first-nine-quick/profile/cpu.pb.gz']' returned non-zero exit status 1.\n"
+}

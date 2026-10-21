@@ -1,0 +1,17 @@
+{
+  "opened": 208,
+  "counts": [
+    {
+      "flat": "02",
+      "domain_hex": "0001",
+      "prefix": "02fffffffffffffffffffffffffffffffffffffffe00000000000000000001",
+      "calls": 18
+    },
+    {
+      "flat": "02",
+      "domain_hex": "0100",
+      "prefix": "02a4997124a328a4615eab437cede31da47a31b37500000000000000000100",
+      "calls": 200
+    }
+  ]
+}
