@@ -1,0 +1,405 @@
+package vm
+
+import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
+)
+
+// These fixtures keep canonical prestate construction outside timing. Each
+// measured operation includes a complete final Call, outer snapshot rollback,
+// FinalizeTransaction and TVM/slot-arena lifecycle, with no parallel execution.
+type serialCallFixture struct {
+	disk                    ethdb.Database
+	state                   *state.StateDB
+	caller, target, witness tcommon.Address
+	cfg                     TVMConfig
+	txID                    tcommon.Hash
+	block                   uint64
+	stamp                   int64
+	input                   []byte
+	limit                   uint64
+	value                   int64
+	wantErr                 error
+	wantUsed                uint64
+	wantLogs, wantInternal  int
+	arena                   InternalTransactionArena
+	logs                    ExecutionLogArena
+}
+
+func serialHex(tb testing.TB, text string) []byte {
+	tb.Helper()
+	b, err := hex.DecodeString(strings.TrimSpace(text))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return b
+}
+func serialHexFile(tb testing.TB, path string) []byte {
+	tb.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return serialHex(tb, string(b))
+}
+func serialAddress(tb testing.TB, text string) tcommon.Address {
+	return tcommon.BytesToAddress(serialHex(tb, text))
+}
+func serialNewState(tb testing.TB) (*state.StateDB, ethdb.Database) {
+	tb.Helper()
+	disk := ethrawdb.NewMemoryDatabase()
+	tb.Cleanup(func() { disk.Close() })
+	s, err := state.New(tcommon.Hash{}, state.NewDatabase(disk))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return s, disk
+}
+func serialCommitReopen(tb testing.TB, s *state.StateDB, disk ethdb.Database) *state.StateDB {
+	tb.Helper()
+	root, err := s.Commit()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	s, err = state.New(root, state.NewDatabase(disk))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return s
+}
+func serialDeploy(tb testing.TB, s *state.StateDB, cfg TVMConfig, caller, addr, witness tcommon.Address, code []byte, block uint64, stamp int64, name string, percent, originLimit int64) uint64 {
+	tb.Helper()
+	v := NewTVM(s, nil, caller, block, stamp, witness, 1, cfg)
+	defer ReleaseTVM(v)
+	meta := &contractpb.SmartContract{OriginAddress: caller.Bytes(), ContractAddress: addr.Bytes(), ConsumeUserResourcePercent: percent, OriginEnergyLimit: originLimit, Name: name}
+	const limit = 10_000_000
+	_, _, left, err := v.CreateAtWithTokenAndContract(caller, addr, code, limit, 0, 0, 0, meta)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return limit - left
+}
+func serialGoldenTronFixture(tb testing.TB) *serialCallFixture {
+	tb.Helper()
+	s, disk := serialNewState(tb)
+	caller := serialAddress(tb, "4182956e1b8f23c7da3a0b9e88c9626147b9118c6f")
+	target := serialAddress(tb, "41f8a43db88d9e0d6748d9129d9aa37c4eea558655")
+	cfg := tusdEraConfig()
+	witness := serialAddress(tb, "410c4c64201f66a32719cf9ab4e6f4aed6330b48bd")
+	if used := serialDeploy(tb, s, cfg, caller, target, witness, serialHexFile(tb, "testdata/nile_goldentron_create.hex"), 11359595, 1606992009000, "GoldenTron", 100, 1_000_000); used != 1624169 {
+		tb.Fatalf("canonical creation energy %d", used)
+	}
+	s = serialCommitReopen(tb, s, disk)
+	return &serialCallFixture{disk: disk, state: s, caller: caller, target: target, witness: serialAddress(tb, "4121f8ff8bfda1b50ea50a75bf91c000eb32c89da8"), cfg: cfg, txID: tcommon.HexToHash("4b48c007ae6eba93e6d69737012a54466e1b0f3a8cba0988a8da3661383b32f4"), block: 11359658, stamp: 1606992198000, input: serialHexFile(tb, "testdata/nile_goldentron_inject_calldata.hex"), limit: 500_000, wantErr: ErrExecutionReverted, wantUsed: 390378, wantInternal: 66}
+}
+func serialTUSDFixture(tb testing.TB) *serialCallFixture {
+	tb.Helper()
+	s, disk := serialNewState(tb)
+	cfg := tusdEraConfig()
+	witness := serialAddress(tb, "41bc20ba9368b49c3d9d68731bb74ed2e88f4ae4c9")
+	origin := serialAddress(tb, "414ab3ded54b146eac9230c63c3f99160f72664c09")
+	for i, impl := range []struct{ file, addr string }{{"token_impl_creation.hex", "41fd677ac5b551f0eb9d9134a76057d07f3f2127af"}, {"ctrl_impl_creation.hex", "41d3ae8459d990198adc4aae652de8264e821574fa"}, {"reg_impl_creation.hex", "41b20a8ef46d2b17de922f3bebba2f68b671b55b11"}} {
+		serialDeploy(tb, s, cfg, origin, serialAddress(tb, impl.addr), witness, serialHexFile(tb, "testdata/nile_tusd14151095/"+impl.file), uint64(14093700+i*10), 1615277400000+int64(i*30000), "", 100, 100)
+	}
+	s = serialCommitReopen(tb, s, disk)
+	raw, err := os.ReadFile("testdata/nile_tusd14151095/manifest.json")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var txs []tusdReplayTx
+	if err = json.Unmarshal(raw, &txs); err != nil {
+		tb.Fatal(err)
+	}
+	for _, tx := range txs[:len(txs)-1] {
+		caller := serialAddress(tb, tx.Caller)
+		var used uint64
+		var callErr error
+		var logs int
+		switch tx.Type {
+		case "CreateSmartContract":
+			used = serialDeploy(tb, s, cfg, caller, serialAddress(tb, tx.CreatedAddr), witness, serialHex(tb, tx.CreateBytecode), tx.Block, tx.BlockTs, tx.CreateName, tx.CreatePercent, tx.CreateEnergyLim)
+		case "TriggerSmartContract":
+			v := NewTVM(s, nil, caller, tx.Block, tx.BlockTs, witness, 1, cfg)
+			v.SetRootTransactionID(tcommon.HexToHash(tx.TxID))
+			_, left, e := v.Call(caller, serialAddress(tb, tx.To), serialHex(tb, tx.Data), 10_000_000, tx.CallValue)
+			used = 10_000_000 - left
+			callErr = e
+			logs = len(v.Logs)
+			ReleaseTVM(v)
+		default:
+			tb.Fatal("unexpected canonical type", tx.Type)
+		}
+		got := "SUCCESS"
+		if callErr == ErrExecutionReverted {
+			got = "REVERT"
+		} else if callErr != nil {
+			got = "FAIL"
+		}
+		if got != tx.JavaRet || used != tx.JavaEnergyTotal || logs != tx.JavaLogs {
+			tb.Fatalf("canonical prestate %s result=%s energy=%d logs=%d", tx.TxID, got, used, logs)
+		}
+		s = serialCommitReopen(tb, s, disk)
+	}
+	tx := txs[len(txs)-1]
+	return &serialCallFixture{disk: disk, state: s, caller: serialAddress(tb, tx.Caller), target: serialAddress(tb, tx.To), witness: witness, cfg: cfg, txID: tcommon.HexToHash(tx.TxID), block: tx.Block, stamp: tx.BlockTs, input: serialHex(tb, tx.Data), limit: 10_000_000, value: tx.CallValue, wantUsed: tx.JavaEnergyTotal, wantLogs: tx.JavaLogs, wantInternal: tx.JavaInternal}
+}
+func serialSmallCallFixture(tb testing.TB, value bool) *serialCallFixture {
+	tb.Helper()
+	s, disk := serialNewState(tb)
+	caller, target, child := tcommon.Address{0x41, 0x61}, tcommon.Address{0x41, 0x62}, addrFromUint(4)
+	callValue := byte(0)
+	if value {
+		child = tcommon.Address{0x41, 0x63}
+		callValue = 7
+		s.SetCode(child, []byte{byte(CALLDATASIZE), byte(PUSH1), 0, byte(PUSH1), 0, byte(CALLDATACOPY), byte(CALLDATASIZE), byte(PUSH1), 0, byte(RETURN)})
+	}
+	s.AddBalance(target, 1_000_000_000)
+	s.AddBalance(child, 100)
+	code := []byte{byte(PUSH2), 1, 0, byte(PUSH1), 0, byte(PUSH1), 0, byte(CALLDATACOPY), byte(PUSH2), 1, 0, byte(PUSH1), 0, byte(PUSH2), 1, 0, byte(PUSH1), 0, byte(PUSH1), callValue, byte(PUSH20)}
+	code = append(code, child[1:]...)
+	code = append(code, byte(PUSH3), 0, 0xc3, 0x50, byte(CALL), byte(POP), byte(PUSH2), 1, 0, byte(PUSH1), 0, byte(RETURN))
+	s.SetCode(target, code)
+	s = serialCommitReopen(tb, s, disk)
+	input := make([]byte, 256)
+	for i := range input {
+		input[i] = byte(i)
+	}
+	count := 0
+	if value {
+		count = 1
+	}
+	return &serialCallFixture{disk: disk, state: s, caller: caller, target: target, cfg: tusdEraConfig(), txID: tcommon.HexToHash("112233"), block: 14_151_095, stamp: 1615451424000, input: input, limit: 1_000_000, wantInternal: count}
+}
+func (f *serialCallFixture) call(tb testing.TB) (*TVM, []byte, uint64, error) {
+	tb.Helper()
+	f.arena.Reset()
+	f.logs.Reset()
+	v := NewTVM(f.state, nil, f.caller, f.block, f.stamp, f.witness, 1, f.cfg)
+	v.SetInternalTransactionArena(&f.arena)
+	v.SetExecutionLogArena(&f.logs)
+	v.SetRootTransactionID(f.txID)
+	ret, left, err := v.Call(f.caller, f.target, f.input, f.limit, f.value)
+	if reflect.TypeOf(err) != reflect.TypeOf(f.wantErr) || errorText(err) != errorText(f.wantErr) || (f.wantUsed != 0 && f.limit-left != f.wantUsed) || len(v.Logs) != f.wantLogs || len(v.InternalTransactions) != f.wantInternal {
+		tb.Fatalf("canonical final Call: err=%v used=%d logs=%d internals=%d", err, f.limit-left, len(v.Logs), len(v.InternalTransactions))
+	}
+	if f.wantUsed == 0 {
+		f.wantUsed = f.limit - left
+	}
+	return v, ret, left, err
+}
+
+type serialCallOracle struct {
+	Return                 []byte
+	Error, ErrorType       string
+	Left, RawEnergy, Nonce uint64
+	Internal               [][]byte
+	Logs                   []struct {
+		Address tcommon.Address
+		Topics  [][]byte
+		Data    []byte
+	}
+	Root tcommon.Hash
+	Rows [][2][]byte
+}
+
+func serialReceiptOracle(tb testing.TB, v *TVM, ret []byte, left uint64, err error) serialCallOracle {
+	tb.Helper()
+	out := serialCallOracle{Return: append([]byte(nil), ret...), Error: errorText(err), ErrorType: fmt.Sprintf("%T", err), Left: left, RawEnergy: v.RawEnergyUsage(), Nonce: v.Nonce}
+	for _, it := range v.InternalTransactions {
+		b, e := proto.MarshalOptions{Deterministic: true}.Marshal(it)
+		if e != nil {
+			tb.Fatal(e)
+		}
+		out.Internal = append(out.Internal, b)
+	}
+	for _, log := range v.Logs {
+		row := struct {
+			Address tcommon.Address
+			Topics  [][]byte
+			Data    []byte
+		}{Address: log.Address, Data: append([]byte(nil), log.Data...)}
+		for i := 0; i < log.TopicCount(); i++ {
+			row.Topics = append(row.Topics, append([]byte(nil), log.Topic(i)...))
+		}
+		out.Logs = append(out.Logs, row)
+	}
+	return out
+}
+
+func serialCallFullOracle(tb testing.TB, makeFixture func(testing.TB) *serialCallFixture) serialCallOracle {
+	tb.Helper()
+	f := makeFixture(tb)
+	v, ret, left, err := f.call(tb)
+	defer ReleaseTVM(v)
+	out := serialReceiptOracle(tb, v, ret, left, err)
+
+	root, e := f.state.Commit()
+	if e != nil {
+		tb.Fatal(e)
+	}
+	out.Root = root
+	iter := f.disk.NewIterator(nil, nil)
+	defer iter.Release()
+	for iter.Next() {
+		out.Rows = append(out.Rows, [2][]byte{append([]byte(nil), iter.Key()...), append([]byte(nil), iter.Value()...)})
+	}
+	if e = iter.Error(); e != nil {
+		tb.Fatal(e)
+	}
+	return out
+}
+
+type serialStateImage struct {
+	Root tcommon.Hash
+	Rows [][2][]byte
+}
+
+func serialRestoredStateImage(tb testing.TB, f *serialCallFixture) serialStateImage {
+	tb.Helper()
+	root, err := f.state.Commit()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	out := serialStateImage{Root: root}
+	iter := f.disk.NewIterator(nil, nil)
+	defer iter.Release()
+	for iter.Next() {
+		out.Rows = append(out.Rows, [2][]byte{append([]byte(nil), iter.Key()...), append([]byte(nil), iter.Value()...)})
+	}
+	if err := iter.Error(); err != nil {
+		tb.Fatal(err)
+	}
+	return out
+}
+
+func serialBenchmarkCall(b *testing.B, name string, makeFixture func(testing.TB) *serialCallFixture) {
+	want := serialCallFullOracle(b, makeFixture)
+	f := makeFixture(b)
+	prestate := serialRestoredStateImage(b, f)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		snap := f.state.Snapshot()
+		v, ret, left, err := f.call(b)
+		if !bytes.Equal(ret, want.Return) || left != want.Left || errorText(err) != want.Error || v.RawEnergyUsage() != want.RawEnergy || v.Nonce != want.Nonce {
+			b.Fatal("iteration result differs")
+		}
+		f.state.RevertToSnapshot(snap)
+		f.state.FinalizeTransaction()
+		ReleaseTVM(v)
+	}
+	b.StopTimer()
+	restored := serialRestoredStateImage(b, f)
+	if !reflect.DeepEqual(restored, prestate) {
+		b.Fatal("timed fixture leaked state across snapshot rollback/finalize")
+	}
+	// Inspect the very same fixture/arenas exercised by the timed loop. A
+	// fresh replay alone would miss a warm record/log payload reuse bug.
+	snap := f.state.Snapshot()
+	v, ret, left, err := f.call(b)
+	warm := serialReceiptOracle(b, v, ret, left, err)
+	ReleaseTVM(v)
+	wantReceipt := want
+	wantReceipt.Root = tcommon.Hash{}
+	wantReceipt.Rows = nil
+	if !reflect.DeepEqual(warm, wantReceipt) {
+		b.Fatal("reused timed fixture receipt differs from independent fresh oracle")
+	}
+	f.state.RevertToSnapshot(snap)
+	f.state.FinalizeTransaction()
+	restored = serialRestoredStateImage(b, f)
+	if !reflect.DeepEqual(restored, prestate) {
+		b.Fatal("warm receipt probe leaked state after rollback")
+	}
+	if directory := os.Getenv("SERIAL_VM_ORACLE_DIR"); directory != "" {
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			b.Fatal(err)
+		}
+		data, err := json.MarshalIndent(struct {
+			FreshResult, WarmReceipt serialCallOracle
+			Prestate, Restored       serialStateImage
+		}{want, warm, prestate, restored}, "", "  ")
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(directory, name+".json"), append(data, '\n'), 0644); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+func BenchmarkNileSerialCallLifecycle(b *testing.B) {
+	b.Run("GoldenTron", func(b *testing.B) { serialBenchmarkCall(b, "GoldenTron", serialGoldenTronFixture) })
+	b.Run("TUSD", func(b *testing.B) { serialBenchmarkCall(b, "TUSD", serialTUSDFixture) })
+}
+func BenchmarkSerialCallLifecycle(b *testing.B) {
+	b.Run("PrecompileIdentity256B", func(b *testing.B) {
+		serialBenchmarkCall(b, "PrecompileIdentity256B", func(tb testing.TB) *serialCallFixture { return serialSmallCallFixture(tb, false) })
+	})
+	b.Run("ValueNested256B", func(b *testing.B) {
+		serialBenchmarkCall(b, "ValueNested256B", func(tb testing.TB) *serialCallFixture { return serialSmallCallFixture(tb, true) })
+	})
+}
+func TestSerialCallLifecycleCanonicalOracles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(testing.TB) *serialCallFixture
+	}{{"GoldenTron", serialGoldenTronFixture}, {"TUSD", serialTUSDFixture}, {"PrecompileIdentity256B", func(tb testing.TB) *serialCallFixture { return serialSmallCallFixture(tb, false) }}, {"ValueNested256B", func(tb testing.TB) *serialCallFixture { return serialSmallCallFixture(tb, true) }}} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := serialCallFullOracle(t, tc.make)
+			second := serialCallFullOracle(t, tc.make)
+			if !reflect.DeepEqual(first, second) {
+				t.Fatal("non-deterministic full canonical oracle")
+			}
+			f := tc.make(t)
+			before := serialRestoredStateImage(t, f)
+			var warm serialCallOracle
+			for range 3 {
+				snap := f.state.Snapshot()
+				v, ret, left, err := f.call(t)
+				warm = serialReceiptOracle(t, v, ret, left, err)
+				receipt := first
+				receipt.Root = tcommon.Hash{}
+				receipt.Rows = nil
+				if !reflect.DeepEqual(warm, receipt) {
+					t.Fatal("reused fixture full receipt differs")
+				}
+				f.state.RevertToSnapshot(snap)
+				f.state.FinalizeTransaction()
+				ReleaseTVM(v)
+			}
+			after := serialRestoredStateImage(t, f)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("same fixture rollback leaked full state")
+			}
+			if directory := os.Getenv("SERIAL_VM_ORACLE_DIR"); directory != "" {
+				if err := os.MkdirAll(directory, 0755); err != nil {
+					t.Fatal(err)
+				}
+				data, err := json.MarshalIndent(struct {
+					FreshResult, WarmReceipt serialCallOracle
+					Prestate, Restored       serialStateImage
+				}{first, warm, before, after}, "", "  ")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(directory, tc.name+".json"), append(data, '\n'), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

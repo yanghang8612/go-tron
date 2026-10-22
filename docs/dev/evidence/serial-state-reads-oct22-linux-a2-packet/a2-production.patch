@@ -1,0 +1,591 @@
+diff --git a/core/blockbuffer/base_read_cache.go b/core/blockbuffer/base_read_cache.go
+--- a/core/blockbuffer/base_read_cache.go
++++ b/core/blockbuffer/base_read_cache.go
+@@ -168,6 +168,10 @@
+ 	// retain the version at which they became valid, allowing a point-in-time
+ 	// commitment session to reuse old hot entries while rejecting replacements
+ 	// published after its Pebble snapshot.
++	// Only snapshot publication participates in this domain. Ordinary cache
++	// reads/fills retain their existing shard locking. Lock order is this guard
++	// before a shard; advanceVersion releases it before any promote/clear shard.
++	snapshotFillMu         sync.RWMutex
+ 	version                atomic.Uint64
+ 	metricsPublishSequence atomic.Uint64
+ 	// Serialize only low-frequency sampling+publication so an older snapshot
+@@ -657,7 +661,10 @@
+ 	if c == nil {
+ 		return 0
+ 	}
+-	return c.version.Add(1)
++	c.snapshotFillMu.Lock()
++	version := c.version.Add(1)
++	c.snapshotFillMu.Unlock()
++	return version
+ }
+ 
+ // setIfEpoch copies key/value into cache-owned immutable storage only if no
+@@ -707,6 +714,25 @@
+ }
+ 
+ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, force bool, epoch baseReadCacheEpoch) ([]byte, bool) {
++	return c.setEntryAtVersion(key, value, missing, expose, force, epoch, 0, false)
++}
++
++// setSnapshotEntry requires both the captured global base version and the
++// original key epoch. snapshotFillMu covers the version check through shard
++// publication, excluding advanceVersion; ordinary live cache reads/fills do not
++// take this guard. Canonical correctness additionally requires the complete
++// captured overlay across base commit and version advance: this guard alone
++// does not make arbitrary direct durable writes safe.
++func (c *baseReadCache) setSnapshotEntry(key, value []byte, missing bool, epoch baseReadCacheEpoch, version uint64) ([]byte, bool) {
++	if c == nil {
++		return value, false
++	}
++	c.snapshotFillMu.RLock()
++	defer c.snapshotFillMu.RUnlock()
++	return c.setEntryAtVersion(key, value, missing, true, false, epoch, version, true)
++}
++
++func (c *baseReadCache) setEntryAtVersion(key, value []byte, missing, expose, force bool, epoch baseReadCacheEpoch, version uint64, checkVersion bool) ([]byte, bool) {
+ 	if c == nil {
+ 		return value, false
+ 	}
+@@ -720,7 +746,7 @@
+ 	}
+ 
+ 	s.mu.Lock()
+-	if c.invalidations[epoch.slot].Load() != epoch.value {
++	if (checkVersion && c.version.Load() != version) || c.invalidations[epoch.slot].Load() != epoch.value {
+ 		s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticEpochRejected)
+ 		s.mu.Unlock()
+ 		return value, false
+@@ -774,7 +800,11 @@
+ 			return value, false
+ 		}
+ 	}
+-	entry := s.acquireEntryBytes(key, value, missing, c.version.Load())
++	entryVersion := c.version.Load()
++	if checkVersion {
++		entryVersion = version
++	}
++	entry := s.acquireEntryBytes(key, value, missing, entryVersion)
+ 	if trunk && s.trunkUsed+entry.charge > s.trunkLimit {
+ 		// Recycled value/key storage can have more capacity than the requested
+ 		// payload. Account that real retained capacity before publishing the entry;
+diff --git a/core/blockbuffer/storage_read_scope.go b/core/blockbuffer/storage_read_scope.go
+--- /dev/null
++++ b/core/blockbuffer/storage_read_scope.go
+@@ -0,0 +1,195 @@
++package blockbuffer
++
++import (
++	"bytes"
++	"errors"
++
++	"github.com/ethereum/go-ethereum/metrics"
++	"github.com/tronprotocol/go-tron/common"
++	"github.com/tronprotocol/go-tron/core/pointread"
++)
++
++var (
++	storageReadScopes      = metrics.NewRegisteredCounter("blockbuffer/storage_read/scopes", nil)
++	storageReadBusy        = metrics.NewRegisteredCounter("blockbuffer/storage_read/fallback_busy", nil)
++	storageReadUnsupported = metrics.NewRegisteredCounter("blockbuffer/storage_read/fallback_unsupported", nil)
++	storageReadDurable     = metrics.NewRegisteredCounter("blockbuffer/storage_read/durable_calls", nil)
++)
++
++var errStorageReadScope = errors.New("blockbuffer: storage read scope no longer owns its active layer")
++
++// StorageReadScope is one canonical block's fixed durable cut and captured
++// layer topology. The active layer remains mutable during that block. Its
++// caller owns the canonical writer lock, does not replace/discard the active
++// layer, and closes before publishing that layer or starting the next block.
++// It is execution-confined, including its cursor and callback scratch state.
++type StorageReadScope struct {
++	buffer   *Buffer
++	snapshot *ReadSnapshot
++	cursor   pointread.Cursor
++	active   *layer
++	callback func([]byte) error
++	result   []byte
++}
++
++// TryStorageReadScope never queues behind a base flush. Absence of the optional
++// snapshot/cursor capability leaves the existing live read path in place;
++// supported storage failures are errors, not permission to read a moving cut.
++func (b *Buffer) TryStorageReadScope(number uint64) (*StorageReadScope, error) {
++	snapshot, err := b.TryNewReadSnapshot()
++	if err == ErrReadSnapshotBusy {
++		storageReadBusy.Inc(1)
++		return nil, nil
++	}
++	if storageSnapshotUnsupportedOnly(err) {
++		storageReadUnsupported.Inc(1)
++		return nil, nil
++	}
++	if err != nil {
++		return nil, err
++	}
++	if snapshot.base == nil {
++		return nil, errors.Join(errors.New("blockbuffer: storage snapshot has no base"), snapshot.Close())
++	}
++	layers := snapshot.view.inflight
++	if len(layers) == 0 || layers[len(layers)-1].number != number {
++		return nil, errors.Join(errStorageReadScope, snapshot.Close())
++	}
++	factory, ok := snapshot.base.(pointread.KeyValueCursorSnapshot)
++	if !ok {
++		storageReadUnsupported.Inc(1)
++		return nil, snapshot.Close()
++	}
++	cursor, err := factory.NewPointReadCursor()
++	if err == pointread.ErrPointReadCursorUnsupported {
++		storageReadUnsupported.Inc(1)
++		return nil, snapshot.Close()
++	}
++	if err != nil {
++		return nil, errors.Join(err, snapshot.Close())
++	}
++	if cursor == nil {
++		return nil, errors.Join(errors.New("blockbuffer: storage snapshot returned nil cursor"), snapshot.Close())
++	}
++	s := &StorageReadScope{buffer: b, snapshot: snapshot, cursor: cursor, active: layers[len(layers)-1]}
++	s.callback = s.consume
++	storageReadScopes.Inc(1)
++	return s, nil
++}
++
++// A compound factory error can contain an unsupported leaf AND a failed
++// cleanup of another already-open snapshot. Only pure capability absence may
++// fall back; errors.Is alone would silently drop the latter real failure.
++func storageSnapshotUnsupportedOnly(err error) bool {
++	if err == ErrReadSnapshotUnsupported || err == pointread.ErrKeyValueSnapshotUnsupported {
++		return true
++	}
++	if joined, ok := err.(interface{ Unwrap() []error }); ok {
++		children := joined.Unwrap()
++		if len(children) == 0 {
++			return false
++		}
++		for _, child := range children {
++			if !storageSnapshotUnsupportedOnly(child) {
++				return false
++			}
++		}
++		return true
++	}
++	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
++		return storageSnapshotUnsupportedOnly(wrapped.Unwrap())
++	}
++	return false
++}
++
++func (s *StorageReadScope) consume(value []byte) error {
++	// ReleaseValue can itself fail after the callback. Own the bytes here and
++	// publish to the shared cache only after View has completely succeeded.
++	s.result = bytes.Clone(value)
++	return nil
++}
++
++func (s *StorageReadScope) get(key []byte) ([]byte, error) {
++	if s == nil || s.snapshot == nil || s.cursor == nil {
++		return nil, errStorageReadScope
++	}
++	current := s.buffer.loadReadView().inflight
++	if len(current) == 0 || current[len(current)-1] != s.active {
++		return nil, errStorageReadScope
++	}
++	view := s.snapshot.view
++	hash := layerBloomHashBytes(key)
++	if value, found, deleted := lookupLayersNewest(view.inflight, key, hash); deleted {
++		return nil, ErrNotFound
++	} else if found {
++		return value, nil
++	}
++	if value, found, deleted := lookupLayersNewest(view.layers, key, hash); deleted {
++		return nil, ErrNotFound
++	} else if found {
++		return value, nil
++	}
++	cache := view.baseReadCache
++	value, found, epoch, cacheable := cache.getAtVersion(key, s.snapshot.cacheVersion)
++	if found {
++		if value == nil {
++			return nil, ErrNotFound
++		}
++		return value, nil
++	}
++	s.result = nil
++	storageReadDurable.Inc(1)
++	readMetrics := pooledForegroundBaseMetricsForKey(key)
++	found, err := s.cursor.View(key, s.callback)
++	value = s.result
++	s.result = nil
++	if err == nil && found && cacheable {
++		if stored, ok := cache.setSnapshotEntry(key, value, false, epoch, s.snapshot.cacheVersion); ok {
++			value = stored
++		}
++	}
++	if err == nil && !found {
++		if cacheable {
++			cache.setSnapshotEntry(key, nil, true, epoch, s.snapshot.cacheVersion)
++		}
++		err = ErrNotFound
++	}
++	readMetrics.recordCompleted(err)
++	return value, err
++}
++
++func (s *StorageReadScope) Get(key []byte) ([]byte, error) {
++	value, err := s.get(key)
++	return bytes.Clone(value), err
++}
++
++func (s *StorageReadScope) Has(key []byte) (bool, error) {
++	_, err := s.get(key)
++	if err == ErrNotFound {
++		return false, nil
++	}
++	return err == nil, err
++}
++
++// IsKeyNotFound does not classify a joined storage/cleanup failure as absence.
++func (*StorageReadScope) IsKeyNotFound(err error) bool { return err == ErrNotFound }
++
++func (s *StorageReadScope) GetNoCopyCachedStateKVLatest(prefix []byte, accountID common.AccountID, generation uint64, domain uint16, logicalKey []byte) ([]byte, error) {
++	size := len(prefix) + common.AccountIDLength + 10 + len(logicalKey)
++	if size > splitReadKeyStackSize {
++		return s.get(appendStateKVLatestKey(make([]byte, 0, size), prefix, accountID, generation, domain, logicalKey))
++	}
++	key := borrowSplitReadKey()
++	defer returnSplitReadKey(key)
++	return s.get(appendStateKVLatestKey(key[:0], prefix, accountID, generation, domain, logicalKey))
++}
++
++func (s *StorageReadScope) Close() error {
++	if s == nil || s.snapshot == nil {
++		return nil
++	}
++	cursor, snapshot := s.cursor, s.snapshot
++	s.cursor, s.snapshot, s.buffer, s.active = nil, nil, nil, nil
++	s.result = nil
++	return errors.Join(cursor.Close(), snapshot.Close())
++}
+diff --git a/core/pointread/view.go b/core/pointread/view.go
+--- a/core/pointread/view.go
++++ b/core/pointread/view.go
+@@ -108,6 +108,15 @@
+ type KeyValueSnapshotter interface {
+ 	NewKeyValueSnapshot() (KeyValueSnapshot, error)
+ }
++
++// KeyValueCursorSnapshot opens an independently owned point cursor on exactly
++// the same MVCC cut as its key/value snapshot. Close cursors before the snapshot.
++// Implementations may omit this optional capability without changing reads.
++type KeyValueCursorSnapshot interface {
++	NewPointReadCursor() (Cursor, error)
++}
++
++var ErrPointReadCursorUnsupported = errors.New("pointread: pinned point cursor unsupported")
+ 
+ // PrefixSeeker returns the first visible key/value pair in the ordered prefix
+ // range beginning at prefix+start. Implementations copy key and value before
+diff --git a/core/rawdb/direct_history_cursor.go b/core/rawdb/direct_history_cursor.go
+--- /dev/null
++++ b/core/rawdb/direct_history_cursor.go
+@@ -0,0 +1,39 @@
++package rawdb
++
++import (
++	"errors"
++
++	"github.com/tronprotocol/go-tron/core/pointread"
++)
++
++// Open both cursors on the already pinned dual-engine snapshot. Routing stays
++// identical to directHistorySnapshot.Get, including non-storage/history keys.
++func (s *directHistorySnapshot) NewPointReadCursor() (pointread.Cursor, error) {
++	hotFactory, hotOK := s.hot.(pointread.KeyValueCursorSnapshot)
++	historyFactory, historyOK := s.history.(pointread.KeyValueCursorSnapshot)
++	if !hotOK || !historyOK {
++		return nil, pointread.ErrPointReadCursorUnsupported
++	}
++	hot, err := hotFactory.NewPointReadCursor()
++	if err != nil {
++		return nil, err
++	}
++	history, err := historyFactory.NewPointReadCursor()
++	if err != nil {
++		return nil, errors.Join(err, hot.Close())
++	}
++	return &directHistoryKeyValueCursor{hot: hot, history: history}, nil
++}
++
++type directHistoryKeyValueCursor struct{ hot, history pointread.Cursor }
++
++func (c *directHistoryKeyValueCursor) View(key []byte, fn func([]byte) error) (bool, error) {
++	if IsDirectHistoryKey(key) {
++		return c.history.View(key, fn)
++	}
++	return c.hot.View(key, fn)
++}
++
++func (c *directHistoryKeyValueCursor) Close() error {
++	return errors.Join(c.hot.Close(), c.history.Close())
++}
+diff --git a/core/rawdb/pebbledb/storage_cursor.go b/core/rawdb/pebbledb/storage_cursor.go
+--- /dev/null
++++ b/core/rawdb/pebbledb/storage_cursor.go
+@@ -0,0 +1,54 @@
++package pebbledb
++
++import (
++	"errors"
++	"github.com/cockroachdb/pebble"
++	"github.com/tronprotocol/go-tron/core/pointread"
++)
++
++var storageCursorMetrics = newGetCursorMetrics("blockbuffer/storage_read/pebble/get_cursor/", "retained_peak_sum")
++
++// A foreground storage cursor has its own metrics and owner. It must never be
++// counted as a prefetch cursor, nor be reused with a moving database sequence.
++type storagePointCursor struct{ inner *pebble.GetCursor }
++
++func (s *keyValueSnapshot) NewPointReadCursor() (pointread.Cursor, error) {
++	if s == nil || s.snapshot == nil {
++		return nil, pebble.ErrClosed
++	}
++	// Keep ordinary DB.Get's filter policy. This candidate changes iterator
++	// lifetime only, not L6 filter selection or table lookup semantics.
++	c, err := s.snapshot.NewGetCursor()
++	if err != nil {
++		return nil, err
++	}
++	return &storagePointCursor{inner: c}, nil
++}
++
++func (c *storagePointCursor) View(key []byte, fn func([]byte) error) (found bool, err error) {
++	if c == nil || c.inner == nil {
++		return false, pebble.ErrClosed
++	}
++	value, err := c.inner.Get(key)
++	if err == pebble.ErrNotFound {
++		return false, nil
++	}
++	if err != nil {
++		return false, err
++	}
++	defer func() {
++		err = errors.Join(err, c.inner.ReleaseValue())
++	}()
++	return true, fn(value)
++}
++
++func (c *storagePointCursor) Close() error {
++	if c == nil || c.inner == nil {
++		return nil
++	}
++	inner := c.inner
++	c.inner = nil
++	err := inner.Close()
++	storageCursorMetrics.observe(inner.Stats())
++	return err
++}
+diff --git a/core/rawdb/pebbledb/physical_read_caller_metrics.go b/core/rawdb/pebbledb/physical_read_caller_metrics.go
+--- a/core/rawdb/pebbledb/physical_read_caller_metrics.go
++++ b/core/rawdb/pebbledb/physical_read_caller_metrics.go
+@@ -30,11 +30,12 @@
+ 	callerUnknown
+ 	callerTruncated
+ 	callerAmbiguous
++	callerCanonicalStorage
+ 	callerRoleCount
+ )
+ 
+ var physicalReadCallerNames = [callerRoleCount]string{
+-	"commitment_demand", "commitment_prefetch", "state_prefetch", "pooled_flat_stack", "cold_builder_stack", "pebble_compaction_path", "unknown", "unknown_truncated", "unknown_ambiguous",
++	"commitment_demand", "commitment_prefetch", "state_prefetch", "pooled_flat_stack", "cold_builder_stack", "pebble_compaction_path", "unknown", "unknown_truncated", "unknown_ambiguous", "canonical_storage_cursor",
+ }
+ 
+ type physicalReadCallerCounter struct{ samples, bytes, nanos, errors, short *metrics.Counter }
+@@ -114,6 +115,8 @@
+ 		c.roles |= 1 << callerCommitmentPrefetch
+ 	case bb + "(*Buffer).PrefetchBatch":
+ 		c.roles |= 1 << callerStatePrefetch
++	case bb + "(*StorageReadScope).get":
++		c.roles |= 1 << callerCanonicalStorage
+ 	case bb + "readBaseIntoCachePooledKey":
+ 		c.pooled = true
+ 	case bb + "(*Buffer).GetNoCopyCachedStateKVLatest", bb + "(*LayerView).GetNoCopyCachedStateKVLatest", bb + "(*Buffer).GetNoCopyCachedStateAccountLatest", bb + "(*LayerView).GetNoCopyCachedStateAccountLatest":
+diff --git a/core/state/statedb.go b/core/state/statedb.go
+--- a/core/state/statedb.go
++++ b/core/state/statedb.go
+@@ -306,6 +306,11 @@
+ 	codeColdTxNum   uint64
+ 
+ 	cycleRewardSink CycleRewardSink
++
++	// This execution-confined scope is deliberately omitted from Copy. Shared
++	// commit readers must never recover it through their original StateDB.
++	storageReadScope       *blockbuffer.StorageReadScope
++	storageReadScopeReader *commitScopeLatestReader
+ }
+ 
+ // SetTransactionAccessRecorder installs a transaction-scoped observe-only
+diff --git a/core/state/storage_read_scope.go b/core/state/storage_read_scope.go
+--- /dev/null
++++ b/core/state/storage_read_scope.go
+@@ -0,0 +1,70 @@
++package state
++
++import (
++	"errors"
++	"fmt"
++	tcommon "github.com/tronprotocol/go-tron/common"
++	"github.com/tronprotocol/go-tron/core/rawdb"
++	"github.com/tronprotocol/go-tron/core/state/kvdomains"
++
++	"github.com/tronprotocol/go-tron/core/blockbuffer"
++)
++
++// BeginCanonicalStorageReadScope is explicitly enabled by the serial canonical
++// processor, after BeginBlock and its rollback snapshots. It must not be called
++// by a worker, historical reader, or while the caller can replace the active
++// buffer topology. The returned cleanup unbinds before closing and must run
++// while processor rollback is still possible.
++func (s *StateDB) BeginCanonicalStorageReadScope(number uint64) (func() error, error) {
++	noop := func() error { return nil }
++	if s == nil || s.transactionVersionedReader != nil {
++		return noop, nil
++	}
++	if s.storageReadScope != nil {
++		return nil, errors.New("state: canonical storage scope already open")
++	}
++	reader, ok := s.accountKVLatestReader.(*commitScopeLatestReader)
++	if !ok || reader == nil || reader.state != s || reader.writer == nil || reader.atomicScope != nil {
++		return noop, nil
++	}
++	buffer, ok := s.accountKVIndex().(*blockbuffer.Buffer)
++	if !ok || reader.writer.index != buffer {
++		return noop, nil
++	}
++	scope, err := buffer.TryStorageReadScope(number)
++	if err != nil {
++		return nil, err
++	}
++	if scope == nil {
++		return noop, nil
++	}
++	s.storageReadScope = scope
++	s.storageReadScopeReader = reader
++	return func() error {
++		if s.storageReadScope == scope {
++			s.storageReadScope = nil
++			s.storageReadScopeReader = nil
++		}
++		return scope.Close()
++	}, nil
++}
++
++// Keep all scope-only pending resolution and source validation out of the
++// ordinary latest decode function. Its original nil-scope reader stays intact.
++func (s *StateDB) readCanonicalStorageLatest(owner tcommon.Address, generation uint64, key []byte) ([]byte, bool, error) {
++	reader, ok := s.accountKVLatestReader.(*commitScopeLatestReader)
++	if !ok || reader != s.storageReadScopeReader || reader.state != s || reader.writer == nil || reader.writer.index != s.accountKVIndex() {
++		return nil, false, fmt.Errorf("state: canonical storage reader changed within block")
++	}
++	w := reader.writer
++	if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, kvdomains.ContractStorage, key)]; ok {
++		if w.storagePendingResolved != nil {
++			(*w.storagePendingResolved)++
++		}
++		if pending.deleted {
++			return nil, false, nil
++		}
++		return pending.value, true, nil
++	}
++	return rawdb.ReadStateKVLatestNoCopy(s.storageReadScope, owner, generation, kvdomains.ContractStorage, key)
++}
+diff --git a/core/state/account_kv.go b/core/state/account_kv.go
+--- a/core/state/account_kv.go
++++ b/core/state/account_kv.go
+@@ -1424,6 +1424,9 @@
+ 	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
+ 		return value, exists, nil
+ 	}
++	if s != nil && s.storageReadScope != nil && domain == kvdomains.ContractStorage {
++		return s.readCanonicalStorageLatest(owner, generation, key)
++	}
+ 	if s != nil && s.accountKVLatestReader != nil {
+ 		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {
+ 			return reader.kvLatestForDecoding(owner, generation, domain, key)
+diff --git a/core/state_processor.go b/core/state_processor.go
+--- a/core/state_processor.go
++++ b/core/state_processor.go
+@@ -984,6 +984,7 @@
+ }
+ 
+ type processBlockOptions struct {
++	canonicalStorageReadScope     bool
+ 	parallelTransfers             bool
+ 	parallelVM                    bool
+ 	captureBalanceTrace           bool
+@@ -1065,6 +1066,13 @@
+ 			dynProps.CommitSnapshot(dpSnap)
+ 		}
+ 	}()
++	if options.canonicalStorageReadScope && !options.parallelVM && !options.parallelTransfers {
++		closeScope, openErr := statedb.BeginCanonicalStorageReadScope(block.Number())
++		if openErr != nil {
++			return nil, tcommon.Hash{}, openErr
++		}
++		defer func() { err = errors.Join(err, closeScope()) }()
++	}
+ 	repairActivated, repairErr := applyMainnetLegacyStateRepairs(statedb, block.Number(), block.Hash(), options.legacyStateRepairHook)
+ 	if repairErr != nil {
+ 		return nil, tcommon.Hash{}, repairErr
+diff --git a/core/blockchain.go b/core/blockchain.go
+--- a/core/blockchain.go
++++ b/core/blockchain.go
+@@ -1798,6 +1798,7 @@
+ 		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
+ 	}
+ 	processorOptions := processBlockOptions{
++		canonicalStorageReadScope:      true,
+ 		parallelTransfers:              bc.parallelTransfers && !bc.speculativeSafetyDisabled.Load(),
+ 		parallelVM:                     bc.parallelVM && !bc.speculativeSafetyDisabled.Load(),
+ 		captureBalanceTrace:            balanceTraceEnabled,
+diff --git a/core/blockbuffer/buffer.go b/core/blockbuffer/buffer.go
+--- a/core/blockbuffer/buffer.go
++++ b/core/blockbuffer/buffer.go
+@@ -750,10 +750,11 @@
+ // overlay; advertising explicit failure is safer than accidentally mutating a
+ // snapshot if that invariant ever changes.
+ type ReadSnapshot struct {
+-	view        *bufferReadView
+-	base        pointread.KeyValueSnapshot
+-	historyOnly bool
+-	closed      atomic.Bool
++	view         *bufferReadView
++	base         pointread.KeyValueSnapshot
++	cacheVersion uint64
++	historyOnly  bool
++	closed       atomic.Bool
+ }
+ 
+ var _ ethdb.KeyValueReader = (*ReadSnapshot)(nil)
+@@ -850,9 +851,13 @@
+ 		view.inflight = append(view.inflight, b.inflight...)
+ 		view.layers = append(view.layers, b.layers...)
+ 	}
++	var cacheVersion uint64
++	if view.baseReadCache != nil {
++		cacheVersion = view.baseReadCache.version.Load()
++	}
+ 	b.mu.RUnlock()
+ 	b.flushMu.Unlock()
+-	return &ReadSnapshot{view: view, base: base, historyOnly: historyOnly}, nil
++	return &ReadSnapshot{view: view, base: base, cacheVersion: cacheVersion, historyOnly: historyOnly}, nil
+ }
+ 
+ func (s *ReadSnapshot) GetWithPresence(key []byte) ([]byte, bool, error) {

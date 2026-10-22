@@ -1,0 +1,352 @@
+package state
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/metrics"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+)
+
+// Assigned only by an optional instrumented-build test file; nil in every
+// production timing build. Count actual successful SST iterator construction.
+var storageBenchTableOpens func() uint64
+
+type storageBenchRead struct {
+	owner   tcommon.Address
+	key     [32]byte
+	value   [32]byte
+	present bool
+}
+
+func storageBenchOwner(n int) tcommon.Address {
+	a := tcommon.Address{0: 0x41}
+	binary.BigEndian.PutUint32(a[17:], uint32(n))
+	return a
+}
+func storageBenchKey(n uint64) [32]byte {
+	var v [8]byte
+	binary.BigEndian.PutUint64(v[:], n)
+	return sha256.Sum256(v[:])
+}
+func storageBenchValue(owner, slot int) [32]byte {
+	var value [32]byte
+	binary.BigEndian.PutUint64(value[8:16], uint64(owner))
+	binary.BigEndian.PutUint64(value[24:32], uint64(slot+1))
+	return value
+}
+
+func BenchmarkCanonicalStorageCursor(b *testing.B)  { benchmarkCanonicalStorageCursor(b, false) }
+func BenchmarkCanonicalStorageScatter(b *testing.B) { benchmarkCanonicalStorageCursor(b, true) }
+func benchmarkCanonicalStorageCursor(b *testing.B, scatter bool) {
+	opts := pebbledb.Options{DisableAutomaticCompactions: true, MemTableSizeBytes: 32 << 20}
+	if scatter {
+		opts.TargetFileSizeBytes = 32 << 10
+	}
+	disk, err := pebbledb.New(b.TempDir(), 64, 64, "bench/storage-cursor/hot/", false, opts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer disk.Close()
+	history, err := pebbledb.New(b.TempDir(), 64, 64, "bench/storage-cursor/history/", false, opts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer history.Close()
+	db := rawdb.NewDirectHistoryStore(disk, history)
+	var fixture struct {
+		Rows                                              int
+		LogicalSHA256, PhysicalSHA256, HeadBytesHex, Root string
+		Head                                              rawdb.StateCommitmentHead
+	}
+	fixtureData, err := os.ReadFile("testdata/storage_cursor_fixture.json")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := json.Unmarshal(fixtureData, &fixture); err != nil {
+		b.Fatal(err)
+	}
+	encodedHead, err := rawdb.EncodeStateCommitmentHead(fixture.Head)
+	if err != nil || hex.EncodeToString(encodedHead) != fixture.HeadBytesHex || fixture.Root != fixture.Head.Root.Hex() || fixture.Rows != 1048576 {
+		b.Fatalf("invalid verified fixture head: %v", err)
+	}
+	logicalSHA := sha256.New()
+	batch := db.NewBatch()
+	for owner := 0; owner < 1024; owner++ {
+		for slot := 0; slot < 1024; slot++ {
+			key, value := storageBenchKey(uint64(slot)), storageBenchValue(owner, slot)
+			storageFixtureFrame(logicalSHA, rawdb.StateKVLatestCommitmentKey(storageBenchOwner(owner), 0, kvdomains.ContractStorage, key[:]), rawdb.EncodeStateKVLatestValue(value[:]))
+			if err := rawdb.WriteStateKVLatest(batch, storageBenchOwner(owner), 0, kvdomains.ContractStorage, key[:], value[:]); err != nil {
+				b.Fatal(err)
+			}
+			if batch.ValueSize() >= 4<<20 {
+				if err := batch.Write(); err != nil {
+					b.Fatal(err)
+				}
+				batch.Reset()
+			}
+		}
+	}
+	if err := batch.Write(); err != nil {
+		b.Fatal(err)
+	}
+	if hex.EncodeToString(logicalSHA.Sum(nil)) != fixture.LogicalSHA256 {
+		b.Fatal("logical fixture input changed")
+	}
+	physicalSHA := sha256.New()
+	physicalRows := 0
+	if err := rawdb.IterateLatestDomainCommitmentSources(db, func(k, v []byte) (bool, error) {
+		storageFixtureFrame(physicalSHA, k, v)
+		physicalRows++
+		return true, nil
+	}); err != nil {
+		b.Fatal(err)
+	}
+	if physicalRows != fixture.Rows || hex.EncodeToString(physicalSHA.Sum(nil)) != fixture.PhysicalSHA256 {
+		b.Fatal("actual persisted physical fixture does not match verified MuHash input")
+	}
+	if err := rawdb.WriteStateCommitmentHead(db, fixture.Head); err != nil {
+		b.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, fixture.Head.Root); err != nil {
+		b.Fatal(err)
+	}
+	if err := disk.Compact(nil, nil); err != nil {
+		b.Fatal(err)
+	}
+	stat, err := disk.Stat()
+	if err != nil {
+		b.Fatal(err)
+	}
+	liveSST := 0.0
+	levels := 0
+	for _, line := range strings.Split(stat, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 || len(f[0]) != 1 || f[0][0] < '0' || f[0][0] > '6' || f[1] != "|" {
+			continue
+		}
+		countText := f[2]
+		scale := 1.0
+		if strings.HasSuffix(countText, "K") {
+			scale = 1e3
+			countText = strings.TrimSuffix(countText, "K")
+		} else if strings.HasSuffix(countText, "M") {
+			scale = 1e6
+			countText = strings.TrimSuffix(countText, "M")
+		}
+		count, err := strconv.ParseFloat(countText, 64)
+		if err != nil {
+			b.Fatal(err)
+		}
+		liveSST += count * scale
+		levels++
+	}
+	if levels != 7 {
+		b.Fatalf("cannot prove live SST count from stats: %s", stat)
+	}
+	if scatter && liveSST < 16 {
+		b.Fatalf("scatter needs>=16 live SST; got%g: %s", liveSST, stat)
+	}
+	fmt.Printf("FIXTURE scatter=%v liveSST_from_metrics=%g\n%s\n", scatter, liveSST, stat)
+	entries, err := os.ReadDir(disk.Path())
+	if err != nil {
+		b.Fatal(err)
+	}
+	sstFiles := 0
+	var sstBytes int64
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".sst") {
+			info, err := entry.Info()
+			if err != nil {
+				b.Fatal(err)
+			}
+			sstFiles++
+			sstBytes += info.Size()
+		}
+	}
+	if scatter && sstFiles < 16 {
+		b.Fatalf("scatter needs >=16 SST, got %d", sstFiles)
+	}
+	for i := 0; i < 8192; i++ {
+		key := storageBenchKey(uint64(i % 1024))
+		if _, _, err := rawdb.ReadStateKVLatest(disk, storageBenchOwner(i/1024), 0, kvdomains.ContractStorage, key[:]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	owners := rand.New(rand.NewSource(0x20261022)).Perm(1024)
+	program := make([][]storageBenchRead, 64)
+	for op := range program {
+		rng := rand.New(rand.NewSource(0x20261022 + int64(op)))
+		for group := 0; group < 256; group++ {
+			owner := owners[(op*256+group)%len(owners)]
+			for position := 0; position < 16; position++ {
+				if scatter {
+					owner = owners[(op*4096+group*16+position)%len(owners)]
+				}
+				slot := rng.Intn(1024)
+				present := position%4 != 0
+				keySlot := slot
+				if !present {
+					keySlot += 1024
+				}
+				program[op] = append(program[op], storageBenchRead{owner: storageBenchOwner(owner), key: storageBenchKey(uint64(keySlot)), value: storageBenchValue(owner, slot), present: present})
+			}
+		}
+	}
+	shapes := []string{"cold4096", "steady4096", "hot4096", "no-cache4096", "overlay4096", "mixed128", "single", "empty"}
+	if scatter {
+		shapes = []string{"scatter4096"}
+	}
+	for _, shape := range shapes {
+		b.Run(shape, func(b *testing.B) {
+			cacheBytes := 128 << 20
+			if shape == "no-cache4096" {
+				cacheBytes = 0
+			}
+			buffer := blockbuffer.New(db)
+			buffer.SetBaseReadCacheSize(cacheBytes)
+			state, err := New(fixture.Head.Root, NewDatabase(rawdb.WrapKeyValueStore(db)))
+			if err != nil {
+				b.Fatal(err)
+			}
+			state.SetAccountKVIndexStore(buffer)
+			commits := state.NewCommitScope()
+			defer commits.Discard()
+			if shape == "steady4096" {
+				for sweep := 0; sweep < 2; sweep++ {
+					for owner := 0; owner < 1024; owner++ {
+						for slot := 0; slot < 1024; slot++ {
+							key := storageBenchKey(uint64(slot))
+							if _, _, err := rawdb.ReadStateKVLatestNoCopy(buffer, storageBenchOwner(owner), 0, kvdomains.ContractStorage, key[:]); err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+				}
+			}
+			calls := metrics.GetOrRegisterCounter("blockbuffer/pooled_foreground_base/state_kv_latest/contract_storage/calls", nil)
+			scopes := metrics.GetOrRegisterCounter("blockbuffer/storage_read/scopes", nil)
+			durable := metrics.GetOrRegisterCounter("blockbuffer/storage_read/durable_calls", nil)
+			cursorOpens := metrics.GetOrRegisterCounter("blockbuffer/storage_read/pebble/get_cursor/table_iterator_opens", nil)
+			cursorReuses := metrics.GetOrRegisterCounter("blockbuffer/storage_read/pebble/get_cursor/table_reuses", nil)
+			var totalCalls, totalOpens, totalScopes, totalDurable, totalCursorOpens, totalReuses int64
+			var checksum byte
+			b.ReportAllocs()
+			b.ResetTimer()
+			for op := 0; op < b.N; op++ {
+				b.StopTimer()
+				reads := program[op%64]
+				switch shape {
+				case "mixed128":
+					reads = reads[:128]
+				case "single":
+					reads = reads[1:2]
+				case "empty":
+					reads = reads[:0]
+				}
+				if shape != "steady4096" && shape != "no-cache4096" {
+					buffer.SetBaseReadCacheSize(cacheBytes)
+				}
+				buffer.BeginBlock(tcommon.Hash{31: 1}, uint64(op+1))
+				if shape == "hot4096" {
+					for warm := 0; warm < 2; warm++ {
+						for _, read := range reads {
+							if _, _, err := rawdb.ReadStateKVLatestNoCopy(buffer, read.owner, 0, kvdomains.ContractStorage, read.key[:]); err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+				}
+				if shape == "overlay4096" {
+					for _, read := range reads {
+						if read.present {
+							err = rawdb.WriteStateKVLatest(buffer, read.owner, 0, kvdomains.ContractStorage, read.key[:], read.value[:])
+						} else {
+							err = rawdb.DeleteStateKVLatest(buffer, read.owner, 0, kvdomains.ContractStorage, read.key[:])
+						}
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				beforeCalls := calls.Snapshot().Count()
+				beforeScopes, beforeDurable := scopes.Snapshot().Count(), durable.Snapshot().Count()
+				beforeCursorOpens, beforeReuses := cursorOpens.Snapshot().Count(), cursorReuses.Snapshot().Count()
+				var beforeOpens uint64
+				if storageBenchTableOpens != nil {
+					beforeOpens = storageBenchTableOpens()
+				}
+				b.StartTimer()
+				closeScope := func() error { return nil }
+				scopeEnabled := false
+				if opener, ok := any(state).(interface {
+					BeginCanonicalStorageReadScope(uint64) (func() error, error)
+				}); ok {
+					scopeEnabled = true
+					closeScope, err = opener.BeginCanonicalStorageReadScope(uint64(op + 1))
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				for _, read := range reads {
+					value, present, err := state.readAccountKVLatestForDecoding(read.owner, 0, kvdomains.ContractStorage, read.key[:])
+					if err != nil || present != read.present || (present && !bytes.Equal(value, read.value[:])) {
+						b.Fatalf("bad read %x/%v: %v", value, present, err)
+					}
+					if present {
+						checksum ^= value[31]
+					}
+				}
+				if err := closeScope(); err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				callDelta := calls.Snapshot().Count() - beforeCalls
+				scopeDelta, durableDelta := scopes.Snapshot().Count()-beforeScopes, durable.Snapshot().Count()-beforeDurable
+				if scopeEnabled && (scopeDelta != 1 || durableDelta != callDelta) {
+					b.Fatalf("inactive scope: scopes=%d durable=%d basecalls=%d", scopeDelta, durableDelta, callDelta)
+				}
+				totalCalls += callDelta
+				totalScopes += scopeDelta
+				totalDurable += durableDelta
+				totalCursorOpens += cursorOpens.Snapshot().Count() - beforeCursorOpens
+				totalReuses += cursorReuses.Snapshot().Count() - beforeReuses
+				if storageBenchTableOpens != nil {
+					totalOpens += int64(storageBenchTableOpens() - beforeOpens)
+				}
+				buffer.DiscardActive()
+				b.StartTimer()
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(totalCalls)/float64(b.N), "basecalls/op")
+			b.ReportMetric(float64(liveSST), "liveSSTfiles_from_metrics")
+			b.ReportMetric(float64(sstFiles), "filesystemSSTfiles")
+			b.ReportMetric(float64(sstBytes)/(1<<20), "filesystemSST_MiB")
+			if totalScopes > 0 {
+				b.ReportMetric(float64(totalCursorOpens)/float64(b.N), "cursor_SSTiters/op")
+				b.ReportMetric(float64(totalReuses)/float64(b.N), "cursor_reuses/op")
+			}
+			b.ReportMetric(float64(totalScopes)/float64(b.N), "scopes/op")
+			b.ReportMetric(float64(totalDurable)/float64(b.N), "cursor_calls/op")
+			if storageBenchTableOpens != nil {
+				b.ReportMetric(float64(totalOpens)/float64(b.N), "SSTiters/op")
+			}
+			storageCursorBenchmarkSink = checksum
+		})
+	}
+}
+
+var storageCursorBenchmarkSink byte

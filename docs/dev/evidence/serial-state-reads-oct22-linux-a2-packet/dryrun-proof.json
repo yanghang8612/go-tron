@@ -1,0 +1,44 @@
+{
+  "kind": "dummy processes and synthetic identity JSON only; no timings/benchmarks/server actions",
+  "cases": [
+    {
+      "case": "resource_exception",
+      "caught": "RuntimeError",
+      "child_exit": -15,
+      "child_reaped": true,
+      "no_orphan": true
+    },
+    {
+      "case": "json_exception",
+      "caught": "TypeError",
+      "child_exit": -15,
+      "child_reaped": true,
+      "no_orphan": true
+    },
+    {
+      "case": "interruption",
+      "caught": "KeyboardInterrupt",
+      "child_exit": -15,
+      "child_reaped": true,
+      "no_orphan": true
+    },
+    {
+      "case": "FAILED blocks analyze.py",
+      "exit_nonzero": true,
+      "no_PASS_output": true,
+      "original_failure_preserved": true
+    },
+    {
+      "case": "FAILED blocks run.py",
+      "exit_nonzero": true,
+      "no_PASS_output": true,
+      "original_failure_preserved": true
+    },
+    {
+      "case": "40 metadata rows but failed post-identity",
+      "exit_nonzero": true,
+      "no_PASS_output": true
+    }
+  ],
+  "all_pass": true
+}

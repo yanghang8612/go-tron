@@ -1,0 +1,3 @@
+package state
+import "github.com/cockroachdb/pebble"
+func init() { storageBenchTableOpens = func() uint64 { return pebble.TestingStoragePointIteratorOpens.Load() } }

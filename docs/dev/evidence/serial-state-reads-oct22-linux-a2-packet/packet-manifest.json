@@ -1,0 +1,145 @@
+{
+  "packet_version": 2,
+  "inactive": true,
+  "no_active_Go_files": true,
+  "baseline_commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
+  "count": 27,
+  "bytes": 676037,
+  "files": [
+    {
+      "path": "PLAN.md",
+      "bytes": 7680,
+      "sha256": "081c0fee1e5daa9a1268260934672eaf6ee33b9450388b795dd95b153f31424e"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1752,
+      "sha256": "e843dcc2a757c543c0e65f20910982c597bcb5b4f1d36b2d84f74cee4de62868"
+    },
+    {
+      "path": "a2-production.patch",
+      "bytes": 21881,
+      "sha256": "0a84708737ac494267f79a64e0fe0225e5e8ef4e6da593a1f7c17cf279f9c681"
+    },
+    {
+      "path": "analyze.py",
+      "bytes": 8393,
+      "sha256": "595655825bc32b47b0869c805bc143b23b3c3da6e88a58153083370d4ccf4b68"
+    },
+    {
+      "path": "archive-evidence.py",
+      "bytes": 906,
+      "sha256": "f6a7148637516cca8985c938de4ea0996d6f75d14c3eb4f2e4aaa681bdebd7aa"
+    },
+    {
+      "path": "common/core/state/storage_cursor_bench_test.go.txt",
+      "bytes": 12000,
+      "sha256": "33aacaa4be7e7d96a42b547d4a412a78f725cc128a12c3de2135c1b0d6d1be2d"
+    },
+    {
+      "path": "common/core/state/storage_cursor_fixture_generate_test.go.txt",
+      "bytes": 3466,
+      "sha256": "d437526bc4a0b48bbc7787b5d81c1de6cd85ee55f3accc6eaefcd1db4deed71f"
+    },
+    {
+      "path": "common/core/state/testdata/storage_cursor_fixture.json.txt",
+      "bytes": 6991,
+      "sha256": "75314979d9521b8ef2d2b7e37f0b661c559f0afc854fec5f89f5626d66b8fc52"
+    },
+    {
+      "path": "common/core/state_processor_storage_cursor_bench_test.go.txt",
+      "bytes": 5554,
+      "sha256": "fb3f640b64037a616d56d7f96dd217f6e9383206003475d140502a531c636ee4"
+    },
+    {
+      "path": "common/vm/serial_call_lifecycle_test.go.txt",
+      "bytes": 15364,
+      "sha256": "847b355959a5914c6117060c514cca5026cfd416cc0fb49aae5aaa1683c0689d"
+    },
+    {
+      "path": "correctness/core/blockbuffer/storage_read_scope_interleaving_test.go.txt",
+      "bytes": 6243,
+      "sha256": "1b5e48e8d0fdbff597390aaf8d54083d2bd679645b84c120fd717cf02d697eab"
+    },
+    {
+      "path": "correctness/core/blockbuffer/storage_read_scope_partial_test.go.txt",
+      "bytes": 9531,
+      "sha256": "1dcfef57ea52648e1373240d1947b7442d1422ccef152dd3276ee746cda86d1e"
+    },
+    {
+      "path": "correctness/core/blockbuffer/storage_read_scope_test.go.txt",
+      "bytes": 5342,
+      "sha256": "e27069f12b635ff29b85179d890d5850362be291d993e950a5bb493471754ab5"
+    },
+    {
+      "path": "correctness/core/rawdb/pebbledb/storage_cursor_test.go.txt",
+      "bytes": 2813,
+      "sha256": "46d61cf7d19bd1fb2d8b14469d94f67f9aca28fcfaa83dc335af76ebb466c9ae"
+    },
+    {
+      "path": "correctness/core/state/storage_read_scope_test.go.txt",
+      "bytes": 5052,
+      "sha256": "ec7cee8bcf503b36fd385ac87e393ba05d35c710a29742e5f507d2fb2c07a939"
+    },
+    {
+      "path": "correctness/core/state_processor_storage_scope_test.go.txt",
+      "bytes": 6354,
+      "sha256": "52546d763829e68ab797b7ea31344dc93361a46c49fd27d9fdce1d858bb21a2e"
+    },
+    {
+      "path": "counts-hook.go.txt",
+      "bytes": 166,
+      "sha256": "ffd92a41be96681ecd91a0b21fd55e7b06e08db833aa463a9a3a01277c604fe9"
+    },
+    {
+      "path": "counts-hook.patch",
+      "bytes": 658,
+      "sha256": "50e7da7783f0b931faf53865996e49ffd5da2098f179120c863705ffd0dd1f44"
+    },
+    {
+      "path": "dryrun-failclosed.py",
+      "bytes": 5102,
+      "sha256": "a9fca9059a3c1a42a589727fb5752751536207722c9e0b9c383ab88a0cf30a96"
+    },
+    {
+      "path": "dryrun-proof.json",
+      "bytes": 1039,
+      "sha256": "7901547a3080344dd111d1fb29e328a2c477de0b7090c727800af19997d5540a"
+    },
+    {
+      "path": "input-manifest.json",
+      "bytes": 3558,
+      "sha256": "4f0f244e3fbbef32b8b5f0885e9bae87e186d13ae4acb6af34607d156f3a9458"
+    },
+    {
+      "path": "prepare.py",
+      "bytes": 9058,
+      "sha256": "1d9fe0cd5d33ca1dbe33100472d73bbaced17994fe6e22b33290094a3fa02759"
+    },
+    {
+      "path": "readonly-preflight.json",
+      "bytes": 1167,
+      "sha256": "8fb77aa3ae57f1a579e960db0fc9d9e15bfe3ea3d3e328b4a46a402284e2933c"
+    },
+    {
+      "path": "run.py",
+      "bytes": 5241,
+      "sha256": "198371eb2ded3542360e85705dc6480bef01e496060f51d7de864b9dabc7a4c0"
+    },
+    {
+      "path": "source-identity.json",
+      "bytes": 523488,
+      "sha256": "3e07f772de856cbc29e2df1f8511e1f7a22290d71f842f44758614939b0f76ff"
+    },
+    {
+      "path": "support.py",
+      "bytes": 6489,
+      "sha256": "79044a6c9506fddf05e5182a1e5d39e03805f5c9af033a8988405a0271b21885"
+    },
+    {
+      "path": "toolchain-pins.json",
+      "bytes": 749,
+      "sha256": "1e081cb0a3cd929ec0be4cd8aaec77fcc8bbd6d3e3853dcea167494c8ba84756"
+    }
+  ]
+}

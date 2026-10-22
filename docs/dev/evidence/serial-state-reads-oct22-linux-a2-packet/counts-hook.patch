@@ -1,0 +1,19 @@
+--- a/third_party/pebble/table_cache.go
++++ b/third_party/pebble/table_cache.go
+@@ -25,6 +25,8 @@
+ 	"github.com/cockroachdb/pebble/objstorage/objstorageprovider/objiotracing"
+ 	"github.com/cockroachdb/pebble/sstable"
+ )
++
++var TestingStoragePointIteratorOpens atomic.Uint64
+ 
+ var emptyIter = &errorIter{err: nil}
+ var emptyKeyspanIter = &errorKeyspanIter{err: nil}
+@@ -540,6 +542,7 @@
+ 		c.unrefValue(v)
+ 		return nil, nil, err
+ 	}
++	TestingStoragePointIteratorOpens.Add(1)
+ 	// NB: v.closeHook takes responsibility for calling unrefValue(v) here. Take
+ 	// care to avoid introducing an allocation here by adding a closure.
+ 	iter.SetCloseHook(v.closeHook)
