@@ -1,0 +1,39 @@
+{
+  "utc": "2026-10-22T09:51:58.451787Z",
+  "phase": "prepare entry require_linux",
+  "exit": 1,
+  "error": "AssertionError: sapling pin mismatch",
+  "counts_started": false,
+  "timing_started": false,
+  "native_inputs": {
+    "go": {
+      "path": "/data/go/bin/go",
+      "realpath": "/data/go/bin/go",
+      "size": 14943765,
+      "mtime": 1764122511.0,
+      "sha256": "d29b19f04e57fa2f35d4725a8743b663289ac29832128a235c4a3f76f885b150",
+      "expected": "d29b19f04e57fa2f35d4725a8743b663289ac29832128a235c4a3f76f885b150",
+      "match": true
+    },
+    "sapling": {
+      "path": "/data/gtron/go-tron/third_party/librustzcash/target/release/librustzcash.a",
+      "realpath": "/data/gtron/go-tron/third_party/librustzcash/target/release/librustzcash.a",
+      "size": 8958018,
+      "mtime": 1779154395.999238,
+      "sha256": "b6c99f8fabac36d5a836c644bb79059449c89740bf33670d66088d094447e7ea",
+      "expected": "b6c99f8fabac36d5a836c644bb79059449c89740bf33670d66088d094447e7ed",
+      "match": false
+    },
+    "header": {
+      "path": "/data/gtron/go-tron/core/zksnark/zksnark_capi.h",
+      "realpath": "/data/gtron/go-tron/core/zksnark/zksnark_capi.h",
+      "size": 4625,
+      "mtime": 1780046174.950328,
+      "sha256": "c3a37e6ac989583c4ce7ef9754f2e0c52c821f286d6ae0b487f11f7530f5f7ca",
+      "expected": "c3a37e6ac989583c4ce7ef9754f2e0c52c821f286d6ae0b487f11f7530f5f7ca",
+      "match": true
+    }
+  },
+  "timer": "inactive",
+  "fd9": "/data/gtron/start.lock"
+}

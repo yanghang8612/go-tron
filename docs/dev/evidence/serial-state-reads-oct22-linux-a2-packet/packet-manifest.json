@@ -1,11 +1,16 @@
 {
-  "packet_version": 2,
+  "packet_version": 3,
   "inactive": true,
   "no_active_Go_files": true,
   "baseline_commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
-  "count": 27,
-  "bytes": 676037,
+  "count": 31,
+  "bytes": 691662,
   "files": [
+    {
+      "path": "ERRATA.md",
+      "bytes": 3133,
+      "sha256": "218238d2c6e3df3fda5f5846612c3df53ebf5640ef367d55e837975a31c28009"
+    },
     {
       "path": "PLAN.md",
       "bytes": 7680,
@@ -107,6 +112,21 @@
       "sha256": "7901547a3080344dd111d1fb29e328a2c477de0b7090c727800af19997d5540a"
     },
     {
+      "path": "errata-evidence/20261019-native-machine-status.json",
+      "bytes": 10731,
+      "sha256": "abfa0efbcc3e5e6b84bcb9918f2c0d2bd773b7d1836db399c24fe8f464764e05"
+    },
+    {
+      "path": "errata-evidence/linux-a2.20261022-ec8303-cpu15.control.json.entry-failure.json",
+      "bytes": 1479,
+      "sha256": "6a5ef106daace021fd969da18f04047fce35aaf204bf4d16fc3d65a512f1be4d"
+    },
+    {
+      "path": "errata-evidence/linux-a2.20261022-ec8303-cpu15.control.json.no-eval.json",
+      "bytes": 282,
+      "sha256": "18ad85f955d95f9f4aeaa36cda83bfe271c297059499ecdf768278850d78e9cc"
+    },
+    {
       "path": "input-manifest.json",
       "bytes": 3558,
       "sha256": "4f0f244e3fbbef32b8b5f0885e9bae87e186d13ae4acb6af34607d156f3a9458"
@@ -139,7 +159,7 @@
     {
       "path": "toolchain-pins.json",
       "bytes": 749,
-      "sha256": "1e081cb0a3cd929ec0be4cd8aaec77fcc8bbd6d3e3853dcea167494c8ba84756"
+      "sha256": "9250f6e4940e209dbb040da64d66571ec9d5e13f69c136136b7d755980e139d0"
     }
   ]
 }
