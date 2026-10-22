@@ -1,20 +1,20 @@
 {
-  "packet_version": 5,
+  "packet_version": 6,
   "inactive": true,
   "no_active_Go_files": true,
   "baseline_commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
-  "count": 42,
-  "bytes": 739514,
+  "count": 44,
+  "bytes": 751144,
   "files": [
     {
       "path": "ERRATA.md",
-      "bytes": 7529,
-      "sha256": "9774aa14df8078628027bcf8396e4f96a62412ce905a5a44ab71359c5018b8f2"
+      "bytes": 9677,
+      "sha256": "1f5cce7448ae33fcf2c208a2667c4ea3f249408b9fa97b55228f5ec67e975e44"
     },
     {
       "path": "PLAN.md",
-      "bytes": 8104,
-      "sha256": "ae2649cc0423881cdfcb2d8f01a65f1b01b8d555de58cce90a8d52c50255ed4a"
+      "bytes": 8509,
+      "sha256": "a059c5c2cace2303be25292b72ce730365a6bcade0adc45cb8f6fa970e16f1e3"
     },
     {
       "path": "README.md",
@@ -192,9 +192,19 @@
       "sha256": "ad934afa3c7a0ac9e6b59b26bbd06fa04fe3b4f8f85d98d93d6266844dce2026"
     },
     {
+      "path": "pty-recovery-reference.json",
+      "bytes": 1459,
+      "sha256": "2157db51792b9d09b689db077bd44b659c7fcf981aa00225c67276e6ba01a07c"
+    },
+    {
       "path": "readonly-preflight.json",
       "bytes": 1167,
       "sha256": "8fb77aa3ae57f1a579e960db0fc9d9e15bfe3ea3d3e328b4a46a402284e2933c"
+    },
+    {
+      "path": "resume-pty-preparation.py",
+      "bytes": 7618,
+      "sha256": "cc9a38446daa10582e694314a0d356416b3ba5e7e4d1dbbb2a0f445f0df1c2ce"
     },
     {
       "path": "run.py",

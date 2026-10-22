@@ -114,3 +114,6 @@ manual transcription of benchmark rows; if the complete archive cannot be
 retrieved, A2 remains unproved/NO-GO. No retry of the evaluation is permitted.
 
 The original sealed A2 patch is retained. On Git 1.8, preparation uses the separate header-only `a2-linux-git18.patch` after exact four-line transformation verification; every resulting production and nonpatch source identity must match the existing sealed input. The 0b5021 preparation refusal and all earlier refusals remain preserved as preparation evidence, with no candidate correctness or performance data collected.
+
+
+The audited finite PTY continuation described in ERRATA uses the original b62686 output and its prevalidation source identities, retaining functional exit 0 and all interrupted raw evidence. Only unknown race and eight unstarted builds resume under nohup/setsid and inherited actual FD9. Counts and formal timing remain separate approvals; their one-attempt rules and all fixed inputs remain unchanged.
