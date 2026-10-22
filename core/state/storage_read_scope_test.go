@@ -59,12 +59,17 @@ func TestCanonicalStorageScopeLifecycleDifferential(t *testing.T) {
 					if err != nil || s.storageReadScope == nil {
 						t.Fatalf("open %v", err)
 					}
-					copy, err := s.Copy()
-					if err != nil {
-						t.Fatal(err)
-					}
-					if copy.storageReadScope != nil || copy.storageReadScopeReader != nil {
-						t.Fatal("Copy inherited canonical scope")
+					for _, entry := range []struct {
+						name string
+						copy func() (*StateDB, error)
+					}{{"Copy", s.Copy}, {"CopyBlockExecutionBase", s.CopyBlockExecutionBase}} {
+						copy, err := entry.copy()
+						if err != nil {
+							t.Fatalf("%s: %v", entry.name, err)
+						}
+						if copy.storageReadScope != nil || copy.storageReadScopeReader != nil {
+							t.Fatalf("%s inherited canonical scope", entry.name)
+						}
 					}
 				}
 				// A completed older commit can flush and prune its pending map
