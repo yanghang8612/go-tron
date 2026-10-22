@@ -67,5 +67,17 @@
   ],
   "sealed_A2_patch_sha256": "0a84708737ac494267f79a64e0fe0225e5e8ef4e6da593a1f7c17cf279f9c681",
   "Darwin_freeze_sha256": "9f0d18e5d386b95d3c4feae94c02bb40258c258186b6b7fd5f40b1a2245c9af2",
-  "Darwin_status": "NO-GO, cold parent spread0.370148; never reclassified or mixed"
+  "Darwin_status": "NO-GO, cold parent spread0.370148; never reclassified or mixed",
+  "linux_transport_patch": {
+    "packet_path": "a2-linux-git18.patch",
+    "sha256": "97b842c627c02d39f200f54f832a48c5c3cc734d24cc6d63e181c6e77a59806f",
+    "new_files": [
+      "core/blockbuffer/storage_read_scope.go",
+      "core/rawdb/direct_history_cursor.go",
+      "core/rawdb/pebbledb/storage_cursor.go",
+      "core/state/storage_read_scope.go"
+    ],
+    "only_added_header": "new file mode 100644",
+    "original_patch_sha256": "0a84708737ac494267f79a64e0fe0225e5e8ef4e6da593a1f7c17cf279f9c681"
+  }
 }

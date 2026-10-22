@@ -28,6 +28,12 @@ for rel,entry in entries.items():
 for rel,h in identity['B_production_sha256'].items():
  data=subprocess.check_output(['git','show',base+':'+rel],cwd=str(repo));assert __import__('hashlib').sha256(data).hexdigest()==h,rel
 assert sha(PACKET/'a2-production.patch')==inputs['sealed_A2_patch_sha256']
+transport=inputs['linux_transport_patch'];original=(PACKET/'a2-production.patch').read_bytes()
+pattern=rb'(diff --git a/([^\n]+) b/\2\n)(--- /dev/null\n)'
+assert [m.group(2).decode() for m in re.finditer(pattern,original)]==transport['new_files']
+compatible=re.sub(pattern,rb'\1new file mode 100644\n\3',original)
+assert (PACKET/transport['packet_path']).read_bytes()==compatible and sha(PACKET/transport['packet_path'])==transport['sha256']
+assert transport['original_patch_sha256']==inputs['sealed_A2_patch_sha256']
 node=node_identity();before=resources(node);assert not pressure(before,node,True),'initial resource admission failed'
 out.mkdir();(out/'tmp').mkdir()
 def checked(cmd,cwd=None):
@@ -53,9 +59,13 @@ try:
   checked(['git','checkout','--detach',base],cwd=dest)
   assert plain(['git','rev-parse','HEAD'],dest)==base
   if arm=='candidate':
-   checked(['git','apply','--check',str(PACKET/'a2-production.patch')],cwd=dest)
-   checked(['git','apply',str(PACKET/'a2-production.patch')],cwd=dest)
+   before_apply=source_index(dest)
+   checked(['git','apply','--check',str(PACKET/transport['packet_path'])],cwd=dest)
+   checked(['git','apply',str(PACKET/transport['packet_path'])],cwd=dest)
    for rel,h in identity['B_plus_A2_production_sha256'].items():assert sha(dest/rel)==h,rel
+   after_apply=source_index(dest);allowed=set(identity['B_plus_A2_production_sha256'])
+   assert {k:v for k,v in before_apply.items() if k not in allowed}=={k:v for k,v in after_apply.items() if k not in allowed},'transport changed nonpatch inputs'
+   write_json(out/'transport-identity.json',{'original_patch_sha256':inputs['sealed_A2_patch_sha256'],'compatible_patch_sha256':transport['sha256'],'new_file_headers':transport['new_files'],'all12_production_sha256':{k:after_apply[k] for k in allowed},'nonpatch_inputs_unchanged':True})
    for rel in ['core/blockbuffer/predecessor.go','core/blockbuffer/layer_view.go']:assert sha(dest/rel)==identity['B_production_sha256'][rel],rel
    for rel,item in inputs['correctness'].items():
     target=dest/rel;target.parent.mkdir(parents=True,exist_ok=True);assert sha(PACKET/item['packet_path'])==item['sha256'];shutil.copyfile(str(PACKET/item['packet_path']),str(target))

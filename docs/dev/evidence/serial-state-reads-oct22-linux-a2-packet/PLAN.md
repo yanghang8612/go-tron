@@ -112,3 +112,5 @@ and verify every manifest member SHA before any audit conclusion. Keep the
 server originals and any failed/partial download. No result is accepted from
 manual transcription of benchmark rows; if the complete archive cannot be
 retrieved, A2 remains unproved/NO-GO. No retry of the evaluation is permitted.
+
+The original sealed A2 patch is retained. On Git 1.8, preparation uses the separate header-only `a2-linux-git18.patch` after exact four-line transformation verification; every resulting production and nonpatch source identity must match the existing sealed input. The 0b5021 preparation refusal and all earlier refusals remain preserved as preparation evidence, with no candidate correctness or performance data collected.

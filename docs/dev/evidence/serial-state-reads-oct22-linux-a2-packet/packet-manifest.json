@@ -1,25 +1,30 @@
 {
-  "packet_version": 4,
+  "packet_version": 5,
   "inactive": true,
   "no_active_Go_files": true,
   "baseline_commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
-  "count": 37,
-  "bytes": 707972,
+  "count": 42,
+  "bytes": 739514,
   "files": [
     {
       "path": "ERRATA.md",
-      "bytes": 5606,
-      "sha256": "b24182e593a4b6fa2c93fe6cfc57d73cf9887619bbf7f13ab650641f49f67761"
+      "bytes": 7529,
+      "sha256": "9774aa14df8078628027bcf8396e4f96a62412ce905a5a44ab71359c5018b8f2"
     },
     {
       "path": "PLAN.md",
-      "bytes": 7680,
-      "sha256": "081c0fee1e5daa9a1268260934672eaf6ee33b9450388b795dd95b153f31424e"
+      "bytes": 8104,
+      "sha256": "ae2649cc0423881cdfcb2d8f01a65f1b01b8d555de58cce90a8d52c50255ed4a"
     },
     {
       "path": "README.md",
       "bytes": 1752,
       "sha256": "e843dcc2a757c543c0e65f20910982c597bcb5b4f1d36b2d84f74cee4de62868"
+    },
+    {
+      "path": "a2-linux-git18.patch",
+      "bytes": 21965,
+      "sha256": "97b842c627c02d39f200f54f832a48c5c3cc734d24cc6d63e181c6e77a59806f"
     },
     {
       "path": "a2-production.patch",
@@ -142,6 +147,26 @@
       "sha256": "214197624331f5dbef3458f0e27dff9a4751d5a326a38b0349fee80dc459ec13"
     },
     {
+      "path": "errata-evidence/git18-FAILED.json",
+      "bytes": 225,
+      "sha256": "7b8b23fb7f4908fed7b0ba0b94572f2fa04b0357df6c320eb54ea9a88e489226"
+    },
+    {
+      "path": "errata-evidence/git18-prepare-actions.jsonl",
+      "bytes": 2884,
+      "sha256": "0d250347795ba058f5d4954ed61913b75a39497d39da853e458149ccd4b55d14"
+    },
+    {
+      "path": "errata-evidence/git18-prepare.log",
+      "bytes": 610,
+      "sha256": "c729f998b5a8b40f3cbb25ce78e7ab1b5a2ae8dc3048e1ff545448231f36887e"
+    },
+    {
+      "path": "errata-evidence/git18-transport-local-proof.json",
+      "bytes": 1905,
+      "sha256": "87e1918653827a2ff01f52da3068b1eab53624c01008bf09b574931b71d50024"
+    },
+    {
       "path": "errata-evidence/linux-a2.20261022-ec8303-cpu15.control.json.entry-failure.json",
       "bytes": 1479,
       "sha256": "6a5ef106daace021fd969da18f04047fce35aaf204bf4d16fc3d65a512f1be4d"
@@ -158,13 +183,13 @@
     },
     {
       "path": "input-manifest.json",
-      "bytes": 3558,
-      "sha256": "4f0f244e3fbbef32b8b5f0885e9bae87e186d13ae4acb6af34607d156f3a9458"
+      "bytes": 4069,
+      "sha256": "6572f94273cf9974b5375333e70c1cdf4cc270713df10ecd61c574db2ebeb3c8"
     },
     {
       "path": "prepare.py",
-      "bytes": 9075,
-      "sha256": "d39bf8572e5f7a6cf9933b040cc5656adb2d349d6fbe022b1352496fb91ea818"
+      "bytes": 10170,
+      "sha256": "ad934afa3c7a0ac9e6b59b26bbd06fa04fe3b4f8f85d98d93d6266844dce2026"
     },
     {
       "path": "readonly-preflight.json",
