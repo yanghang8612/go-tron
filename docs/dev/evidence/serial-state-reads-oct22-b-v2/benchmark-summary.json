@@ -1,0 +1,537 @@
+{
+  "passed": true,
+  "workloads": {
+    "8MiB/cold": {
+      "parent": {
+        "median_ns": 3610820.0,
+        "spread": 0.10140688264715494,
+        "ns_samples": [
+          3754729.0,
+          3797887.0,
+          3610820.0,
+          3431725.0,
+          3505670.0
+        ],
+        "metrics_median": {
+          "ns/op": 3610820.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 16.0,
+          "B/op": 526376.0,
+          "allocs/op": 45.0
+        }
+      },
+      "candidate": {
+        "median_ns": 419591.0,
+        "spread": 0.22915648810389164,
+        "ns_samples": [
+          450999.0,
+          419591.0,
+          416648.0,
+          466377.0,
+          370225.0
+        ],
+        "metrics_median": {
+          "ns/op": 419591.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 7992.0,
+          "allocs/op": 76.0
+        }
+      },
+      "speedup_fraction": 0.8837962014168527,
+      "sort_reduction_fraction": 1.0,
+      "passed": true
+    },
+    "8MiB/churn": {
+      "parent": {
+        "median_ns": 1060523.0,
+        "spread": 0.12485160623579121,
+        "ns_samples": [
+          1036468.0,
+          1092586.0,
+          1020678.0,
+          1153086.0,
+          1060523.0
+        ],
+        "metrics_median": {
+          "ns/op": 1060523.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 16.0,
+          "B/op": 327584.0,
+          "allocs/op": 1065.0
+        }
+      },
+      "candidate": {
+        "median_ns": 87113.0,
+        "spread": 0.11177436203551709,
+        "ns_samples": [
+          87950.0,
+          87113.0,
+          88968.0,
+          83484.0,
+          79231.0
+        ],
+        "metrics_median": {
+          "ns/op": 87113.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 160288.0,
+          "allocs/op": 1062.0
+        }
+      },
+      "speedup_fraction": 0.9178584528576939,
+      "sort_reduction_fraction": 1.0,
+      "passed": true
+    },
+    "8MiB/hotstable": {
+      "parent": {
+        "median_ns": 2478.0,
+        "spread": 0.16303470540758677,
+        "ns_samples": [
+          2306.0,
+          2478.0,
+          2537.0,
+          2710.0,
+          2445.0
+        ],
+        "metrics_median": {
+          "ns/op": 2478.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 552.0,
+          "allocs/op": 13.0
+        }
+      },
+      "candidate": {
+        "median_ns": 2006.0,
+        "spread": 0.12911266201395813,
+        "ns_samples": [
+          2006.0,
+          2075.0,
+          1976.0,
+          2136.0,
+          1877.0
+        ],
+        "metrics_median": {
+          "ns/op": 2006.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 504.0,
+          "allocs/op": 12.0
+        }
+      },
+      "speedup_fraction": 0.19047619047619047,
+      "passed": true
+    },
+    "8MiB/smallprefix": {
+      "parent": {
+        "median_ns": 2227.0,
+        "spread": 0.17826672653794343,
+        "ns_samples": [
+          2188.0,
+          2153.0,
+          2227.0,
+          2501.0,
+          2550.0
+        ],
+        "metrics_median": {
+          "ns/op": 2227.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 552.0,
+          "allocs/op": 13.0
+        }
+      },
+      "candidate": {
+        "median_ns": 2008.0,
+        "spread": 0.12250996015936255,
+        "ns_samples": [
+          1992.0,
+          2008.0,
+          2100.0,
+          2040.0,
+          1854.0
+        ],
+        "metrics_median": {
+          "ns/op": 2008.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 504.0,
+          "allocs/op": 12.0
+        }
+      },
+      "speedup_fraction": 0.09833857207004937,
+      "passed": true
+    },
+    "8MiB/tombstones": {
+      "parent": {
+        "median_ns": 1521174.0,
+        "spread": 0.046395086952577415,
+        "ns_samples": [
+          1521174.0,
+          1512903.0,
+          1531661.0,
+          1513943.0,
+          1583478.0
+        ],
+        "metrics_median": {
+          "ns/op": 1521174.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 97.0,
+          "baseSeeks/op": 97.0,
+          "fullsorts/op": 0.0,
+          "B/op": 1381928.0,
+          "allocs/op": 19703.0
+        }
+      },
+      "candidate": {
+        "median_ns": 1508096.0,
+        "spread": 0.036407496604990666,
+        "ns_samples": [
+          1522681.0,
+          1495831.0,
+          1508096.0,
+          1525956.0,
+          1471050.0
+        ],
+        "metrics_median": {
+          "ns/op": 1508096.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 97.0,
+          "baseSeeks/op": 97.0,
+          "fullsorts/op": 0.0,
+          "B/op": 1380473.0,
+          "allocs/op": 19799.0
+        }
+      },
+      "speedup_fraction": 0.008597307079926453,
+      "passed": true
+    },
+    "8MiB/generic": {
+      "parent": {
+        "median_ns": 2518.0,
+        "spread": 0.19579030976965847,
+        "ns_samples": [
+          2484.0,
+          2464.0,
+          2518.0,
+          2651.0,
+          2957.0
+        ],
+        "metrics_median": {
+          "ns/op": 2518.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 280.0,
+          "allocs/op": 10.0
+        }
+      },
+      "candidate": {
+        "median_ns": 2506.0,
+        "spread": 0.08339984038308061,
+        "ns_samples": [
+          2506.0,
+          2507.0,
+          2439.0,
+          2516.0,
+          2307.0
+        ],
+        "metrics_median": {
+          "ns/op": 2506.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 280.0,
+          "allocs/op": 10.0
+        }
+      },
+      "speedup_fraction": 0.004765687053216894,
+      "passed": true
+    },
+    "128MiB/cold": {
+      "parent": {
+        "median_ns": 76100823.0,
+        "spread": 0.06546642734731002,
+        "ns_samples": [
+          76129307.0,
+          75583530.0,
+          76100823.0,
+          80565579.0,
+          76085978.0
+        ],
+        "metrics_median": {
+          "ns/op": 76100823.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 32.0,
+          "B/op": 8392232.0,
+          "allocs/op": 77.0
+        }
+      },
+      "candidate": {
+        "median_ns": 12132353.0,
+        "spread": 0.05876296213933109,
+        "ns_samples": [
+          12162969.0,
+          12132353.0,
+          12329206.0,
+          12115806.0,
+          11616273.0
+        ],
+        "metrics_median": {
+          "ns/op": 12132353.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 82040.0,
+          "allocs/op": 164.0
+        }
+      },
+      "speedup_fraction": 0.8405752720965974,
+      "sort_reduction_fraction": 1.0,
+      "passed": true
+    },
+    "128MiB/churn": {
+      "parent": {
+        "median_ns": 19064668.0,
+        "spread": 0.05930467816171779,
+        "ns_samples": [
+          19064668.0,
+          18910265.0,
+          19419898.0,
+          20040889.0,
+          18965284.0
+        ],
+        "metrics_median": {
+          "ns/op": 19064668.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 16.0,
+          "B/op": 2323917.0,
+          "allocs/op": 1061.0
+        }
+      },
+      "candidate": {
+        "median_ns": 140760.0,
+        "spread": 0.2161906791702188,
+        "ns_samples": [
+          139236.0,
+          146338.0,
+          140760.0,
+          156571.0,
+          126140.0
+        ],
+        "metrics_median": {
+          "ns/op": 140760.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 157373.0,
+          "allocs/op": 1052.0
+        }
+      },
+      "speedup_fraction": 0.9926167085626668,
+      "sort_reduction_fraction": 1.0,
+      "passed": true
+    },
+    "128MiB/hotstable": {
+      "parent": {
+        "median_ns": 3764.0,
+        "spread": 0.25664187035069075,
+        "ns_samples": [
+          3971.0,
+          3423.0,
+          3760.0,
+          4389.0,
+          3764.0
+        ],
+        "metrics_median": {
+          "ns/op": 3764.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 552.0,
+          "allocs/op": 13.0
+        }
+      },
+      "candidate": {
+        "median_ns": 2164.0,
+        "spread": 0.26247689463955637,
+        "ns_samples": [
+          2160.0,
+          2590.0,
+          2347.0,
+          2164.0,
+          2022.0
+        ],
+        "metrics_median": {
+          "ns/op": 2164.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 504.0,
+          "allocs/op": 12.0
+        }
+      },
+      "speedup_fraction": 0.42507970244420834,
+      "passed": true
+    },
+    "128MiB/smallprefix": {
+      "parent": {
+        "median_ns": 2201.0,
+        "spread": 0.27033166742389825,
+        "ns_samples": [
+          2201.0,
+          2181.0,
+          2219.0,
+          2759.0,
+          2164.0
+        ],
+        "metrics_median": {
+          "ns/op": 2201.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 552.0,
+          "allocs/op": 13.0
+        }
+      },
+      "candidate": {
+        "median_ns": 2024.0,
+        "spread": 0.16452569169960474,
+        "ns_samples": [
+          2024.0,
+          1960.0,
+          2064.0,
+          2145.0,
+          1812.0
+        ],
+        "metrics_median": {
+          "ns/op": 2024.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 504.0,
+          "allocs/op": 12.0
+        }
+      },
+      "speedup_fraction": 0.08041799182189913,
+      "passed": true
+    },
+    "128MiB/tombstones": {
+      "parent": {
+        "median_ns": 1664437.0,
+        "spread": 0.10336708448562487,
+        "ns_samples": [
+          1772886.0,
+          1600838.0,
+          1686580.0,
+          1664437.0,
+          1602703.0
+        ],
+        "metrics_median": {
+          "ns/op": 1664437.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 97.0,
+          "baseSeeks/op": 97.0,
+          "fullsorts/op": 0.0,
+          "B/op": 1381929.0,
+          "allocs/op": 19703.0
+        }
+      },
+      "candidate": {
+        "median_ns": 1543501.0,
+        "spread": 0.09823965128626415,
+        "ns_samples": [
+          1614619.0,
+          1543501.0,
+          1588142.0,
+          1538625.0,
+          1462986.0
+        ],
+        "metrics_median": {
+          "ns/op": 1543501.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 97.0,
+          "baseSeeks/op": 97.0,
+          "fullsorts/op": 0.0,
+          "B/op": 1380472.0,
+          "allocs/op": 19799.0
+        }
+      },
+      "speedup_fraction": 0.07265880294658189,
+      "passed": true
+    },
+    "128MiB/generic": {
+      "parent": {
+        "median_ns": 4117.0,
+        "spread": 0.03619140150595093,
+        "ns_samples": [
+          4027.0,
+          4176.0,
+          4127.0,
+          4117.0,
+          4089.0
+        ],
+        "metrics_median": {
+          "ns/op": 4117.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 280.0,
+          "allocs/op": 10.0
+        }
+      },
+      "candidate": {
+        "median_ns": 3627.0,
+        "spread": 0.15329473393989523,
+        "ns_samples": [
+          3848.0,
+          3626.0,
+          3627.0,
+          3584.0,
+          4140.0
+        ],
+        "metrics_median": {
+          "ns/op": 3627.0,
+          "baseGets/op": 0.0,
+          "baseIters/op": 1.0,
+          "baseSeeks/op": 1.0,
+          "fullsorts/op": 0.0,
+          "B/op": 280.0,
+          "allocs/op": 10.0
+        }
+      },
+      "speedup_fraction": 0.11901870293903327,
+      "passed": true
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "status": "B module GO after formal Astra independent audit; overall release pending A/combined tests/identity",
+  "v1_status": "sealed NO-GO, retained without resampling",
+  "source_hashes_verified": {
+    "parent": {
+      "core/blockbuffer/buffer.go": "dd2d268d6b4c51f0b83500c69fd68b06d31a652fccacdc7f152b3a5e73b07591",
+      "core/blockbuffer/layer_view.go": "a10abd1a551d186f1b2ed3fc0c476096577e00992ae6844a99c48a4bf87c3b08",
+      "core/blockbuffer/predecessor.go": "4ebe06554c4fc70d4f4efe5848570b330c4909169fdb9e0c9c2fe50c31087382",
+      "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898",
+      "core/blockbuffer/predecessor_candidates_bench_test.go": "fbd9f51cb8e8844be34365d16ac265fc31ec08cb56c88dc76888ec889f2ac383"
+    },
+    "candidate": {
+      "core/blockbuffer/buffer.go": "f2be9e42eacda87f81341dac75fab93a7238b573f05c2f5968e512cdc098a832",
+      "core/blockbuffer/layer_view.go": "8f835b3712b67acca69f43a25460677eb545b194c4572e0bc942c0a4543b2af2",
+      "core/blockbuffer/predecessor.go": "5bf199cead74281a521b0e2dfc83ecc424f6cc3e03192dea45c8fd6a803e344d",
+      "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898",
+      "core/blockbuffer/predecessor_candidates_bench_test.go": "fbd9f51cb8e8844be34365d16ac265fc31ec08cb56c88dc76888ec889f2ac383",
+      "core/blockbuffer/predecessor_candidates_v2_test.go": "d3b01b9a0c1a8f590119d3dc624bff49f53ead15dc3dc7e3549222016ca0bea6"
+    }
+  },
+  "workspace_B_identity_verified": true,
+  "binaries": {
+    "parent": "3c44942924eccd7c75b4eb8715971fc4756b0b50adf14bea767175a81ae1d5a2",
+    "candidate": "2c6d8042b94716d477981939bf888b896c30d869caaaa7be38efd36384971512"
+  },
+  "evidence_hashes": {
+    "RESULT.md": "bed0b575f823c6d9623f392ea800c6a0c7cefef9d09d5b2721e88d9221649106",
+    "astra-audit.md": "df106149685e44285f8d07839cb23c7d7f0291ae87a31f7a439c861d066161f7",
+    "benchmark-manifest.json": "775b04a4d184b8245d1e76f8d809f277c9190a9942b966c30e5431f773611de6",
+    "benchmark-summary.json": "690f3bec0e15b2d59ff5469a37984ecb6460209d5ae97073c7f71ff42c1745c2",
+    "candidate-bench-1.log": "afbc66aa521ec12d7c7b8ff309d345ed51325a1a4cbeb3fe71e33c2692ef992a",
+    "candidate-bench-2.log": "733ce82aa4d056cb441398bfd2922096582139febc4ad9118365c6477dfb7fd7",
+    "candidate-bench-3.log": "03d207b776c81d74d75ff1cd2455adaaf4449548aa991102d04c1d76d7119410",
+    "candidate-bench-4.log": "22cfd1ebfc529ab67f8de72ad5424679ff710a3f4a1a38131bb44e9c56a0903d",
+    "candidate-bench-5.log": "224f607ea4410262f48edc8064ea9ac01136d34a407811b628c8598b35d912ad",
+    "candidate-blockbuffer.log": "f57276d12ef003e7ccc286ad86b0f2ccb9b9d5ba43a496df59bb80e20b6d23b8",
+    "candidate-build.log": "9654f6be4c3bc3a28dfd1ded744a193a9d74ab959050c06008d8e50a18e21f67",
+    "candidate-oracle.log": "03b83f0775776fd1395e128e106046ef0eaef29b36e3b938ec9786e68a917d37",
+    "candidate-race.log": "c92bcacd291fcf36a8821b486a781b988c7e2caa881fa66c369a8b1a42c44904",
+    "export-manifest.json": "3839b975030614acfe67dab0c6abb1843fa40af9049e5f227fdf2f241610784b",
+    "parent-bench-1.log": "74c74b6df92944a655cd394c3a9cf76eb34775772f19b5d485a9cea458dedb08",
+    "parent-bench-2.log": "eaf1edbfc3fbd2c316be39cf804722ef9cd3ee7624d683d62c82cc1377ca853f",
+    "parent-bench-3.log": "9f0615e5c57845e6d7c4776b8beb67d4727b8b01ed02a79204df4bfeef28c8ee",
+    "parent-bench-4.log": "1c3c87ce4e354ba7d0b7df88bb749409fa4371a91dd80d56e129d913a2951c7a",
+    "parent-bench-5.log": "7c9550515411a79082aa944d8c7acdfc256f18d7f52a53a7dbfef528c2d2637b",
+    "parent-blockbuffer.log": "7b7371643a5f8fd48eb6874baa566bf31928987406e6c6bfadeb288cf6cd6a95",
+    "parent-build.log": "8852ad643a96f273b3447956f2319477799f1afb90acc0c1cb40f061b62981a7",
+    "parent-oracle.log": "554d2a8d486d407680ec2fff8c4fc3046a5fc71bf1e83215bf0b01b4a4e51e60",
+    "parent-race.log": "fba2bca9cb9577ea80af423f69f033e5071b0f8c6c5666c5c7df576625242c0c",
+    "prepare-exports.py": "2740c531c5035a348dc0b542f50a15a6db750ff3694ebd6f2229012c24f039ff",
+    "production.patch": "ccca7373cc8606f580a0a879d89376c80b7e0aba34e97bd802ac6cfbeaa2d47c",
+    "run-benchmarks.py": "9879876ce54481ab836c4d614220d84b15603a53c7b42172f75996646a7fd83c",
+    "run-validation.py": "cf5f915b290ea0ffa2d22f94a8d3edd3e480e1ea12cb65fb63931854d37037d4",
+    "source-isolation.json": "7d5f6c5be5628775d62fac4cc71c8c076daf188d01be44845ec7b70a641058dd",
+    "summarize-benchmarks.py": "15af7dde1dde363a3a6f2416674804e5ac4880e1dfbd2b2c2395a7cea6309b5f",
+    "verify-source-isolation.py": "9dc3d7dcd5187ddbf61632254a4bd83407577f1759cce03f3ebc0bcaab09d84f"
+  }
+}

@@ -329,6 +329,7 @@ type layerPrefixBucketIndex struct {
 	prefix            string
 	buckets           map[byte][]string
 	built             [4]uint64
+	sorted            [4]uint64 // existing bucket slices sorted for bounded predecessor seeks
 	iteratorKeys      []string
 	iteratorKeysBuilt bool
 }
@@ -373,6 +374,23 @@ func (i *layerPrefixBucketIndex) bucketBuilt(bucket byte) bool {
 	return i != nil && i.built[bucket>>6]&(uint64(1)<<(bucket&63)) != 0
 }
 
+// bucketSorted is checked under the shard lock. A reset bucket is never
+// sorted, even if an older sorted bit remained until its next build.
+func (i *layerPrefixBucketIndex) bucketSorted(bucket byte) bool {
+	return i.bucketBuilt(bucket) && i.sorted[bucket>>6]&(uint64(1)<<(bucket&63)) != 0
+}
+
+// ensureBucketSorted orders only an existing owner bucket, retaining its key
+// arena and mutation lifecycle. Callers hold the shard's exclusive lock.
+func (i *layerPrefixBucketIndex) ensureBucketSorted(bucket byte, writes map[string][]byte, deletes map[string]struct{}) {
+	i.ensureBucket(bucket, writes, deletes)
+	if i.bucketSorted(bucket) {
+		return
+	}
+	sort.Strings(i.buckets[bucket])
+	i.sorted[bucket>>6] |= uint64(1) << (bucket & 63)
+}
+
 func (i *layerPrefixBucketIndex) anyBucketBuilt() bool {
 	if i == nil {
 		return false
@@ -401,6 +419,7 @@ func (i *layerPrefixBucketIndex) ensureBucket(bucket byte, writes map[string][]b
 }
 
 func (i *layerPrefixBucketIndex) buildBucket(bucket byte, writes map[string][]byte, deletes map[string]struct{}) {
+	i.sorted[bucket>>6] &^= uint64(1) << (bucket & 63)
 	for key := range writes {
 		i.addToBucket(bucket, key)
 	}
@@ -424,6 +443,7 @@ func (i *layerPrefixBucketIndex) buildAllBuckets(writes map[string][]byte, delet
 	if i == nil {
 		return
 	}
+	i.sorted = [4]uint64{}
 	var counts [256]int
 	total := 0
 	count := func(key string) {
@@ -490,6 +510,7 @@ func (i *layerPrefixBucketIndex) addToBucket(bucket byte, key string) {
 	if i.buckets == nil {
 		i.buckets = make(map[byte][]string)
 	}
+	i.sorted[bucket>>6] &^= uint64(1) << (bucket & 63)
 	i.buckets[bucket] = append(i.buckets[bucket], key)
 }
 

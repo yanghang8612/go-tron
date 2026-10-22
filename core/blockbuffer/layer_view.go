@@ -389,6 +389,7 @@ func (b *Buffer) deleteRangeInto(l *layer, start, end []byte) error {
 			s.prefixBucketIndex.invalidateIteratorKeys()
 			s.prefixBucketIndex.buckets = nil
 			s.prefixBucketIndex.built = [4]uint64{}
+			s.prefixBucketIndex.sorted = [4]uint64{}
 		}
 		s.mu.Unlock()
 	}

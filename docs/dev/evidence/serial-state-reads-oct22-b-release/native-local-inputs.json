@@ -1,0 +1,13 @@
+{
+  "go_path": "/opt/homebrew/bin/go",
+  "go_version": "go version go1.27.3 darwin/arm64",
+  "go_sha256": "60fa7fbaac037e24462915e8c19a1c73b02f548df0098b323823d6fbcdd0c764",
+  "native_repo": "/Users/asuka/Projects/asuka/go/go-tron/third_party/librustzcash",
+  "native_gitlink": "45f80494b0760e9993e178b06fd0781caca70c69",
+  "native_archive": "/Users/asuka/Projects/asuka/go/go-tron/third_party/librustzcash/target/release/librustzcash.a",
+  "native_sha256": "deb1c6b067b8ba52d3aca010bfbb083c2b6cf5df75b90bf502b38fec17340012",
+  "native_bytes": 2407640,
+  "native_architecture": "arm64",
+  "header_sha256": "c3a37e6ac989583c4ce7ef9754f2e0c52c821f286d6ae0b487f11f7530f5f7ca",
+  "shared_lock": "/Users/asuka/Projects/asuka/go/go-tron/build/benchmarks/20261018-tvm-event-replay/local-benchmark.lock"
+}
