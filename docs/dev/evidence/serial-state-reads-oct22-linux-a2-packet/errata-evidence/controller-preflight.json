@@ -1,0 +1,136 @@
+{
+  "SMT_sibling": 7,
+  "affinity_before_observer_pin": "see readonly-preflight.json; allowed0..15",
+  "diagnostics": [
+    {
+      "command": [
+        "/data/go/bin/go",
+        "version"
+      ],
+      "exit": 0,
+      "stdout": "go version go1.25.5 linux/amd64"
+    },
+    {
+      "command": [
+        "lscpu",
+        "-p=CPU,CORE,SOCKET,NODE"
+      ],
+      "exit": 0,
+      "stdout": "# The following is the parsable format, which can be fed to other\n# programs. Each different item in every column has an unique ID\n# starting from zero.\n# CPU,Core,Socket,Node\n0,0,0,0\n1,1,0,0\n2,2,0,0\n3,3,0,0\n4,4,0,0\n5,5,0,0\n6,6,0,0\n7,7,0,0\n8,0,0,0\n9,1,0,0\n10,2,0,0\n11,3,0,0\n12,4,0,0\n13,5,0,0\n14,6,0,0\n15,7,0,0"
+    },
+    {
+      "command": [
+        "taskset",
+        "-c",
+        "15",
+        "python3",
+        "-c",
+        "import os; print(sorted(os.sched_getaffinity(0)))"
+      ],
+      "exit": 0,
+      "stdout": "[15]"
+    },
+    {
+      "command": [
+        "lsblk",
+        "-o",
+        "NAME,MAJ:MIN,TYPE,MOUNTPOINT"
+      ],
+      "exit": 0,
+      "stdout": "NAME        MAJ:MIN TYPE MOUNTPOINT\nnvme0n1     259:1   disk \n\u2514\u2500nvme0n1p1 259:2   part /\nnvme1n1     259:0   disk /data"
+    },
+    {
+      "command": [
+        "systemctl",
+        "is-active",
+        "gtron-deploy.timer"
+      ],
+      "exit": 3,
+      "stdout": "inactive\n"
+    },
+    {
+      "command": [
+        "systemctl",
+        "is-active",
+        "gtron-deploy.service"
+      ],
+      "exit": 3,
+      "stdout": "inactive\n"
+    },
+    {
+      "command": [
+        "systemctl",
+        "is-active",
+        "gtron-cold-query-observe.service"
+      ],
+      "exit": 3,
+      "stdout": "unknown\n"
+    },
+    {
+      "command": [
+        "gcc",
+        "--version"
+      ],
+      "exit": 0,
+      "stdout": "gcc (GCC) 4.8.5 20150623 (Red Hat 4.8.5-44)\nCopyright (C) 2015 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+    }
+  ],
+  "environment": {
+    "CGO_ENABLED": "1",
+    "GOARCH": "amd64",
+    "GOCACHE": "/home/java-tron/.cache/go-build",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "1",
+    "GOMEMLIMIT": "4GiB",
+    "GOMODCACHE": "/home/java-tron/go/pkg/mod",
+    "GOOS": "linux",
+    "GOPROXY": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "no_service_change": true,
+  "node": {
+    "exe": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron",
+    "pid": 14163,
+    "start_ticks": "4830887353"
+  },
+  "node_binary_sha256": "5848de48f2f24a128054ff0967cddfd7256c54029f674b317d37f98ac23c63c4",
+  "observer_affinity": [
+    0
+  ],
+  "resources": {
+    "cgroup_memory": {
+      "/sys/fs/cgroup/memory/system.slice/gtron.service/memory.limit_in_bytes": "42949672960\n",
+      "/sys/fs/cgroup/memory/system.slice/gtron.service/memory.usage_in_bytes": "29654425600\n"
+    },
+    "cpu_stat": "cpu  8346596479 37627280 805053949 66324069738 1535320883 0 33541425 875479 0 0\ncpu0 990993182 4081499 105381960 3437126613 276205706 0 199171 51820 0 0\ncpu1 691985510 2848240 68826517 3922456233 133671168 0 191221 45149 0 0\ncpu2 587627943 3066369 56238455 4071157574 101744071 0 208446 69613 0 0\ncpu3 543620660 2932931 51376288 4136134237 86114575 0 221552 40591 0 0\ncpu4 1013085179 4240474 105527262 3417340274 275073451 0 195876 41977 0 0\ncpu5 691703677 2883317 68753546 3923471753 133674919 0 192451 42235 0 0\ncpu6 572345437 2705528 58525389 4068892557 102810567 0 5326300 46983 0 0\ncpu7 547886872 2558781 53959801 4114132361 86199739 0 5361134 92872 0 0\ncpu8 357825594 1472701 30113701 4379316330 42661056 0 3602966 51133 0 0\ncpu9 339486013 1461611 30980676 4397242518 42638674 0 3539124 46839 0 0\ncpu10 342097001 1796175 31848683 4392768917 42677088 0 3673774 68840 0 0\ncpu11 341745359 1786794 32342822 4393028379 42500097 0 3586296 42943 0 0\ncpu12 345752461 1456338 29654708 4392184987 42607863 0 3595843 42765 0 0\ncpu13 341611661 1495911 31031049 4395065109 42646847 0 3486038 45459 0 0\ncpu14 321932390 1435612 25204760 4439367101 42178881 0 80296 49749 0 0\ncpu15 316897533 1404991 25288324 4444384786 41916176 0 80927 96504 0 0\nintr 131247078877 160 11 0 0 777 0 0 0 0 0 0 0 154 0 0 0 0 0 0 0 0 0 0 0 48397427 1870920228 1127782529 768694758 1338918768 2704629491 1213692581 1395326246 1210925953 63 71 2862408349 2750571580 150581751 148560174 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\nctxt 690945891104\nbtime 1744265506\nprocesses 83624969\nprocs_running 6\nprocs_blocked 0\nsoftirq 122733922719 0 3196113515 155230026 3872715702 26 0 955898196 2975537641 0 4204245213\n",
+    "df": {
+      "/": {
+        "available_bytes": 28398886912,
+        "total_bytes": 85887791104
+      },
+      "/data": {
+        "available_bytes": 1760519610368,
+        "total_bytes": 7609457909760
+      }
+    },
+    "diskstats": " 259       0 nvme1n1 36515199176 639407 5165371960498 265925070 10288004974 7386180700 2314905076992 90103188 2 3576294268 356028258\n 259       1 nvme0n1 176155699 9405 17400292344 422562588 174861267 5681913 22186299831 617591065 0 149358779 1040153653\n 259       2 nvme0n1p1 176155666 9405 17400289976 422562571 174861267 5681913 22186299831 617591065 0 149358761 1040153636\n",
+    "loadavg": "7.18 7.07 7.24 6/1266 25631\n",
+    "mem": {
+      "MemAvailable": 26551279616,
+      "MemTotal": 65842163712
+    },
+    "monotonic": 48397877.01495457,
+    "node_cgroup": "11:blkio:/system.slice/gtron.service\n10:memory:/system.slice/gtron.service\n9:perf_event:/\n8:pids:/system.slice/gtron.service\n7:devices:/system.slice/gtron.service\n6:freezer:/\n5:net_prio,net_cls:/\n4:hugetlb:/\n3:cpuset:/\n2:cpuacct,cpu:/system.slice/gtron.service\n1:name=systemd:/system.slice/gtron.service\n",
+    "node_identity": {
+      "exe": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron",
+      "pid": 14163,
+      "start_ticks": "4830887353"
+    },
+    "node_io": "rchar: 4932707857275\nwchar: 4500218639623\nsyscr: 2377880699\nsyscw: 292085671\nread_bytes: 1029980576256\nwrite_bytes: 4501052866560\ncancelled_write_bytes: 442081918976\n",
+    "node_status": "Name:\tgtron\nUmask:\t0027\nState:\tR (running)\nTgid:\t14163\nNgid:\t0\nPid:\t14163\nPPid:\t1\nTracerPid:\t0\nUid:\t1003\t1003\t1003\t1003\nGid:\t1003\t1003\t1003\t1003\nFDSize:\t8192\nGroups:\t991 1003 \nVmPeak:\t23089676 kB\nVmSize:\t22827528 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t20925732 kB\nVmRSS:\t19765532 kB\nRssAnon:\t19736776 kB\nRssFile:\t   28756 kB\nRssShmem:\t       0 kB\nVmData:\t22766348 kB\nVmStk:\t     132 kB\nVmExe:\t   44628 kB\nVmLib:\t    3244 kB\nVmPTE:\t   41660 kB\nVmSwap:\t       0 kB\nThreads:\t41\nSigQ:\t0/250942\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\tfffffffdffc1feff\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000001fffffffff\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t0\nSpeculation_Store_Bypass:\tvulnerable\nCpus_allowed:\tffff\nCpus_allowed_list:\t0-15\nMems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t7354794\nnonvoluntary_ctxt_switches:\t123568\n",
+    "utc_unix": 1792663383.4827015
+  },
+  "selected_cpu": 15
+}

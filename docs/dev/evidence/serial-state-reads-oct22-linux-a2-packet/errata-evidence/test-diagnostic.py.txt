@@ -1,0 +1,14 @@
+import ast,json,subprocess,hashlib
+from pathlib import Path
+p=Path("docs/dev/evidence/serial-state-reads-oct22-linux-a2-packet/prepare.py")
+tree=ast.parse(p.read_text());node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=="diagnostic")
+code=compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),str(p),"exec")
+results=[]
+for name,exit,raw,expected in [("inactive_exit3",3,b"inactive\n",True),("active_success",0,b"active\n",False),("unknown_exit3",3,b"unknown\n",False),("failed_exit3",3,b"failed\n",False),("system_error_exit1",1,b"Failed to connect to bus: No such file or directory\n",False),("activating_success",0,b"activating\n",False),("deactivating_success",0,b"deactivating\n",False),("not_found_exit4",4,b"not-found\n",False)]:
+ def plain(cmd):
+  if exit:raise subprocess.CalledProcessError(exit,cmd,output=raw)
+  return raw.decode("utf-8","replace").strip()
+ ns={"subprocess":subprocess,"plain":plain};exec(code,ns);r=ns["diagnostic"](["systemctl","is-active","gtron-deploy.timer"]);admitted=r["stdout"]=="inactive"
+ assert admitted==expected,(name,r)
+ results.append({"name":name,"actual_exit":exit,"raw_output_repr":repr(raw),"diagnostic":r,"admitted":admitted,"expected":expected})
+print(json.dumps({"prepare_sha256":hashlib.sha256(p.read_bytes()).hexdigest(),"tests":results,"all_pass":True,"real_subprocess_or_server_calls":False},indent=2))
