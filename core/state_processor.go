@@ -984,6 +984,7 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 }
 
 type processBlockOptions struct {
+	canonicalStorageReadScope     bool
 	parallelTransfers             bool
 	parallelVM                    bool
 	captureBalanceTrace           bool
@@ -1065,6 +1066,16 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			dynProps.CommitSnapshot(dpSnap)
 		}
 	}()
+	// Empty blocks still perform history/repair reads through the existing live
+	// reader, but have no transaction SLOADs to amortize a pinned cursor scope.
+	// Keep the original eager cut and cleanup boundary for every nonempty block.
+	if options.canonicalStorageReadScope && !options.parallelVM && !options.parallelTransfers && len(block.Proto().GetTransactions()) > 0 {
+		closeScope, openErr := statedb.BeginCanonicalStorageReadScope(block.Number())
+		if openErr != nil {
+			return nil, tcommon.Hash{}, openErr
+		}
+		defer func() { err = errors.Join(err, closeScope()) }()
+	}
 	repairActivated, repairErr := applyMainnetLegacyStateRepairs(statedb, block.Number(), block.Hash(), options.legacyStateRepairHook)
 	if repairErr != nil {
 		return nil, tcommon.Hash{}, repairErr

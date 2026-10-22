@@ -1424,6 +1424,9 @@ func (s *StateDB) readAccountKVLatestForDecoding(owner tcommon.Address, generati
 	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
 		return value, exists, nil
 	}
+	if s != nil && s.storageReadScope != nil && domain == kvdomains.ContractStorage {
+		return s.readCanonicalStorageLatest(owner, generation, key)
+	}
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {
 			return reader.kvLatestForDecoding(owner, generation, domain, key)

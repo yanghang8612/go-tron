@@ -771,10 +771,11 @@ type Buffer struct {
 // overlay; advertising explicit failure is safer than accidentally mutating a
 // snapshot if that invariant ever changes.
 type ReadSnapshot struct {
-	view        *bufferReadView
-	base        pointread.KeyValueSnapshot
-	historyOnly bool
-	closed      atomic.Bool
+	view         *bufferReadView
+	base         pointread.KeyValueSnapshot
+	cacheVersion uint64
+	historyOnly  bool
+	closed       atomic.Bool
 }
 
 var _ ethdb.KeyValueReader = (*ReadSnapshot)(nil)
@@ -871,9 +872,13 @@ func (b *Buffer) captureReadSnapshot(maxBlock *uint64, try, historyOnly bool) (*
 		view.inflight = append(view.inflight, b.inflight...)
 		view.layers = append(view.layers, b.layers...)
 	}
+	var cacheVersion uint64
+	if view.baseReadCache != nil {
+		cacheVersion = view.baseReadCache.version.Load()
+	}
 	b.mu.RUnlock()
 	b.flushMu.Unlock()
-	return &ReadSnapshot{view: view, base: base, historyOnly: historyOnly}, nil
+	return &ReadSnapshot{view: view, base: base, cacheVersion: cacheVersion, historyOnly: historyOnly}, nil
 }
 
 func (s *ReadSnapshot) GetWithPresence(key []byte) ([]byte, bool, error) {

@@ -168,6 +168,10 @@ type baseReadCache struct {
 	// retain the version at which they became valid, allowing a point-in-time
 	// commitment session to reuse old hot entries while rejecting replacements
 	// published after its Pebble snapshot.
+	// Only snapshot publication participates in this domain. Ordinary cache
+	// reads/fills retain their existing shard locking. Lock order is this guard
+	// before a shard; advanceVersion releases it before any promote/clear shard.
+	snapshotFillMu         sync.RWMutex
 	version                atomic.Uint64
 	metricsPublishSequence atomic.Uint64
 	// Serialize only low-frequency sampling+publication so an older snapshot
@@ -657,7 +661,10 @@ func (c *baseReadCache) advanceVersion() uint64 {
 	if c == nil {
 		return 0
 	}
-	return c.version.Add(1)
+	c.snapshotFillMu.Lock()
+	version := c.version.Add(1)
+	c.snapshotFillMu.Unlock()
+	return version
 }
 
 // setIfEpoch copies key/value into cache-owned immutable storage only if no
@@ -707,6 +714,25 @@ func (c *baseReadCache) prefetchMissingIfEpoch(key []byte, epoch baseReadCacheEp
 }
 
 func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, force bool, epoch baseReadCacheEpoch) ([]byte, bool) {
+	return c.setEntryAtVersion(key, value, missing, expose, force, epoch, 0, false)
+}
+
+// setSnapshotEntry requires both the captured global base version and the
+// original key epoch. snapshotFillMu covers the version check through shard
+// publication, excluding advanceVersion; ordinary live cache reads/fills do not
+// take this guard. Canonical correctness additionally requires the complete
+// captured overlay across base commit and version advance: this guard alone
+// does not make arbitrary direct durable writes safe.
+func (c *baseReadCache) setSnapshotEntry(key, value []byte, missing bool, epoch baseReadCacheEpoch, version uint64) ([]byte, bool) {
+	if c == nil {
+		return value, false
+	}
+	c.snapshotFillMu.RLock()
+	defer c.snapshotFillMu.RUnlock()
+	return c.setEntryAtVersion(key, value, missing, true, false, epoch, version, true)
+}
+
+func (c *baseReadCache) setEntryAtVersion(key, value []byte, missing, expose, force bool, epoch baseReadCacheEpoch, version uint64, checkVersion bool) ([]byte, bool) {
 	if c == nil {
 		return value, false
 	}
@@ -720,7 +746,7 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 	}
 
 	s.mu.Lock()
-	if c.invalidations[epoch.slot].Load() != epoch.value {
+	if (checkVersion && c.version.Load() != version) || c.invalidations[epoch.slot].Load() != epoch.value {
 		s.recordDiagnosticReason(diagnosticDepth, baseReadCacheDiagnosticEpochRejected)
 		s.mu.Unlock()
 		return value, false
@@ -774,7 +800,11 @@ func (c *baseReadCache) setEntryIfEpoch(key, value []byte, missing, expose, forc
 			return value, false
 		}
 	}
-	entry := s.acquireEntryBytes(key, value, missing, c.version.Load())
+	entryVersion := c.version.Load()
+	if checkVersion {
+		entryVersion = version
+	}
+	entry := s.acquireEntryBytes(key, value, missing, entryVersion)
 	if trunk && s.trunkUsed+entry.charge > s.trunkLimit {
 		// Recycled value/key storage can have more capacity than the requested
 		// payload. Account that real retained capacity before publishing the entry;
