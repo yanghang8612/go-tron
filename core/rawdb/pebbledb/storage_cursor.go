@@ -18,7 +18,11 @@ func (s *keyValueSnapshot) NewPointReadCursor() (pointread.Cursor, error) {
 	}
 	// Keep ordinary DB.Get's filter policy. This candidate changes iterator
 	// lifetime only, not L6 filter selection or table lookup semantics.
-	c, err := s.snapshot.NewGetCursor()
+	// Only canonical storage opts into 16 pairs; other cursor roles retain 4.
+	// The first four pairs stay inline. A compatible miss needing a fifth
+	// distinct retained table allocates fixed overflow for the remaining 12.
+	// Neither array moves, including while inline wrappers are leased.
+	c, err := s.snapshot.NewGetCursorWithOptions(pebble.GetCursorOptions{MaxRetainedTables: 16})
 	if err != nil {
 		return nil, err
 	}

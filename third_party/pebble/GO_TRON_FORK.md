@@ -77,3 +77,31 @@ See parent spec2026-10-18-sync-stage-point-read.md and get_point_delete_test.go
 for version-growth evidence, Next-step/cleanup oracle, and view/merge/range
 regressions. The later3.4M production baseline no longer has the early275k
 stage-read CPU hotspot; the microbenchmark does not predict online TPS.
+
+
+## October 23: bounded canonical storage retention
+
+Default snapshot cursors retain four point/range-deletion iterator pairs.
+`GetCursorOptions.MaxRetainedTables` optionally selects 4, 8, 16 or 32 (zero
+means four); only the canonical storage adapter opts into 16. Commitment and
+prefetch cursors retain their existing default and L6 filter policies. Fixed
+overflow backing is allocated once only when a compatible miss needs a fifth
+retained table. Neither the first four inline slots nor the overflow array moves. Slots own their filter backing. Leases still last through
+ReleaseValue, including borrowed range tombstones and merge/lazy values.
+
+DirectHistory opens hot and history cursors on its already pinned two-engine
+cut. At 16 each, their total bound is 32 retained pairs / 64 point-plus-range
+component handles. This is a count bound, not a pinned-byte or block-cache
+budget. Unused cursors do not allocate expanded backing. Default four-entry
+cursors retain inline storage. Errors, poison state and close ownership are
+unchanged. No upstream provenance hashes or file formats are changed.
+
+Cursor-local TableFallbackIncompatible and TableFallbackAllLeased partition
+TableFallbacks, including failed fallback opens. Root role metrics publish
+these counts only at cursor Close. Requests remain logical table requests;
+retention reduces repeated iterator construction, not L0 layers or query count.
+
+The predeclared untimed high-L0 proof selected the smallest sufficient bound,
+16, from 4/8/16/32. High-16 still had 3,996 all-leased fallbacks over 68,732
+requests at 16, versus 52,348 at four; 32 was not selected. This construction
+proof is not an end-to-end speed or online throughput claim.

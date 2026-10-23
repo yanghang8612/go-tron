@@ -8,6 +8,12 @@ import (
 
 // Open both cursors on the already pinned dual-engine snapshot. Routing stays
 // identical to directHistorySnapshot.Get, including non-storage/history keys.
+// The canonical Pebble factories each retain at most 16 iterator pairs (32
+// across both engines / 64 retained point-plus-range component handles).
+// Each uses inline four pairs, allocating fixed overflow for the remaining 12
+// only on a compatible miss needing a fifth distinct retained SST. Neither
+// backing moves. These retained bounds exclude transient fallback resources
+// and do not bound pinned bytes.
 func (s *directHistorySnapshot) NewPointReadCursor() (pointread.Cursor, error) {
 	hotFactory, hotOK := s.hot.(pointread.KeyValueCursorSnapshot)
 	historyFactory, historyOK := s.history.(pointread.KeyValueCursorSnapshot)

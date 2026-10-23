@@ -121,6 +121,7 @@ func (m *pointGetMetrics) observe(c *pointReadCursor) {
 // Each cursor records locally; only Close publishes to the process counters.
 type getCursorMetrics struct {
 	requests, opens, reuses, fallbacks, evictions, peakSum *metrics.Counter
+	fallbackIncompatible, fallbackAllLeased                *metrics.Counter
 }
 
 var (
@@ -133,12 +134,14 @@ var (
 
 func newGetCursorMetrics(prefix, peakName string) *getCursorMetrics {
 	return &getCursorMetrics{
-		requests:  metrics.GetOrRegisterCounter(prefix+"table_requests", nil),
-		opens:     metrics.GetOrRegisterCounter(prefix+"table_iterator_opens", nil),
-		reuses:    metrics.GetOrRegisterCounter(prefix+"table_reuses", nil),
-		fallbacks: metrics.GetOrRegisterCounter(prefix+"table_fallbacks", nil),
-		evictions: metrics.GetOrRegisterCounter(prefix+"table_evictions", nil),
-		peakSum:   metrics.GetOrRegisterCounter(prefix+peakName, nil),
+		requests:             metrics.GetOrRegisterCounter(prefix+"table_requests", nil),
+		opens:                metrics.GetOrRegisterCounter(prefix+"table_iterator_opens", nil),
+		reuses:               metrics.GetOrRegisterCounter(prefix+"table_reuses", nil),
+		fallbacks:            metrics.GetOrRegisterCounter(prefix+"table_fallbacks", nil),
+		fallbackIncompatible: metrics.GetOrRegisterCounter(prefix+"table_fallback_incompatible", nil),
+		fallbackAllLeased:    metrics.GetOrRegisterCounter(prefix+"table_fallback_all_leased", nil),
+		evictions:            metrics.GetOrRegisterCounter(prefix+"table_evictions", nil),
+		peakSum:              metrics.GetOrRegisterCounter(prefix+peakName, nil),
 	}
 }
 
@@ -147,6 +150,8 @@ func (m *getCursorMetrics) observe(s pebble.GetCursorStats) {
 	m.opens.Inc(int64(s.TableOpens))
 	m.reuses.Inc(int64(s.TableReuses))
 	m.fallbacks.Inc(int64(s.TableFallbacks))
+	m.fallbackIncompatible.Inc(int64(s.TableFallbackIncompatible))
+	m.fallbackAllLeased.Inc(int64(s.TableFallbackAllLeased))
 	m.evictions.Inc(int64(s.TableEvictions))
 	m.peakSum.Inc(int64(s.MaxRetained))
 }
