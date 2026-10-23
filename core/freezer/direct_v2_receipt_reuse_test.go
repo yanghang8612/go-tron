@@ -3,6 +3,7 @@ package freezer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"testing"
 
@@ -128,6 +129,51 @@ func TestDirectV2ReceiptReuseMatchesStrictReference(t *testing.T) {
 					t.Fatal("source bytes mutated")
 				}
 			})
+		}
+	}
+}
+
+func TestDirectV2ReceiptReuseKeepsTypedAndWireIdentitySeparate(t *testing.T) {
+	chain := newDirectV2PreparedFixture(t, 2, 1)
+	defer chain.db.Close()
+	var pb corepb.Block
+	if err := proto.Unmarshal(chain.blockRaw[1], &pb); err != nil {
+		t.Fatal(err)
+	}
+	pb.Transactions = nil
+	header, err := proto.Marshal(&pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRaw := []byte{0x70, 1} // timestamp=1; the typed decoder merges timestamp=2 below.
+	txWire := append(receiptReuseField(1, firstRaw), receiptReuseField(1, []byte{0x70, 2})...)
+	body := append(header, receiptReuseField(1, txWire)...)
+	block, err := decodeDirectV2BlockBorrowed(1, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedHash := block.Transactions()[0].Hash()
+	wireHash := sha256.Sum256(firstRaw)
+	if bytes.Equal(typedHash[:], wireHash[:]) {
+		t.Fatal("fixture does not distinguish typed and wire identity")
+	}
+	for _, external := range []bool{false, true} {
+		for name, id := range map[string][]byte{"typed": typedHash[:], "wire": wireHash[:]} {
+			data, err := proto.Marshal(&corepb.TransactionRet{BlockNumber: 1, Transactioninfo: []*corepb.TransactionInfo{{Id: id, BlockNumber: 1, Log: []*corepb.TransactionInfo_Log{{Address: []byte{1}, Data: bytes.Repeat([]byte{2}, 512)}}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, we := directV2ReceiptReference(1, data, body, external)
+			got, ge := directV2ReceiptReuse(1, data, body, external)
+			if !bytes.Equal(want, got) || fmt.Sprint(we) != fmt.Sprint(ge) {
+				t.Fatalf("%s/external_%t changed: %v/%v", name, external, we, ge)
+			}
+			if name == "typed" && (ge != nil || !bytes.Equal(got, data)) {
+				t.Fatal("typed ID should pass strict validation and retain its original wire row")
+			}
+			if name == "wire" && ge == nil {
+				t.Fatal("wire ID must not replace the strict typed identity check")
+			}
 		}
 	}
 }
