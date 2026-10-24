@@ -1,0 +1,6039 @@
+{
+  "complete": true,
+  "utc": "2026-10-24T14:28:27.458106+00:00",
+  "kind": "contemporaneous immutable cohort grouped by actual block bounds; not historical filesystem sizes at each height",
+  "frozen": {
+    "manifest_sha256": "127dfba9e75dbe215a9f00c5407ceb6db9a3f0be9f7c7e6a67418e3772992b67",
+    "cold_frontier": {
+      "visibleTxStart": 1,
+      "visibleTxEnd": 2400130160,
+      "generation": 23819
+    },
+    "progress": {
+      "historyBuildTxNum": 2400130160,
+      "accessorBuildTxNum": 2400130160,
+      "hotPruneTxNum": 2400130160,
+      "hotPruneBlockNum": 33248191
+    },
+    "files": 19949,
+    "groups": {
+      "0M-5M": {
+        "counts": {
+          "files": 1265,
+          "tx_numbers": 109326051,
+          "records": 665034595,
+          "logical_seg_bytes": 37982790620,
+          "tx_range_entries": 4997883,
+          "accessor_bytes": 4957016954,
+          "history_bytes": 8220181967,
+          "inverted_bytes": 297151594,
+          "keys": 60025913,
+          "distinct_transactions_with_records": 109326051,
+          "v8_accessor_bytes": 4627324339
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 10754408,
+            "records": 311390703,
+            "posting_bytes": 1621788172,
+            "logical_key_bytes": 225842568,
+            "suffix_bytes": 203605756,
+            "key_meta_bytes": 64738045,
+            "singletons": 8291855
+          },
+          "kv/1": {
+            "keys": 11156,
+            "records": 16034602,
+            "posting_bytes": 79395688,
+            "logical_key_bytes": 553951,
+            "suffix_bytes": 198727,
+            "key_meta_bytes": 80295,
+            "singletons": 980
+          },
+          "kv/11": {
+            "keys": 3,
+            "records": 3,
+            "posting_bytes": 30,
+            "logical_key_bytes": 154,
+            "suffix_bytes": 58,
+            "key_meta_bytes": 18,
+            "singletons": 3
+          },
+          "kv/2": {
+            "keys": 611,
+            "records": 765,
+            "posting_bytes": 10073,
+            "logical_key_bytes": 27839,
+            "suffix_bytes": 9595,
+            "key_meta_bytes": 4040,
+            "singletons": 520
+          },
+          "kv/5": {
+            "keys": 12533,
+            "records": 15511,
+            "posting_bytes": 201603,
+            "logical_key_bytes": 526907,
+            "suffix_bytes": 109279,
+            "key_meta_bytes": 82238,
+            "singletons": 12363
+          },
+          "kv/514": {
+            "keys": 16429541,
+            "records": 39961869,
+            "posting_bytes": 359311314,
+            "logical_key_bytes": 633556626,
+            "suffix_bytes": 341388726,
+            "key_meta_bytes": 104615085,
+            "singletons": 14576519
+          },
+          "kv/515": {
+            "keys": 16429541,
+            "records": 39961869,
+            "posting_bytes": 359311447,
+            "logical_key_bytes": 624322558,
+            "suffix_bytes": 85928990,
+            "key_meta_bytes": 104615636,
+            "singletons": 14576519
+          },
+          "kv/520": {
+            "keys": 753945,
+            "records": 994303,
+            "posting_bytes": 12739680,
+            "logical_key_bytes": 26388075,
+            "suffix_bytes": 6528757,
+            "key_meta_bytes": 4799946,
+            "singletons": 601849
+          },
+          "kv/525": {
+            "keys": 338297,
+            "records": 408461,
+            "posting_bytes": 5438789,
+            "logical_key_bytes": 11840395,
+            "suffix_bytes": 2444302,
+            "key_meta_bytes": 2156201,
+            "singletons": 281262
+          },
+          "kv/768": {
+            "keys": 56269,
+            "records": 5068573,
+            "posting_bytes": 33560728,
+            "logical_key_bytes": 3038526,
+            "suffix_bytes": 2718807,
+            "key_meta_bytes": 373140,
+            "singletons": 19590
+          },
+          "kv/769": {
+            "keys": 1401605,
+            "records": 2865988,
+            "posting_bytes": 30384413,
+            "logical_key_bytes": 81175580,
+            "suffix_bytes": 27423869,
+            "key_meta_bytes": 9313557,
+            "singletons": 982648
+          },
+          "kv/8": {
+            "keys": 13519,
+            "records": 13519,
+            "posting_bytes": 196270,
+            "logical_key_bytes": 575906,
+            "suffix_bytes": 141237,
+            "key_meta_bytes": 88395,
+            "singletons": 13519
+          },
+          "kv/523": {
+            "keys": 1012,
+            "records": 1012,
+            "posting_bytes": 14702,
+            "logical_key_bytes": 35420,
+            "suffix_bytes": 4144,
+            "key_meta_bytes": 6317,
+            "singletons": 1012
+          },
+          "kv/516": {
+            "keys": 755,
+            "records": 1511,
+            "posting_bytes": 15633,
+            "logical_key_bytes": 25935,
+            "suffix_bytes": 3435,
+            "key_meta_bytes": 4614,
+            "singletons": 603
+          },
+          "kv/517": {
+            "keys": 755,
+            "records": 1511,
+            "posting_bytes": 15633,
+            "logical_key_bytes": 28690,
+            "suffix_bytes": 6190,
+            "key_meta_bytes": 4614,
+            "singletons": 603
+          },
+          "kv/518": {
+            "keys": 795,
+            "records": 1279,
+            "posting_bytes": 14883,
+            "logical_key_bytes": 27295,
+            "suffix_bytes": 3775,
+            "key_meta_bytes": 4857,
+            "singletons": 644
+          },
+          "kv/519": {
+            "keys": 795,
+            "records": 1279,
+            "posting_bytes": 14883,
+            "logical_key_bytes": 30210,
+            "suffix_bytes": 6510,
+            "key_meta_bytes": 4857,
+            "singletons": 644
+          },
+          "kv/524": {
+            "keys": 747104,
+            "records": 89220348,
+            "posting_bytes": 496689812,
+            "logical_key_bytes": 23907328,
+            "suffix_bytes": 21349281,
+            "key_meta_bytes": 5062717,
+            "singletons": 215834
+          },
+          "kv/3": {
+            "keys": 106,
+            "records": 176,
+            "posting_bytes": 2135,
+            "logical_key_bytes": 4276,
+            "suffix_bytes": 1078,
+            "key_meta_bytes": 712,
+            "singletons": 69
+          },
+          "kv/256": {
+            "keys": 13034984,
+            "records": 157316961,
+            "posting_bytes": 1045239506,
+            "logical_key_bytes": 821203992,
+            "suffix_bytes": 125631107,
+            "key_meta_bytes": 88346017,
+            "singletons": 12064087
+          },
+          "kv/258": {
+            "keys": 1225,
+            "records": 1225,
+            "posting_bytes": 18027,
+            "logical_key_bytes": 41650,
+            "suffix_bytes": 8650,
+            "key_meta_bytes": 8160,
+            "singletons": 1225
+          },
+          "kv/6": {
+            "keys": 36886,
+            "records": 1772426,
+            "posting_bytes": 12059216,
+            "logical_key_bytes": 1475440,
+            "suffix_bytes": 59940,
+            "key_meta_bytes": 246745,
+            "singletons": 6666
+          },
+          "flat/3": {
+            "keys": 4,
+            "records": 4,
+            "posting_bytes": 59,
+            "logical_key_bytes": 84,
+            "suffix_bytes": 83,
+            "key_meta_bytes": 28,
+            "singletons": 4
+          },
+          "kv/4": {
+            "keys": 64,
+            "records": 697,
+            "posting_bytes": 4955,
+            "logical_key_bytes": 2432,
+            "suffix_bytes": 542,
+            "key_meta_bytes": 433,
+            "singletons": 10
+          }
+        },
+        "from_block": 1,
+        "to_block": 4997883,
+        "bytes_per_tx": {
+          "history_bytes": 75.18959929321878,
+          "inverted_bytes": 2.718030984216196,
+          "accessor_bytes": 45.341589755217626,
+          "v8_accessor_bytes": 42.325907655806574
+        },
+        "records_per_tx": 6.083038662029419,
+        "bytes_per_record": {
+          "history_bytes": 12.36053286370764,
+          "inverted_bytes": 0.4468212574715756,
+          "accessor_bytes": 7.453773068752912,
+          "v8_accessor_bytes": 6.95802049064831
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 10754408,
+              "records": 311390703,
+              "posting_bytes": 1621788172,
+              "logical_key_bytes": 225842568,
+              "suffix_bytes": 203605756,
+              "key_meta_bytes": 64738045,
+              "singletons": 8291855
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 13034984,
+              "records": 157316961,
+              "posting_bytes": 1045239506,
+              "logical_key_bytes": 821203992,
+              "suffix_bytes": 125631107,
+              "key_meta_bytes": 88346017,
+              "singletons": 12064087
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 747104,
+              "records": 89220348,
+              "posting_bytes": 496689812,
+              "logical_key_bytes": 23907328,
+              "suffix_bytes": 21349281,
+              "key_meta_bytes": 5062717,
+              "singletons": 215834
+            }
+          ],
+          [
+            "kv/514",
+            {
+              "keys": 16429541,
+              "records": 39961869,
+              "posting_bytes": 359311314,
+              "logical_key_bytes": 633556626,
+              "suffix_bytes": 341388726,
+              "key_meta_bytes": 104615085,
+              "singletons": 14576519
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 16429541,
+              "records": 39961869,
+              "posting_bytes": 359311447,
+              "logical_key_bytes": 624322558,
+              "suffix_bytes": 85928990,
+              "key_meta_bytes": 104615636,
+              "singletons": 14576519
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 11156,
+              "records": 16034602,
+              "posting_bytes": 79395688,
+              "logical_key_bytes": 553951,
+              "suffix_bytes": 198727,
+              "key_meta_bytes": 80295,
+              "singletons": 980
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 56269,
+              "records": 5068573,
+              "posting_bytes": 33560728,
+              "logical_key_bytes": 3038526,
+              "suffix_bytes": 2718807,
+              "key_meta_bytes": 373140,
+              "singletons": 19590
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 1401605,
+              "records": 2865988,
+              "posting_bytes": 30384413,
+              "logical_key_bytes": 81175580,
+              "suffix_bytes": 27423869,
+              "key_meta_bytes": 9313557,
+              "singletons": 982648
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 36886,
+              "records": 1772426,
+              "posting_bytes": 12059216,
+              "logical_key_bytes": 1475440,
+              "suffix_bytes": 59940,
+              "key_meta_bytes": 246745,
+              "singletons": 6666
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 753945,
+              "records": 994303,
+              "posting_bytes": 12739680,
+              "logical_key_bytes": 26388075,
+              "suffix_bytes": 6528757,
+              "key_meta_bytes": 4799946,
+              "singletons": 601849
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 338297,
+              "records": 408461,
+              "posting_bytes": 5438789,
+              "logical_key_bytes": 11840395,
+              "suffix_bytes": 2444302,
+              "key_meta_bytes": 2156201,
+              "singletons": 281262
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 12533,
+              "records": 15511,
+              "posting_bytes": 201603,
+              "logical_key_bytes": 526907,
+              "suffix_bytes": 109279,
+              "key_meta_bytes": 82238,
+              "singletons": 12363
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 13519,
+              "records": 13519,
+              "posting_bytes": 196270,
+              "logical_key_bytes": 575906,
+              "suffix_bytes": 141237,
+              "key_meta_bytes": 88395,
+              "singletons": 13519
+            }
+          ],
+          [
+            "kv/516",
+            {
+              "keys": 755,
+              "records": 1511,
+              "posting_bytes": 15633,
+              "logical_key_bytes": 25935,
+              "suffix_bytes": 3435,
+              "key_meta_bytes": 4614,
+              "singletons": 603
+            }
+          ],
+          [
+            "kv/517",
+            {
+              "keys": 755,
+              "records": 1511,
+              "posting_bytes": 15633,
+              "logical_key_bytes": 28690,
+              "suffix_bytes": 6190,
+              "key_meta_bytes": 4614,
+              "singletons": 603
+            }
+          ],
+          [
+            "kv/518",
+            {
+              "keys": 795,
+              "records": 1279,
+              "posting_bytes": 14883,
+              "logical_key_bytes": 27295,
+              "suffix_bytes": 3775,
+              "key_meta_bytes": 4857,
+              "singletons": 644
+            }
+          ],
+          [
+            "kv/519",
+            {
+              "keys": 795,
+              "records": 1279,
+              "posting_bytes": 14883,
+              "logical_key_bytes": 30210,
+              "suffix_bytes": 6510,
+              "key_meta_bytes": 4857,
+              "singletons": 644
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 1225,
+              "records": 1225,
+              "posting_bytes": 18027,
+              "logical_key_bytes": 41650,
+              "suffix_bytes": 8650,
+              "key_meta_bytes": 8160,
+              "singletons": 1225
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 1012,
+              "records": 1012,
+              "posting_bytes": 14702,
+              "logical_key_bytes": 35420,
+              "suffix_bytes": 4144,
+              "key_meta_bytes": 6317,
+              "singletons": 1012
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 611,
+              "records": 765,
+              "posting_bytes": 10073,
+              "logical_key_bytes": 27839,
+              "suffix_bytes": 9595,
+              "key_meta_bytes": 4040,
+              "singletons": 520
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 64,
+              "records": 697,
+              "posting_bytes": 4955,
+              "logical_key_bytes": 2432,
+              "suffix_bytes": 542,
+              "key_meta_bytes": 433,
+              "singletons": 10
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 106,
+              "records": 176,
+              "posting_bytes": 2135,
+              "logical_key_bytes": 4276,
+              "suffix_bytes": 1078,
+              "key_meta_bytes": 712,
+              "singletons": 69
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 4,
+              "records": 4,
+              "posting_bytes": 59,
+              "logical_key_bytes": 84,
+              "suffix_bytes": 83,
+              "key_meta_bytes": 28,
+              "singletons": 4
+            }
+          ],
+          [
+            "kv/11",
+            {
+              "keys": 3,
+              "records": 3,
+              "posting_bytes": 30,
+              "logical_key_bytes": 154,
+              "suffix_bytes": 58,
+              "key_meta_bytes": 18,
+              "singletons": 3
+            }
+          ]
+        ]
+      },
+      "boundary-0M-10M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 229514,
+          "records": 1444895,
+          "logical_seg_bytes": 84545401,
+          "tx_range_entries": 2150,
+          "accessor_bytes": 8986851,
+          "history_bytes": 19513933,
+          "inverted_bytes": 680198,
+          "keys": 39232,
+          "distinct_transactions_with_records": 229514,
+          "v8_accessor_bytes": 8826111
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 3897,
+            "records": 757471,
+            "posting_bytes": 3841511,
+            "logical_key_bytes": 81837,
+            "suffix_bytes": 74246,
+            "key_meta_bytes": 25880,
+            "singletons": 1270
+          },
+          "kv/1": {
+            "keys": 8,
+            "records": 9327,
+            "posting_bytes": 61095,
+            "logical_key_bytes": 403,
+            "suffix_bytes": 137,
+            "key_meta_bytes": 63,
+            "singletons": 0
+          },
+          "kv/256": {
+            "keys": 23005,
+            "records": 454397,
+            "posting_bytes": 3021429,
+            "logical_key_bytes": 1449315,
+            "suffix_bytes": 164154,
+            "key_meta_bytes": 161680,
+            "singletons": 19859
+          },
+          "kv/258": {
+            "keys": 4,
+            "records": 4,
+            "posting_bytes": 60,
+            "logical_key_bytes": 136,
+            "suffix_bytes": 16,
+            "key_meta_bytes": 28,
+            "singletons": 4
+          },
+          "kv/5": {
+            "keys": 2,
+            "records": 1044,
+            "posting_bytes": 5278,
+            "logical_key_bytes": 80,
+            "suffix_bytes": 19,
+            "key_meta_bytes": 16,
+            "singletons": 0
+          },
+          "kv/514": {
+            "keys": 4632,
+            "records": 14248,
+            "posting_bytes": 128996,
+            "logical_key_bytes": 184772,
+            "suffix_bytes": 103304,
+            "key_meta_bytes": 32433,
+            "singletons": 3058
+          },
+          "kv/515": {
+            "keys": 4632,
+            "records": 14248,
+            "posting_bytes": 128996,
+            "logical_key_bytes": 176016,
+            "suffix_bytes": 24993,
+            "key_meta_bytes": 32433,
+            "singletons": 3058
+          },
+          "kv/516": {
+            "keys": 3,
+            "records": 522,
+            "posting_bytes": 2929,
+            "logical_key_bytes": 117,
+            "suffix_bytes": 27,
+            "key_meta_bytes": 23,
+            "singletons": 1
+          },
+          "kv/517": {
+            "keys": 3,
+            "records": 522,
+            "posting_bytes": 2929,
+            "logical_key_bytes": 114,
+            "suffix_bytes": 24,
+            "key_meta_bytes": 23,
+            "singletons": 1
+          },
+          "kv/518": {
+            "keys": 3,
+            "records": 190,
+            "posting_bytes": 1258,
+            "logical_key_bytes": 117,
+            "suffix_bytes": 27,
+            "key_meta_bytes": 21,
+            "singletons": 1
+          },
+          "kv/519": {
+            "keys": 3,
+            "records": 190,
+            "posting_bytes": 1258,
+            "logical_key_bytes": 114,
+            "suffix_bytes": 24,
+            "key_meta_bytes": 21,
+            "singletons": 1
+          },
+          "kv/520": {
+            "keys": 399,
+            "records": 454,
+            "posting_bytes": 6423,
+            "logical_key_bytes": 13965,
+            "suffix_bytes": 6397,
+            "key_meta_bytes": 2793,
+            "singletons": 352
+          },
+          "kv/524": {
+            "keys": 1797,
+            "records": 186442,
+            "posting_bytes": 1161981,
+            "logical_key_bytes": 57504,
+            "suffix_bytes": 51806,
+            "key_meta_bytes": 12855,
+            "singletons": 601
+          },
+          "kv/525": {
+            "keys": 217,
+            "records": 277,
+            "posting_bytes": 3717,
+            "logical_key_bytes": 7595,
+            "suffix_bytes": 1962,
+            "key_meta_bytes": 1519,
+            "singletons": 172
+          },
+          "kv/6": {
+            "keys": 64,
+            "records": 2140,
+            "posting_bytes": 16070,
+            "logical_key_bytes": 2560,
+            "suffix_bytes": 120,
+            "key_meta_bytes": 450,
+            "singletons": 22
+          },
+          "kv/768": {
+            "keys": 27,
+            "records": 2325,
+            "posting_bytes": 18024,
+            "logical_key_bytes": 1458,
+            "suffix_bytes": 1405,
+            "key_meta_bytes": 189,
+            "singletons": 0
+          },
+          "kv/769": {
+            "keys": 517,
+            "records": 1075,
+            "posting_bytes": 11658,
+            "logical_key_bytes": 29893,
+            "suffix_bytes": 10251,
+            "key_meta_bytes": 3621,
+            "singletons": 464
+          },
+          "kv/8": {
+            "keys": 19,
+            "records": 19,
+            "posting_bytes": 281,
+            "logical_key_bytes": 803,
+            "suffix_bytes": 192,
+            "key_meta_bytes": 133,
+            "singletons": 19
+          }
+        },
+        "from_block": 4997884,
+        "to_block": 5000033,
+        "bytes_per_tx": {
+          "history_bytes": 85.0228439223751,
+          "inverted_bytes": 2.9636449192641843,
+          "accessor_bytes": 39.15600355533867,
+          "v8_accessor_bytes": 38.45565412131722
+        },
+        "records_per_tx": 6.295454743501486,
+        "bytes_per_record": {
+          "history_bytes": 13.505433266777171,
+          "inverted_bytes": 0.4707594669508857,
+          "accessor_bytes": 6.219726000851273,
+          "v8_accessor_bytes": 6.108479162845743
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 3897,
+              "records": 757471,
+              "posting_bytes": 3841511,
+              "logical_key_bytes": 81837,
+              "suffix_bytes": 74246,
+              "key_meta_bytes": 25880,
+              "singletons": 1270
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 23005,
+              "records": 454397,
+              "posting_bytes": 3021429,
+              "logical_key_bytes": 1449315,
+              "suffix_bytes": 164154,
+              "key_meta_bytes": 161680,
+              "singletons": 19859
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 1797,
+              "records": 186442,
+              "posting_bytes": 1161981,
+              "logical_key_bytes": 57504,
+              "suffix_bytes": 51806,
+              "key_meta_bytes": 12855,
+              "singletons": 601
+            }
+          ],
+          [
+            "kv/514",
+            {
+              "keys": 4632,
+              "records": 14248,
+              "posting_bytes": 128996,
+              "logical_key_bytes": 184772,
+              "suffix_bytes": 103304,
+              "key_meta_bytes": 32433,
+              "singletons": 3058
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 4632,
+              "records": 14248,
+              "posting_bytes": 128996,
+              "logical_key_bytes": 176016,
+              "suffix_bytes": 24993,
+              "key_meta_bytes": 32433,
+              "singletons": 3058
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 8,
+              "records": 9327,
+              "posting_bytes": 61095,
+              "logical_key_bytes": 403,
+              "suffix_bytes": 137,
+              "key_meta_bytes": 63,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 27,
+              "records": 2325,
+              "posting_bytes": 18024,
+              "logical_key_bytes": 1458,
+              "suffix_bytes": 1405,
+              "key_meta_bytes": 189,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 64,
+              "records": 2140,
+              "posting_bytes": 16070,
+              "logical_key_bytes": 2560,
+              "suffix_bytes": 120,
+              "key_meta_bytes": 450,
+              "singletons": 22
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 517,
+              "records": 1075,
+              "posting_bytes": 11658,
+              "logical_key_bytes": 29893,
+              "suffix_bytes": 10251,
+              "key_meta_bytes": 3621,
+              "singletons": 464
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 2,
+              "records": 1044,
+              "posting_bytes": 5278,
+              "logical_key_bytes": 80,
+              "suffix_bytes": 19,
+              "key_meta_bytes": 16,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/516",
+            {
+              "keys": 3,
+              "records": 522,
+              "posting_bytes": 2929,
+              "logical_key_bytes": 117,
+              "suffix_bytes": 27,
+              "key_meta_bytes": 23,
+              "singletons": 1
+            }
+          ],
+          [
+            "kv/517",
+            {
+              "keys": 3,
+              "records": 522,
+              "posting_bytes": 2929,
+              "logical_key_bytes": 114,
+              "suffix_bytes": 24,
+              "key_meta_bytes": 23,
+              "singletons": 1
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 399,
+              "records": 454,
+              "posting_bytes": 6423,
+              "logical_key_bytes": 13965,
+              "suffix_bytes": 6397,
+              "key_meta_bytes": 2793,
+              "singletons": 352
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 217,
+              "records": 277,
+              "posting_bytes": 3717,
+              "logical_key_bytes": 7595,
+              "suffix_bytes": 1962,
+              "key_meta_bytes": 1519,
+              "singletons": 172
+            }
+          ],
+          [
+            "kv/518",
+            {
+              "keys": 3,
+              "records": 190,
+              "posting_bytes": 1258,
+              "logical_key_bytes": 117,
+              "suffix_bytes": 27,
+              "key_meta_bytes": 21,
+              "singletons": 1
+            }
+          ],
+          [
+            "kv/519",
+            {
+              "keys": 3,
+              "records": 190,
+              "posting_bytes": 1258,
+              "logical_key_bytes": 114,
+              "suffix_bytes": 24,
+              "key_meta_bytes": 21,
+              "singletons": 1
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 19,
+              "records": 19,
+              "posting_bytes": 281,
+              "logical_key_bytes": 803,
+              "suffix_bytes": 192,
+              "key_meta_bytes": 133,
+              "singletons": 19
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 4,
+              "records": 4,
+              "posting_bytes": 60,
+              "logical_key_bytes": 136,
+              "suffix_bytes": 16,
+              "key_meta_bytes": 28,
+              "singletons": 4
+            }
+          ]
+        ]
+      },
+      "5M-10M": {
+        "counts": {
+          "files": 2680,
+          "tx_numbers": 361243751,
+          "records": 2337956954,
+          "logical_seg_bytes": 134508220404,
+          "tx_range_entries": 4998155,
+          "accessor_bytes": 18031048601,
+          "history_bytes": 32139565713,
+          "inverted_bytes": 1213397482,
+          "keys": 193431424,
+          "distinct_transactions_with_records": 361243751,
+          "v8_accessor_bytes": 17340160326
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 33797126,
+            "records": 1138718576,
+            "posting_bytes": 6182830263,
+            "logical_key_bytes": 709739646,
+            "suffix_bytes": 639431185,
+            "key_meta_bytes": 210403398,
+            "singletons": 20217425
+          },
+          "kv/1": {
+            "keys": 23230,
+            "records": 21889036,
+            "posting_bytes": 136013086,
+            "logical_key_bytes": 1161115,
+            "suffix_bytes": 400843,
+            "key_meta_bytes": 174378,
+            "singletons": 1286
+          },
+          "kv/2": {
+            "keys": 677,
+            "records": 678,
+            "posting_bytes": 10046,
+            "logical_key_bytes": 31064,
+            "suffix_bytes": 10807,
+            "key_meta_bytes": 4707,
+            "singletons": 676
+          },
+          "kv/256": {
+            "keys": 125979534,
+            "records": 770334554,
+            "posting_bytes": 5812680802,
+            "logical_key_bytes": 7936710642,
+            "suffix_bytes": 1029582533,
+            "key_meta_bytes": 873569247,
+            "singletons": 87425634
+          },
+          "kv/258": {
+            "keys": 12836,
+            "records": 12836,
+            "posting_bytes": 190462,
+            "logical_key_bytes": 436424,
+            "suffix_bytes": 79073,
+            "key_meta_bytes": 88915,
+            "singletons": 12836
+          },
+          "kv/4": {
+            "keys": 360,
+            "records": 3350,
+            "posting_bytes": 24408,
+            "logical_key_bytes": 13680,
+            "suffix_bytes": 3000,
+            "key_meta_bytes": 2492,
+            "singletons": 27
+          },
+          "kv/5": {
+            "keys": 4791,
+            "records": 27383,
+            "posting_bytes": 215729,
+            "logical_key_bytes": 201554,
+            "suffix_bytes": 48715,
+            "key_meta_bytes": 33222,
+            "singletons": 3597
+          },
+          "kv/514": {
+            "keys": 1233539,
+            "records": 3469312,
+            "posting_bytes": 31338635,
+            "logical_key_bytes": 47497575,
+            "suffix_bytes": 32578727,
+            "key_meta_bytes": 8548962,
+            "singletons": 1020848
+          },
+          "kv/515": {
+            "keys": 11929129,
+            "records": 31250261,
+            "posting_bytes": 285601964,
+            "logical_key_bytes": 453306902,
+            "suffix_bytes": 313488722,
+            "key_meta_bytes": 82256763,
+            "singletons": 10135789
+          },
+          "kv/520": {
+            "keys": 746070,
+            "records": 1086442,
+            "posting_bytes": 13260819,
+            "logical_key_bytes": 26112450,
+            "suffix_bytes": 11757000,
+            "key_meta_bytes": 5152947,
+            "singletons": 617743
+          },
+          "kv/524": {
+            "keys": 15565863,
+            "records": 359644805,
+            "posting_bytes": 2281303018,
+            "logical_key_bytes": 498107616,
+            "suffix_bytes": 440037476,
+            "key_meta_bytes": 107896852,
+            "singletons": 10682719
+          },
+          "kv/525": {
+            "keys": 398800,
+            "records": 462769,
+            "posting_bytes": 6419675,
+            "logical_key_bytes": 13958000,
+            "suffix_bytes": 3658792,
+            "key_meta_bytes": 2755960,
+            "singletons": 342843
+          },
+          "kv/6": {
+            "keys": 45477,
+            "records": 908812,
+            "posting_bytes": 6855615,
+            "logical_key_bytes": 1819080,
+            "suffix_bytes": 86417,
+            "key_meta_bytes": 315076,
+            "singletons": 13470
+          },
+          "kv/768": {
+            "keys": 90186,
+            "records": 5093879,
+            "posting_bytes": 37156846,
+            "logical_key_bytes": 4870044,
+            "suffix_bytes": 4614640,
+            "key_meta_bytes": 619784,
+            "singletons": 17749
+          },
+          "kv/769": {
+            "keys": 1751558,
+            "records": 3161366,
+            "posting_bytes": 35933797,
+            "logical_key_bytes": 101367664,
+            "suffix_bytes": 34471272,
+            "key_meta_bytes": 12170628,
+            "singletons": 1492604
+          },
+          "kv/8": {
+            "keys": 13477,
+            "records": 13477,
+            "posting_bytes": 199651,
+            "logical_key_bytes": 565024,
+            "suffix_bytes": 135114,
+            "key_meta_bytes": 93538,
+            "singletons": 13477
+          },
+          "kv/523": {
+            "keys": 504,
+            "records": 504,
+            "posting_bytes": 7467,
+            "logical_key_bytes": 17640,
+            "suffix_bytes": 2520,
+            "key_meta_bytes": 3488,
+            "singletons": 504
+          },
+          "kv/516": {
+            "keys": 637,
+            "records": 5061,
+            "posting_bytes": 36609,
+            "logical_key_bytes": 24843,
+            "suffix_bytes": 5793,
+            "key_meta_bytes": 4415,
+            "singletons": 154
+          },
+          "kv/517": {
+            "keys": 4007,
+            "records": 18680,
+            "posting_bytes": 152090,
+            "logical_key_bytes": 152266,
+            "suffix_bytes": 32956,
+            "key_meta_bytes": 27497,
+            "singletons": 1628
+          },
+          "kv/518": {
+            "keys": 637,
+            "records": 3144,
+            "posting_bytes": 28180,
+            "logical_key_bytes": 24843,
+            "suffix_bytes": 5883,
+            "key_meta_bytes": 4411,
+            "singletons": 173
+          },
+          "kv/519": {
+            "keys": 4251,
+            "records": 14469,
+            "posting_bytes": 136417,
+            "logical_key_bytes": 161538,
+            "suffix_bytes": 35238,
+            "key_meta_bytes": 29178,
+            "singletons": 1910
+          },
+          "kv/3": {
+            "keys": 99,
+            "records": 168,
+            "posting_bytes": 2053,
+            "logical_key_bytes": 3988,
+            "suffix_bytes": 951,
+            "key_meta_bytes": 673,
+            "singletons": 69
+          },
+          "flat/3": {
+            "keys": 8,
+            "records": 8,
+            "posting_bytes": 120,
+            "logical_key_bytes": 168,
+            "suffix_bytes": 165,
+            "key_meta_bytes": 54,
+            "singletons": 8
+          },
+          "kv/7": {
+            "keys": 35480,
+            "records": 44223,
+            "posting_bytes": 589146,
+            "logical_key_bytes": 2438066,
+            "suffix_bytes": 985918,
+            "key_meta_bytes": 247259,
+            "singletons": 31652
+          },
+          "kv/513": {
+            "keys": 1793148,
+            "records": 1793161,
+            "posting_bytes": 26585752,
+            "logical_key_bytes": 60967044,
+            "suffix_bytes": 31538441,
+            "key_meta_bytes": 12454973,
+            "singletons": 1793136
+          }
+        },
+        "from_block": 5000034,
+        "to_block": 9998188,
+        "bytes_per_tx": {
+          "history_bytes": 88.96919496608815,
+          "inverted_bytes": 3.3589438672393808,
+          "accessor_bytes": 49.91380072620274,
+          "v8_accessor_bytes": 48.00127414799211
+        },
+        "records_per_tx": 6.471965113660887,
+        "bytes_per_record": {
+          "history_bytes": 13.746859478320404,
+          "inverted_bytes": 0.5189990687912384,
+          "accessor_bytes": 7.712309916635018,
+          "v8_accessor_bytes": 7.4168005088086835
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 33797126,
+              "records": 1138718576,
+              "posting_bytes": 6182830263,
+              "logical_key_bytes": 709739646,
+              "suffix_bytes": 639431185,
+              "key_meta_bytes": 210403398,
+              "singletons": 20217425
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 125979534,
+              "records": 770334554,
+              "posting_bytes": 5812680802,
+              "logical_key_bytes": 7936710642,
+              "suffix_bytes": 1029582533,
+              "key_meta_bytes": 873569247,
+              "singletons": 87425634
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 15565863,
+              "records": 359644805,
+              "posting_bytes": 2281303018,
+              "logical_key_bytes": 498107616,
+              "suffix_bytes": 440037476,
+              "key_meta_bytes": 107896852,
+              "singletons": 10682719
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 11929129,
+              "records": 31250261,
+              "posting_bytes": 285601964,
+              "logical_key_bytes": 453306902,
+              "suffix_bytes": 313488722,
+              "key_meta_bytes": 82256763,
+              "singletons": 10135789
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 23230,
+              "records": 21889036,
+              "posting_bytes": 136013086,
+              "logical_key_bytes": 1161115,
+              "suffix_bytes": 400843,
+              "key_meta_bytes": 174378,
+              "singletons": 1286
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 90186,
+              "records": 5093879,
+              "posting_bytes": 37156846,
+              "logical_key_bytes": 4870044,
+              "suffix_bytes": 4614640,
+              "key_meta_bytes": 619784,
+              "singletons": 17749
+            }
+          ],
+          [
+            "kv/514",
+            {
+              "keys": 1233539,
+              "records": 3469312,
+              "posting_bytes": 31338635,
+              "logical_key_bytes": 47497575,
+              "suffix_bytes": 32578727,
+              "key_meta_bytes": 8548962,
+              "singletons": 1020848
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 1751558,
+              "records": 3161366,
+              "posting_bytes": 35933797,
+              "logical_key_bytes": 101367664,
+              "suffix_bytes": 34471272,
+              "key_meta_bytes": 12170628,
+              "singletons": 1492604
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 1793148,
+              "records": 1793161,
+              "posting_bytes": 26585752,
+              "logical_key_bytes": 60967044,
+              "suffix_bytes": 31538441,
+              "key_meta_bytes": 12454973,
+              "singletons": 1793136
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 746070,
+              "records": 1086442,
+              "posting_bytes": 13260819,
+              "logical_key_bytes": 26112450,
+              "suffix_bytes": 11757000,
+              "key_meta_bytes": 5152947,
+              "singletons": 617743
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 45477,
+              "records": 908812,
+              "posting_bytes": 6855615,
+              "logical_key_bytes": 1819080,
+              "suffix_bytes": 86417,
+              "key_meta_bytes": 315076,
+              "singletons": 13470
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 398800,
+              "records": 462769,
+              "posting_bytes": 6419675,
+              "logical_key_bytes": 13958000,
+              "suffix_bytes": 3658792,
+              "key_meta_bytes": 2755960,
+              "singletons": 342843
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 35480,
+              "records": 44223,
+              "posting_bytes": 589146,
+              "logical_key_bytes": 2438066,
+              "suffix_bytes": 985918,
+              "key_meta_bytes": 247259,
+              "singletons": 31652
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 4791,
+              "records": 27383,
+              "posting_bytes": 215729,
+              "logical_key_bytes": 201554,
+              "suffix_bytes": 48715,
+              "key_meta_bytes": 33222,
+              "singletons": 3597
+            }
+          ],
+          [
+            "kv/517",
+            {
+              "keys": 4007,
+              "records": 18680,
+              "posting_bytes": 152090,
+              "logical_key_bytes": 152266,
+              "suffix_bytes": 32956,
+              "key_meta_bytes": 27497,
+              "singletons": 1628
+            }
+          ],
+          [
+            "kv/519",
+            {
+              "keys": 4251,
+              "records": 14469,
+              "posting_bytes": 136417,
+              "logical_key_bytes": 161538,
+              "suffix_bytes": 35238,
+              "key_meta_bytes": 29178,
+              "singletons": 1910
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 13477,
+              "records": 13477,
+              "posting_bytes": 199651,
+              "logical_key_bytes": 565024,
+              "suffix_bytes": 135114,
+              "key_meta_bytes": 93538,
+              "singletons": 13477
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 12836,
+              "records": 12836,
+              "posting_bytes": 190462,
+              "logical_key_bytes": 436424,
+              "suffix_bytes": 79073,
+              "key_meta_bytes": 88915,
+              "singletons": 12836
+            }
+          ],
+          [
+            "kv/516",
+            {
+              "keys": 637,
+              "records": 5061,
+              "posting_bytes": 36609,
+              "logical_key_bytes": 24843,
+              "suffix_bytes": 5793,
+              "key_meta_bytes": 4415,
+              "singletons": 154
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 360,
+              "records": 3350,
+              "posting_bytes": 24408,
+              "logical_key_bytes": 13680,
+              "suffix_bytes": 3000,
+              "key_meta_bytes": 2492,
+              "singletons": 27
+            }
+          ],
+          [
+            "kv/518",
+            {
+              "keys": 637,
+              "records": 3144,
+              "posting_bytes": 28180,
+              "logical_key_bytes": 24843,
+              "suffix_bytes": 5883,
+              "key_meta_bytes": 4411,
+              "singletons": 173
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 677,
+              "records": 678,
+              "posting_bytes": 10046,
+              "logical_key_bytes": 31064,
+              "suffix_bytes": 10807,
+              "key_meta_bytes": 4707,
+              "singletons": 676
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 504,
+              "records": 504,
+              "posting_bytes": 7467,
+              "logical_key_bytes": 17640,
+              "suffix_bytes": 2520,
+              "key_meta_bytes": 3488,
+              "singletons": 504
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 99,
+              "records": 168,
+              "posting_bytes": 2053,
+              "logical_key_bytes": 3988,
+              "suffix_bytes": 951,
+              "key_meta_bytes": 673,
+              "singletons": 69
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 8,
+              "records": 8,
+              "posting_bytes": 120,
+              "logical_key_bytes": 168,
+              "suffix_bytes": 165,
+              "key_meta_bytes": 54,
+              "singletons": 8
+            }
+          ]
+        ]
+      },
+      "boundary-5M-15M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 141066,
+          "records": 879554,
+          "logical_seg_bytes": 49079171,
+          "tx_range_entries": 2641,
+          "accessor_bytes": 7691410,
+          "history_bytes": 12009086,
+          "inverted_bytes": 461243,
+          "keys": 100559,
+          "distinct_transactions_with_records": 141066,
+          "v8_accessor_bytes": 7317181
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 19686,
+            "records": 389753,
+            "posting_bytes": 2210748,
+            "logical_key_bytes": 413406,
+            "suffix_bytes": 371999,
+            "key_meta_bytes": 119688,
+            "singletons": 11394
+          },
+          "kv/1": {
+            "keys": 8,
+            "records": 11454,
+            "posting_bytes": 68110,
+            "logical_key_bytes": 403,
+            "suffix_bytes": 137,
+            "key_meta_bytes": 63,
+            "singletons": 0
+          },
+          "kv/256": {
+            "keys": 50406,
+            "records": 273143,
+            "posting_bytes": 2057287,
+            "logical_key_bytes": 3175578,
+            "suffix_bytes": 475769,
+            "key_meta_bytes": 353119,
+            "singletons": 33153
+          },
+          "kv/258": {
+            "keys": 6,
+            "records": 6,
+            "posting_bytes": 90,
+            "logical_key_bytes": 204,
+            "suffix_bytes": 24,
+            "key_meta_bytes": 42,
+            "singletons": 6
+          },
+          "kv/513": {
+            "keys": 1638,
+            "records": 1638,
+            "posting_bytes": 24324,
+            "logical_key_bytes": 55692,
+            "suffix_bytes": 28616,
+            "key_meta_bytes": 11466,
+            "singletons": 1638
+          },
+          "kv/515": {
+            "keys": 17761,
+            "records": 39177,
+            "posting_bytes": 367429,
+            "logical_key_bytes": 674918,
+            "suffix_bytes": 581030,
+            "key_meta_bytes": 124337,
+            "singletons": 14359
+          },
+          "kv/520": {
+            "keys": 297,
+            "records": 338,
+            "posting_bytes": 4756,
+            "logical_key_bytes": 10395,
+            "suffix_bytes": 5736,
+            "key_meta_bytes": 2079,
+            "singletons": 258
+          },
+          "kv/524": {
+            "keys": 10140,
+            "records": 160267,
+            "posting_bytes": 990589,
+            "logical_key_bytes": 324480,
+            "suffix_bytes": 288616,
+            "key_meta_bytes": 71129,
+            "singletons": 8351
+          },
+          "kv/525": {
+            "keys": 162,
+            "records": 184,
+            "posting_bytes": 2566,
+            "logical_key_bytes": 5670,
+            "suffix_bytes": 1170,
+            "key_meta_bytes": 1134,
+            "singletons": 140
+          },
+          "kv/6": {
+            "keys": 4,
+            "records": 18,
+            "posting_bytes": 182,
+            "logical_key_bytes": 160,
+            "suffix_bytes": 13,
+            "key_meta_bytes": 28,
+            "singletons": 2
+          },
+          "kv/7": {
+            "keys": 4,
+            "records": 8,
+            "posting_bytes": 92,
+            "logical_key_bytes": 274,
+            "suffix_bytes": 136,
+            "key_meta_bytes": 28,
+            "singletons": 0
+          },
+          "kv/768": {
+            "keys": 27,
+            "records": 2733,
+            "posting_bytes": 19265,
+            "logical_key_bytes": 1458,
+            "suffix_bytes": 1397,
+            "key_meta_bytes": 189,
+            "singletons": 0
+          },
+          "kv/769": {
+            "keys": 416,
+            "records": 831,
+            "posting_bytes": 9019,
+            "logical_key_bytes": 23960,
+            "suffix_bytes": 8255,
+            "key_meta_bytes": 2914,
+            "singletons": 383
+          },
+          "kv/8": {
+            "keys": 4,
+            "records": 4,
+            "posting_bytes": 60,
+            "logical_key_bytes": 172,
+            "suffix_bytes": 45,
+            "key_meta_bytes": 28,
+            "singletons": 4
+          }
+        },
+        "from_block": 9998189,
+        "to_block": 10000829,
+        "bytes_per_tx": {
+          "history_bytes": 85.13097415394212,
+          "inverted_bytes": 3.269696454142033,
+          "accessor_bytes": 54.52348546070633,
+          "v8_accessor_bytes": 51.87062084414388
+        },
+        "records_per_tx": 6.235053095714063,
+        "bytes_per_record": {
+          "history_bytes": 13.653608533415799,
+          "inverted_bytes": 0.5244055509951635,
+          "accessor_bytes": 8.744670594414897,
+          "v8_accessor_bytes": 8.319194728237266
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 19686,
+              "records": 389753,
+              "posting_bytes": 2210748,
+              "logical_key_bytes": 413406,
+              "suffix_bytes": 371999,
+              "key_meta_bytes": 119688,
+              "singletons": 11394
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 50406,
+              "records": 273143,
+              "posting_bytes": 2057287,
+              "logical_key_bytes": 3175578,
+              "suffix_bytes": 475769,
+              "key_meta_bytes": 353119,
+              "singletons": 33153
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 10140,
+              "records": 160267,
+              "posting_bytes": 990589,
+              "logical_key_bytes": 324480,
+              "suffix_bytes": 288616,
+              "key_meta_bytes": 71129,
+              "singletons": 8351
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 17761,
+              "records": 39177,
+              "posting_bytes": 367429,
+              "logical_key_bytes": 674918,
+              "suffix_bytes": 581030,
+              "key_meta_bytes": 124337,
+              "singletons": 14359
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 8,
+              "records": 11454,
+              "posting_bytes": 68110,
+              "logical_key_bytes": 403,
+              "suffix_bytes": 137,
+              "key_meta_bytes": 63,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 27,
+              "records": 2733,
+              "posting_bytes": 19265,
+              "logical_key_bytes": 1458,
+              "suffix_bytes": 1397,
+              "key_meta_bytes": 189,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 1638,
+              "records": 1638,
+              "posting_bytes": 24324,
+              "logical_key_bytes": 55692,
+              "suffix_bytes": 28616,
+              "key_meta_bytes": 11466,
+              "singletons": 1638
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 416,
+              "records": 831,
+              "posting_bytes": 9019,
+              "logical_key_bytes": 23960,
+              "suffix_bytes": 8255,
+              "key_meta_bytes": 2914,
+              "singletons": 383
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 297,
+              "records": 338,
+              "posting_bytes": 4756,
+              "logical_key_bytes": 10395,
+              "suffix_bytes": 5736,
+              "key_meta_bytes": 2079,
+              "singletons": 258
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 162,
+              "records": 184,
+              "posting_bytes": 2566,
+              "logical_key_bytes": 5670,
+              "suffix_bytes": 1170,
+              "key_meta_bytes": 1134,
+              "singletons": 140
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 4,
+              "records": 18,
+              "posting_bytes": 182,
+              "logical_key_bytes": 160,
+              "suffix_bytes": 13,
+              "key_meta_bytes": 28,
+              "singletons": 2
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 4,
+              "records": 8,
+              "posting_bytes": 92,
+              "logical_key_bytes": 274,
+              "suffix_bytes": 136,
+              "key_meta_bytes": 28,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 6,
+              "records": 6,
+              "posting_bytes": 90,
+              "logical_key_bytes": 204,
+              "suffix_bytes": 24,
+              "key_meta_bytes": 42,
+              "singletons": 6
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 4,
+              "records": 4,
+              "posting_bytes": 60,
+              "logical_key_bytes": 172,
+              "suffix_bytes": 45,
+              "key_meta_bytes": 28,
+              "singletons": 4
+            }
+          ]
+        ]
+      },
+      "10M-15M": {
+        "counts": {
+          "files": 3283,
+          "tx_numbers": 359397770,
+          "records": 2275194150,
+          "logical_seg_bytes": 139352581245,
+          "tx_range_entries": 4996107,
+          "accessor_bytes": 16510783742,
+          "history_bytes": 32530782735,
+          "inverted_bytes": 1180199896,
+          "keys": 134395736,
+          "distinct_transactions_with_records": 359397770,
+          "v8_accessor_bytes": 15962341458
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 38447702,
+            "records": 1209694004,
+            "posting_bytes": 6701184605,
+            "logical_key_bytes": 807401742,
+            "suffix_bytes": 727399812,
+            "key_meta_bytes": 239874919,
+            "singletons": 27788742
+          },
+          "kv/1": {
+            "keys": 26802,
+            "records": 21108105,
+            "posting_bytes": 130112836,
+            "logical_key_bytes": 1344757,
+            "suffix_bytes": 483064,
+            "key_meta_bytes": 195686,
+            "singletons": 1263
+          },
+          "kv/2": {
+            "keys": 566,
+            "records": 566,
+            "posting_bytes": 8374,
+            "logical_key_bytes": 25976,
+            "suffix_bytes": 9141,
+            "key_meta_bytes": 3905,
+            "singletons": 566
+          },
+          "kv/256": {
+            "keys": 64775637,
+            "records": 641359094,
+            "posting_bytes": 4525800241,
+            "logical_key_bytes": 4080865131,
+            "suffix_bytes": 557250159,
+            "key_meta_bytes": 443824211,
+            "singletons": 46629496
+          },
+          "kv/258": {
+            "keys": 7690,
+            "records": 7691,
+            "posting_bytes": 113579,
+            "logical_key_bytes": 261460,
+            "suffix_bytes": 41637,
+            "key_meta_bytes": 52544,
+            "singletons": 7689
+          },
+          "kv/4": {
+            "keys": 208,
+            "records": 2914,
+            "posting_bytes": 19712,
+            "logical_key_bytes": 7904,
+            "suffix_bytes": 1664,
+            "key_meta_bytes": 1456,
+            "singletons": 17
+          },
+          "kv/513": {
+            "keys": 2280172,
+            "records": 2280218,
+            "posting_bytes": 33696685,
+            "logical_key_bytes": 77525944,
+            "suffix_bytes": 40145039,
+            "key_meta_bytes": 15618083,
+            "singletons": 2280130
+          },
+          "kv/515": {
+            "keys": 15618922,
+            "records": 37263147,
+            "posting_bytes": 350890745,
+            "logical_key_bytes": 593519036,
+            "suffix_bytes": 469153915,
+            "key_meta_bytes": 106486344,
+            "singletons": 13363551
+          },
+          "kv/520": {
+            "keys": 473514,
+            "records": 594722,
+            "posting_bytes": 7977688,
+            "logical_key_bytes": 16572990,
+            "suffix_bytes": 8130804,
+            "key_meta_bytes": 3230433,
+            "singletons": 394726
+          },
+          "kv/524": {
+            "keys": 10842026,
+            "records": 355064101,
+            "posting_bytes": 2151212141,
+            "logical_key_bytes": 346944832,
+            "suffix_bytes": 291196138,
+            "key_meta_bytes": 74176037,
+            "singletons": 7273795
+          },
+          "kv/525": {
+            "keys": 237310,
+            "records": 269871,
+            "posting_bytes": 3764448,
+            "logical_key_bytes": 8305850,
+            "suffix_bytes": 2029518,
+            "key_meta_bytes": 1621227,
+            "singletons": 208370
+          },
+          "kv/6": {
+            "keys": 2782,
+            "records": 10784,
+            "posting_bytes": 104181,
+            "logical_key_bytes": 111280,
+            "suffix_bytes": 16678,
+            "key_meta_bytes": 19217,
+            "singletons": 1504
+          },
+          "kv/7": {
+            "keys": 72104,
+            "records": 89160,
+            "posting_bytes": 1196369,
+            "logical_key_bytes": 4996982,
+            "suffix_bytes": 2083567,
+            "key_meta_bytes": 496593,
+            "singletons": 61868
+          },
+          "kv/768": {
+            "keys": 101812,
+            "records": 5045094,
+            "posting_bytes": 36890514,
+            "logical_key_bytes": 5497937,
+            "suffix_bytes": 5206693,
+            "key_meta_bytes": 680146,
+            "singletons": 13108
+          },
+          "kv/769": {
+            "keys": 1220880,
+            "records": 2115978,
+            "posting_bytes": 24612581,
+            "logical_key_bytes": 70577836,
+            "suffix_bytes": 24143939,
+            "key_meta_bytes": 8422060,
+            "singletons": 1037404
+          },
+          "kv/8": {
+            "keys": 4807,
+            "records": 4807,
+            "posting_bytes": 70995,
+            "logical_key_bytes": 205107,
+            "suffix_bytes": 55323,
+            "key_meta_bytes": 33211,
+            "singletons": 4807
+          },
+          "kv/5": {
+            "keys": 1274,
+            "records": 1274,
+            "posting_bytes": 18818,
+            "logical_key_bytes": 55081,
+            "suffix_bytes": 14910,
+            "key_meta_bytes": 8802,
+            "singletons": 1274
+          },
+          "kv/523": {
+            "keys": 130,
+            "records": 130,
+            "posting_bytes": 1920,
+            "logical_key_bytes": 4550,
+            "suffix_bytes": 618,
+            "key_meta_bytes": 887,
+            "singletons": 130
+          },
+          "flat/3": {
+            "keys": 9,
+            "records": 9,
+            "posting_bytes": 135,
+            "logical_key_bytes": 189,
+            "suffix_bytes": 188,
+            "key_meta_bytes": 62,
+            "singletons": 9
+          },
+          "kv/3": {
+            "keys": 83,
+            "records": 145,
+            "posting_bytes": 1731,
+            "logical_key_bytes": 3348,
+            "suffix_bytes": 728,
+            "key_meta_bytes": 561,
+            "singletons": 52
+          },
+          "kv/10": {
+            "keys": 281306,
+            "records": 282336,
+            "posting_bytes": 4164971,
+            "logical_key_bytes": 18337848,
+            "suffix_bytes": 6444717,
+            "key_meta_bytes": 1960830,
+            "singletons": 280276
+          }
+        },
+        "from_block": 10000830,
+        "to_block": 14996936,
+        "bytes_per_tx": {
+          "history_bytes": 90.5147039031433,
+          "inverted_bytes": 3.283826429974788,
+          "accessor_bytes": 45.94013964527382,
+          "v8_accessor_bytes": 44.41413606433896
+        },
+        "records_per_tx": 6.330573920923327,
+        "bytes_per_record": {
+          "history_bytes": 14.298024955364799,
+          "inverted_bytes": 0.518724916728535,
+          "accessor_bytes": 7.256868053216469,
+          "v8_accessor_bytes": 7.015815093406424
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 38447702,
+              "records": 1209694004,
+              "posting_bytes": 6701184605,
+              "logical_key_bytes": 807401742,
+              "suffix_bytes": 727399812,
+              "key_meta_bytes": 239874919,
+              "singletons": 27788742
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 64775637,
+              "records": 641359094,
+              "posting_bytes": 4525800241,
+              "logical_key_bytes": 4080865131,
+              "suffix_bytes": 557250159,
+              "key_meta_bytes": 443824211,
+              "singletons": 46629496
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 10842026,
+              "records": 355064101,
+              "posting_bytes": 2151212141,
+              "logical_key_bytes": 346944832,
+              "suffix_bytes": 291196138,
+              "key_meta_bytes": 74176037,
+              "singletons": 7273795
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 15618922,
+              "records": 37263147,
+              "posting_bytes": 350890745,
+              "logical_key_bytes": 593519036,
+              "suffix_bytes": 469153915,
+              "key_meta_bytes": 106486344,
+              "singletons": 13363551
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 26802,
+              "records": 21108105,
+              "posting_bytes": 130112836,
+              "logical_key_bytes": 1344757,
+              "suffix_bytes": 483064,
+              "key_meta_bytes": 195686,
+              "singletons": 1263
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 101812,
+              "records": 5045094,
+              "posting_bytes": 36890514,
+              "logical_key_bytes": 5497937,
+              "suffix_bytes": 5206693,
+              "key_meta_bytes": 680146,
+              "singletons": 13108
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 2280172,
+              "records": 2280218,
+              "posting_bytes": 33696685,
+              "logical_key_bytes": 77525944,
+              "suffix_bytes": 40145039,
+              "key_meta_bytes": 15618083,
+              "singletons": 2280130
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 1220880,
+              "records": 2115978,
+              "posting_bytes": 24612581,
+              "logical_key_bytes": 70577836,
+              "suffix_bytes": 24143939,
+              "key_meta_bytes": 8422060,
+              "singletons": 1037404
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 473514,
+              "records": 594722,
+              "posting_bytes": 7977688,
+              "logical_key_bytes": 16572990,
+              "suffix_bytes": 8130804,
+              "key_meta_bytes": 3230433,
+              "singletons": 394726
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 281306,
+              "records": 282336,
+              "posting_bytes": 4164971,
+              "logical_key_bytes": 18337848,
+              "suffix_bytes": 6444717,
+              "key_meta_bytes": 1960830,
+              "singletons": 280276
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 237310,
+              "records": 269871,
+              "posting_bytes": 3764448,
+              "logical_key_bytes": 8305850,
+              "suffix_bytes": 2029518,
+              "key_meta_bytes": 1621227,
+              "singletons": 208370
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 72104,
+              "records": 89160,
+              "posting_bytes": 1196369,
+              "logical_key_bytes": 4996982,
+              "suffix_bytes": 2083567,
+              "key_meta_bytes": 496593,
+              "singletons": 61868
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 2782,
+              "records": 10784,
+              "posting_bytes": 104181,
+              "logical_key_bytes": 111280,
+              "suffix_bytes": 16678,
+              "key_meta_bytes": 19217,
+              "singletons": 1504
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 7690,
+              "records": 7691,
+              "posting_bytes": 113579,
+              "logical_key_bytes": 261460,
+              "suffix_bytes": 41637,
+              "key_meta_bytes": 52544,
+              "singletons": 7689
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 4807,
+              "records": 4807,
+              "posting_bytes": 70995,
+              "logical_key_bytes": 205107,
+              "suffix_bytes": 55323,
+              "key_meta_bytes": 33211,
+              "singletons": 4807
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 208,
+              "records": 2914,
+              "posting_bytes": 19712,
+              "logical_key_bytes": 7904,
+              "suffix_bytes": 1664,
+              "key_meta_bytes": 1456,
+              "singletons": 17
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 1274,
+              "records": 1274,
+              "posting_bytes": 18818,
+              "logical_key_bytes": 55081,
+              "suffix_bytes": 14910,
+              "key_meta_bytes": 8802,
+              "singletons": 1274
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 566,
+              "records": 566,
+              "posting_bytes": 8374,
+              "logical_key_bytes": 25976,
+              "suffix_bytes": 9141,
+              "key_meta_bytes": 3905,
+              "singletons": 566
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 83,
+              "records": 145,
+              "posting_bytes": 1731,
+              "logical_key_bytes": 3348,
+              "suffix_bytes": 728,
+              "key_meta_bytes": 561,
+              "singletons": 52
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 130,
+              "records": 130,
+              "posting_bytes": 1920,
+              "logical_key_bytes": 4550,
+              "suffix_bytes": 618,
+              "key_meta_bytes": 887,
+              "singletons": 130
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 9,
+              "records": 9,
+              "posting_bytes": 135,
+              "logical_key_bytes": 189,
+              "suffix_bytes": 188,
+              "key_meta_bytes": 62,
+              "singletons": 9
+            }
+          ]
+        ]
+      },
+      "boundary-10M-20M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 152358,
+          "records": 1552036,
+          "logical_seg_bytes": 107567426,
+          "tx_range_entries": 4364,
+          "accessor_bytes": 11299595,
+          "history_bytes": 23523522,
+          "inverted_bytes": 486524,
+          "keys": 87900,
+          "distinct_transactions_with_records": 152358,
+          "v8_accessor_bytes": 10947005
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 19618,
+            "records": 943405,
+            "posting_bytes": 5661590,
+            "logical_key_bytes": 411978,
+            "suffix_bytes": 370627,
+            "key_meta_bytes": 130129,
+            "singletons": 12811
+          },
+          "kv/1": {
+            "keys": 10,
+            "records": 17804,
+            "posting_bytes": 111774,
+            "logical_key_bytes": 498,
+            "suffix_bytes": 188,
+            "key_meta_bytes": 77,
+            "singletons": 2
+          },
+          "kv/10": {
+            "keys": 1715,
+            "records": 1721,
+            "posting_bytes": 25629,
+            "logical_key_bytes": 112439,
+            "suffix_bytes": 38092,
+            "key_meta_bytes": 12005,
+            "singletons": 1709
+          },
+          "kv/256": {
+            "keys": 44329,
+            "records": 391642,
+            "posting_bytes": 2597673,
+            "logical_key_bytes": 2792727,
+            "suffix_bytes": 325114,
+            "key_meta_bytes": 310624,
+            "singletons": 33731
+          },
+          "kv/258": {
+            "keys": 7,
+            "records": 7,
+            "posting_bytes": 93,
+            "logical_key_bytes": 238,
+            "suffix_bytes": 28,
+            "key_meta_bytes": 49,
+            "singletons": 7
+          },
+          "kv/513": {
+            "keys": 912,
+            "records": 912,
+            "posting_bytes": 13546,
+            "logical_key_bytes": 31008,
+            "suffix_bytes": 16021,
+            "key_meta_bytes": 6384,
+            "singletons": 912
+          },
+          "kv/515": {
+            "keys": 11744,
+            "records": 25315,
+            "posting_bytes": 246102,
+            "logical_key_bytes": 446272,
+            "suffix_bytes": 363872,
+            "key_meta_bytes": 82213,
+            "singletons": 10360
+          },
+          "kv/520": {
+            "keys": 443,
+            "records": 602,
+            "posting_bytes": 7874,
+            "logical_key_bytes": 15505,
+            "suffix_bytes": 6604,
+            "key_meta_bytes": 3101,
+            "singletons": 346
+          },
+          "kv/524": {
+            "keys": 7352,
+            "records": 163382,
+            "posting_bytes": 1006285,
+            "logical_key_bytes": 235264,
+            "suffix_bytes": 192698,
+            "key_meta_bytes": 51604,
+            "singletons": 5614
+          },
+          "kv/525": {
+            "keys": 215,
+            "records": 238,
+            "posting_bytes": 3382,
+            "logical_key_bytes": 7525,
+            "suffix_bytes": 1497,
+            "key_meta_bytes": 1505,
+            "singletons": 193
+          },
+          "kv/7": {
+            "keys": 78,
+            "records": 106,
+            "posting_bytes": 1377,
+            "logical_key_bytes": 5460,
+            "suffix_bytes": 2219,
+            "key_meta_bytes": 546,
+            "singletons": 58
+          },
+          "kv/768": {
+            "keys": 39,
+            "records": 4402,
+            "posting_bytes": 32358,
+            "logical_key_bytes": 2106,
+            "suffix_bytes": 1894,
+            "key_meta_bytes": 300,
+            "singletons": 12
+          },
+          "kv/769": {
+            "keys": 1436,
+            "records": 2498,
+            "posting_bytes": 29597,
+            "logical_key_bytes": 83220,
+            "suffix_bytes": 28104,
+            "key_meta_bytes": 10054,
+            "singletons": 1123
+          },
+          "kv/8": {
+            "keys": 2,
+            "records": 2,
+            "posting_bytes": 29,
+            "logical_key_bytes": 92,
+            "suffix_bytes": 30,
+            "key_meta_bytes": 14,
+            "singletons": 2
+          }
+        },
+        "from_block": 14996937,
+        "to_block": 15001300,
+        "bytes_per_tx": {
+          "history_bytes": 154.3963690780924,
+          "inverted_bytes": 3.1932947400202156,
+          "accessor_bytes": 74.16476325496528,
+          "v8_accessor_bytes": 71.85054280050933
+        },
+        "records_per_tx": 10.186770632326494,
+        "bytes_per_record": {
+          "history_bytes": 15.156556935535,
+          "inverted_bytes": 0.31347468744281703,
+          "accessor_bytes": 7.28049800391228,
+          "v8_accessor_bytes": 7.053318995177947
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 19618,
+              "records": 943405,
+              "posting_bytes": 5661590,
+              "logical_key_bytes": 411978,
+              "suffix_bytes": 370627,
+              "key_meta_bytes": 130129,
+              "singletons": 12811
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 44329,
+              "records": 391642,
+              "posting_bytes": 2597673,
+              "logical_key_bytes": 2792727,
+              "suffix_bytes": 325114,
+              "key_meta_bytes": 310624,
+              "singletons": 33731
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 7352,
+              "records": 163382,
+              "posting_bytes": 1006285,
+              "logical_key_bytes": 235264,
+              "suffix_bytes": 192698,
+              "key_meta_bytes": 51604,
+              "singletons": 5614
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 11744,
+              "records": 25315,
+              "posting_bytes": 246102,
+              "logical_key_bytes": 446272,
+              "suffix_bytes": 363872,
+              "key_meta_bytes": 82213,
+              "singletons": 10360
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 10,
+              "records": 17804,
+              "posting_bytes": 111774,
+              "logical_key_bytes": 498,
+              "suffix_bytes": 188,
+              "key_meta_bytes": 77,
+              "singletons": 2
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 39,
+              "records": 4402,
+              "posting_bytes": 32358,
+              "logical_key_bytes": 2106,
+              "suffix_bytes": 1894,
+              "key_meta_bytes": 300,
+              "singletons": 12
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 1436,
+              "records": 2498,
+              "posting_bytes": 29597,
+              "logical_key_bytes": 83220,
+              "suffix_bytes": 28104,
+              "key_meta_bytes": 10054,
+              "singletons": 1123
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 1715,
+              "records": 1721,
+              "posting_bytes": 25629,
+              "logical_key_bytes": 112439,
+              "suffix_bytes": 38092,
+              "key_meta_bytes": 12005,
+              "singletons": 1709
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 912,
+              "records": 912,
+              "posting_bytes": 13546,
+              "logical_key_bytes": 31008,
+              "suffix_bytes": 16021,
+              "key_meta_bytes": 6384,
+              "singletons": 912
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 443,
+              "records": 602,
+              "posting_bytes": 7874,
+              "logical_key_bytes": 15505,
+              "suffix_bytes": 6604,
+              "key_meta_bytes": 3101,
+              "singletons": 346
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 215,
+              "records": 238,
+              "posting_bytes": 3382,
+              "logical_key_bytes": 7525,
+              "suffix_bytes": 1497,
+              "key_meta_bytes": 1505,
+              "singletons": 193
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 78,
+              "records": 106,
+              "posting_bytes": 1377,
+              "logical_key_bytes": 5460,
+              "suffix_bytes": 2219,
+              "key_meta_bytes": 546,
+              "singletons": 58
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 7,
+              "records": 7,
+              "posting_bytes": 93,
+              "logical_key_bytes": 238,
+              "suffix_bytes": 28,
+              "key_meta_bytes": 49,
+              "singletons": 7
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 2,
+              "records": 2,
+              "posting_bytes": 29,
+              "logical_key_bytes": 92,
+              "suffix_bytes": 30,
+              "key_meta_bytes": 14,
+              "singletons": 2
+            }
+          ]
+        ]
+      },
+      "15M-20M": {
+        "counts": {
+          "files": 2124,
+          "tx_numbers": 196315234,
+          "records": 1750170615,
+          "logical_seg_bytes": 120595258288,
+          "tx_range_entries": 4997850,
+          "accessor_bytes": 13377373268,
+          "history_bytes": 26829254837,
+          "inverted_bytes": 608668579,
+          "keys": 117787090,
+          "distinct_transactions_with_records": 196315234,
+          "v8_accessor_bytes": 12914651135
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 29166527,
+            "records": 1128099223,
+            "posting_bytes": 6708260401,
+            "logical_key_bytes": 612497067,
+            "suffix_bytes": 551308388,
+            "key_meta_bytes": 185995853,
+            "singletons": 16330297
+          },
+          "kv/1": {
+            "keys": 17661,
+            "records": 21183663,
+            "posting_bytes": 132664297,
+            "logical_key_bytes": 885739,
+            "suffix_bytes": 333070,
+            "key_meta_bytes": 135243,
+            "singletons": 1645
+          },
+          "kv/10": {
+            "keys": 1813825,
+            "records": 1819979,
+            "posting_bytes": 26819315,
+            "logical_key_bytes": 117929537,
+            "suffix_bytes": 41594435,
+            "key_meta_bytes": 12678440,
+            "singletons": 1807671
+          },
+          "kv/2": {
+            "keys": 472,
+            "records": 472,
+            "posting_bytes": 6964,
+            "logical_key_bytes": 21610,
+            "suffix_bytes": 7625,
+            "key_meta_bytes": 3298,
+            "singletons": 472
+          },
+          "kv/256": {
+            "keys": 53364891,
+            "records": 339225741,
+            "posting_bytes": 2488398116,
+            "logical_key_bytes": 3361988133,
+            "suffix_bytes": 485070346,
+            "key_meta_bytes": 372573580,
+            "singletons": 40968795
+          },
+          "kv/258": {
+            "keys": 16501,
+            "records": 16503,
+            "posting_bytes": 240169,
+            "logical_key_bytes": 561034,
+            "suffix_bytes": 80683,
+            "key_meta_bytes": 115336,
+            "singletons": 16499
+          },
+          "kv/513": {
+            "keys": 3349788,
+            "records": 3350130,
+            "posting_bytes": 49473262,
+            "logical_key_bytes": 113893048,
+            "suffix_bytes": 58877026,
+            "key_meta_bytes": 23391063,
+            "singletons": 3349461
+          },
+          "kv/515": {
+            "keys": 18082983,
+            "records": 39034892,
+            "posting_bytes": 382926884,
+            "logical_key_bytes": 687153354,
+            "suffix_bytes": 546954401,
+            "key_meta_bytes": 125870898,
+            "singletons": 14857165
+          },
+          "kv/520": {
+            "keys": 529656,
+            "records": 640268,
+            "posting_bytes": 8668753,
+            "logical_key_bytes": 18537960,
+            "suffix_bytes": 9995193,
+            "key_meta_bytes": 3698092,
+            "singletons": 450901
+          },
+          "kv/524": {
+            "keys": 9469080,
+            "records": 208689095,
+            "posting_bytes": 1259226187,
+            "logical_key_bytes": 303010560,
+            "suffix_bytes": 234728047,
+            "key_meta_bytes": 66291573,
+            "singletons": 6893482
+          },
+          "kv/525": {
+            "keys": 287230,
+            "records": 322025,
+            "posting_bytes": 4512268,
+            "logical_key_bytes": 10053050,
+            "suffix_bytes": 2335623,
+            "key_meta_bytes": 2005395,
+            "singletons": 256770
+          },
+          "kv/6": {
+            "keys": 326,
+            "records": 902,
+            "posting_bytes": 9070,
+            "logical_key_bytes": 13040,
+            "suffix_bytes": 2915,
+            "key_meta_bytes": 2280,
+            "singletons": 198
+          },
+          "kv/7": {
+            "keys": 143725,
+            "records": 182886,
+            "posting_bytes": 2380230,
+            "logical_key_bytes": 9958330,
+            "suffix_bytes": 3833579,
+            "key_meta_bytes": 1004769,
+            "singletons": 127999
+          },
+          "kv/768": {
+            "keys": 75769,
+            "records": 5037170,
+            "posting_bytes": 36161598,
+            "logical_key_bytes": 4091712,
+            "suffix_bytes": 3853043,
+            "key_meta_bytes": 533834,
+            "singletons": 18344
+          },
+          "kv/769": {
+            "keys": 1464905,
+            "records": 2560996,
+            "posting_bytes": 29501050,
+            "logical_key_bytes": 84796973,
+            "suffix_bytes": 28853469,
+            "key_meta_bytes": 10238858,
+            "singletons": 1231773
+          },
+          "kv/8": {
+            "keys": 2566,
+            "records": 2566,
+            "posting_bytes": 37875,
+            "logical_key_bytes": 110156,
+            "suffix_bytes": 30479,
+            "key_meta_bytes": 17939,
+            "singletons": 2566
+          },
+          "flat/3": {
+            "keys": 6,
+            "records": 6,
+            "posting_bytes": 90,
+            "logical_key_bytes": 126,
+            "suffix_bytes": 126,
+            "key_meta_bytes": 42,
+            "singletons": 6
+          },
+          "kv/5": {
+            "keys": 856,
+            "records": 856,
+            "posting_bytes": 12652,
+            "logical_key_bytes": 37022,
+            "suffix_bytes": 10460,
+            "key_meta_bytes": 5984,
+            "singletons": 856
+          },
+          "kv/523": {
+            "keys": 85,
+            "records": 85,
+            "posting_bytes": 1261,
+            "logical_key_bytes": 2975,
+            "suffix_bytes": 473,
+            "key_meta_bytes": 594,
+            "singletons": 85
+          },
+          "kv/4": {
+            "keys": 192,
+            "records": 3095,
+            "posting_bytes": 20481,
+            "logical_key_bytes": 7296,
+            "suffix_bytes": 1536,
+            "key_meta_bytes": 1338,
+            "singletons": 21
+          },
+          "kv/3": {
+            "keys": 46,
+            "records": 62,
+            "posting_bytes": 807,
+            "logical_key_bytes": 1868,
+            "suffix_bytes": 448,
+            "key_meta_bytes": 322,
+            "singletons": 37
+          }
+        },
+        "from_block": 15001301,
+        "to_block": 19999150,
+        "bytes_per_tx": {
+          "history_bytes": 136.66415127518835,
+          "inverted_bytes": 3.1004653413702985,
+          "accessor_bytes": 68.14230865038218,
+          "v8_accessor_bytes": 65.78527234926659
+        },
+        "records_per_tx": 8.91510342493339,
+        "bytes_per_record": {
+          "history_bytes": 15.329508224545297,
+          "inverted_bytes": 0.34777671032946694,
+          "accessor_bytes": 7.643468101537061,
+          "v8_accessor_bytes": 7.379081230317651
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 29166527,
+              "records": 1128099223,
+              "posting_bytes": 6708260401,
+              "logical_key_bytes": 612497067,
+              "suffix_bytes": 551308388,
+              "key_meta_bytes": 185995853,
+              "singletons": 16330297
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 53364891,
+              "records": 339225741,
+              "posting_bytes": 2488398116,
+              "logical_key_bytes": 3361988133,
+              "suffix_bytes": 485070346,
+              "key_meta_bytes": 372573580,
+              "singletons": 40968795
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 9469080,
+              "records": 208689095,
+              "posting_bytes": 1259226187,
+              "logical_key_bytes": 303010560,
+              "suffix_bytes": 234728047,
+              "key_meta_bytes": 66291573,
+              "singletons": 6893482
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 18082983,
+              "records": 39034892,
+              "posting_bytes": 382926884,
+              "logical_key_bytes": 687153354,
+              "suffix_bytes": 546954401,
+              "key_meta_bytes": 125870898,
+              "singletons": 14857165
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 17661,
+              "records": 21183663,
+              "posting_bytes": 132664297,
+              "logical_key_bytes": 885739,
+              "suffix_bytes": 333070,
+              "key_meta_bytes": 135243,
+              "singletons": 1645
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 75769,
+              "records": 5037170,
+              "posting_bytes": 36161598,
+              "logical_key_bytes": 4091712,
+              "suffix_bytes": 3853043,
+              "key_meta_bytes": 533834,
+              "singletons": 18344
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 3349788,
+              "records": 3350130,
+              "posting_bytes": 49473262,
+              "logical_key_bytes": 113893048,
+              "suffix_bytes": 58877026,
+              "key_meta_bytes": 23391063,
+              "singletons": 3349461
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 1464905,
+              "records": 2560996,
+              "posting_bytes": 29501050,
+              "logical_key_bytes": 84796973,
+              "suffix_bytes": 28853469,
+              "key_meta_bytes": 10238858,
+              "singletons": 1231773
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 1813825,
+              "records": 1819979,
+              "posting_bytes": 26819315,
+              "logical_key_bytes": 117929537,
+              "suffix_bytes": 41594435,
+              "key_meta_bytes": 12678440,
+              "singletons": 1807671
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 529656,
+              "records": 640268,
+              "posting_bytes": 8668753,
+              "logical_key_bytes": 18537960,
+              "suffix_bytes": 9995193,
+              "key_meta_bytes": 3698092,
+              "singletons": 450901
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 287230,
+              "records": 322025,
+              "posting_bytes": 4512268,
+              "logical_key_bytes": 10053050,
+              "suffix_bytes": 2335623,
+              "key_meta_bytes": 2005395,
+              "singletons": 256770
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 143725,
+              "records": 182886,
+              "posting_bytes": 2380230,
+              "logical_key_bytes": 9958330,
+              "suffix_bytes": 3833579,
+              "key_meta_bytes": 1004769,
+              "singletons": 127999
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 16501,
+              "records": 16503,
+              "posting_bytes": 240169,
+              "logical_key_bytes": 561034,
+              "suffix_bytes": 80683,
+              "key_meta_bytes": 115336,
+              "singletons": 16499
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 192,
+              "records": 3095,
+              "posting_bytes": 20481,
+              "logical_key_bytes": 7296,
+              "suffix_bytes": 1536,
+              "key_meta_bytes": 1338,
+              "singletons": 21
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 2566,
+              "records": 2566,
+              "posting_bytes": 37875,
+              "logical_key_bytes": 110156,
+              "suffix_bytes": 30479,
+              "key_meta_bytes": 17939,
+              "singletons": 2566
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 326,
+              "records": 902,
+              "posting_bytes": 9070,
+              "logical_key_bytes": 13040,
+              "suffix_bytes": 2915,
+              "key_meta_bytes": 2280,
+              "singletons": 198
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 856,
+              "records": 856,
+              "posting_bytes": 12652,
+              "logical_key_bytes": 37022,
+              "suffix_bytes": 10460,
+              "key_meta_bytes": 5984,
+              "singletons": 856
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 472,
+              "records": 472,
+              "posting_bytes": 6964,
+              "logical_key_bytes": 21610,
+              "suffix_bytes": 7625,
+              "key_meta_bytes": 3298,
+              "singletons": 472
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 85,
+              "records": 85,
+              "posting_bytes": 1261,
+              "logical_key_bytes": 2975,
+              "suffix_bytes": 473,
+              "key_meta_bytes": 594,
+              "singletons": 85
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 46,
+              "records": 62,
+              "posting_bytes": 807,
+              "logical_key_bytes": 1868,
+              "suffix_bytes": 448,
+              "key_meta_bytes": 322,
+              "singletons": 37
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 6,
+              "records": 6,
+              "posting_bytes": 90,
+              "logical_key_bytes": 126,
+              "suffix_bytes": 126,
+              "key_meta_bytes": 42,
+              "singletons": 6
+            }
+          ]
+        ]
+      },
+      "boundary-15M-25M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 85694,
+          "records": 812277,
+          "logical_seg_bytes": 58241218,
+          "tx_range_entries": 2746,
+          "accessor_bytes": 5631093,
+          "history_bytes": 12530962,
+          "inverted_bytes": 283530,
+          "keys": 34038,
+          "distinct_transactions_with_records": 85694,
+          "v8_accessor_bytes": 5509560
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 6764,
+            "records": 554454,
+            "posting_bytes": 3229859,
+            "logical_key_bytes": 142044,
+            "suffix_bytes": 128543,
+            "key_meta_bytes": 43439,
+            "singletons": 2091
+          },
+          "kv/1": {
+            "keys": 8,
+            "records": 11622,
+            "posting_bytes": 72516,
+            "logical_key_bytes": 403,
+            "suffix_bytes": 137,
+            "key_meta_bytes": 62,
+            "singletons": 0
+          },
+          "kv/10": {
+            "keys": 894,
+            "records": 894,
+            "posting_bytes": 13165,
+            "logical_key_bytes": 56372,
+            "suffix_bytes": 21412,
+            "key_meta_bytes": 6258,
+            "singletons": 894
+          },
+          "kv/256": {
+            "keys": 17287,
+            "records": 145481,
+            "posting_bytes": 1035694,
+            "logical_key_bytes": 1089081,
+            "suffix_bytes": 155469,
+            "key_meta_bytes": 121189,
+            "singletons": 12503
+          },
+          "kv/258": {
+            "keys": 5,
+            "records": 5,
+            "posting_bytes": 73,
+            "logical_key_bytes": 170,
+            "suffix_bytes": 50,
+            "key_meta_bytes": 35,
+            "singletons": 5
+          },
+          "kv/513": {
+            "keys": 1182,
+            "records": 1182,
+            "posting_bytes": 17416,
+            "logical_key_bytes": 40188,
+            "suffix_bytes": 20944,
+            "key_meta_bytes": 8274,
+            "singletons": 1182
+          },
+          "kv/515": {
+            "keys": 2905,
+            "records": 5778,
+            "posting_bytes": 61059,
+            "logical_key_bytes": 110390,
+            "suffix_bytes": 54044,
+            "key_meta_bytes": 20337,
+            "singletons": 2315
+          },
+          "kv/520": {
+            "keys": 417,
+            "records": 483,
+            "posting_bytes": 6716,
+            "logical_key_bytes": 14595,
+            "suffix_bytes": 7445,
+            "key_meta_bytes": 2919,
+            "singletons": 365
+          },
+          "kv/524": {
+            "keys": 3691,
+            "records": 88122,
+            "posting_bytes": 536109,
+            "logical_key_bytes": 118112,
+            "suffix_bytes": 97880,
+            "key_meta_bytes": 25928,
+            "singletons": 2445
+          },
+          "kv/525": {
+            "keys": 214,
+            "records": 239,
+            "posting_bytes": 3342,
+            "logical_key_bytes": 7490,
+            "suffix_bytes": 1463,
+            "key_meta_bytes": 1498,
+            "singletons": 190
+          },
+          "kv/7": {
+            "keys": 61,
+            "records": 79,
+            "posting_bytes": 1044,
+            "logical_key_bytes": 4228,
+            "suffix_bytes": 1793,
+            "key_meta_bytes": 427,
+            "singletons": 49
+          },
+          "kv/768": {
+            "keys": 27,
+            "records": 2747,
+            "posting_bytes": 19360,
+            "logical_key_bytes": 1458,
+            "suffix_bytes": 1405,
+            "key_meta_bytes": 189,
+            "singletons": 0
+          },
+          "kv/769": {
+            "keys": 582,
+            "records": 1190,
+            "posting_bytes": 12686,
+            "logical_key_bytes": 33633,
+            "suffix_bytes": 11496,
+            "key_meta_bytes": 4077,
+            "singletons": 544
+          },
+          "kv/8": {
+            "keys": 1,
+            "records": 1,
+            "posting_bytes": 15,
+            "logical_key_bytes": 52,
+            "suffix_bytes": 22,
+            "key_meta_bytes": 7,
+            "singletons": 1
+          }
+        },
+        "from_block": 19999151,
+        "to_block": 20001896,
+        "bytes_per_tx": {
+          "history_bytes": 146.22916423553573,
+          "inverted_bytes": 3.3086330431535464,
+          "accessor_bytes": 65.71163675403179,
+          "v8_accessor_bytes": 64.29341610847901
+        },
+        "records_per_tx": 9.478808317968586,
+        "bytes_per_record": {
+          "history_bytes": 15.426956567771832,
+          "inverted_bytes": 0.3490558023925336,
+          "accessor_bytes": 6.932478698769016,
+          "v8_accessor_bytes": 6.782858556871609
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 6764,
+              "records": 554454,
+              "posting_bytes": 3229859,
+              "logical_key_bytes": 142044,
+              "suffix_bytes": 128543,
+              "key_meta_bytes": 43439,
+              "singletons": 2091
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 17287,
+              "records": 145481,
+              "posting_bytes": 1035694,
+              "logical_key_bytes": 1089081,
+              "suffix_bytes": 155469,
+              "key_meta_bytes": 121189,
+              "singletons": 12503
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 3691,
+              "records": 88122,
+              "posting_bytes": 536109,
+              "logical_key_bytes": 118112,
+              "suffix_bytes": 97880,
+              "key_meta_bytes": 25928,
+              "singletons": 2445
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 8,
+              "records": 11622,
+              "posting_bytes": 72516,
+              "logical_key_bytes": 403,
+              "suffix_bytes": 137,
+              "key_meta_bytes": 62,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 2905,
+              "records": 5778,
+              "posting_bytes": 61059,
+              "logical_key_bytes": 110390,
+              "suffix_bytes": 54044,
+              "key_meta_bytes": 20337,
+              "singletons": 2315
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 27,
+              "records": 2747,
+              "posting_bytes": 19360,
+              "logical_key_bytes": 1458,
+              "suffix_bytes": 1405,
+              "key_meta_bytes": 189,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 582,
+              "records": 1190,
+              "posting_bytes": 12686,
+              "logical_key_bytes": 33633,
+              "suffix_bytes": 11496,
+              "key_meta_bytes": 4077,
+              "singletons": 544
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 1182,
+              "records": 1182,
+              "posting_bytes": 17416,
+              "logical_key_bytes": 40188,
+              "suffix_bytes": 20944,
+              "key_meta_bytes": 8274,
+              "singletons": 1182
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 894,
+              "records": 894,
+              "posting_bytes": 13165,
+              "logical_key_bytes": 56372,
+              "suffix_bytes": 21412,
+              "key_meta_bytes": 6258,
+              "singletons": 894
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 417,
+              "records": 483,
+              "posting_bytes": 6716,
+              "logical_key_bytes": 14595,
+              "suffix_bytes": 7445,
+              "key_meta_bytes": 2919,
+              "singletons": 365
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 214,
+              "records": 239,
+              "posting_bytes": 3342,
+              "logical_key_bytes": 7490,
+              "suffix_bytes": 1463,
+              "key_meta_bytes": 1498,
+              "singletons": 190
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 61,
+              "records": 79,
+              "posting_bytes": 1044,
+              "logical_key_bytes": 4228,
+              "suffix_bytes": 1793,
+              "key_meta_bytes": 427,
+              "singletons": 49
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 5,
+              "records": 5,
+              "posting_bytes": 73,
+              "logical_key_bytes": 170,
+              "suffix_bytes": 50,
+              "key_meta_bytes": 35,
+              "singletons": 5
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 1,
+              "records": 1,
+              "posting_bytes": 15,
+              "logical_key_bytes": 52,
+              "suffix_bytes": 22,
+              "key_meta_bytes": 7,
+              "singletons": 1
+            }
+          ]
+        ]
+      },
+      "20M-25M": {
+        "counts": {
+          "files": 3384,
+          "tx_numbers": 316757387,
+          "records": 2438442521,
+          "logical_seg_bytes": 154042503903,
+          "tx_range_entries": 4996982,
+          "accessor_bytes": 27250976946,
+          "history_bytes": 39748438602,
+          "inverted_bytes": 1029648632,
+          "keys": 479689645,
+          "distinct_transactions_with_records": 316757387,
+          "v8_accessor_bytes": 25309160117
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 97131247,
+            "records": 1384838926,
+            "posting_bytes": 8819380989,
+            "logical_key_bytes": 2039756187,
+            "suffix_bytes": 1826160389,
+            "key_meta_bytes": 611884209,
+            "singletons": 57600888
+          },
+          "kv/1": {
+            "keys": 27839,
+            "records": 24560526,
+            "posting_bytes": 155236491,
+            "logical_key_bytes": 1396973,
+            "suffix_bytes": 510216,
+            "key_meta_bytes": 212434,
+            "singletons": 1982
+          },
+          "kv/10": {
+            "keys": 3706958,
+            "records": 3715544,
+            "posting_bytes": 54751268,
+            "logical_key_bytes": 236525438,
+            "suffix_bytes": 85696615,
+            "key_meta_bytes": 25743406,
+            "singletons": 3698372
+          },
+          "kv/256": {
+            "keys": 294945359,
+            "records": 671162062,
+            "posting_bytes": 6840459403,
+            "logical_key_bytes": 18581557617,
+            "suffix_bytes": 2773102317,
+            "key_meta_bytes": 2041899200,
+            "singletons": 246583022
+          },
+          "kv/258": {
+            "keys": 80291,
+            "records": 80291,
+            "posting_bytes": 1187638,
+            "logical_key_bytes": 2729894,
+            "suffix_bytes": 377395,
+            "key_meta_bytes": 557130,
+            "singletons": 80291
+          },
+          "kv/513": {
+            "keys": 15977170,
+            "records": 15985001,
+            "posting_bytes": 235830591,
+            "logical_key_bytes": 543223752,
+            "suffix_bytes": 280406086,
+            "key_meta_bytes": 110535573,
+            "singletons": 15969378
+          },
+          "kv/515": {
+            "keys": 15027582,
+            "records": 44332952,
+            "posting_bytes": 393801934,
+            "logical_key_bytes": 571048116,
+            "suffix_bytes": 461674722,
+            "key_meta_bytes": 104309115,
+            "singletons": 11763465
+          },
+          "kv/520": {
+            "keys": 1141356,
+            "records": 1401512,
+            "posting_bytes": 18864723,
+            "logical_key_bytes": 39947460,
+            "suffix_bytes": 24746867,
+            "key_meta_bytes": 7891616,
+            "singletons": 960912
+          },
+          "kv/524": {
+            "keys": 47009856,
+            "records": 280312865,
+            "posting_bytes": 2162004962,
+            "logical_key_bytes": 1504315392,
+            "suffix_bytes": 1286269889,
+            "key_meta_bytes": 323684500,
+            "singletons": 30944415
+          },
+          "kv/525": {
+            "keys": 771998,
+            "records": 878488,
+            "posting_bytes": 12221581,
+            "logical_key_bytes": 27019930,
+            "suffix_bytes": 7493565,
+            "key_meta_bytes": 5339906,
+            "singletons": 675618
+          },
+          "kv/7": {
+            "keys": 476475,
+            "records": 632192,
+            "posting_bytes": 8169922,
+            "logical_key_bytes": 33100218,
+            "suffix_bytes": 11695349,
+            "key_meta_bytes": 3298753,
+            "singletons": 414423
+          },
+          "kv/768": {
+            "keys": 119355,
+            "records": 5058091,
+            "posting_bytes": 37123487,
+            "logical_key_bytes": 6445263,
+            "suffix_bytes": 6127673,
+            "key_meta_bytes": 816373,
+            "singletons": 27914
+          },
+          "kv/769": {
+            "keys": 3267839,
+            "records": 5474520,
+            "posting_bytes": 63725600,
+            "logical_key_bytes": 189178620,
+            "suffix_bytes": 63952382,
+            "key_meta_bytes": 22675363,
+            "singletons": 2875061
+          },
+          "kv/8": {
+            "keys": 2893,
+            "records": 2893,
+            "posting_bytes": 42648,
+            "logical_key_bytes": 124225,
+            "suffix_bytes": 35384,
+            "key_meta_bytes": 20132,
+            "singletons": 2893
+          },
+          "kv/5": {
+            "keys": 1960,
+            "records": 1960,
+            "posting_bytes": 28952,
+            "logical_key_bytes": 84770,
+            "suffix_bytes": 23306,
+            "key_meta_bytes": 13660,
+            "singletons": 1960
+          },
+          "kv/2": {
+            "keys": 517,
+            "records": 518,
+            "posting_bytes": 7636,
+            "logical_key_bytes": 23689,
+            "suffix_bytes": 8292,
+            "key_meta_bytes": 3593,
+            "singletons": 516
+          },
+          "kv/6": {
+            "keys": 414,
+            "records": 988,
+            "posting_bytes": 10418,
+            "logical_key_bytes": 16560,
+            "suffix_bytes": 3972,
+            "key_meta_bytes": 2871,
+            "singletons": 263
+          },
+          "kv/523": {
+            "keys": 106,
+            "records": 106,
+            "posting_bytes": 1565,
+            "logical_key_bytes": 3710,
+            "suffix_bytes": 522,
+            "key_meta_bytes": 736,
+            "singletons": 106
+          },
+          "kv/4": {
+            "keys": 374,
+            "records": 2995,
+            "posting_bytes": 22139,
+            "logical_key_bytes": 14212,
+            "suffix_bytes": 2767,
+            "key_meta_bytes": 2611,
+            "singletons": 32
+          },
+          "flat/3": {
+            "keys": 10,
+            "records": 10,
+            "posting_bytes": 149,
+            "logical_key_bytes": 210,
+            "suffix_bytes": 207,
+            "key_meta_bytes": 70,
+            "singletons": 10
+          },
+          "kv/3": {
+            "keys": 46,
+            "records": 81,
+            "posting_bytes": 983,
+            "logical_key_bytes": 1868,
+            "suffix_bytes": 481,
+            "key_meta_bytes": 322,
+            "singletons": 26
+          }
+        },
+        "from_block": 20001897,
+        "to_block": 24998878,
+        "bytes_per_tx": {
+          "history_bytes": 125.48543533098409,
+          "inverted_bytes": 3.2505907494432007,
+          "accessor_bytes": 86.0310700378394,
+          "v8_accessor_bytes": 79.9007731333508
+        },
+        "records_per_tx": 7.698139399666156,
+        "bytes_per_record": {
+          "history_bytes": 16.300748637576763,
+          "inverted_bytes": 0.4222566753706966,
+          "accessor_bytes": 11.175566662454866,
+          "v8_accessor_bytes": 10.379231783827642
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 97131247,
+              "records": 1384838926,
+              "posting_bytes": 8819380989,
+              "logical_key_bytes": 2039756187,
+              "suffix_bytes": 1826160389,
+              "key_meta_bytes": 611884209,
+              "singletons": 57600888
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 294945359,
+              "records": 671162062,
+              "posting_bytes": 6840459403,
+              "logical_key_bytes": 18581557617,
+              "suffix_bytes": 2773102317,
+              "key_meta_bytes": 2041899200,
+              "singletons": 246583022
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 47009856,
+              "records": 280312865,
+              "posting_bytes": 2162004962,
+              "logical_key_bytes": 1504315392,
+              "suffix_bytes": 1286269889,
+              "key_meta_bytes": 323684500,
+              "singletons": 30944415
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 15027582,
+              "records": 44332952,
+              "posting_bytes": 393801934,
+              "logical_key_bytes": 571048116,
+              "suffix_bytes": 461674722,
+              "key_meta_bytes": 104309115,
+              "singletons": 11763465
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 27839,
+              "records": 24560526,
+              "posting_bytes": 155236491,
+              "logical_key_bytes": 1396973,
+              "suffix_bytes": 510216,
+              "key_meta_bytes": 212434,
+              "singletons": 1982
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 15977170,
+              "records": 15985001,
+              "posting_bytes": 235830591,
+              "logical_key_bytes": 543223752,
+              "suffix_bytes": 280406086,
+              "key_meta_bytes": 110535573,
+              "singletons": 15969378
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 3267839,
+              "records": 5474520,
+              "posting_bytes": 63725600,
+              "logical_key_bytes": 189178620,
+              "suffix_bytes": 63952382,
+              "key_meta_bytes": 22675363,
+              "singletons": 2875061
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 119355,
+              "records": 5058091,
+              "posting_bytes": 37123487,
+              "logical_key_bytes": 6445263,
+              "suffix_bytes": 6127673,
+              "key_meta_bytes": 816373,
+              "singletons": 27914
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 3706958,
+              "records": 3715544,
+              "posting_bytes": 54751268,
+              "logical_key_bytes": 236525438,
+              "suffix_bytes": 85696615,
+              "key_meta_bytes": 25743406,
+              "singletons": 3698372
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 1141356,
+              "records": 1401512,
+              "posting_bytes": 18864723,
+              "logical_key_bytes": 39947460,
+              "suffix_bytes": 24746867,
+              "key_meta_bytes": 7891616,
+              "singletons": 960912
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 771998,
+              "records": 878488,
+              "posting_bytes": 12221581,
+              "logical_key_bytes": 27019930,
+              "suffix_bytes": 7493565,
+              "key_meta_bytes": 5339906,
+              "singletons": 675618
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 476475,
+              "records": 632192,
+              "posting_bytes": 8169922,
+              "logical_key_bytes": 33100218,
+              "suffix_bytes": 11695349,
+              "key_meta_bytes": 3298753,
+              "singletons": 414423
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 80291,
+              "records": 80291,
+              "posting_bytes": 1187638,
+              "logical_key_bytes": 2729894,
+              "suffix_bytes": 377395,
+              "key_meta_bytes": 557130,
+              "singletons": 80291
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 374,
+              "records": 2995,
+              "posting_bytes": 22139,
+              "logical_key_bytes": 14212,
+              "suffix_bytes": 2767,
+              "key_meta_bytes": 2611,
+              "singletons": 32
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 2893,
+              "records": 2893,
+              "posting_bytes": 42648,
+              "logical_key_bytes": 124225,
+              "suffix_bytes": 35384,
+              "key_meta_bytes": 20132,
+              "singletons": 2893
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 1960,
+              "records": 1960,
+              "posting_bytes": 28952,
+              "logical_key_bytes": 84770,
+              "suffix_bytes": 23306,
+              "key_meta_bytes": 13660,
+              "singletons": 1960
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 414,
+              "records": 988,
+              "posting_bytes": 10418,
+              "logical_key_bytes": 16560,
+              "suffix_bytes": 3972,
+              "key_meta_bytes": 2871,
+              "singletons": 263
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 517,
+              "records": 518,
+              "posting_bytes": 7636,
+              "logical_key_bytes": 23689,
+              "suffix_bytes": 8292,
+              "key_meta_bytes": 3593,
+              "singletons": 516
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 106,
+              "records": 106,
+              "posting_bytes": 1565,
+              "logical_key_bytes": 3710,
+              "suffix_bytes": 522,
+              "key_meta_bytes": 736,
+              "singletons": 106
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 46,
+              "records": 81,
+              "posting_bytes": 983,
+              "logical_key_bytes": 1868,
+              "suffix_bytes": 481,
+              "key_meta_bytes": 322,
+              "singletons": 26
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 10,
+              "records": 10,
+              "posting_bytes": 149,
+              "logical_key_bytes": 210,
+              "suffix_bytes": 207,
+              "key_meta_bytes": 70,
+              "singletons": 10
+            }
+          ]
+        ]
+      },
+      "boundary-20M-30M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 78255,
+          "records": 605423,
+          "logical_seg_bytes": 38122006,
+          "tx_range_entries": 1256,
+          "accessor_bytes": 6794264,
+          "history_bytes": 10100497,
+          "inverted_bytes": 272222,
+          "keys": 111284,
+          "distinct_transactions_with_records": 78255,
+          "v8_accessor_bytes": 6336154
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 31071,
+            "records": 347266,
+            "posting_bytes": 2281353,
+            "logical_key_bytes": 652491,
+            "suffix_bytes": 584779,
+            "key_meta_bytes": 189474,
+            "singletons": 20856
+          },
+          "kv/1": {
+            "keys": 8,
+            "records": 6522,
+            "posting_bytes": 40931,
+            "logical_key_bytes": 403,
+            "suffix_bytes": 137,
+            "key_meta_bytes": 63,
+            "singletons": 0
+          },
+          "kv/10": {
+            "keys": 856,
+            "records": 856,
+            "posting_bytes": 12617,
+            "logical_key_bytes": 53814,
+            "suffix_bytes": 20424,
+            "key_meta_bytes": 5992,
+            "singletons": 856
+          },
+          "kv/256": {
+            "keys": 56729,
+            "records": 166546,
+            "posting_bytes": 1578372,
+            "logical_key_bytes": 3573927,
+            "suffix_bytes": 600422,
+            "key_meta_bytes": 397175,
+            "singletons": 42155
+          },
+          "kv/258": {
+            "keys": 13,
+            "records": 13,
+            "posting_bytes": 193,
+            "logical_key_bytes": 442,
+            "suffix_bytes": 82,
+            "key_meta_bytes": 91,
+            "singletons": 13
+          },
+          "kv/3": {
+            "keys": 1,
+            "records": 1,
+            "posting_bytes": 14,
+            "logical_key_bytes": 40,
+            "suffix_bytes": 10,
+            "key_meta_bytes": 7,
+            "singletons": 1
+          },
+          "kv/513": {
+            "keys": 7548,
+            "records": 7556,
+            "posting_bytes": 111228,
+            "logical_key_bytes": 256632,
+            "suffix_bytes": 132361,
+            "key_meta_bytes": 52836,
+            "singletons": 7540
+          },
+          "kv/515": {
+            "keys": 2975,
+            "records": 7720,
+            "posting_bytes": 77227,
+            "logical_key_bytes": 113050,
+            "suffix_bytes": 97590,
+            "key_meta_bytes": 20826,
+            "singletons": 2248
+          },
+          "kv/520": {
+            "keys": 242,
+            "records": 347,
+            "posting_bytes": 4352,
+            "logical_key_bytes": 8470,
+            "suffix_bytes": 4963,
+            "key_meta_bytes": 1694,
+            "singletons": 186
+          },
+          "kv/524": {
+            "keys": 11063,
+            "records": 66089,
+            "posting_bytes": 509723,
+            "logical_key_bytes": 354016,
+            "suffix_bytes": 298067,
+            "key_meta_bytes": 77496,
+            "singletons": 7407
+          },
+          "kv/525": {
+            "keys": 143,
+            "records": 164,
+            "posting_bytes": 2251,
+            "logical_key_bytes": 5005,
+            "suffix_bytes": 1246,
+            "key_meta_bytes": 1001,
+            "singletons": 125
+          },
+          "kv/7": {
+            "keys": 245,
+            "records": 307,
+            "posting_bytes": 4084,
+            "logical_key_bytes": 16718,
+            "suffix_bytes": 5981,
+            "key_meta_bytes": 1715,
+            "singletons": 233
+          },
+          "kv/768": {
+            "keys": 27,
+            "records": 1259,
+            "posting_bytes": 9165,
+            "logical_key_bytes": 1458,
+            "suffix_bytes": 1404,
+            "key_meta_bytes": 189,
+            "singletons": 0
+          },
+          "kv/769": {
+            "keys": 362,
+            "records": 776,
+            "posting_bytes": 8165,
+            "logical_key_bytes": 20913,
+            "suffix_bytes": 7222,
+            "key_meta_bytes": 2535,
+            "singletons": 326
+          },
+          "kv/8": {
+            "keys": 1,
+            "records": 1,
+            "posting_bytes": 15,
+            "logical_key_bytes": 46,
+            "suffix_bytes": 16,
+            "key_meta_bytes": 7,
+            "singletons": 1
+          }
+        },
+        "from_block": 24998879,
+        "to_block": 25000134,
+        "bytes_per_tx": {
+          "history_bytes": 129.07158648009712,
+          "inverted_bytes": 3.4786531212063125,
+          "accessor_bytes": 86.82210721359658,
+          "v8_accessor_bytes": 80.96804038080634
+        },
+        "records_per_tx": 7.736540796115264,
+        "bytes_per_record": {
+          "history_bytes": 16.68337179129303,
+          "inverted_bytes": 0.4496393430708777,
+          "accessor_bytes": 11.222342064969451,
+          "v8_accessor_bytes": 10.465664502339687
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 31071,
+              "records": 347266,
+              "posting_bytes": 2281353,
+              "logical_key_bytes": 652491,
+              "suffix_bytes": 584779,
+              "key_meta_bytes": 189474,
+              "singletons": 20856
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 56729,
+              "records": 166546,
+              "posting_bytes": 1578372,
+              "logical_key_bytes": 3573927,
+              "suffix_bytes": 600422,
+              "key_meta_bytes": 397175,
+              "singletons": 42155
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 11063,
+              "records": 66089,
+              "posting_bytes": 509723,
+              "logical_key_bytes": 354016,
+              "suffix_bytes": 298067,
+              "key_meta_bytes": 77496,
+              "singletons": 7407
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 2975,
+              "records": 7720,
+              "posting_bytes": 77227,
+              "logical_key_bytes": 113050,
+              "suffix_bytes": 97590,
+              "key_meta_bytes": 20826,
+              "singletons": 2248
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 7548,
+              "records": 7556,
+              "posting_bytes": 111228,
+              "logical_key_bytes": 256632,
+              "suffix_bytes": 132361,
+              "key_meta_bytes": 52836,
+              "singletons": 7540
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 8,
+              "records": 6522,
+              "posting_bytes": 40931,
+              "logical_key_bytes": 403,
+              "suffix_bytes": 137,
+              "key_meta_bytes": 63,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 27,
+              "records": 1259,
+              "posting_bytes": 9165,
+              "logical_key_bytes": 1458,
+              "suffix_bytes": 1404,
+              "key_meta_bytes": 189,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 856,
+              "records": 856,
+              "posting_bytes": 12617,
+              "logical_key_bytes": 53814,
+              "suffix_bytes": 20424,
+              "key_meta_bytes": 5992,
+              "singletons": 856
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 362,
+              "records": 776,
+              "posting_bytes": 8165,
+              "logical_key_bytes": 20913,
+              "suffix_bytes": 7222,
+              "key_meta_bytes": 2535,
+              "singletons": 326
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 242,
+              "records": 347,
+              "posting_bytes": 4352,
+              "logical_key_bytes": 8470,
+              "suffix_bytes": 4963,
+              "key_meta_bytes": 1694,
+              "singletons": 186
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 245,
+              "records": 307,
+              "posting_bytes": 4084,
+              "logical_key_bytes": 16718,
+              "suffix_bytes": 5981,
+              "key_meta_bytes": 1715,
+              "singletons": 233
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 143,
+              "records": 164,
+              "posting_bytes": 2251,
+              "logical_key_bytes": 5005,
+              "suffix_bytes": 1246,
+              "key_meta_bytes": 1001,
+              "singletons": 125
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 13,
+              "records": 13,
+              "posting_bytes": 193,
+              "logical_key_bytes": 442,
+              "suffix_bytes": 82,
+              "key_meta_bytes": 91,
+              "singletons": 13
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 1,
+              "records": 1,
+              "posting_bytes": 14,
+              "logical_key_bytes": 40,
+              "suffix_bytes": 10,
+              "key_meta_bytes": 7,
+              "singletons": 1
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 1,
+              "records": 1,
+              "posting_bytes": 15,
+              "logical_key_bytes": 46,
+              "suffix_bytes": 16,
+              "key_meta_bytes": 7,
+              "singletons": 1
+            }
+          ]
+        ]
+      },
+      "25M-30M": {
+        "counts": {
+          "files": 4473,
+          "tx_numbers": 490530888,
+          "records": 2695570015,
+          "logical_seg_bytes": 164247603171,
+          "tx_range_entries": 4999350,
+          "accessor_bytes": 37346884317,
+          "history_bytes": 46987513997,
+          "inverted_bytes": 1416878891,
+          "keys": 694915377,
+          "distinct_transactions_with_records": 490530888,
+          "v8_accessor_bytes": 34247933775
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 215089593,
+            "records": 1506743118,
+            "posting_bytes": 10895797003,
+            "logical_key_bytes": 4516881453,
+            "suffix_bytes": 4018032544,
+            "key_meta_bytes": 1347159444,
+            "singletons": 136848935
+          },
+          "kv/1": {
+            "keys": 38063,
+            "records": 29153500,
+            "posting_bytes": 189831093,
+            "logical_key_bytes": 1905039,
+            "suffix_bytes": 682716,
+            "key_meta_bytes": 296065,
+            "singletons": 2077
+          },
+          "kv/10": {
+            "keys": 6173082,
+            "records": 6181844,
+            "posting_bytes": 91198753,
+            "logical_key_bytes": 390625764,
+            "suffix_bytes": 142863554,
+            "key_meta_bytes": 43083472,
+            "singletons": 6164320
+          },
+          "kv/256": {
+            "keys": 239915953,
+            "records": 629676682,
+            "posting_bytes": 6210285280,
+            "logical_key_bytes": 15114705039,
+            "suffix_bytes": 2780418275,
+            "key_meta_bytes": 1655093718,
+            "singletons": 183265415
+          },
+          "kv/258": {
+            "keys": 127399,
+            "records": 127401,
+            "posting_bytes": 1883443,
+            "logical_key_bytes": 4331566,
+            "suffix_bytes": 579636,
+            "key_meta_bytes": 880037,
+            "singletons": 127397
+          },
+          "kv/513": {
+            "keys": 34307585,
+            "records": 34333761,
+            "posting_bytes": 506714843,
+            "logical_key_bytes": 1166457636,
+            "suffix_bytes": 600060348,
+            "key_meta_bytes": 236479370,
+            "singletons": 34281448
+          },
+          "kv/515": {
+            "keys": 127491265,
+            "records": 191047959,
+            "posting_bytes": 2260810987,
+            "logical_key_bytes": 4844668070,
+            "suffix_bytes": 3982958285,
+            "key_meta_bytes": 872572255,
+            "singletons": 113881559
+          },
+          "kv/520": {
+            "keys": 1751140,
+            "records": 2244402,
+            "posting_bytes": 29618425,
+            "logical_key_bytes": 61289900,
+            "suffix_bytes": 37961921,
+            "key_meta_bytes": 12063153,
+            "singletons": 1452040
+          },
+          "kv/524": {
+            "keys": 60062261,
+            "records": 276410370,
+            "posting_bytes": 2272773145,
+            "logical_key_bytes": 1921992352,
+            "suffix_bytes": 1478318186,
+            "key_meta_bytes": 413608373,
+            "singletons": 43765598
+          },
+          "kv/525": {
+            "keys": 1013755,
+            "records": 1134937,
+            "posting_bytes": 15905549,
+            "logical_key_bytes": 35481425,
+            "suffix_bytes": 9213271,
+            "key_meta_bytes": 6987375,
+            "singletons": 899717
+          },
+          "kv/7": {
+            "keys": 3555450,
+            "records": 4801549,
+            "posting_bytes": 61291360,
+            "logical_key_bytes": 245112204,
+            "suffix_bytes": 81649931,
+            "key_meta_bytes": 24796773,
+            "singletons": 3250953
+          },
+          "kv/768": {
+            "keys": 149526,
+            "records": 5085018,
+            "posting_bytes": 37566697,
+            "logical_key_bytes": 8074546,
+            "suffix_bytes": 7689382,
+            "key_meta_bytes": 1020001,
+            "singletons": 28718
+          },
+          "kv/769": {
+            "keys": 5232700,
+            "records": 8620261,
+            "posting_bytes": 100704899,
+            "logical_key_bytes": 302940011,
+            "suffix_bytes": 102145270,
+            "key_meta_bytes": 36525982,
+            "singletons": 4709356
+          },
+          "kv/2": {
+            "keys": 440,
+            "records": 440,
+            "posting_bytes": 6488,
+            "logical_key_bytes": 20144,
+            "suffix_bytes": 6969,
+            "key_meta_bytes": 3067,
+            "singletons": 440
+          },
+          "kv/8": {
+            "keys": 2565,
+            "records": 2565,
+            "posting_bytes": 37821,
+            "logical_key_bytes": 110002,
+            "suffix_bytes": 30895,
+            "key_meta_bytes": 17902,
+            "singletons": 2565
+          },
+          "kv/3": {
+            "keys": 111,
+            "records": 170,
+            "posting_bytes": 2109,
+            "logical_key_bytes": 4484,
+            "suffix_bytes": 957,
+            "key_meta_bytes": 777,
+            "singletons": 76
+          },
+          "kv/5": {
+            "keys": 1802,
+            "records": 1921,
+            "posting_bytes": 27087,
+            "logical_key_bytes": 77904,
+            "suffix_bytes": 22302,
+            "key_meta_bytes": 12586,
+            "singletons": 1793
+          },
+          "kv/523": {
+            "keys": 35,
+            "records": 35,
+            "posting_bytes": 517,
+            "logical_key_bytes": 1225,
+            "suffix_bytes": 167,
+            "key_meta_bytes": 242,
+            "singletons": 35
+          },
+          "kv/6": {
+            "keys": 194,
+            "records": 412,
+            "posting_bytes": 4503,
+            "logical_key_bytes": 7760,
+            "suffix_bytes": 1904,
+            "key_meta_bytes": 1354,
+            "singletons": 137
+          },
+          "flat/3": {
+            "keys": 2230,
+            "records": 2382,
+            "posting_bytes": 33948,
+            "logical_key_bytes": 46830,
+            "suffix_bytes": 45141,
+            "key_meta_bytes": 15601,
+            "singletons": 2142
+          },
+          "kv/4": {
+            "keys": 148,
+            "records": 1115,
+            "posting_bytes": 8679,
+            "logical_key_bytes": 5624,
+            "suffix_bytes": 1244,
+            "key_meta_bytes": 1027,
+            "singletons": 13
+          },
+          "kv/517": {
+            "keys": 40,
+            "records": 128,
+            "posting_bytes": 958,
+            "logical_key_bytes": 1520,
+            "suffix_bytes": 320,
+            "key_meta_bytes": 280,
+            "singletons": 13
+          },
+          "kv/519": {
+            "keys": 40,
+            "records": 45,
+            "posting_bytes": 618,
+            "logical_key_bytes": 1520,
+            "suffix_bytes": 320,
+            "key_meta_bytes": 280,
+            "singletons": 35
+          }
+        },
+        "from_block": 25000135,
+        "to_block": 29999484,
+        "bytes_per_tx": {
+          "history_bytes": 95.78910349270402,
+          "inverted_bytes": 2.888460086126116,
+          "accessor_bytes": 76.13564248577961,
+          "v8_accessor_bytes": 69.81809833553234
+        },
+        "records_per_tx": 5.4952095391799265,
+        "bytes_per_record": {
+          "history_bytes": 17.43138324566947,
+          "inverted_bytes": 0.5256323831751779,
+          "accessor_bytes": 13.854911617645369,
+          "v8_accessor_bytes": 12.705265893455191
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 215089593,
+              "records": 1506743118,
+              "posting_bytes": 10895797003,
+              "logical_key_bytes": 4516881453,
+              "suffix_bytes": 4018032544,
+              "key_meta_bytes": 1347159444,
+              "singletons": 136848935
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 239915953,
+              "records": 629676682,
+              "posting_bytes": 6210285280,
+              "logical_key_bytes": 15114705039,
+              "suffix_bytes": 2780418275,
+              "key_meta_bytes": 1655093718,
+              "singletons": 183265415
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 60062261,
+              "records": 276410370,
+              "posting_bytes": 2272773145,
+              "logical_key_bytes": 1921992352,
+              "suffix_bytes": 1478318186,
+              "key_meta_bytes": 413608373,
+              "singletons": 43765598
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 127491265,
+              "records": 191047959,
+              "posting_bytes": 2260810987,
+              "logical_key_bytes": 4844668070,
+              "suffix_bytes": 3982958285,
+              "key_meta_bytes": 872572255,
+              "singletons": 113881559
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 34307585,
+              "records": 34333761,
+              "posting_bytes": 506714843,
+              "logical_key_bytes": 1166457636,
+              "suffix_bytes": 600060348,
+              "key_meta_bytes": 236479370,
+              "singletons": 34281448
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 38063,
+              "records": 29153500,
+              "posting_bytes": 189831093,
+              "logical_key_bytes": 1905039,
+              "suffix_bytes": 682716,
+              "key_meta_bytes": 296065,
+              "singletons": 2077
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 5232700,
+              "records": 8620261,
+              "posting_bytes": 100704899,
+              "logical_key_bytes": 302940011,
+              "suffix_bytes": 102145270,
+              "key_meta_bytes": 36525982,
+              "singletons": 4709356
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 6173082,
+              "records": 6181844,
+              "posting_bytes": 91198753,
+              "logical_key_bytes": 390625764,
+              "suffix_bytes": 142863554,
+              "key_meta_bytes": 43083472,
+              "singletons": 6164320
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 149526,
+              "records": 5085018,
+              "posting_bytes": 37566697,
+              "logical_key_bytes": 8074546,
+              "suffix_bytes": 7689382,
+              "key_meta_bytes": 1020001,
+              "singletons": 28718
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 3555450,
+              "records": 4801549,
+              "posting_bytes": 61291360,
+              "logical_key_bytes": 245112204,
+              "suffix_bytes": 81649931,
+              "key_meta_bytes": 24796773,
+              "singletons": 3250953
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 1751140,
+              "records": 2244402,
+              "posting_bytes": 29618425,
+              "logical_key_bytes": 61289900,
+              "suffix_bytes": 37961921,
+              "key_meta_bytes": 12063153,
+              "singletons": 1452040
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 1013755,
+              "records": 1134937,
+              "posting_bytes": 15905549,
+              "logical_key_bytes": 35481425,
+              "suffix_bytes": 9213271,
+              "key_meta_bytes": 6987375,
+              "singletons": 899717
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 127399,
+              "records": 127401,
+              "posting_bytes": 1883443,
+              "logical_key_bytes": 4331566,
+              "suffix_bytes": 579636,
+              "key_meta_bytes": 880037,
+              "singletons": 127397
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 2565,
+              "records": 2565,
+              "posting_bytes": 37821,
+              "logical_key_bytes": 110002,
+              "suffix_bytes": 30895,
+              "key_meta_bytes": 17902,
+              "singletons": 2565
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 2230,
+              "records": 2382,
+              "posting_bytes": 33948,
+              "logical_key_bytes": 46830,
+              "suffix_bytes": 45141,
+              "key_meta_bytes": 15601,
+              "singletons": 2142
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 1802,
+              "records": 1921,
+              "posting_bytes": 27087,
+              "logical_key_bytes": 77904,
+              "suffix_bytes": 22302,
+              "key_meta_bytes": 12586,
+              "singletons": 1793
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 148,
+              "records": 1115,
+              "posting_bytes": 8679,
+              "logical_key_bytes": 5624,
+              "suffix_bytes": 1244,
+              "key_meta_bytes": 1027,
+              "singletons": 13
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 440,
+              "records": 440,
+              "posting_bytes": 6488,
+              "logical_key_bytes": 20144,
+              "suffix_bytes": 6969,
+              "key_meta_bytes": 3067,
+              "singletons": 440
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 194,
+              "records": 412,
+              "posting_bytes": 4503,
+              "logical_key_bytes": 7760,
+              "suffix_bytes": 1904,
+              "key_meta_bytes": 1354,
+              "singletons": 137
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 111,
+              "records": 170,
+              "posting_bytes": 2109,
+              "logical_key_bytes": 4484,
+              "suffix_bytes": 957,
+              "key_meta_bytes": 777,
+              "singletons": 76
+            }
+          ],
+          [
+            "kv/517",
+            {
+              "keys": 40,
+              "records": 128,
+              "posting_bytes": 958,
+              "logical_key_bytes": 1520,
+              "suffix_bytes": 320,
+              "key_meta_bytes": 280,
+              "singletons": 13
+            }
+          ],
+          [
+            "kv/519",
+            {
+              "keys": 40,
+              "records": 45,
+              "posting_bytes": 618,
+              "logical_key_bytes": 1520,
+              "suffix_bytes": 320,
+              "key_meta_bytes": 280,
+              "singletons": 35
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 35,
+              "records": 35,
+              "posting_bytes": 517,
+              "logical_key_bytes": 1225,
+              "suffix_bytes": 167,
+              "key_meta_bytes": 242,
+              "singletons": 35
+            }
+          ]
+        ]
+      },
+      "boundary-25M-35M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 148762,
+          "records": 560953,
+          "logical_seg_bytes": 34158032,
+          "tx_range_entries": 1080,
+          "accessor_bytes": 9500247,
+          "history_bytes": 10514558,
+          "inverted_bytes": 375734,
+          "keys": 192811,
+          "distinct_transactions_with_records": 148762,
+          "v8_accessor_bytes": 8558784
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 80267,
+            "records": 335105,
+            "posting_bytes": 2859581,
+            "logical_key_bytes": 1685607,
+            "suffix_bytes": 1492646,
+            "key_meta_bytes": 503294,
+            "singletons": 52489
+          },
+          "kv/1": {
+            "keys": 9,
+            "records": 7218,
+            "posting_bytes": 49356,
+            "logical_key_bytes": 449,
+            "suffix_bytes": 150,
+            "key_meta_bytes": 71,
+            "singletons": 0
+          },
+          "kv/10": {
+            "keys": 1462,
+            "records": 1462,
+            "posting_bytes": 21574,
+            "logical_key_bytes": 91590,
+            "suffix_bytes": 34451,
+            "key_meta_bytes": 10234,
+            "singletons": 1462
+          },
+          "kv/256": {
+            "keys": 34849,
+            "records": 87520,
+            "posting_bytes": 864893,
+            "logical_key_bytes": 2195487,
+            "suffix_bytes": 536323,
+            "key_meta_bytes": 243973,
+            "singletons": 23125
+          },
+          "kv/258": {
+            "keys": 234,
+            "records": 234,
+            "posting_bytes": 3486,
+            "logical_key_bytes": 7956,
+            "suffix_bytes": 964,
+            "key_meta_bytes": 1638,
+            "singletons": 234
+          },
+          "kv/513": {
+            "keys": 11203,
+            "records": 11209,
+            "posting_bytes": 166101,
+            "logical_key_bytes": 380904,
+            "suffix_bytes": 195798,
+            "key_meta_bytes": 78421,
+            "singletons": 11197
+          },
+          "kv/515": {
+            "keys": 46621,
+            "records": 52926,
+            "posting_bytes": 732932,
+            "logical_key_bytes": 1771598,
+            "suffix_bytes": 1207924,
+            "key_meta_bytes": 326351,
+            "singletons": 44681
+          },
+          "kv/520": {
+            "keys": 436,
+            "records": 512,
+            "posting_bytes": 7051,
+            "logical_key_bytes": 15260,
+            "suffix_bytes": 9429,
+            "key_meta_bytes": 3052,
+            "singletons": 373
+          },
+          "kv/524": {
+            "keys": 15060,
+            "records": 59582,
+            "posting_bytes": 476863,
+            "logical_key_bytes": 481920,
+            "suffix_bytes": 332432,
+            "key_meta_bytes": 105455,
+            "singletons": 12080
+          },
+          "kv/525": {
+            "keys": 244,
+            "records": 272,
+            "posting_bytes": 3813,
+            "logical_key_bytes": 8540,
+            "suffix_bytes": 2115,
+            "key_meta_bytes": 1708,
+            "singletons": 216
+          },
+          "kv/7": {
+            "keys": 1680,
+            "records": 2342,
+            "posting_bytes": 29310,
+            "logical_key_bytes": 115098,
+            "suffix_bytes": 38027,
+            "key_meta_bytes": 11760,
+            "singletons": 1539
+          },
+          "kv/768": {
+            "keys": 27,
+            "records": 1082,
+            "posting_bytes": 7727,
+            "logical_key_bytes": 1458,
+            "suffix_bytes": 1397,
+            "key_meta_bytes": 189,
+            "singletons": 0
+          },
+          "kv/769": {
+            "keys": 719,
+            "records": 1489,
+            "posting_bytes": 15776,
+            "logical_key_bytes": 41574,
+            "suffix_bytes": 14221,
+            "key_meta_bytes": 5036,
+            "singletons": 655
+          }
+        },
+        "from_block": 29999485,
+        "to_block": 30000564,
+        "bytes_per_tx": {
+          "history_bytes": 70.68040225326361,
+          "inverted_bytes": 2.5257391000389884,
+          "accessor_bytes": 63.862054825829176,
+          "v8_accessor_bytes": 57.53340234737366
+        },
+        "records_per_tx": 3.77080840537234,
+        "bytes_per_record": {
+          "history_bytes": 18.744097990384223,
+          "inverted_bytes": 0.6698136920561972,
+          "accessor_bytes": 16.935905503669648,
+          "v8_accessor_bytes": 15.257577729328482
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 80267,
+              "records": 335105,
+              "posting_bytes": 2859581,
+              "logical_key_bytes": 1685607,
+              "suffix_bytes": 1492646,
+              "key_meta_bytes": 503294,
+              "singletons": 52489
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 34849,
+              "records": 87520,
+              "posting_bytes": 864893,
+              "logical_key_bytes": 2195487,
+              "suffix_bytes": 536323,
+              "key_meta_bytes": 243973,
+              "singletons": 23125
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 15060,
+              "records": 59582,
+              "posting_bytes": 476863,
+              "logical_key_bytes": 481920,
+              "suffix_bytes": 332432,
+              "key_meta_bytes": 105455,
+              "singletons": 12080
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 46621,
+              "records": 52926,
+              "posting_bytes": 732932,
+              "logical_key_bytes": 1771598,
+              "suffix_bytes": 1207924,
+              "key_meta_bytes": 326351,
+              "singletons": 44681
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 11203,
+              "records": 11209,
+              "posting_bytes": 166101,
+              "logical_key_bytes": 380904,
+              "suffix_bytes": 195798,
+              "key_meta_bytes": 78421,
+              "singletons": 11197
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 9,
+              "records": 7218,
+              "posting_bytes": 49356,
+              "logical_key_bytes": 449,
+              "suffix_bytes": 150,
+              "key_meta_bytes": 71,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 1680,
+              "records": 2342,
+              "posting_bytes": 29310,
+              "logical_key_bytes": 115098,
+              "suffix_bytes": 38027,
+              "key_meta_bytes": 11760,
+              "singletons": 1539
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 719,
+              "records": 1489,
+              "posting_bytes": 15776,
+              "logical_key_bytes": 41574,
+              "suffix_bytes": 14221,
+              "key_meta_bytes": 5036,
+              "singletons": 655
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 1462,
+              "records": 1462,
+              "posting_bytes": 21574,
+              "logical_key_bytes": 91590,
+              "suffix_bytes": 34451,
+              "key_meta_bytes": 10234,
+              "singletons": 1462
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 27,
+              "records": 1082,
+              "posting_bytes": 7727,
+              "logical_key_bytes": 1458,
+              "suffix_bytes": 1397,
+              "key_meta_bytes": 189,
+              "singletons": 0
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 436,
+              "records": 512,
+              "posting_bytes": 7051,
+              "logical_key_bytes": 15260,
+              "suffix_bytes": 9429,
+              "key_meta_bytes": 3052,
+              "singletons": 373
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 244,
+              "records": 272,
+              "posting_bytes": 3813,
+              "logical_key_bytes": 8540,
+              "suffix_bytes": 2115,
+              "key_meta_bytes": 1708,
+              "singletons": 216
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 234,
+              "records": 234,
+              "posting_bytes": 3486,
+              "logical_key_bytes": 7956,
+              "suffix_bytes": 964,
+              "key_meta_bytes": 1638,
+              "singletons": 234
+            }
+          ]
+        ]
+      },
+      "30M-35M": {
+        "counts": {
+          "files": 2734,
+          "tx_numbers": 565723430,
+          "records": 2134199668,
+          "logical_seg_bytes": 119004451642,
+          "tx_range_entries": 3247627,
+          "accessor_bytes": 36513216511,
+          "history_bytes": 37717222208,
+          "inverted_bytes": 1345676608,
+          "keys": 762612095,
+          "distinct_transactions_with_records": 565723430,
+          "v8_accessor_bytes": 32958776923
+        },
+        "domains": {
+          "flat/1": {
+            "keys": 243644669,
+            "records": 1103453742,
+            "posting_bytes": 9070929475,
+            "logical_key_bytes": 5116538049,
+            "suffix_bytes": 4516107217,
+            "key_meta_bytes": 1559307168,
+            "singletons": 148633092
+          },
+          "kv/1": {
+            "keys": 25597,
+            "records": 21483234,
+            "posting_bytes": 148418441,
+            "logical_key_bytes": 1272020,
+            "suffix_bytes": 446342,
+            "key_meta_bytes": 200495,
+            "singletons": 1482
+          },
+          "kv/10": {
+            "keys": 4395904,
+            "records": 4401839,
+            "posting_bytes": 65294025,
+            "logical_key_bytes": 279179993,
+            "suffix_bytes": 102176488,
+            "key_meta_bytes": 30769990,
+            "singletons": 4389969
+          },
+          "kv/256": {
+            "keys": 113000936,
+            "records": 284462679,
+            "posting_bytes": 2824498940,
+            "logical_key_bytes": 7119058968,
+            "suffix_bytes": 1682185403,
+            "key_meta_bytes": 787811899,
+            "singletons": 80660983
+          },
+          "kv/258": {
+            "keys": 101432,
+            "records": 101432,
+            "posting_bytes": 1505432,
+            "logical_key_bytes": 3448688,
+            "suffix_bytes": 451201,
+            "key_meta_bytes": 707701,
+            "singletons": 101432
+          },
+          "kv/513": {
+            "keys": 39676476,
+            "records": 39686805,
+            "posting_bytes": 589361834,
+            "logical_key_bytes": 1349000120,
+            "suffix_bytes": 689824230,
+            "key_meta_bytes": 276914748,
+            "singletons": 39666176
+          },
+          "kv/515": {
+            "keys": 305873618,
+            "records": 495054577,
+            "posting_bytes": 5644571528,
+            "logical_key_bytes": 11623197484,
+            "suffix_bytes": 7813222601,
+            "key_meta_bytes": 2137838228,
+            "singletons": 256332773
+          },
+          "kv/520": {
+            "keys": 1117880,
+            "records": 1453461,
+            "posting_bytes": 19205207,
+            "logical_key_bytes": 39125800,
+            "suffix_bytes": 22081350,
+            "key_meta_bytes": 7792446,
+            "singletons": 921089
+          },
+          "kv/524": {
+            "keys": 44679943,
+            "records": 166840959,
+            "posting_bytes": 1407392396,
+            "logical_key_bytes": 1429758176,
+            "suffix_bytes": 830323668,
+            "key_meta_bytes": 311332311,
+            "singletons": 35713301
+          },
+          "kv/525": {
+            "keys": 585517,
+            "records": 659124,
+            "posting_bytes": 9272866,
+            "logical_key_bytes": 20493095,
+            "suffix_bytes": 4398904,
+            "key_meta_bytes": 4081880,
+            "singletons": 515197
+          },
+          "kv/7": {
+            "keys": 5955701,
+            "records": 7617872,
+            "posting_bytes": 100114430,
+            "logical_key_bytes": 408506726,
+            "suffix_bytes": 128894946,
+            "key_meta_bytes": 41691075,
+            "singletons": 5570436
+          },
+          "kv/768": {
+            "keys": 89782,
+            "records": 3287248,
+            "posting_bytes": 25163398,
+            "logical_key_bytes": 4848307,
+            "suffix_bytes": 4550079,
+            "key_meta_bytes": 624526,
+            "singletons": 15938
+          },
+          "kv/769": {
+            "keys": 3460300,
+            "records": 5691396,
+            "posting_bytes": 67135276,
+            "logical_key_bytes": 200346803,
+            "suffix_bytes": 67534136,
+            "key_meta_bytes": 24228264,
+            "singletons": 3120894
+          },
+          "kv/3": {
+            "keys": 48,
+            "records": 88,
+            "posting_bytes": 1031,
+            "logical_key_bytes": 1940,
+            "suffix_bytes": 459,
+            "key_meta_bytes": 336,
+            "singletons": 31
+          },
+          "kv/4": {
+            "keys": 86,
+            "records": 870,
+            "posting_bytes": 6697,
+            "logical_key_bytes": 3268,
+            "suffix_bytes": 718,
+            "key_meta_bytes": 602,
+            "singletons": 11
+          },
+          "flat/3": {
+            "keys": 790,
+            "records": 875,
+            "posting_bytes": 12418,
+            "logical_key_bytes": 16590,
+            "suffix_bytes": 16121,
+            "key_meta_bytes": 5530,
+            "singletons": 754
+          },
+          "kv/5": {
+            "keys": 2240,
+            "records": 2244,
+            "posting_bytes": 33279,
+            "logical_key_bytes": 96867,
+            "suffix_bytes": 26174,
+            "key_meta_bytes": 15672,
+            "singletons": 2238
+          },
+          "kv/6": {
+            "keys": 47,
+            "records": 94,
+            "posting_bytes": 1104,
+            "logical_key_bytes": 1880,
+            "suffix_bytes": 425,
+            "key_meta_bytes": 329,
+            "singletons": 23
+          },
+          "kv/8": {
+            "keys": 880,
+            "records": 880,
+            "posting_bytes": 13051,
+            "logical_key_bytes": 37739,
+            "suffix_bytes": 11067,
+            "key_meta_bytes": 6160,
+            "singletons": 880
+          },
+          "kv/2": {
+            "keys": 240,
+            "records": 240,
+            "posting_bytes": 3563,
+            "logical_key_bytes": 10998,
+            "suffix_bytes": 3854,
+            "key_meta_bytes": 1680,
+            "singletons": 240
+          },
+          "kv/523": {
+            "keys": 9,
+            "records": 9,
+            "posting_bytes": 135,
+            "logical_key_bytes": 315,
+            "suffix_bytes": 41,
+            "key_meta_bytes": 63,
+            "singletons": 9
+          }
+        },
+        "from_block": 30000565,
+        "to_block": 33248191,
+        "bytes_per_tx": {
+          "history_bytes": 66.67077976247157,
+          "inverted_bytes": 2.3786828274020753,
+          "accessor_bytes": 64.54252126520551,
+          "v8_accessor_bytes": 58.259522542667185
+        },
+        "records_per_tx": 3.7725141912541966,
+        "bytes_per_record": {
+          "history_bytes": 17.672771097066818,
+          "inverted_bytes": 0.6305298553724636,
+          "accessor_bytes": 17.10862252416019,
+          "v8_accessor_bytes": 15.443155304154981
+        },
+        "domains_by_records": [
+          [
+            "flat/1",
+            {
+              "keys": 243644669,
+              "records": 1103453742,
+              "posting_bytes": 9070929475,
+              "logical_key_bytes": 5116538049,
+              "suffix_bytes": 4516107217,
+              "key_meta_bytes": 1559307168,
+              "singletons": 148633092
+            }
+          ],
+          [
+            "kv/515",
+            {
+              "keys": 305873618,
+              "records": 495054577,
+              "posting_bytes": 5644571528,
+              "logical_key_bytes": 11623197484,
+              "suffix_bytes": 7813222601,
+              "key_meta_bytes": 2137838228,
+              "singletons": 256332773
+            }
+          ],
+          [
+            "kv/256",
+            {
+              "keys": 113000936,
+              "records": 284462679,
+              "posting_bytes": 2824498940,
+              "logical_key_bytes": 7119058968,
+              "suffix_bytes": 1682185403,
+              "key_meta_bytes": 787811899,
+              "singletons": 80660983
+            }
+          ],
+          [
+            "kv/524",
+            {
+              "keys": 44679943,
+              "records": 166840959,
+              "posting_bytes": 1407392396,
+              "logical_key_bytes": 1429758176,
+              "suffix_bytes": 830323668,
+              "key_meta_bytes": 311332311,
+              "singletons": 35713301
+            }
+          ],
+          [
+            "kv/513",
+            {
+              "keys": 39676476,
+              "records": 39686805,
+              "posting_bytes": 589361834,
+              "logical_key_bytes": 1349000120,
+              "suffix_bytes": 689824230,
+              "key_meta_bytes": 276914748,
+              "singletons": 39666176
+            }
+          ],
+          [
+            "kv/1",
+            {
+              "keys": 25597,
+              "records": 21483234,
+              "posting_bytes": 148418441,
+              "logical_key_bytes": 1272020,
+              "suffix_bytes": 446342,
+              "key_meta_bytes": 200495,
+              "singletons": 1482
+            }
+          ],
+          [
+            "kv/7",
+            {
+              "keys": 5955701,
+              "records": 7617872,
+              "posting_bytes": 100114430,
+              "logical_key_bytes": 408506726,
+              "suffix_bytes": 128894946,
+              "key_meta_bytes": 41691075,
+              "singletons": 5570436
+            }
+          ],
+          [
+            "kv/769",
+            {
+              "keys": 3460300,
+              "records": 5691396,
+              "posting_bytes": 67135276,
+              "logical_key_bytes": 200346803,
+              "suffix_bytes": 67534136,
+              "key_meta_bytes": 24228264,
+              "singletons": 3120894
+            }
+          ],
+          [
+            "kv/10",
+            {
+              "keys": 4395904,
+              "records": 4401839,
+              "posting_bytes": 65294025,
+              "logical_key_bytes": 279179993,
+              "suffix_bytes": 102176488,
+              "key_meta_bytes": 30769990,
+              "singletons": 4389969
+            }
+          ],
+          [
+            "kv/768",
+            {
+              "keys": 89782,
+              "records": 3287248,
+              "posting_bytes": 25163398,
+              "logical_key_bytes": 4848307,
+              "suffix_bytes": 4550079,
+              "key_meta_bytes": 624526,
+              "singletons": 15938
+            }
+          ],
+          [
+            "kv/520",
+            {
+              "keys": 1117880,
+              "records": 1453461,
+              "posting_bytes": 19205207,
+              "logical_key_bytes": 39125800,
+              "suffix_bytes": 22081350,
+              "key_meta_bytes": 7792446,
+              "singletons": 921089
+            }
+          ],
+          [
+            "kv/525",
+            {
+              "keys": 585517,
+              "records": 659124,
+              "posting_bytes": 9272866,
+              "logical_key_bytes": 20493095,
+              "suffix_bytes": 4398904,
+              "key_meta_bytes": 4081880,
+              "singletons": 515197
+            }
+          ],
+          [
+            "kv/258",
+            {
+              "keys": 101432,
+              "records": 101432,
+              "posting_bytes": 1505432,
+              "logical_key_bytes": 3448688,
+              "suffix_bytes": 451201,
+              "key_meta_bytes": 707701,
+              "singletons": 101432
+            }
+          ],
+          [
+            "kv/5",
+            {
+              "keys": 2240,
+              "records": 2244,
+              "posting_bytes": 33279,
+              "logical_key_bytes": 96867,
+              "suffix_bytes": 26174,
+              "key_meta_bytes": 15672,
+              "singletons": 2238
+            }
+          ],
+          [
+            "kv/8",
+            {
+              "keys": 880,
+              "records": 880,
+              "posting_bytes": 13051,
+              "logical_key_bytes": 37739,
+              "suffix_bytes": 11067,
+              "key_meta_bytes": 6160,
+              "singletons": 880
+            }
+          ],
+          [
+            "flat/3",
+            {
+              "keys": 790,
+              "records": 875,
+              "posting_bytes": 12418,
+              "logical_key_bytes": 16590,
+              "suffix_bytes": 16121,
+              "key_meta_bytes": 5530,
+              "singletons": 754
+            }
+          ],
+          [
+            "kv/4",
+            {
+              "keys": 86,
+              "records": 870,
+              "posting_bytes": 6697,
+              "logical_key_bytes": 3268,
+              "suffix_bytes": 718,
+              "key_meta_bytes": 602,
+              "singletons": 11
+            }
+          ],
+          [
+            "kv/2",
+            {
+              "keys": 240,
+              "records": 240,
+              "posting_bytes": 3563,
+              "logical_key_bytes": 10998,
+              "suffix_bytes": 3854,
+              "key_meta_bytes": 1680,
+              "singletons": 240
+            }
+          ],
+          [
+            "kv/6",
+            {
+              "keys": 47,
+              "records": 94,
+              "posting_bytes": 1104,
+              "logical_key_bytes": 1880,
+              "suffix_bytes": 425,
+              "key_meta_bytes": 329,
+              "singletons": 23
+            }
+          ],
+          [
+            "kv/3",
+            {
+              "keys": 48,
+              "records": 88,
+              "posting_bytes": 1031,
+              "logical_key_bytes": 1940,
+              "suffix_bytes": 459,
+              "key_meta_bytes": 336,
+              "singletons": 31
+            }
+          ],
+          [
+            "kv/523",
+            {
+              "keys": 9,
+              "records": 9,
+              "posting_bytes": 135,
+              "logical_key_bytes": 315,
+              "suffix_bytes": 41,
+              "key_meta_bytes": 63,
+              "singletons": 9
+            }
+          ]
+        ]
+      }
+    },
+    "missing": []
+  },
+  "current": {
+    "manifest_sha256": "840c8e1d4698f7c42f542a9b0eb2f0f03d250f21fd15ea3d049c2f30f34ee87b",
+    "cold_frontier": {
+      "visibleTxStart": 1,
+      "visibleTxEnd": 2658305819,
+      "generation": 26712
+    },
+    "progress": {
+      "historyBuildTxNum": 2658305819,
+      "accessorBuildTxNum": 2658305819,
+      "hotPruneTxNum": 2658305819,
+      "hotPruneBlockNum": 35819894
+    },
+    "files": 22121,
+    "groups": {
+      "0M-5M": {
+        "counts": {
+          "files": 1265,
+          "tx_numbers": 109326051,
+          "records": 665034595,
+          "logical_seg_bytes": 37982790620,
+          "tx_range_entries": 4997883,
+          "accessor_bytes": 4957016954,
+          "history_bytes": 8220181967,
+          "inverted_bytes": 297151594
+        },
+        "domains": {},
+        "from_block": 1,
+        "to_block": 4997883,
+        "bytes_per_tx": {
+          "history_bytes": 75.18959929321878,
+          "inverted_bytes": 2.718030984216196,
+          "accessor_bytes": 45.341589755217626
+        },
+        "records_per_tx": 6.083038662029419,
+        "bytes_per_record": {
+          "history_bytes": 12.36053286370764,
+          "inverted_bytes": 0.4468212574715756,
+          "accessor_bytes": 7.453773068752912
+        },
+        "domains_by_records": []
+      },
+      "boundary-0M-10M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 229514,
+          "records": 1444895,
+          "logical_seg_bytes": 84545401,
+          "tx_range_entries": 2150,
+          "accessor_bytes": 8986851,
+          "history_bytes": 19513933,
+          "inverted_bytes": 680198
+        },
+        "domains": {},
+        "from_block": 4997884,
+        "to_block": 5000033,
+        "bytes_per_tx": {
+          "history_bytes": 85.0228439223751,
+          "inverted_bytes": 2.9636449192641843,
+          "accessor_bytes": 39.15600355533867
+        },
+        "records_per_tx": 6.295454743501486,
+        "bytes_per_record": {
+          "history_bytes": 13.505433266777171,
+          "inverted_bytes": 0.4707594669508857,
+          "accessor_bytes": 6.219726000851273
+        },
+        "domains_by_records": []
+      },
+      "5M-10M": {
+        "counts": {
+          "files": 2680,
+          "tx_numbers": 361243751,
+          "records": 2337956954,
+          "logical_seg_bytes": 134508220404,
+          "tx_range_entries": 4998155,
+          "accessor_bytes": 18031048601,
+          "history_bytes": 32139565713,
+          "inverted_bytes": 1213397482
+        },
+        "domains": {},
+        "from_block": 5000034,
+        "to_block": 9998188,
+        "bytes_per_tx": {
+          "history_bytes": 88.96919496608815,
+          "inverted_bytes": 3.3589438672393808,
+          "accessor_bytes": 49.91380072620274
+        },
+        "records_per_tx": 6.471965113660887,
+        "bytes_per_record": {
+          "history_bytes": 13.746859478320404,
+          "inverted_bytes": 0.5189990687912384,
+          "accessor_bytes": 7.712309916635018
+        },
+        "domains_by_records": []
+      },
+      "boundary-5M-15M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 141066,
+          "records": 879554,
+          "logical_seg_bytes": 49079171,
+          "tx_range_entries": 2641,
+          "accessor_bytes": 7691410,
+          "history_bytes": 12009086,
+          "inverted_bytes": 461243
+        },
+        "domains": {},
+        "from_block": 9998189,
+        "to_block": 10000829,
+        "bytes_per_tx": {
+          "history_bytes": 85.13097415394212,
+          "inverted_bytes": 3.269696454142033,
+          "accessor_bytes": 54.52348546070633
+        },
+        "records_per_tx": 6.235053095714063,
+        "bytes_per_record": {
+          "history_bytes": 13.653608533415799,
+          "inverted_bytes": 0.5244055509951635,
+          "accessor_bytes": 8.744670594414897
+        },
+        "domains_by_records": []
+      },
+      "10M-15M": {
+        "counts": {
+          "files": 3283,
+          "tx_numbers": 359397770,
+          "records": 2275194150,
+          "logical_seg_bytes": 139352581245,
+          "tx_range_entries": 4996107,
+          "accessor_bytes": 16510783742,
+          "history_bytes": 32530782735,
+          "inverted_bytes": 1180199896
+        },
+        "domains": {},
+        "from_block": 10000830,
+        "to_block": 14996936,
+        "bytes_per_tx": {
+          "history_bytes": 90.5147039031433,
+          "inverted_bytes": 3.283826429974788,
+          "accessor_bytes": 45.94013964527382
+        },
+        "records_per_tx": 6.330573920923327,
+        "bytes_per_record": {
+          "history_bytes": 14.298024955364799,
+          "inverted_bytes": 0.518724916728535,
+          "accessor_bytes": 7.256868053216469
+        },
+        "domains_by_records": []
+      },
+      "boundary-10M-20M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 152358,
+          "records": 1552036,
+          "logical_seg_bytes": 107567426,
+          "tx_range_entries": 4364,
+          "accessor_bytes": 11299595,
+          "history_bytes": 23523522,
+          "inverted_bytes": 486524
+        },
+        "domains": {},
+        "from_block": 14996937,
+        "to_block": 15001300,
+        "bytes_per_tx": {
+          "history_bytes": 154.3963690780924,
+          "inverted_bytes": 3.1932947400202156,
+          "accessor_bytes": 74.16476325496528
+        },
+        "records_per_tx": 10.186770632326494,
+        "bytes_per_record": {
+          "history_bytes": 15.156556935535,
+          "inverted_bytes": 0.31347468744281703,
+          "accessor_bytes": 7.28049800391228
+        },
+        "domains_by_records": []
+      },
+      "15M-20M": {
+        "counts": {
+          "files": 2124,
+          "tx_numbers": 196315234,
+          "records": 1750170615,
+          "logical_seg_bytes": 120595258288,
+          "tx_range_entries": 4997850,
+          "accessor_bytes": 13377373268,
+          "history_bytes": 26829254837,
+          "inverted_bytes": 608668579
+        },
+        "domains": {},
+        "from_block": 15001301,
+        "to_block": 19999150,
+        "bytes_per_tx": {
+          "history_bytes": 136.66415127518835,
+          "inverted_bytes": 3.1004653413702985,
+          "accessor_bytes": 68.14230865038218
+        },
+        "records_per_tx": 8.91510342493339,
+        "bytes_per_record": {
+          "history_bytes": 15.329508224545297,
+          "inverted_bytes": 0.34777671032946694,
+          "accessor_bytes": 7.643468101537061
+        },
+        "domains_by_records": []
+      },
+      "boundary-15M-25M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 85694,
+          "records": 812277,
+          "logical_seg_bytes": 58241218,
+          "tx_range_entries": 2746,
+          "accessor_bytes": 5631093,
+          "history_bytes": 12530962,
+          "inverted_bytes": 283530
+        },
+        "domains": {},
+        "from_block": 19999151,
+        "to_block": 20001896,
+        "bytes_per_tx": {
+          "history_bytes": 146.22916423553573,
+          "inverted_bytes": 3.3086330431535464,
+          "accessor_bytes": 65.71163675403179
+        },
+        "records_per_tx": 9.478808317968586,
+        "bytes_per_record": {
+          "history_bytes": 15.426956567771832,
+          "inverted_bytes": 0.3490558023925336,
+          "accessor_bytes": 6.932478698769016
+        },
+        "domains_by_records": []
+      },
+      "20M-25M": {
+        "counts": {
+          "files": 3384,
+          "tx_numbers": 316757387,
+          "records": 2438442521,
+          "logical_seg_bytes": 154042503903,
+          "tx_range_entries": 4996982,
+          "accessor_bytes": 27250976946,
+          "history_bytes": 39748438602,
+          "inverted_bytes": 1029648632
+        },
+        "domains": {},
+        "from_block": 20001897,
+        "to_block": 24998878,
+        "bytes_per_tx": {
+          "history_bytes": 125.48543533098409,
+          "inverted_bytes": 3.2505907494432007,
+          "accessor_bytes": 86.0310700378394
+        },
+        "records_per_tx": 7.698139399666156,
+        "bytes_per_record": {
+          "history_bytes": 16.300748637576763,
+          "inverted_bytes": 0.4222566753706966,
+          "accessor_bytes": 11.175566662454866
+        },
+        "domains_by_records": []
+      },
+      "boundary-20M-30M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 78255,
+          "records": 605423,
+          "logical_seg_bytes": 38122006,
+          "tx_range_entries": 1256,
+          "accessor_bytes": 6794264,
+          "history_bytes": 10100497,
+          "inverted_bytes": 272222
+        },
+        "domains": {},
+        "from_block": 24998879,
+        "to_block": 25000134,
+        "bytes_per_tx": {
+          "history_bytes": 129.07158648009712,
+          "inverted_bytes": 3.4786531212063125,
+          "accessor_bytes": 86.82210721359658
+        },
+        "records_per_tx": 7.736540796115264,
+        "bytes_per_record": {
+          "history_bytes": 16.68337179129303,
+          "inverted_bytes": 0.4496393430708777,
+          "accessor_bytes": 11.222342064969451
+        },
+        "domains_by_records": []
+      },
+      "25M-30M": {
+        "counts": {
+          "files": 4473,
+          "tx_numbers": 490530888,
+          "records": 2695570015,
+          "logical_seg_bytes": 164247603171,
+          "tx_range_entries": 4999350,
+          "accessor_bytes": 37346884317,
+          "history_bytes": 46987513997,
+          "inverted_bytes": 1416878891
+        },
+        "domains": {},
+        "from_block": 25000135,
+        "to_block": 29999484,
+        "bytes_per_tx": {
+          "history_bytes": 95.78910349270402,
+          "inverted_bytes": 2.888460086126116,
+          "accessor_bytes": 76.13564248577961
+        },
+        "records_per_tx": 5.4952095391799265,
+        "bytes_per_record": {
+          "history_bytes": 17.43138324566947,
+          "inverted_bytes": 0.5256323831751779,
+          "accessor_bytes": 13.854911617645369
+        },
+        "domains_by_records": []
+      },
+      "boundary-25M-35M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 148762,
+          "records": 560953,
+          "logical_seg_bytes": 34158032,
+          "tx_range_entries": 1080,
+          "accessor_bytes": 9500247,
+          "history_bytes": 10514558,
+          "inverted_bytes": 375734
+        },
+        "domains": {},
+        "from_block": 29999485,
+        "to_block": 30000564,
+        "bytes_per_tx": {
+          "history_bytes": 70.68040225326361,
+          "inverted_bytes": 2.5257391000389884,
+          "accessor_bytes": 63.862054825829176
+        },
+        "records_per_tx": 3.77080840537234,
+        "bytes_per_record": {
+          "history_bytes": 18.744097990384223,
+          "inverted_bytes": 0.6698136920561972,
+          "accessor_bytes": 16.935905503669648
+        },
+        "domains_by_records": []
+      },
+      "30M-35M": {
+        "counts": {
+          "files": 4175,
+          "tx_numbers": 732737130,
+          "records": 2913586474,
+          "logical_seg_bytes": 168544701946,
+          "tx_range_entries": 4998941,
+          "accessor_bytes": 48301401554,
+          "history_bytes": 52485865984,
+          "inverted_bytes": 1804533669
+        },
+        "domains": {},
+        "from_block": 30000565,
+        "to_block": 34999505,
+        "bytes_per_tx": {
+          "history_bytes": 71.62987084331321,
+          "inverted_bytes": 2.4627299410908794,
+          "accessor_bytes": 65.91914013419792
+        },
+        "records_per_tx": 3.976305218762423,
+        "bytes_per_record": {
+          "history_bytes": 18.014178213816077,
+          "inverted_bytes": 0.6193513338639971,
+          "accessor_bytes": 16.577987983204785
+        },
+        "domains_by_records": []
+      },
+      "boundary-30M-40M": {
+        "counts": {
+          "files": 1,
+          "tx_numbers": 115028,
+          "records": 530205,
+          "logical_seg_bytes": 33475228,
+          "tx_range_entries": 1049,
+          "accessor_bytes": 8592766,
+          "history_bytes": 10684241,
+          "inverted_bytes": 339735
+        },
+        "domains": {},
+        "from_block": 34999506,
+        "to_block": 35000554,
+        "bytes_per_tx": {
+          "history_bytes": 92.88382828528707,
+          "inverted_bytes": 2.9534982786799735,
+          "accessor_bytes": 74.70151615258894
+        },
+        "records_per_tx": 4.609355982891122,
+        "bytes_per_record": {
+          "history_bytes": 20.151150969907867,
+          "inverted_bytes": 0.6407615922143322,
+          "accessor_bytes": 16.206497486821135
+        },
+        "domains_by_records": []
+      },
+      "35M-40M": {
+        "counts": {
+          "files": 728,
+          "tx_numbers": 90969388,
+          "records": 396130441,
+          "logical_seg_bytes": 25938059577,
+          "tx_range_entries": 818695,
+          "accessor_bytes": 6189946858,
+          "history_bytes": 8029228287,
+          "inverted_bytes": 248439166
+        },
+        "domains": {},
+        "from_block": 35000555,
+        "to_block": 35819894,
+        "bytes_per_tx": {
+          "history_bytes": 88.26296915397518,
+          "inverted_bytes": 2.731019428205893,
+          "accessor_bytes": 68.04428384194472
+        },
+        "records_per_tx": 4.354546619572729,
+        "bytes_per_record": {
+          "history_bytes": 20.269152420427087,
+          "inverted_bytes": 0.6271650453644384,
+          "accessor_bytes": 15.626031774720389
+        },
+        "domains_by_records": []
+      }
+    },
+    "missing": [
+      {
+        "ref": {
+          "dataset": "state-domain-change",
+          "kind": "history",
+          "fromTxNum": 2658111152,
+          "toTxNum": 2658146427,
+          "aggregationSteps": 1,
+          "path": "history/state-domain-change-2658111152-2658146427-d97d0b6edb44b2a9.seg",
+          "size": 2957648,
+          "checksum": "sha256:d97d0b6edb44b2a9c800937fc75e3f6bef9f1783472616f246c9b7c7a87c4833"
+        },
+        "error": "open /data/gtron/main/datadir/gtron/state-snapshots/history/state-domain-change-2658111152-2658146427-d97d0b6edb44b2a9.seg: no such file or directory"
+      },
+      {
+        "ref": {
+          "dataset": "state-domain-change",
+          "kind": "history",
+          "fromTxNum": 2658146428,
+          "toTxNum": 2658188694,
+          "aggregationSteps": 1,
+          "path": "history/state-domain-change-2658146428-2658188694-e7008d321e0c0f8e.seg",
+          "size": 3288612,
+          "checksum": "sha256:e7008d321e0c0f8e4f6b1fd0c2b185318d2d7fae5fa540a5cc036ace778c8cf0"
+        },
+        "error": "open /data/gtron/main/datadir/gtron/state-snapshots/history/state-domain-change-2658146428-2658188694-e7008d321e0c0f8e.seg: no such file or directory"
+      }
+    ]
+  }
+}

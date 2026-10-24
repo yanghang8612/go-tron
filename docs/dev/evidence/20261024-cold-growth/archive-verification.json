@@ -1,0 +1,10 @@
+{
+  "growth_archive_bytes": 12615308,
+  "growth_archive_sha256": "57275ccb2c498e7b485de45cc00c1d369c7fd8f20a92387a5a0284b2c53c905e",
+  "members_verified": 16,
+  "frozen_raw_statistics_sha256": "c9d77be1bfdcb425979c1e11669743f79344409cb5603f6707d96d4405a12e84",
+  "frozen_manifest_sha256": "127dfba9e75dbe215a9f00c5407ceb6db9a3f0be9f7c7e6a67418e3772992b67",
+  "frozen_files": 19949,
+  "frozen_index_records": 14302423656,
+  "source_domain_format": "V7, not a physical byte attribution for V8/V9 compressed mixed key pages"
+}

@@ -1,0 +1,413 @@
+{
+  "complete": true,
+  "live_manifest_sha256": "840c8e1d4698f7c42f542a9b0eb2f0f03d250f21fd15ea3d049c2f30f34ee87b",
+  "growth_spans_sha256": "9a6ab346f6e1b054988a84699e6800d9a627f66ad767a85efbac8c6d750e14da",
+  "all_readable_spans_block_aligned": true,
+  "readable_spans": 22119,
+  "missing_current_refs": [
+    {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 2658111152,
+      "toTxNum": 2658146427,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-2658111152-2658146427-d97d0b6edb44b2a9.seg",
+      "size": 2957648,
+      "checksum": "sha256:d97d0b6edb44b2a9c800937fc75e3f6bef9f1783472616f246c9b7c7a87c4833"
+    },
+    {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 2658146428,
+      "toTxNum": 2658188694,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-2658146428-2658188694-e7008d321e0c0f8e.seg",
+      "size": 3288612,
+      "checksum": "sha256:e7008d321e0c0f8e4f6b1fd0c2b185318d2d7fae5fa540a5cc036ace778c8cf0"
+    }
+  ],
+  "missing_only_above_35M": true,
+  "definition": "Sum manifest file lengths for complete files wholly inside each 5M bucket. Cross-boundary files are retained separately; this is not past filesystem allocation at each height. Event log manifest From/To are block bounds; state history From/To are state TxNum bounds.",
+  "groups": {
+    "0M-5M": {
+      "event-log_bytes": 3057044854,
+      "event-log-index_bytes": 145792544,
+      "tx_numbers": 109326051,
+      "blocks": 4997883,
+      "records": 665034595,
+      "observed_range_gaps": 0,
+      "real_transactions": 104328168,
+      "accessor_bytes": 4957016954,
+      "history_bytes": 8220181967,
+      "inverted_bytes": 297151594
+    },
+    "5M-10M": {
+      "event-log_bytes": 14276595924,
+      "event-log-index_bytes": 789841423,
+      "tx_numbers": 361243751,
+      "blocks": 4998155,
+      "records": 2337956954,
+      "observed_range_gaps": 0,
+      "real_transactions": 356245596,
+      "accessor_bytes": 18031048601,
+      "history_bytes": 32139565713,
+      "inverted_bytes": 1213397482
+    },
+    "10M-15M": {
+      "event-log_bytes": 19047467890,
+      "event-log-index_bytes": 1060320580,
+      "tx_numbers": 359397770,
+      "blocks": 4996107,
+      "records": 2275194150,
+      "observed_range_gaps": 0,
+      "real_transactions": 354401663,
+      "accessor_bytes": 16510783742,
+      "history_bytes": 32530782735,
+      "inverted_bytes": 1180199896
+    },
+    "15M-20M": {
+      "event-log_bytes": 10760108442,
+      "event-log-index_bytes": 972868784,
+      "tx_numbers": 196315234,
+      "blocks": 4997850,
+      "records": 1750170615,
+      "observed_range_gaps": 0,
+      "real_transactions": 191317384,
+      "accessor_bytes": 13377373268,
+      "history_bytes": 26829254837,
+      "inverted_bytes": 608668579
+    },
+    "20M-25M": {
+      "event-log_bytes": 16821289369,
+      "event-log-index_bytes": 2626302042,
+      "tx_numbers": 316757387,
+      "blocks": 4996982,
+      "records": 2438442521,
+      "observed_range_gaps": 0,
+      "real_transactions": 311760405,
+      "accessor_bytes": 27250976946,
+      "history_bytes": 39748438602,
+      "inverted_bytes": 1029648632,
+      "state_history_bytes": 68029064180,
+      "event_bytes": 19447591411,
+      "total_bytes": 87476655591
+    },
+    "25M-30M": {
+      "event-log_bytes": 21220606336,
+      "event-log-index_bytes": 4425273267,
+      "tx_numbers": 490530888,
+      "blocks": 4999350,
+      "records": 2695570015,
+      "observed_range_gaps": 0,
+      "real_transactions": 485531538,
+      "accessor_bytes": 37346884317,
+      "history_bytes": 46987513997,
+      "inverted_bytes": 1416878891,
+      "state_history_bytes": 85751277205,
+      "event_bytes": 25645879603,
+      "total_bytes": 111397156808
+    },
+    "30M-35M": {
+      "event-log_bytes": 19797908668,
+      "event-log-index_bytes": 5341165497,
+      "tx_numbers": 732737130,
+      "blocks": 4998941,
+      "records": 2913586474,
+      "observed_range_gaps": 0,
+      "real_transactions": 727738189,
+      "accessor_bytes": 48301401554,
+      "history_bytes": 52485865984,
+      "inverted_bytes": 1804533669,
+      "state_history_bytes": 102591801207,
+      "event_bytes": 25139074165,
+      "total_bytes": 127730875372
+    },
+    "35M-40M": {
+      "event-log_bytes": 3956980819,
+      "event-log-index_bytes": 1122516625,
+      "tx_numbers": 90969388,
+      "blocks": 818695,
+      "records": 396130441,
+      "observed_range_gaps": 1,
+      "real_transactions": 90150693,
+      "accessor_bytes": 6189946858,
+      "history_bytes": 8029228287,
+      "inverted_bytes": 248439166
+    }
+  },
+  "boundary_files": [
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 4997884,
+        "toTxNum": 5000033,
+        "path": "log/event-log-4997884-5000033-5545cbd86565c528.seg",
+        "size": 8717427,
+        "checksum": "sha256:5545cbd86565c5287640261c018985cb17f721c1f53be0e97d0f05b8264862d9"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 9998189,
+        "toTxNum": 10000829,
+        "path": "log/event-log-9998189-10000829-d7f062fc330c6f17.seg",
+        "size": 5983363,
+        "checksum": "sha256:d7f062fc330c6f17dee557d5f7176cf8aac499109301adc69f0642cf0b18d79d"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 14996937,
+        "toTxNum": 15001300,
+        "path": "log/event-log-14996937-15001300-8c5b5d392205ca20.seg",
+        "size": 7250256,
+        "checksum": "sha256:8c5b5d392205ca200bc8bc90b7070db2d3171e55e01adcc4ae79c8b65c901aa7"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 19999151,
+        "toTxNum": 20001896,
+        "path": "log/event-log-19999151-20001896-3a93055c781711e0.seg",
+        "size": 5213106,
+        "checksum": "sha256:3a93055c781711e02c56621c5552384475dfad761c7a5ad30439fee6e1959f94"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 24998879,
+        "toTxNum": 25000134,
+        "path": "log/event-log-24998879-25000134-bd74e205700e7b3b.seg",
+        "size": 5753665,
+        "checksum": "sha256:bd74e205700e7b3b795c94d095b62aae5372cc0c74cc99f10e07ad86bf613341"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 29999485,
+        "toTxNum": 30000564,
+        "path": "log/event-log-29999485-30000564-b3099e1d984ca247.seg",
+        "size": 3736382,
+        "checksum": "sha256:b3099e1d984ca247cf49c48be1f3e95312a4076f7691434163f9345a5eaefafc"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log",
+        "fromTxNum": 34999506,
+        "toTxNum": 35000554,
+        "path": "log/event-log-34999506-35000554-11446ad5816f2ae9.seg",
+        "size": 6501189,
+        "checksum": "sha256:11446ad5816f2ae95dccd0ee1f980633b0eefbafdc8ca35640035618e084f406"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 4997884,
+        "toTxNum": 5000033,
+        "path": "log/event-log-index-4997884-5000033-132c10ff6ad0cc27.idx",
+        "size": 370451,
+        "checksum": "sha256:132c10ff6ad0cc27b110ed05ab838fd6290c9c34de24885577c982d36b857b58"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 9998189,
+        "toTxNum": 10000829,
+        "path": "log/event-log-index-9998189-10000829-39791a664a91d178.idx",
+        "size": 390256,
+        "checksum": "sha256:39791a664a91d178ff7434f2c51a5b004e9ed07c073f062c629e28a65b4ce6c6"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 14996937,
+        "toTxNum": 15001300,
+        "path": "log/event-log-index-14996937-15001300-cb6275dd607272ae.idx",
+        "size": 317872,
+        "checksum": "sha256:cb6275dd607272ae7f3b05fb263d0d78824e014e03b9fc6876bac699183ddcf6"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 19999151,
+        "toTxNum": 20001896,
+        "path": "log/event-log-index-19999151-20001896-55e341f6e685f0ee.idx",
+        "size": 195862,
+        "checksum": "sha256:55e341f6e685f0eef1879546726ce4e44c4732957effe248e8ca7eb3836ede49"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 24998879,
+        "toTxNum": 25000134,
+        "path": "log/event-log-index-24998879-25000134-6be920bb15eb0ae9.idx",
+        "size": 1112918,
+        "checksum": "sha256:6be920bb15eb0ae9f87845ef076265e4e58a0729206056e5354922bb413b61b2"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 29999485,
+        "toTxNum": 30000564,
+        "path": "log/event-log-index-29999485-30000564-e762829bee0ea433.idx",
+        "size": 1031552,
+        "checksum": "sha256:e762829bee0ea4335ea20df6f26af87f21a43dfc711e82a03052919b85855291"
+      }
+    },
+    {
+      "dataset": "event-log",
+      "ref": {
+        "dataset": "event-log",
+        "kind": "event-log-index",
+        "fromTxNum": 34999506,
+        "toTxNum": 35000554,
+        "path": "log/event-log-index-34999506-35000554-512b558367a853a9.idx",
+        "size": 1875034,
+        "checksum": "sha256:512b558367a853a9ce1e90a7b57cfaed3b1317ad68b7a91babd43bb008544b31"
+      }
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 109326052,
+        "toTxNum": 109555565,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-109326052-109555565-fdad2543937c4e3f.seg",
+        "size": 19513933,
+        "checksum": "sha256:fdad2543937c4e3f8d1acc9c586725ebaf6600594aaa9a395ce1d93947d8bc89"
+      },
+      "from_block": 4997884,
+      "to_block": 5000033
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 470799317,
+        "toTxNum": 470940382,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-470799317-470940382-d0b0cfa08a0cc101.seg",
+        "size": 12009086,
+        "checksum": "sha256:d0b0cfa08a0cc1019b5e02d0b56e3498e32d5039501468199bc808883eb3ecd3"
+      },
+      "from_block": 9998189,
+      "to_block": 10000829
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 830338153,
+        "toTxNum": 830490510,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-830338153-830490510-3c3d4f9f8af9c73c.seg",
+        "size": 23523522,
+        "checksum": "sha256:3c3d4f9f8af9c73c7ce6288daafd303e6c57fcd938a605d25d032f3ce238c039"
+      },
+      "from_block": 14996937,
+      "to_block": 15001300
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 1026805745,
+        "toTxNum": 1026891438,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-1026805745-1026891438-3df00c3559ed9727.seg",
+        "size": 12530962,
+        "checksum": "sha256:3df00c3559ed9727a421031e9f2c894a3f37de9ccc970ebb6d7e31734cc8a9fc"
+      },
+      "from_block": 19999151,
+      "to_block": 20001896
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 1343648826,
+        "toTxNum": 1343727080,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-1343648826-1343727080-30fbdcfad1187212.seg",
+        "size": 10100497,
+        "checksum": "sha256:30fbdcfad1187212626a36dc9d6d1dce072938813601929d973ff817eb367ed0"
+      },
+      "from_block": 24998879,
+      "to_block": 25000134
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 1834257969,
+        "toTxNum": 1834406730,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-1834257969-1834406730-e69ef0daa7bae688.seg",
+        "size": 10514558,
+        "checksum": "sha256:e69ef0daa7bae6886a6fec7bef009949e840c04de058320d06f6be971af5defa"
+      },
+      "from_block": 29999485,
+      "to_block": 30000564
+    },
+    {
+      "dataset": "state-domain-change",
+      "ref": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 2567143861,
+        "toTxNum": 2567258888,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-2567143861-2567258888-058498c8035968b9.seg",
+        "size": 10684241,
+        "checksum": "sha256:058498c8035968b944d3a7ac2522d8853e825a44b5084fde7dbb16e2db38f5b9"
+      },
+      "from_block": 34999506,
+      "to_block": 35000554
+    }
+  ]
+}
