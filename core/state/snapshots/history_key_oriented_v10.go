@@ -143,7 +143,9 @@ func resolveHistoryOwnerKeys(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6H
 	entries := make(map[uint64][]byte, len(pages))
 	for start := 0; start < len(pages); {
 		end := start + 1
-		for end < len(pages) && (pages[end]-pages[start]+1)*historyOwnerEntrySize <= historyOwnerReadBudget {
+		// Merge only nearby entries: sparse owners must not turn two 18-byte
+		// reads into a 64 KiB scan of unrelated directory entries.
+		for end < len(pages) && pages[end]-pages[end-1] <= 4 && (pages[end]-pages[start]+1)*historyOwnerEntrySize <= historyOwnerReadBudget {
 			end++
 		}
 		raw := make([]byte, (pages[end-1]-pages[start]+1)*historyOwnerEntrySize)

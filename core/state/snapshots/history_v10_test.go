@@ -323,3 +323,55 @@ func TestHistoryOwnerStrictCoverageRejectsForgedDictionary(t *testing.T) {
 		t.Fatal("accepted owner mapping not matching authoritative history")
 	}
 }
+
+// A key page spanning two distant owners must not read the gap between their
+// directory entries. Preserve adjacent-entry batching without arbitrary overfetch.
+func TestHistoryOwnerDistantDirectoryEntriesStayBounded(t *testing.T) {
+	owners := make([][20]byte, 1<<18)
+	for i := range owners {
+		binary.BigEndian.PutUint64(owners[i][12:], uint64(i))
+	}
+	table, err := makeHistoryOwnerTable(owners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw bytes.Buffer
+	raw.Write(make([]byte, 152))
+	if err := table.appendTo(&raw, 152); err != nil {
+		t.Fatal(err)
+	}
+	h, err := decodeHistoryOwnerFooter(bytes.NewReader(raw.Bytes()), uint64(raw.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]stateDomainChangeBinaryAccessorV6Record, 2)
+	for i, id := range []uint32{0, 1<<18 - 1} {
+		rows[i].key = make([]byte, 5)
+		rows[i].key[0] = 1
+		binary.BigEndian.PutUint32(rows[i].key[1:], id)
+	}
+	r := &ownerDirectoryCountReader{Reader: bytes.NewReader(raw.Bytes()), start: h.prefixSize + h.dataLen, end: h.fileSize - 64}
+	if err := resolveHistoryOwnerKeys(r, stateDomainChangeBinaryAccessorV6Header{owners: h}, rows); err != nil {
+		t.Fatal(err)
+	}
+	if r.bytes != 36 || r.calls != 2 {
+		t.Fatal("sparse directory read amplification", r.bytes, r.calls)
+	}
+	if !bytes.Equal(rows[0].key[1:], owners[0][:]) || !bytes.Equal(rows[1].key[1:], owners[len(owners)-1][:]) {
+		t.Fatal("reconstruction")
+	}
+}
+
+type ownerDirectoryCountReader struct {
+	*bytes.Reader
+	start, end   uint64
+	bytes, calls int
+}
+
+func (r *ownerDirectoryCountReader) ReadAt(p []byte, off int64) (int, error) {
+	if off >= 0 && uint64(off) >= r.start && uint64(off) < r.end {
+		r.bytes += len(p)
+		r.calls++
+	}
+	return r.Reader.ReadAt(p, off)
+}
