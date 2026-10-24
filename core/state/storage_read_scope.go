@@ -50,15 +50,17 @@ func (s *StateDB) BeginCanonicalStorageReadScope(number uint64) (func() error, e
 }
 
 // Keep all scope-only pending resolution and source validation out of the
-// ordinary latest decode function. Its original nil-scope reader stays intact.
-func (s *StateDB) readCanonicalStorageLatest(owner tcommon.Address, generation uint64, key []byte) ([]byte, bool, error) {
+// ordinary decoding function. Owning reads and preimages retain their original
+// live route; only immediate decoding borrows the captured cut. Dirty/fresh
+// resolution remains in callers. Pending commits precede the physical cut.
+func (s *StateDB) readCanonicalAccountKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	reader, ok := s.accountKVLatestReader.(*commitScopeLatestReader)
 	if !ok || reader != s.storageReadScopeReader || reader.state != s || reader.writer == nil || reader.writer.index != s.accountKVIndex() {
 		return nil, false, fmt.Errorf("state: canonical storage reader changed within block")
 	}
 	w := reader.writer
-	if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, kvdomains.ContractStorage, key)]; ok {
-		if w.storagePendingResolved != nil {
+	if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, domain, key)]; ok {
+		if domain == kvdomains.ContractStorage && w.storagePendingResolved != nil {
 			(*w.storagePendingResolved)++
 		}
 		if pending.deleted {
@@ -66,5 +68,5 @@ func (s *StateDB) readCanonicalStorageLatest(owner tcommon.Address, generation u
 		}
 		return pending.value, true, nil
 	}
-	return rawdb.ReadStateKVLatestNoCopy(s.storageReadScope, owner, generation, kvdomains.ContractStorage, key)
+	return rawdb.ReadStateKVLatestNoCopy(s.storageReadScope, owner, generation, domain, key)
 }
