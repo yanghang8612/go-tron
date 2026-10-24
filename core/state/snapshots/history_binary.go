@@ -1758,8 +1758,11 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 	if err != nil {
 		return err
 	}
+	if err := checkHistoryOwnerDictionary(accessor, accessorHeader); err != nil {
+		return err
+	}
 	var locator *historyAccessorOffsetResolver
-	if accessorHeader.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(accessorHeader.version) {
 		if err := checkHistoryAccessorOffsets(accessor, accessorHeader); err != nil {
 			return err
 		}
@@ -1859,7 +1862,7 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 	if err != nil {
 		return err
 	}
-	cursor.deferOffsets = accessorHeader.version == stateDomainChangeBinaryAccessorVersionV9
+	cursor.deferOffsets = isHistoryOffsetAccessor(accessorHeader.version)
 	var compared uint64
 	_, err = collector.Iterate(func(key, value []byte) error {
 		if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
@@ -2598,7 +2601,7 @@ func checkStateDomainChangeBinaryAccessorValidationContext(ctx context.Context, 
 			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
 		}
 	}
-	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 || header.version == stateDomainChangeBinaryVersionV7 || header.version == stateDomainChangeBinaryAccessorVersionV8 || header.version == stateDomainChangeBinaryAccessorVersionV9) && fileSize > math.MaxInt64 {
+	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 || header.version == stateDomainChangeBinaryVersionV7 || header.version == stateDomainChangeBinaryAccessorVersionV8 || isHistoryOffsetAccessor(header.version)) && fileSize > math.MaxInt64 {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q logical size %d exceeds int64", ref.Path, fileSize)
 	}
 	if header.version == stateDomainChangeBinaryVersionV3 {
@@ -3565,7 +3568,7 @@ func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomai
 		return stateDomainChangeBinaryHeader{}, nil, errors.New("snapshots: invalid state-domain-change binary magic")
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && (magic == stateDomainChangeBinaryIndexMagic || magic == stateDomainChangeBinaryAccessorMagic)) && !(version == stateDomainChangeBinaryAccessorVersionV9 && magic == stateDomainChangeBinaryAccessorMagic) {
+	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && (magic == stateDomainChangeBinaryIndexMagic || magic == stateDomainChangeBinaryAccessorMagic)) && !(isHistoryOffsetAccessor(version) && magic == stateDomainChangeBinaryAccessorMagic) {
 		return stateDomainChangeBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", version)
 	}
 	return stateDomainChangeBinaryHeader{

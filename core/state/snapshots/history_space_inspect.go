@@ -324,7 +324,7 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 	var totalRecords, totalKeys, totalIndexEntries, totalIndexFrames uint64
 	var totalRecordDirectoryEntries uint64
 	var totalAccessorPosting, totalAccessorMetadata uint64
-	allV6, allV7, allV8, allV9 := true, true, true, true
+	allV6, allV7, allV8, allV9, allV10 := true, true, true, true, true
 	for i, trio := range trios {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -348,8 +348,9 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		allV7 = allV7 && h.accessorVersion == stateDomainChangeBinaryVersionV7
 		allV8 = allV8 && h.accessorVersion == stateDomainChangeBinaryAccessorVersionV8
 		allV9 = allV9 && h.accessorVersion == stateDomainChangeBinaryAccessorVersionV9
+		allV10 = allV10 && h.accessorVersion == stateDomainChangeBinaryAccessorVersionV10
 		if !h.accessorV6 {
-			return nil, fmt.Errorf("snapshots: history-space benchmark requires a key-oriented V6/V7/V8/V9 accessor %s", trio.accessor.Path)
+			return nil, fmt.Errorf("snapshots: history-space benchmark requires a key-oriented V6/V7/V8/V9/V10 accessor %s", trio.accessor.Path)
 		}
 		if !h.historyCompressed {
 			return nil, fmt.Errorf("snapshots: history-space benchmark requires compressed history %s", trio.history.Path)
@@ -449,6 +450,8 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		currentName = "current-v6"
 	case allV7:
 		currentName = "current-v7"
+	case allV10:
+		currentName = "current-v10"
 	case allV9:
 		currentName = "current-v9"
 	case allV8:

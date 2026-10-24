@@ -721,7 +721,7 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 }
 
 func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
-	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV9)
+	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV10)
 }
 
 func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Context, dir string, ref SegmentRef, recordCount uint64, version uint32) (SegmentRef, etl.Stats, error) {
@@ -738,6 +738,17 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	}
 	if b == nil || b.postings == nil || uint64(b.keyCount) > recordCount {
 		return SegmentRef{}, etl.Stats{}, errors.New("snapshots: invalid V6 accessor build")
+	}
+	var owners *historyOwnerTable
+	if version == stateDomainChangeBinaryAccessorVersionV10 {
+		var err error
+		owners, err = b.buildHistoryOwnerTable(ctx)
+		if err != nil {
+			return SegmentRef{}, etl.Stats{}, err
+		}
+		if owners == nil {
+			version = stateDomainChangeBinaryAccessorVersionV9
+		}
 	}
 	abs := filepath.Join(dir, ref.Path)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -772,7 +783,21 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	if err != nil {
 		return SegmentRef{}, postingStats, err
 	}
-	defer func() { _ = keyData.Close(); _ = os.Remove(keyDataName) }()
+	defer func(f *os.File, n string) { _ = f.Close(); _ = os.Remove(n) }(keyData, keyDataName)
+	var plainData *os.File
+	var plainWriter *bufio.Writer
+	var plainOffset uint64
+	var plainLargest int
+	var plainBlocks []stateDomainChangeBinaryAccessorV6Block
+	if owners != nil {
+		f, n, err := createStateDomainChangeBinaryTempFileInDir(filepath.Dir(abs), filepath.Base(abs)+".plain-keys")
+		if err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+		plainData = f
+		defer func() { _ = f.Close(); _ = os.Remove(n) }()
+		plainWriter = bufio.NewWriterSize(f, 1<<20)
+	}
 	metaReader := bufio.NewReaderSize(io.NewSectionReader(metaFile, 0, int64(b.keyCount)*int64(metaSize)), 64<<10)
 	keyWriter := bufio.NewWriterSize(keyData, 1<<20)
 	var keyOffset uint64
@@ -795,18 +820,39 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			}
 			records[i] = stateDomainChangeBinaryAccessorV6Key{key: key, keyID: keyID, postingOff: binary.BigEndian.Uint64(raw[:8]), postingCount: binary.BigEndian.Uint32(raw[8:12]), inlinePosting: stateDomainChangeBinaryAccessorV6Posting{txNum: binary.BigEndian.Uint64(raw[12:20]), offset: binary.BigEndian.Uint64(raw[20:28]), recordIndex: binary.BigEndian.Uint32(raw[28:32])}}
 		}
-		var raw []byte
-		if isHistoryInlineAccessor(version) {
-			raw, err = encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
+		var raw, stored []byte
+		var storedLen uint32
+		if owners != nil {
+			raw, stored, storedLen, err = encodeHistoryOwnerKeyBlock(records, ref.FromTxNum, owners, &largestRawKeyBlock)
+			if err != nil {
+				return SegmentRef{}, postingStats, err
+			}
+			plain, err := encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
+			if err != nil {
+				return SegmentRef{}, postingStats, err
+			}
+			packed, flags, err := compressHistoryDictionaryKeyBlock(plain, &plainLargest)
+			if err != nil {
+				return SegmentRef{}, postingStats, err
+			}
+			if _, err = plainWriter.Write(packed); err != nil {
+				return SegmentRef{}, postingStats, err
+			}
+			plainBlocks = append(plainBlocks, stateDomainChangeBinaryAccessorV6Block{firstKey: append([]byte(nil), keys[0]...), dataOff: plainOffset, dataLen: flags, rawLen: uint32(len(plain)), checksum: crc32.ChecksumIEEE(plain), keyCount: uint32(len(keys))})
+			plainOffset += uint64(len(packed))
 		} else {
-			raw, err = encodeStateDomainChangeBinaryAccessorV6KeyBlock(records)
-		}
-		if err != nil {
-			return SegmentRef{}, postingStats, err
-		}
-		stored, storedLen, err := compressHistoryDictionaryKeyBlock(raw, &largestRawKeyBlock)
-		if err != nil {
-			return SegmentRef{}, postingStats, err
+			if isHistoryInlineAccessor(version) {
+				raw, err = encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
+			} else {
+				raw, err = encodeStateDomainChangeBinaryAccessorV6KeyBlock(records)
+			}
+			if err != nil {
+				return SegmentRef{}, postingStats, err
+			}
+			stored, storedLen, err = compressHistoryDictionaryKeyBlock(raw, &largestRawKeyBlock)
+			if err != nil {
+				return SegmentRef{}, postingStats, err
+			}
 		}
 		off := keyOffset
 		if _, err := keyWriter.Write(stored); err != nil {
@@ -821,6 +867,20 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	keyStat, err := keyData.Stat()
 	if err != nil {
 		return SegmentRef{}, postingStats, err
+	}
+	if owners != nil {
+		if err := plainWriter.Flush(); err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+		plainStat, err := plainData.Stat()
+		if err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+		if uint64(keyStat.Size())+owners.size() >= uint64(plainStat.Size()) {
+			version = stateDomainChangeBinaryAccessorVersionV9
+			owners = nil
+			keyData, keyStat, blocks = plainData, plainStat, plainBlocks
+		}
 	}
 	postingStat, err := postingFile.Stat()
 	if err != nil {
@@ -908,7 +968,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			return SegmentRef{}, postingStats, err
 		}
 	}
-	if version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(version) {
 		if b.offsets == nil {
 			b.offsets, err = newHistoryAccessorOffsetBuilder(filepath.Dir(abs), filepath.Base(abs))
 			if err != nil {
@@ -916,6 +976,11 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			}
 		}
 		if err := b.offsets.AppendTo(metadata, recordCount); err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+	}
+	if owners != nil {
+		if err := owners.appendTo(metadata, metadata.size); err != nil {
 			return SegmentRef{}, postingStats, err
 		}
 	}

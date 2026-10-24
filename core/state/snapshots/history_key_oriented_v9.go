@@ -20,7 +20,11 @@ const historyOffsetCachePages = 64
 var historyOffsetMagic = [8]byte{'G', 'T', 'O', 'F', 'F', 'S', '0', '9'}
 
 func isHistoryInlineAccessor(version uint32) bool {
-	return version == stateDomainChangeBinaryAccessorVersionV8 || version == stateDomainChangeBinaryAccessorVersionV9
+	return version == stateDomainChangeBinaryAccessorVersionV8 || isHistoryOffsetAccessor(version)
+}
+
+func isHistoryOffsetAccessor(version uint32) bool {
+	return version == stateDomainChangeBinaryAccessorVersionV9 || version == stateDomainChangeBinaryAccessorVersionV10
 }
 
 func historyOffsetCRC(page uint64, entry, payload []byte) uint32 {
@@ -138,7 +142,7 @@ func (r *historyAccessorOffsetResolver) Offset(ordinal uint32) (uint64, error) {
 
 // Full verification walks directory/payload in order, never one random read per row.
 func checkHistoryAccessorOffsets(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header) error {
-	if h.version != stateDomainChangeBinaryAccessorVersionV9 {
+	if !isHistoryOffsetAccessor(h.version) {
 		return nil
 	}
 	count := ceilDiv(h.recordCount, historyOffsetPageRows)

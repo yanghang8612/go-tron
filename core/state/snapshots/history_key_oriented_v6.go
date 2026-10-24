@@ -70,6 +70,7 @@ type stateDomainChangeBinaryAccessorV6Header struct {
 	dictionaryDigest                               [sha256.Size]byte
 	sparseLen                                      uint64
 	offsetDataBase, offsetDataLen, offsetDirectory uint64
+	owners                                         *historyOwnerHeader
 }
 
 type stateDomainChangeBinaryAccessorV6Record struct {
@@ -359,13 +360,16 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 	postingStart := keyStart + h.keyDataLen
 	storedLen := uint64(block.dataLen &^ stateDomainChangeBinaryAccessorV6StoredRaw)
 	fileEnd := postingStart + h.postingLen
-	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(h.version) {
 		fileEnd = h.offsetDirectory + ceilDiv(h.recordCount, historyOffsetPageRows)*historyOffsetEntrySize + historyOffsetFooterSize
+		if h.owners != nil {
+			fileEnd = h.owners.fileSize
+		}
 	}
 	if block.dataOff < keyStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff || fileEnd != fileSize {
 		return nil, errors.New("snapshots: V6 accessor key block outside key data")
 	}
-	maxRaw := uint64(block.keyCount) * (math.MaxUint16 + 5*binary.MaxVarintLen64 + binary.MaxVarintLen32)
+	maxRaw := uint64(block.keyCount)*(math.MaxUint16+5*binary.MaxVarintLen64+binary.MaxVarintLen32) + 1
 	if uint64(block.rawLen) > h.keyDataLen || uint64(block.rawLen) > maxRaw {
 		return nil, errors.New("snapshots: V6 accessor key block decoded length is excessive")
 	}
@@ -387,6 +391,14 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 	if len(decoded) != int(block.rawLen) || crc32.ChecksumIEEE(decoded) != block.checksum {
 		return nil, errors.New("snapshots: V6 accessor key block checksum mismatch")
 	}
+	compactOwners := false
+	if h.version == stateDomainChangeBinaryAccessorVersionV10 {
+		if len(decoded) == 0 || decoded[0] > 1 {
+			return nil, errors.New("snapshots: invalid V10 key page tag")
+		}
+		compactOwners = decoded[0] == 1
+		decoded = decoded[1:]
+	}
 	br := bytes.NewReader(decoded)
 	records := make([]stateDomainChangeBinaryAccessorV6Record, 0, block.keyCount)
 	var previous []byte
@@ -396,7 +408,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 			return nil, errors.New("snapshots: invalid V6 accessor key prefix")
 		}
 		suffix, err := binary.ReadUvarint(br)
-		if err != nil || suffix > uint64(br.Len()) {
+		if err != nil || suffix > uint64(br.Len()) || prefix+suffix > math.MaxUint16 {
 			return nil, errors.New("snapshots: invalid V6 accessor key suffix")
 		}
 		key := make([]byte, prefix+suffix)
@@ -433,7 +445,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 			rec.postingOff, rec.postings = postingOff, uint32(postingCount)
 		}
 
-		if i == 0 && !bytes.Equal(key, block.firstKey) {
+		if i == 0 && !compactOwners && !bytes.Equal(key, block.firstKey) {
 			return nil, errors.New("snapshots: V6 accessor first key mismatch")
 		}
 		if i > 0 && bytes.Compare(previous, key) >= 0 {
@@ -445,6 +457,16 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 	}
 	if br.Len() != 0 {
 		return nil, errors.New("snapshots: V6 accessor key block trailing bytes")
+	}
+	if compactOwners {
+		if err := resolveHistoryOwnerKeys(r, h, records); err != nil {
+			return nil, err
+		}
+		for i, rec := range records {
+			if i == 0 && !bytes.Equal(rec.key, block.firstKey) || i > 0 && bytes.Compare(records[i-1].key, rec.key) >= 0 {
+				return nil, errors.New("snapshots: V10 reconstructed key mismatch/order")
+			}
+		}
 	}
 	return records, nil
 }

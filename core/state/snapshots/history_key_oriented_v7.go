@@ -87,8 +87,20 @@ func decodeStateDomainChangeBinaryAccessorV7Header(r io.ReaderAt, fileSize uint6
 	if !overflow {
 		total, overflow = checkedAdd(total, h.postingLen)
 	}
-	if !overflow && h.version == stateDomainChangeBinaryAccessorVersionV9 {
-		if err := decodeHistoryOffsetFooter(r, fileSize, total, &h); err != nil {
+	if !overflow && isHistoryOffsetAccessor(h.version) {
+		prefixSize := fileSize
+		if h.version == stateDomainChangeBinaryAccessorVersionV10 {
+			var err error
+			h.owners, err = decodeHistoryOwnerFooter(r, fileSize)
+			if err != nil {
+				return h, err
+			}
+			if h.owners.count > h.keyCount {
+				return h, errors.New("snapshots: owner count exceeds key count")
+			}
+			prefixSize = h.owners.prefixSize
+		}
+		if err := decodeHistoryOffsetFooter(r, prefixSize, total, &h); err != nil {
 			return h, err
 		}
 		total = fileSize
@@ -107,7 +119,7 @@ func decodeStateDomainChangeBinaryAccessorKeyHeader(r io.ReaderAt, fileSize uint
 	switch binary.BigEndian.Uint32(raw[8:12]) {
 	case stateDomainChangeBinaryVersionV6:
 		return decodeStateDomainChangeBinaryAccessorV6Header(r, fileSize)
-	case stateDomainChangeBinaryVersionV7, stateDomainChangeBinaryAccessorVersionV8, stateDomainChangeBinaryAccessorVersionV9:
+	case stateDomainChangeBinaryVersionV7, stateDomainChangeBinaryAccessorVersionV8, stateDomainChangeBinaryAccessorVersionV9, stateDomainChangeBinaryAccessorVersionV10:
 		return decodeStateDomainChangeBinaryAccessorV7Header(r, fileSize)
 	default:
 		return stateDomainChangeBinaryAccessorV6Header{}, errors.New("snapshots: unsupported key-oriented accessor version")
@@ -157,13 +169,13 @@ func encodeStateDomainChangeBinaryAccessorPostingListVersion(fromTxNum uint64, p
 			}
 			if i == start {
 				encoded = binary.AppendUvarint(encoded, posting.txNum-fromTxNum)
-				if version != stateDomainChangeBinaryAccessorVersionV9 {
+				if !isHistoryOffsetAccessor(version) {
 					encoded = binary.AppendUvarint(encoded, posting.offset)
 				}
 				encoded = binary.AppendUvarint(encoded, uint64(posting.recordIndex))
 			} else {
 				encoded = binary.AppendUvarint(encoded, posting.txNum-previous.txNum)
-				if version != stateDomainChangeBinaryAccessorVersionV9 {
+				if !isHistoryOffsetAccessor(version) {
 					encoded = binary.AppendUvarint(encoded, posting.offset-previous.offset)
 				}
 				encoded = binary.AppendUvarint(encoded, uint64(posting.recordIndex-previous.recordIndex))
@@ -288,7 +300,7 @@ func decodeStateDomainChangeBinaryAccessorFrameVersion(raw []byte, fromTxNum uin
 			return nil, err
 		}
 		var b uint64
-		if version != stateDomainChangeBinaryAccessorVersionV9 {
+		if !isHistoryOffsetAccessor(version) {
 			b, err = read()
 			if err != nil {
 				return nil, err
@@ -305,12 +317,12 @@ func decodeStateDomainChangeBinaryAccessorFrameVersion(raw []byte, fromTxNum uin
 			}
 			posting = stateDomainChangeBinaryAccessorV6Posting{txNum: fromTxNum + a, offset: b, recordIndex: uint32(c)}
 		} else {
-			if previous.txNum > math.MaxUint64-a || previous.offset > math.MaxUint64-b || c > math.MaxUint32-uint64(previous.recordIndex) || version != stateDomainChangeBinaryAccessorVersionV9 && b == 0 || c == 0 {
+			if previous.txNum > math.MaxUint64-a || previous.offset > math.MaxUint64-b || c > math.MaxUint32-uint64(previous.recordIndex) || !isHistoryOffsetAccessor(version) && b == 0 || c == 0 {
 				return nil, errors.New("snapshots: V7 accessor posting delta overflows")
 			}
 			posting = stateDomainChangeBinaryAccessorV6Posting{txNum: previous.txNum + a, offset: previous.offset + b, recordIndex: previous.recordIndex + uint32(c)}
 		}
-		if posting.offset > stateDomainChangeBinaryAccessorV5MaxOffset || i > 0 && (posting.txNum < previous.txNum || version != stateDomainChangeBinaryAccessorVersionV9 && posting.offset <= previous.offset || posting.recordIndex <= previous.recordIndex) {
+		if posting.offset > stateDomainChangeBinaryAccessorV5MaxOffset || i > 0 && (posting.txNum < previous.txNum || !isHistoryOffsetAccessor(version) && posting.offset <= previous.offset || posting.recordIndex <= previous.recordIndex) {
 			return nil, errors.New("snapshots: invalid V7 accessor posting")
 		}
 		postings = append(postings, posting)
@@ -445,7 +457,7 @@ func stateDomainChangeBinaryAccessorV7ReadFrame(r io.ReaderAt, h stateDomainChan
 // streams without scanning a single-frame varint payload a second time.
 func stateDomainChangeBinaryAccessorV7ReadFrameWithLength(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, frame stateDomainChangeBinaryAccessorV7Frame) ([]stateDomainChangeBinaryAccessorV6Posting, uint64, error) {
 	rows, end, err := readHistoryAccessorRawFrame(r, h, record, frame)
-	if err == nil && h.version == stateDomainChangeBinaryAccessorVersionV9 && !record.inline {
+	if err == nil && isHistoryOffsetAccessor(h.version) && !record.inline {
 		resolver := newHistoryAccessorOffsetResolver(r, h)
 		for i := range rows {
 			rows[i].offset, err = resolver.Offset(rows[i].recordIndex)
@@ -510,7 +522,7 @@ func stateDomainChangeBinaryAccessorV7ReadSingleFrameData(r io.ReaderAt, h state
 		return nil, 0, io.ErrUnexpectedEOF
 	}
 	columns := 3
-	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(h.version) {
 		columns = 2
 	}
 	maxRead := uint64(count)*uint64(columns)*binary.MaxVarintLen64 + 4
@@ -578,7 +590,7 @@ func newStateDomainChangeBinaryAccessorV7PostingCursor(r io.ReaderAt, size uint6
 		return nil, err
 	}
 	c := &stateDomainChangeBinaryAccessorV7PostingCursor{r: r, size: size, header: h, blocks: blocks}
-	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(h.version) {
 		c.offsets = newHistoryAccessorOffsetResolver(r, h)
 	}
 	return c, nil
@@ -646,7 +658,7 @@ func (c *stateDomainChangeBinaryAccessorV7PostingCursor) Next() (uint32, stateDo
 
 func iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error), shared ...*historyAccessorOffsetResolver) error {
 	var resolver *historyAccessorOffsetResolver
-	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(h.version) {
 		if len(shared) > 0 {
 			resolver = shared[0]
 		}
@@ -769,7 +781,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx context.Co
 		return block, err
 	}
 	var offsets *historyAccessorOffsetResolver
-	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(h.version) {
 		offsets = newHistoryAccessorOffsetResolver(accessor, h)
 	}
 	recordBlocks := make(map[uint64][]stateDomainChangeBinaryAccessorV6Record)
@@ -849,7 +861,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7Prefix(segment io.ReaderAt
 	}
 
 	var offsets *historyAccessorOffsetResolver
-	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+	if isHistoryOffsetAccessor(h.version) {
 		offsets = newHistoryAccessorOffsetResolver(accessor, h)
 	}
 	for blockIndex := start; blockIndex < h.blockCount; blockIndex++ {
@@ -906,6 +918,9 @@ func checkStateDomainChangeBinaryAccessorV7(r io.ReaderAt, fileSize uint64) erro
 	if err := checkHistoryAccessorOffsets(r, h); err != nil {
 		return err
 	}
+	if err := checkHistoryOwnerDictionary(r, h); err != nil {
+		return err
+	}
 	var keys, postings uint64
 	var previous []byte
 	var expectedOff uint64
@@ -938,7 +953,7 @@ func checkStateDomainChangeBinaryAccessorV7(r io.ReaderAt, fileSize uint64) erro
 					if p.txNum < h.fromTxNum || p.txNum > h.toTxNum || uint64(p.recordIndex) >= h.recordCount {
 						return errors.New("snapshots: V7 accessor posting outside segment bounds")
 					}
-					if seen > 0 && (p.txNum < last.txNum || h.version != stateDomainChangeBinaryAccessorVersionV9 && p.offset <= last.offset || p.recordIndex <= last.recordIndex) {
+					if seen > 0 && (p.txNum < last.txNum || !isHistoryOffsetAccessor(h.version) && p.offset <= last.offset || p.recordIndex <= last.recordIndex) {
 						return errors.New("snapshots: V7 accessor postings are not ordered")
 					}
 					last = p
