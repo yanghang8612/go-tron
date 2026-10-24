@@ -37,6 +37,7 @@
   "birth-height-baseline-cpu-cumulative.txt": "9547ee40fa1853471d10f5b42948b6313ed98083abd0a8f116491735e8123850",
   "birth-height-candidate-workload.json": "f56ae79c1b51755fd809060cd87248a622d94d4f78dd70b059152d5981fee5b6",
   "source-identity.json.gz": "d271d90c032916da0797e9279b5a18534ec68e4e59e871eef82e58ef50657a22",
+  "next-compression-budget.json": "654c587d0bc1d5a06ce58685923e2b6a3528e424da65ee2be714fe2f1b447c16",
   "http-specs.json.gz": "29686e35b68474dd77240edb8c632df32823479925e572a460950db56d5ca94d",
   "local-final-packages.log.gz": "4396adb815e8d7e4953855d81e0982fc848c443f4aa8585d128835236f21c378",
   "trace-summary.py.gz": "7e07003cb996346088f59f10f2da4c10eb0368168e2ea42fa02eb5a61c7e677b",

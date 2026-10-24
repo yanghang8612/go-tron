@@ -1,0 +1,72 @@
+{
+  "v8_bytes": 143407842868,
+  "multi_posting_fields_bytes": {
+    "tx": 17729740632,
+    "offset": 33589182048,
+    "ordinal": 22069045497,
+    "tag": 595930989,
+    "short_list_crc": 2346633764,
+    "frame_directory": 1866301872,
+    "frame_count": 9327231
+  },
+  "offset_table_static_bytes": 16287163453,
+  "tx_run_payload_static_bytes": 4800874163,
+  "offset_only_static_opportunity": 17302018595,
+  "combined_static_opportunity": 30230885064,
+  "duplicate_key_appearances": 1676306990,
+  "unique_keys": 767116114,
+  "duplicate_logical_key_bytes": 66167734536,
+  "prior_experiments": [
+    {
+      "name": "prototype-zstd3",
+      "files": 44,
+      "input_bytes": 588002548,
+      "output_bytes": 586965135,
+      "saved_percent": 0.17643001778284811,
+      "warm_ratio": 0.9932295649826803,
+      "private_cold_ratio": 1.013379900742511,
+      "scope": "Prior standalone V7 accessor prototype, not V8 incremental savings or full HTTP."
+    },
+    {
+      "name": "prototype-zstd9",
+      "files": 44,
+      "input_bytes": 588002548,
+      "output_bytes": 585936113,
+      "saved_percent": 0.3514330009331864,
+      "warm_ratio": 0.9972507180960197,
+      "private_cold_ratio": 1.0039605992837923,
+      "scope": "Prior standalone V7 accessor prototype, not V8 incremental savings or full HTTP."
+    },
+    {
+      "name": "prototype-posting4096",
+      "files": 44,
+      "input_bytes": 588002548,
+      "output_bytes": 579326210,
+      "saved_percent": 1.4755612929758937,
+      "warm_ratio": 1.3481099939887555,
+      "private_cold_ratio": 1.7963497921296607,
+      "scope": "Prior standalone V7 accessor prototype, not V8 incremental savings or full HTTP."
+    },
+    {
+      "name": "prototype-posting16384",
+      "files": 44,
+      "input_bytes": 588002548,
+      "output_bytes": 574828819,
+      "saved_percent": 2.2404203935524443,
+      "warm_ratio": 1.3946259043487013,
+      "private_cold_ratio": 1.574324969691851,
+      "scope": "Prior standalone V7 accessor prototype, not V8 incremental savings or full HTTP."
+    }
+  ],
+  "limitations": [
+    "The ordinal/offset table uses full-segment accounting including page CRC/directory/header; transaction run bytes are payload only and exclude a random-access directory and protection.",
+    "Static byte subtraction is not a working format or validated net output saving. Existing inline singleton pages are assumed retained; combined stage estimates are not independent experiments.",
+    "Cross-segment logical key duplication precedes prefix/Zstd compression; it cannot be subtracted from physical V8 bytes.",
+    "No production changes; no new codec implementation or performance claim in this follow-up."
+  ],
+  "input_sha256": {
+    "final-summary.json": "45d2fd26e4b1e395f8623e06c99340d2f91522cfaf604183b49dfd87fa5be0a2",
+    "analyze-final.go": "2a5fcfa6345a433dc2789c0ab9a2082ace8969290658b0fb52bb8e21733d3602",
+    "key-union/summary.json": "0502013d4cc2eb7bc8cd000fc699a087c9093a0f5f7ccca794e95cf112be5451"
+  }
+}
