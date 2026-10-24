@@ -59,6 +59,7 @@ type stateDomainChangeV6Build struct {
 	keyMask           uint64
 	keyHashSeed       maphash.Seed
 	dictionaryDigest  [sha256.Size]byte
+	offsets           *historyAccessorOffsetBuilder
 }
 
 func newStateDomainChangeV6Build(opts etl.Options, dir, base string) (*stateDomainChangeV6Build, error) {
@@ -96,6 +97,8 @@ func (b *stateDomainChangeV6Build) Close() {
 	if b == nil {
 		return
 	}
+	b.offsets.Close()
+	b.offsets = nil
 	b.keyDedup = nil
 	b.keyDedupBytes = 0
 	if b.keys != nil {
@@ -370,6 +373,8 @@ func (b *stateDomainChangeV6Build) ResetPostings() error {
 		return fmt.Errorf("snapshots: recreate V6 posting ETL: %w", err)
 	}
 	b.postings = postings
+	b.offsets.Close()
+	b.offsets = nil
 	return nil
 }
 
@@ -443,6 +448,16 @@ func (b *stateDomainChangeV6Build) CollectPosting(keyID uint32, txNum, offset, r
 	if b == nil || b.postings == nil || recordIndex > math.MaxUint32 || offset > stateDomainChangeBinaryAccessorV5MaxOffset {
 		return errors.New("snapshots: invalid V6 posting")
 	}
+	if b.offsets == nil {
+		var err error
+		b.offsets, err = newHistoryAccessorOffsetBuilder(filepath.Dir(b.dictName), filepath.Base(b.dictName))
+		if err != nil {
+			return err
+		}
+	}
+	if err := b.offsets.Add(recordIndex, offset); err != nil {
+		return err
+	}
 	return b.postings.PutEncoded(8, stateDomainChangeBinaryAccessorV6PostingSize, func(key, value []byte) {
 		binary.BigEndian.PutUint32(key[:4], keyID)
 		binary.BigEndian.PutUint32(key[4:], uint32(recordIndex))
@@ -494,6 +509,7 @@ type stateDomainChangeV7PostingWriter struct {
 	last             stateDomainChangeBinaryAccessorV6Posting
 	haveLast         bool
 	inlineSingletons bool
+	version          uint32
 }
 
 func (w *stateDomainChangeV7PostingWriter) Put(key, value []byte) error {
@@ -599,7 +615,7 @@ func (w *stateDomainChangeV7PostingWriter) flushFrame() error {
 	if len(w.current) == 0 || w.scratch == nil {
 		return errors.New("snapshots: invalid V7 posting frame")
 	}
-	encoded, err := encodeStateDomainChangeBinaryAccessorV7PostingList(w.fromTx, w.current)
+	encoded, err := encodeStateDomainChangeBinaryAccessorPostingListVersion(w.fromTx, w.current, w.version)
 	if err != nil {
 		return err
 	}
@@ -705,7 +721,7 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 }
 
 func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
-	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV8)
+	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV9)
 }
 
 func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Context, dir string, ref SegmentRef, recordCount uint64, version uint32) (SegmentRef, etl.Stats, error) {
@@ -713,7 +729,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 		return SegmentRef{}, etl.Stats{}, errors.New("snapshots: unsupported accessor build version")
 	}
 	metaSize := 12
-	if version == stateDomainChangeBinaryAccessorVersionV8 {
+	if isHistoryInlineAccessor(version) {
 		metaSize = 32
 	}
 
@@ -739,7 +755,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	defer func() { _ = metaFile.Close(); _ = os.Remove(metaName) }()
 	scratch := &historyPostingScratch{ctx: ctx, dir: filepath.Dir(abs), base: filepath.Base(abs) + ".posting-frames"}
 	defer scratch.Close()
-	writer := &stateDomainChangeV7PostingWriter{ctx: ctx, postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratch, expected: b.keyCount, fromTx: ref.FromTxNum, inlineSingletons: version == stateDomainChangeBinaryAccessorVersionV8}
+	writer := &stateDomainChangeV7PostingWriter{ctx: ctx, postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratch, expected: b.keyCount, fromTx: ref.FromTxNum, version: version, inlineSingletons: isHistoryInlineAccessor(version)}
 	postingStats, err := loadHistoryETLContext(ctx, b.postings, writer)
 	if err != nil {
 		return SegmentRef{}, postingStats, err
@@ -780,7 +796,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			records[i] = stateDomainChangeBinaryAccessorV6Key{key: key, keyID: keyID, postingOff: binary.BigEndian.Uint64(raw[:8]), postingCount: binary.BigEndian.Uint32(raw[8:12]), inlinePosting: stateDomainChangeBinaryAccessorV6Posting{txNum: binary.BigEndian.Uint64(raw[12:20]), offset: binary.BigEndian.Uint64(raw[20:28]), recordIndex: binary.BigEndian.Uint32(raw[28:32])}}
 		}
 		var raw []byte
-		if version == stateDomainChangeBinaryAccessorVersionV8 {
+		if isHistoryInlineAccessor(version) {
 			raw, err = encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
 		} else {
 			raw, err = encodeStateDomainChangeBinaryAccessorV6KeyBlock(records)
@@ -816,7 +832,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	}
 	dirLen += uint64(len(blocks)) * 8
 	var sparse []byte
-	if version == stateDomainChangeBinaryAccessorVersionV8 {
+	if isHistoryInlineAccessor(version) {
 		sparse = encodeHistoryAccessorSparseDirectory(blocks)
 	}
 	dirLen += uint64(len(sparse))
@@ -889,6 +905,17 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			return SegmentRef{}, postingStats, err
 		}
 		if _, err := copyStateDomainChangeHistoryData(metadata, contextReader{ctx: ctx, r: src}); err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+	}
+	if version == stateDomainChangeBinaryAccessorVersionV9 {
+		if b.offsets == nil {
+			b.offsets, err = newHistoryAccessorOffsetBuilder(filepath.Dir(abs), filepath.Base(abs))
+			if err != nil {
+				return SegmentRef{}, postingStats, err
+			}
+		}
+		if err := b.offsets.AppendTo(metadata, recordCount); err != nil {
 			return SegmentRef{}, postingStats, err
 		}
 	}

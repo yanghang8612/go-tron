@@ -1754,6 +1754,17 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 		return err
 	}
 
+	accessorHeader, err := decodeStateDomainChangeBinaryAccessorV7Header(accessor, accessorSize)
+	if err != nil {
+		return err
+	}
+	var locator *historyAccessorOffsetResolver
+	if accessorHeader.version == stateDomainChangeBinaryAccessorVersionV9 {
+		if err := checkHistoryAccessorOffsets(accessor, accessorHeader); err != nil {
+			return err
+		}
+		locator = newHistoryAccessorOffsetResolver(accessor, accessorHeader)
+	}
 	started, lastProgress := time.Now(), time.Now()
 	expectedRecordIndex, expectedOffset := uint64(0), recordOffset
 	var previousTxNum uint64
@@ -1810,6 +1821,15 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 			if recordIndex > math.MaxUint32 || offset > stateDomainChangeBinaryAccessorV5MaxOffset {
 				return errors.New("snapshots: V7 verification posting exceeds encoded bounds")
 			}
+			if locator != nil {
+				got, err := locator.Offset(uint32(recordIndex))
+				if err != nil {
+					return err
+				}
+				if got != offset {
+					return errors.New("snapshots: V9 locator/history offset mismatch")
+				}
+			}
 			if err := collector.PutEncoded(8, stateDomainChangeBinaryAccessorV6PostingSize, func(key, value []byte) {
 				binary.BigEndian.PutUint32(key[:4], keyID)
 				binary.BigEndian.PutUint32(key[4:], uint32(recordIndex))
@@ -1839,6 +1859,7 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 	if err != nil {
 		return err
 	}
+	cursor.deferOffsets = accessorHeader.version == stateDomainChangeBinaryAccessorVersionV9
 	var compared uint64
 	_, err = collector.Iterate(func(key, value []byte) error {
 		if err := maintenance.WorkCheckpoint(ctx, 0); err != nil {
@@ -1861,6 +1882,9 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 		expected.offset, err = stateDomainChangeBinaryAccessorV5Offset(value[8:14])
 		if err != nil {
 			return err
+		}
+		if cursor.deferOffsets && !cursor.records[cursor.record-1].inline {
+			expected.offset = 0
 		}
 		if keyID != expectedKeyID || posting != expected {
 			return errors.New("snapshots: V7 accessor posting/history mismatch")
@@ -2574,7 +2598,7 @@ func checkStateDomainChangeBinaryAccessorValidationContext(ctx context.Context, 
 			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
 		}
 	}
-	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 || header.version == stateDomainChangeBinaryVersionV7 || header.version == stateDomainChangeBinaryAccessorVersionV8) && fileSize > math.MaxInt64 {
+	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 || header.version == stateDomainChangeBinaryVersionV7 || header.version == stateDomainChangeBinaryAccessorVersionV8 || header.version == stateDomainChangeBinaryAccessorVersionV9) && fileSize > math.MaxInt64 {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q logical size %d exceeds int64", ref.Path, fileSize)
 	}
 	if header.version == stateDomainChangeBinaryVersionV3 {
@@ -3541,7 +3565,7 @@ func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomai
 		return stateDomainChangeBinaryHeader{}, nil, errors.New("snapshots: invalid state-domain-change binary magic")
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && (magic == stateDomainChangeBinaryIndexMagic || magic == stateDomainChangeBinaryAccessorMagic)) {
+	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && (magic == stateDomainChangeBinaryIndexMagic || magic == stateDomainChangeBinaryAccessorMagic)) && !(version == stateDomainChangeBinaryAccessorVersionV9 && magic == stateDomainChangeBinaryAccessorMagic) {
 		return stateDomainChangeBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", version)
 	}
 	return stateDomainChangeBinaryHeader{

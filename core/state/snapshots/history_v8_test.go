@@ -209,6 +209,10 @@ func TestStateDomainChangeV8RejectsCorruptDirectoryAndInline(t *testing.T) {
 // position. Strict snapshot validation must still compare inline tuples against
 // the authoritative history stream.
 func TestStateDomainChangeV8StrictCoverageRejectsForgedInline(t *testing.T) {
+	testHistoryInlineStrictCoverageRejectsForgery(t, stateDomainChangeBinaryAccessorVersionV8)
+}
+
+func testHistoryInlineStrictCoverageRejectsForgery(t *testing.T, version uint32) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	for tx := uint64(1); tx <= 3; tx++ {
@@ -221,7 +225,7 @@ func TestStateDomainChangeV8StrictCoverageRejectsForgedInline(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 3, "history/state-domain-change-forged-inline.seg")
+	refs, err := buildStateDomainChangeAccessorSegmentsForTest(t, db, dir, 1, 3, "history/state-domain-change-forged-inline.seg", version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +253,7 @@ func TestStateDomainChangeV8StrictCoverageRejectsForgedInline(t *testing.T) {
 	}
 	r := bytes.NewReader(data)
 	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(r, uint64(len(data)))
-	if err != nil || h.version != 8 || h.blockCount != 1 {
+	if err != nil || h.version != version || h.blockCount != 1 {
 		t.Fatal("V8 fixture", h, err)
 	}
 	b, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(r, h, 0)

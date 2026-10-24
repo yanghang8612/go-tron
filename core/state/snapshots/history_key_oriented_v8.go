@@ -16,14 +16,14 @@ const historyAccessorSparseStride = uint64(32)
 const historyAccessorDirectoryReadLimit = uint64(64 << 10)
 
 func isStateDomainChangeFramedAccessor(version uint32) bool {
-	return version == stateDomainChangeBinaryVersionV7 || version == stateDomainChangeBinaryAccessorVersionV8
+	return version == stateDomainChangeBinaryVersionV7 || isHistoryInlineAccessor(version)
 }
 func isStateDomainChangeKeyAccessor(version uint32) bool {
 	return version == stateDomainChangeBinaryVersionV6 || isStateDomainChangeFramedAccessor(version)
 }
 func stateDomainChangeAccessorHeaderCRC(raw []byte, version uint32) uint32 {
 	sum := crc32.ChecksumIEEE(raw[:112])
-	if version == stateDomainChangeBinaryAccessorVersionV8 {
+	if isHistoryInlineAccessor(version) {
 		sum = crc32.Update(sum, crc32.IEEETable, raw[116:120])
 	}
 	return sum
@@ -143,7 +143,7 @@ func readHistoryAccessorSparseDirectory(r io.ReaderAt, h stateDomainChangeBinary
 	if h.sparseLen == 0 {
 		return nil, nil
 	}
-	if h.version != stateDomainChangeBinaryAccessorVersionV8 || h.sparseLen < 8 || h.sparseLen > historyAccessorDirectoryReadLimit || h.sparseLen > h.blockDirLen {
+	if !isHistoryInlineAccessor(h.version) || h.sparseLen < 8 || h.sparseLen > historyAccessorDirectoryReadLimit || h.sparseLen > h.blockDirLen {
 		return nil, errors.New("snapshots: invalid V8 sparse directory length")
 	}
 	end := h.headerSize + h.blockDirLen - h.sparseLen

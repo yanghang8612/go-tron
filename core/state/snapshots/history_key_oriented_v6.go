@@ -62,13 +62,14 @@ type stateDomainChangeBinaryAccessorV6Block struct {
 }
 
 type stateDomainChangeBinaryAccessorV6Header struct {
-	version                             uint32
-	headerSize                          uint64
-	fromTxNum, toTxNum                  uint64
-	recordCount, keyCount, blockCount   uint64
-	blockDirLen, keyDataLen, postingLen uint64
-	dictionaryDigest                    [sha256.Size]byte
-	sparseLen                           uint64
+	version                                        uint32
+	headerSize                                     uint64
+	fromTxNum, toTxNum                             uint64
+	recordCount, keyCount, blockCount              uint64
+	blockDirLen, keyDataLen, postingLen            uint64
+	dictionaryDigest                               [sha256.Size]byte
+	sparseLen                                      uint64
+	offsetDataBase, offsetDataLen, offsetDirectory uint64
 }
 
 type stateDomainChangeBinaryAccessorV6Record struct {
@@ -357,7 +358,11 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 	keyStart := h.headerSize + h.blockDirLen
 	postingStart := keyStart + h.keyDataLen
 	storedLen := uint64(block.dataLen &^ stateDomainChangeBinaryAccessorV6StoredRaw)
-	if block.dataOff < keyStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff || postingStart+h.postingLen != fileSize {
+	fileEnd := postingStart + h.postingLen
+	if h.version == stateDomainChangeBinaryAccessorVersionV9 {
+		fileEnd = h.offsetDirectory + ceilDiv(h.recordCount, historyOffsetPageRows)*historyOffsetEntrySize + historyOffsetFooterSize
+	}
+	if block.dataOff < keyStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff || fileEnd != fileSize {
 		return nil, errors.New("snapshots: V6 accessor key block outside key data")
 	}
 	maxRaw := uint64(block.keyCount) * (math.MaxUint16 + 5*binary.MaxVarintLen64 + binary.MaxVarintLen32)
@@ -400,7 +405,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 			return nil, err
 		}
 		var rec stateDomainChangeBinaryAccessorV6Record
-		if h.version == stateDomainChangeBinaryAccessorVersionV8 {
+		if isHistoryInlineAccessor(h.version) {
 			rec, err = readStateDomainChangeAccessorV8Meta(br, h)
 			if err != nil {
 				return nil, err

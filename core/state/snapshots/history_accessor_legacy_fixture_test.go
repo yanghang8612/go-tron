@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -13,6 +14,10 @@ import (
 // Legacy-reader tests must continue exercising actual V7 bytes after the current
 // builder advances. Rebuild only the accessor, preserving the history dictionary.
 func buildStateDomainChangeV7SegmentsForTest(t testing.TB, db ethdb.Iteratee, dir string, from, to uint64, path string) ([]SegmentRef, error) {
+	return buildStateDomainChangeAccessorSegmentsForTest(t, db, dir, from, to, path, stateDomainChangeBinaryVersionV7)
+}
+
+func buildStateDomainChangeAccessorSegmentsForTest(t testing.TB, db ethdb.Iteratee, dir string, from, to uint64, path string, version uint32) ([]SegmentRef, error) {
 	t.Helper()
 	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, from, to, path)
 	if err != nil {
@@ -36,6 +41,7 @@ func buildStateDomainChangeV7SegmentsForTest(t testing.TB, db ethdb.Iteratee, di
 		if err != nil {
 			return nil, err
 		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].recordIndex < entries[j].recordIndex })
 		b, err := newStateDomainChangeV6Build(etl.Options{TempDir: t.TempDir()}, dir, ref.Path+".legacy")
 		if err != nil {
 			return nil, err
@@ -61,7 +67,7 @@ func buildStateDomainChangeV7SegmentsForTest(t testing.TB, db ethdb.Iteratee, di
 			}
 		}
 		if err == nil {
-			refs[i], _, err = b.buildAccessorContextVersion(context.Background(), dir, ref, uint64(len(entries)), stateDomainChangeBinaryVersionV7)
+			refs[i], _, err = b.buildAccessorContextVersion(context.Background(), dir, ref, uint64(len(entries)), version)
 		}
 		b.Close()
 		if err != nil {
