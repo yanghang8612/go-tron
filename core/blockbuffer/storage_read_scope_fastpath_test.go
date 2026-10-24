@@ -2,7 +2,10 @@ package blockbuffer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -20,6 +23,30 @@ func (c *storageFastpathCursor) View(key []byte, fn func([]byte) error) (bool, e
 	return c.Cursor.View(key, fn)
 }
 
+// The memory-hit allocation test needs an immutable empty base, but never
+// reads it. Use the public snapshot/cursor capabilities without Pebble's
+// background goroutines: AllocsPerRun counts process-wide allocations.
+// Actual Pebble cursor ownership and IO remain covered below and by scope
+// lifecycle/interleaving tests. Any unexpected durable access fails closed.
+type storageFastpathMemoryStore struct{ ethdb.KeyValueStore }
+
+type storageFastpathMemorySnapshot struct{ ethdb.KeyValueStore }
+
+func (s *storageFastpathMemoryStore) NewKeyValueSnapshot() (pointread.KeyValueSnapshot, error) {
+	return &storageFastpathMemorySnapshot{KeyValueStore: s.KeyValueStore}, nil
+}
+func (*storageFastpathMemorySnapshot) Close() error { return nil }
+func (*storageFastpathMemorySnapshot) NewPointReadCursor() (pointread.Cursor, error) {
+	return storageFastpathUnexpectedCursor{}, nil
+}
+
+type storageFastpathUnexpectedCursor struct{}
+
+func (storageFastpathUnexpectedCursor) View([]byte, func([]byte) error) (bool, error) {
+	return false, errors.New("memory-hit fixture reached durable cursor")
+}
+func (storageFastpathUnexpectedCursor) Close() error { return nil }
+
 func TestStorageReadScopeStructuredMemoryHits(t *testing.T) {
 	// Both the ordinary stack key and the oversized fallback must preserve
 	// active > captured committed > versioned base-cache precedence. A zero
@@ -27,12 +54,10 @@ func TestStorageReadScopeStructuredMemoryHits(t *testing.T) {
 	for _, size := range []int{32, splitReadKeyStackSize} {
 		for _, source := range []string{"active", "captured", "cache"} {
 			t.Run(fmt.Sprintf("%s/%d", source, size), func(t *testing.T) {
-				disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
-				if err != nil {
-					t.Fatal(err)
-				}
+				disk := &storageFastpathMemoryStore{KeyValueStore: memorydb.New()}
 				defer disk.Close()
 				b := New(disk)
+				var err error
 				b.SetBaseReadCacheSize(1 << 20)
 				prefix, owner := []byte("scope-"), common.AccountID{19: 7}
 				logical := bytes.Repeat([]byte{0x51}, size)

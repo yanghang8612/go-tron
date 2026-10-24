@@ -132,6 +132,10 @@ func TestProcessBlockCanonicalStorageScopeOracleAndCloseRollback(t *testing.T) {
 			beforeOpens := opens.Snapshot().Count()
 			scopes := metrics.GetOrRegisterCounter("blockbuffer/storage_read/scopes", nil)
 			beforeScopes := scopes.Snapshot().Count()
+			// The scope now also serves non-storage decoding. Keep the SLOAD
+			// oracle exact by counting its domain rather than all scope reads.
+			storageCalls := metrics.GetOrRegisterCounter("blockbuffer/pooled_foreground_base/state_kv_latest/contract_storage/calls", nil)
+			beforeStorageCalls := storageCalls.Snapshot().Count()
 			beforeCalls, beforeBalance := counter.Snapshot().Count(), s.GetBalance(owner)
 			infos, _, err := processBlockWithOptions(s, s.DynamicProperties(), block, buffer, nil, 0, params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil, nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil, processBlockOptions{canonicalStorageReadScope: mode != "live"})
 			wantScopes := int64(1)
@@ -159,8 +163,13 @@ func TestProcessBlockCanonicalStorageScopeOracleAndCloseRollback(t *testing.T) {
 			if len(infos) != 1 || infos[0].GetResult() != corepb.TransactionInfo_SUCESS {
 				t.Fatalf("receipt %v", infos)
 			}
-			if mode == "scope" && counter.Snapshot().Count()-beforeCalls != 8 {
-				t.Fatalf("scope not exercised: calls=%d", counter.Snapshot().Count()-beforeCalls)
+			if mode == "scope" {
+				if got := storageCalls.Snapshot().Count() - beforeStorageCalls; got != 8 {
+					t.Fatalf("SLOAD durable reads: got %d want 8", got)
+				}
+				if got := counter.Snapshot().Count() - beforeCalls; got < 8 {
+					t.Fatalf("scope not exercised: calls=%d", got)
+				}
 			}
 			if mode == "scope" && opens.Snapshot().Count() <= beforeOpens {
 				t.Fatal("canonical cursor never opened SST iterator")
