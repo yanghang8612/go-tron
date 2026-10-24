@@ -1,0 +1,6 @@
+{
+  "complete": true,
+  "first_launch_error": "older systemd-run does not support --working-directory; no test process was started",
+  "production_source_changed": false,
+  "utc": "2026-10-24T14:37:47.032628+00:00"
+}

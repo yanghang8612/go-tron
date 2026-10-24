@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "archive_sha256": "c72285afcbbf8fa955df5b5fd796e4afb2119a4628409b8816db931035512b34",
+  "members": 467,
+  "checksummed_members": 466,
+  "production_source_files": 1076,
+  "files": 19949,
+  "index_tuples_compared": 14302423656,
+  "saved_file_bytes": 17398010359,
+  "muhash_verified": true
+}

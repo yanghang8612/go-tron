@@ -1,0 +1,16 @@
+{
+  "MainPID": "27692",
+  "ExecMainStartTimestamp": "Sat 2026-10-24 05:57:01 UTC",
+  "ActiveState": "active",
+  "utc": "2026-10-24T16:08:03.884889+00:00",
+  "exe": "/data/gtron/releases/auto-46e19f556aa4-7e4e5dfd592903e7/gtron",
+  "sha256": "7e4e5dfd592903e7a8bf657df5b9d9dbe32ac412917e24d3e4e7bd018dacba0c",
+  "cpu_count": 16,
+  "load": [
+    9.85,
+    10.51,
+    10.69
+  ],
+  "meminfo": "MemTotal:       64298988 kB\nMemFree:          352068 kB\nMemAvailable:   25464868 kB\nBuffers:          207240 kB\nCached:         28234772 kB\nSwapCached:            0 kB\nActive:         46503380 kB\nInactive:       14955936 kB\nActive(anon):   35490836 kB\nInactive(anon):  1568688 kB\nActive(file):   11012544 kB\nInactive(file): 13387248 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:             16992 kB\nWriteback:             0 kB\nAnonPages:      33018644 kB\nMapped:           180904 kB\nShmem:           4040888 kB\nSlab:            1426368 kB\nSReclaimable:    1238972 kB\nSUnreclaim:       187396 kB\nKernelStack:       22544 kB\nPageTables:       293368 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32149492 kB\nCommitted_AS:   40991812 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      123096 kB\nVmallocChunk:   34359450644 kB\nPercpu:            10624 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    378880 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nDirectMap4k:      309156 kB\nDirectMap2M:    43249664 kB\nDirectMap1G:    22020096 kB\n",
+  "df": "Filesystem         1B-blocks          Used    Available Use% Mounted on\n/dev/nvme1n1   7609457909760 6777565990912 831465541632  90% /data\n/dev/nvme0n1p1   85887791104   58523283456  27364507648  69% /\n"
+}

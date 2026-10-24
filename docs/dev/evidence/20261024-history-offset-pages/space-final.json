@@ -1,0 +1,300 @@
+{
+  "complete": true,
+  "files": 19949,
+  "counts": {
+    "Keys": 2443423104,
+    "Records": 14302423656,
+    "Singletons": 1847492115,
+    "MultiLists": 595930989,
+    "MultiRows": 12454931541,
+    "SourceBytes": 143407842868,
+    "CandidateBytes": 126009832509,
+    "RemovedOffsetBytes": 33589182048,
+    "LocatorDataBytes": 14945555001,
+    "LocatorDirectoryBytes": 1340970084,
+    "LocatorFooterBytes": 638368,
+    "SourcePostingBytes": 78206162033,
+    "CandidatePostingBytes": 44616979985,
+    "SparseBytes": 34180599
+  },
+  "saved_bytes": 17398010359,
+  "saved_percent": 12.131840219515766,
+  "source_allocated": 143451025408,
+  "candidate_allocated": 126057021440,
+  "allocated_saved_bytes": 17394003968,
+  "smaller_files": 19948,
+  "larger_files": 1,
+  "equal_files": 0,
+  "components": [
+    {
+      "part": "header",
+      "source": 2393880,
+      "candidate": 2393880
+    },
+    {
+      "part": "directory",
+      "source": 1570197655,
+      "candidate": 1570197655
+    },
+    {
+      "part": "key_pages",
+      "source": 63629089300,
+      "candidate": 63533097536
+    },
+    {
+      "part": "multi_postings",
+      "source": 78206162033,
+      "candidate": 44616979985
+    },
+    {
+      "part": "shared_offset_locator",
+      "source": 0,
+      "candidate": 16287163453
+    }
+  ],
+  "largest_savings": [
+    {
+      "path": "history/state-domain-change-301780280-302101090-43a76302a4569d09.kv",
+      "source_bytes": 19305447,
+      "candidate_bytes": 15391691,
+      "saved_bytes": 3913756
+    },
+    {
+      "path": "history/state-domain-change-299631645-299949197-2bf62ac93fa83142.kv",
+      "source_bytes": 18584642,
+      "candidate_bytes": 14775258,
+      "saved_bytes": 3809384
+    },
+    {
+      "path": "history/state-domain-change-296503408-296812504-2030d686daf69f44.kv",
+      "source_bytes": 18204945,
+      "candidate_bytes": 14398735,
+      "saved_bytes": 3806210
+    },
+    {
+      "path": "history/state-domain-change-303913833-304199148-894fa7cc7eff4ae4.kv",
+      "source_bytes": 18274978,
+      "candidate_bytes": 14492628,
+      "saved_bytes": 3782350
+    },
+    {
+      "path": "history/state-domain-change-292569895-292897078-5c14a976329021f1.kv",
+      "source_bytes": 18109876,
+      "candidate_bytes": 14399337,
+      "saved_bytes": 3710539
+    },
+    {
+      "path": "history/state-domain-change-304471880-304759990-339ed9bbfd7e408f.kv",
+      "source_bytes": 18345366,
+      "candidate_bytes": 14652402,
+      "saved_bytes": 3692964
+    },
+    {
+      "path": "history/state-domain-change-301469215-301780279-fa25ee6d44b595a6.kv",
+      "source_bytes": 18302966,
+      "candidate_bytes": 14611815,
+      "saved_bytes": 3691151
+    },
+    {
+      "path": "history/state-domain-change-356253736-356501718-ceb220d492cab2de.kv",
+      "source_bytes": 18472711,
+      "candidate_bytes": 14790822,
+      "saved_bytes": 3681889
+    },
+    {
+      "path": "history/state-domain-change-309247295-309540926-2ef7b27babb71d4c.kv",
+      "source_bytes": 18682436,
+      "candidate_bytes": 15048751,
+      "saved_bytes": 3633685
+    },
+    {
+      "path": "history/state-domain-change-303630716-303913832-5375dd8d49662749.kv",
+      "source_bytes": 17716148,
+      "candidate_bytes": 14102485,
+      "saved_bytes": 3613663
+    },
+    {
+      "path": "history/state-domain-change-297572683-297871763-424848aacd94f644.kv",
+      "source_bytes": 17463438,
+      "candidate_bytes": 13868667,
+      "saved_bytes": 3594771
+    },
+    {
+      "path": "history/state-domain-change-309540927-309820604-d62a5f2d20477c8e.kv",
+      "source_bytes": 18305128,
+      "candidate_bytes": 14715242,
+      "saved_bytes": 3589886
+    },
+    {
+      "path": "history/state-domain-change-300550985-300863093-473abbc6aaeebcb3.kv",
+      "source_bytes": 18180565,
+      "candidate_bytes": 14605680,
+      "saved_bytes": 3574885
+    },
+    {
+      "path": "history/state-domain-change-290727148-291078014-9fc1fbe02cdc2138.kv",
+      "source_bytes": 17418553,
+      "candidate_bytes": 13875618,
+      "saved_bytes": 3542935
+    },
+    {
+      "path": "history/state-domain-change-301162609-301469214-ff66b05dd1e5af3b.kv",
+      "source_bytes": 17803849,
+      "candidate_bytes": 14262873,
+      "saved_bytes": 3540976
+    },
+    {
+      "path": "history/state-domain-change-300241113-300550984-eb18ece10a8c0fd6.kv",
+      "source_bytes": 17601038,
+      "candidate_bytes": 14154110,
+      "saved_bytes": 3446928
+    },
+    {
+      "path": "history/state-domain-change-289719972-290078506-ce4d53ab5c7b888a.kv",
+      "source_bytes": 16716119,
+      "candidate_bytes": 13270298,
+      "saved_bytes": 3445821
+    },
+    {
+      "path": "history/state-domain-change-304759991-305030251-ea4d625c0ce314c9.kv",
+      "source_bytes": 17102815,
+      "candidate_bytes": 13672975,
+      "saved_bytes": 3429840
+    },
+    {
+      "path": "history/state-domain-change-356012731-356253735-775a725eed32dc3d.kv",
+      "source_bytes": 16953256,
+      "candidate_bytes": 13540981,
+      "saved_bytes": 3412275
+    },
+    {
+      "path": "history/state-domain-change-299949198-300241112-6843a658c324fd55.kv",
+      "source_bytes": 16946513,
+      "candidate_bytes": 13540563,
+      "saved_bytes": 3405950
+    }
+  ],
+  "largest_growth": [
+    {
+      "path": "history/state-domain-change-1914559084-1914686553-58ba2d0d57b97f42.kv",
+      "source_bytes": 10674712,
+      "candidate_bytes": 10676242,
+      "saved_bytes": -1530
+    },
+    {
+      "path": "history/state-domain-change-955602-959346-c04b065affc206ab.kv",
+      "source_bytes": 113626,
+      "candidate_bytes": 105316,
+      "saved_bytes": 8310
+    },
+    {
+      "path": "history/state-domain-change-1-5714-0a8e0df0a8adfa93.kv",
+      "source_bytes": 111948,
+      "candidate_bytes": 99432,
+      "saved_bytes": 12516
+    },
+    {
+      "path": "history/state-domain-change-959347-967833-0623f4e9e0f00c4e.kv",
+      "source_bytes": 337397,
+      "candidate_bytes": 321359,
+      "saved_bytes": 16038
+    },
+    {
+      "path": "history/state-domain-change-5715-12941-4d518b1faac307fd.kv",
+      "source_bytes": 126149,
+      "candidate_bytes": 108512,
+      "saved_bytes": 17637
+    },
+    {
+      "path": "history/state-domain-change-1895564271-1895690971-272cdb8d858563e7.kv",
+      "source_bytes": 11032084,
+      "candidate_bytes": 11012742,
+      "saved_bytes": 19342
+    },
+    {
+      "path": "history/state-domain-change-967834-978079-e29fa2c958ab0552.kv",
+      "source_bytes": 321957,
+      "candidate_bytes": 298643,
+      "saved_bytes": 23314
+    },
+    {
+      "path": "history/state-domain-change-978080-991353-586d0f9d7975e5a1.kv",
+      "source_bytes": 476508,
+      "candidate_bytes": 448341,
+      "saved_bytes": 28167
+    },
+    {
+      "path": "history/state-domain-change-12942-27489-43bbb21820173007.kv",
+      "source_bytes": 225227,
+      "candidate_bytes": 188556,
+      "saved_bytes": 36671
+    },
+    {
+      "path": "history/state-domain-change-1914205878-1914559083-b1156efc6139c758.kv",
+      "source_bytes": 29467510,
+      "candidate_bytes": 29425202,
+      "saved_bytes": 42308
+    },
+    {
+      "path": "history/state-domain-change-1918922329-1919206323-dae49e3c5509a1a5.kv",
+      "source_bytes": 19909453,
+      "candidate_bytes": 19864154,
+      "saved_bytes": 45299
+    },
+    {
+      "path": "history/state-domain-change-134865-155449-9aff12f4f380daf2.kv",
+      "source_bytes": 308798,
+      "candidate_bytes": 257040,
+      "saved_bytes": 51758
+    },
+    {
+      "path": "history/state-domain-change-113774-134864-a4f0fe504aaf9a44.kv",
+      "source_bytes": 322470,
+      "candidate_bytes": 269845,
+      "saved_bytes": 52625
+    },
+    {
+      "path": "history/state-domain-change-176940-198363-afa7690fba8847ac.kv",
+      "source_bytes": 332769,
+      "candidate_bytes": 279236,
+      "saved_bytes": 53533
+    },
+    {
+      "path": "history/state-domain-change-397569-419488-466063d01d2ba155.kv",
+      "source_bytes": 363285,
+      "candidate_bytes": 309402,
+      "saved_bytes": 53883
+    },
+    {
+      "path": "history/state-domain-change-198364-220118-68a6e69249263120.kv",
+      "source_bytes": 334684,
+      "candidate_bytes": 279864,
+      "saved_bytes": 54820
+    },
+    {
+      "path": "history/state-domain-change-242669-264259-8c1ceadda4d62425.kv",
+      "source_bytes": 351685,
+      "candidate_bytes": 296673,
+      "saved_bytes": 55012
+    },
+    {
+      "path": "history/state-domain-change-285517-307135-6d1a64c14a7ff8e3.kv",
+      "source_bytes": 350876,
+      "candidate_bytes": 295842,
+      "saved_bytes": 55034
+    },
+    {
+      "path": "history/state-domain-change-264260-285516-17b4458c52fe8478.kv",
+      "source_bytes": 337529,
+      "candidate_bytes": 282373,
+      "saved_bytes": 55156
+    },
+    {
+      "path": "history/state-domain-change-991354-1010950-74708733c452bab3.kv",
+      "source_bytes": 777382,
+      "candidate_bytes": 722063,
+      "saved_bytes": 55319
+    }
+  ],
+  "allocation_note": "Final counts after fsync and full candidate SHA reread; initial per-file writeback allocation is not used."
+}

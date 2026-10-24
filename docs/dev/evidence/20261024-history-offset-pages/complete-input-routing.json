@@ -1,0 +1,19 @@
+{
+  "canonical_frontiers_unchanged": true,
+  "complete": true,
+  "routes": [
+    {
+      "bytes": 100798871,
+      "covered_pairs": 4609,
+      "kind": "account-history-routing",
+      "membership_payload_unchanged": true
+    },
+    {
+      "bytes": 1515200,
+      "covered_pairs": 4609,
+      "kind": "system-history-routing",
+      "membership_payload_unchanged": true
+    }
+  ],
+  "strict_reconstruction_passed": true
+}

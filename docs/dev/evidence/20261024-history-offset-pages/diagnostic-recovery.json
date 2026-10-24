@@ -1,0 +1,13 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "initial_timed_rows": 238,
+  "timed_json_sha256": "127b4ffd1987f361e943c9c5dcabc4dcbacf1030c65cc226646e4344017180c4",
+  "reason": "go tool pprof lacked GOCACHE/HOME; original timing samples retained, no timing rerun",
+  "premature_perf_archive_attempt": "asserted pipeline completion and exited before writing any archive",
+  "utc": "2026-10-24T15:50:34.685954+00:00",
+  "final_timed_rows": 238,
+  "total_rows": 286,
+  "original_timed_rows_unchanged": true
+}

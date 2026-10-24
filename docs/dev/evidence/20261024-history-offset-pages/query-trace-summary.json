@@ -1,0 +1,142 @@
+[
+  {
+    "name": "nine-million",
+    "mode": "baseline",
+    "query_io_markers": 2,
+    "by_suffix": {
+      ".gtv2": {
+        "calls": 2,
+        "bytes": 572504,
+        "small_reads": 0
+      },
+      ".sst": {
+        "calls": 1704,
+        "bytes": 15738286,
+        "small_reads": 104
+      },
+      ".route": {
+        "calls": 9,
+        "bytes": 4726295,
+        "small_reads": 1
+      },
+      ".seg": {
+        "calls": 59,
+        "bytes": 1325060,
+        "small_reads": 9
+      },
+      ".kv": {
+        "calls": 58,
+        "bytes": 165534,
+        "small_reads": 18
+      }
+    },
+    "database_read_calls": 1832,
+    "database_read_bytes": 22527679,
+    "small_read_calls": 132
+  },
+  {
+    "name": "nine-million",
+    "mode": "candidate",
+    "query_io_markers": 2,
+    "by_suffix": {
+      ".gtv2": {
+        "calls": 2,
+        "bytes": 572504,
+        "small_reads": 0
+      },
+      ".sst": {
+        "calls": 1704,
+        "bytes": 15738286,
+        "small_reads": 104
+      },
+      ".route": {
+        "calls": 9,
+        "bytes": 4726295,
+        "small_reads": 1
+      },
+      ".seg": {
+        "calls": 59,
+        "bytes": 1325060,
+        "small_reads": 9
+      },
+      ".kv": {
+        "calls": 74,
+        "bytes": 194494,
+        "small_reads": 27
+      }
+    },
+    "database_read_calls": 1848,
+    "database_read_bytes": 22556639,
+    "small_read_calls": 141
+  },
+  {
+    "name": "oldest",
+    "mode": "baseline",
+    "query_io_markers": 2,
+    "by_suffix": {
+      ".gtv2": {
+        "calls": 2,
+        "bytes": 37348,
+        "small_reads": 0
+      },
+      ".sst": {
+        "calls": 1641,
+        "bytes": 15515208,
+        "small_reads": 104
+      },
+      ".route": {
+        "calls": 9,
+        "bytes": 4726295,
+        "small_reads": 1
+      },
+      ".seg": {
+        "calls": 112,
+        "bytes": 2798506,
+        "small_reads": 17
+      },
+      ".kv": {
+        "calls": 109,
+        "bytes": 309512,
+        "small_reads": 34
+      }
+    },
+    "database_read_calls": 1873,
+    "database_read_bytes": 23386869,
+    "small_read_calls": 156
+  },
+  {
+    "name": "oldest",
+    "mode": "candidate",
+    "query_io_markers": 2,
+    "by_suffix": {
+      ".gtv2": {
+        "calls": 2,
+        "bytes": 37348,
+        "small_reads": 0
+      },
+      ".sst": {
+        "calls": 1641,
+        "bytes": 15515208,
+        "small_reads": 104
+      },
+      ".route": {
+        "calls": 9,
+        "bytes": 4726295,
+        "small_reads": 1
+      },
+      ".seg": {
+        "calls": 112,
+        "bytes": 2798506,
+        "small_reads": 17
+      },
+      ".kv": {
+        "calls": 136,
+        "bytes": 351016,
+        "small_reads": 51
+      }
+    },
+    "database_read_calls": 1900,
+    "database_read_bytes": 23428373,
+    "small_read_calls": 173
+  }
+]

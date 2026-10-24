@@ -1,0 +1,28 @@
+{
+  "complete": true,
+  "archive_sha256": "a6681dc131366899d33b16c9db4f5044ec447c123c595b62b198325e3069d9ef",
+  "members": 534,
+  "checksummed_members": 533,
+  "production_source_files": 1076,
+  "files": 19949,
+  "counts": {
+    "Keys": 2443423104,
+    "Records": 14302423656,
+    "Singletons": 1847492115,
+    "MultiLists": 595930989,
+    "MultiRows": 12454931541,
+    "SourceBytes": 143407842868,
+    "CandidateBytes": 126009832509,
+    "RemovedOffsetBytes": 33589182048,
+    "LocatorDataBytes": 14945555001,
+    "LocatorDirectoryBytes": 1340970084,
+    "LocatorFooterBytes": 638368,
+    "SourcePostingBytes": 78206162033,
+    "CandidatePostingBytes": 44616979985,
+    "SparseBytes": 34180599
+  },
+  "timed_http_requests": 238,
+  "all_http_requests_correct": 286,
+  "muhash_verified": true,
+  "actual_restored_rows": 22496
+}

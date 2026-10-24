@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "utc": "2026-10-24T15:27:15.151119+00:00",
+  "source_manifest_sha256": "a1f6021166f4fd4051071c738e30a7d2fdc0b57ed51bacb25cb37f80b726cbfe",
+  "original_manifest_sha256": "127dfba9e75dbe215a9f00c5407ceb6db9a3f0be9f7c7e6a67418e3772992b67",
+  "scope": "All 19949 V8 accessors; not a complete restorable node."
+}

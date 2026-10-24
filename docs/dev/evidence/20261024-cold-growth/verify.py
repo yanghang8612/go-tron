@@ -18,7 +18,7 @@ for r in m['segments']:
   a=(x['first']['BlockNum']-1)//5000000;b=(x['last']['BlockNum']-1)//5000000
   if a!=b:continue
   assignment[(r['fromTxNum'],r['toTxNum'])]=a;members[a].append(x)
-  out[a].update(records=x['records'],tx_numbers=r['toTxNum']-r['fromTxNum']+1,blocks=x['tx_range_count'])
+  out[a].update(records=x['records'],logical_seg_bytes=x['logical_bytes'],tx_numbers=r['toTxNum']-r['fromTxNum']+1,blocks=x['tx_range_count'])
  elif r['dataset']=='event-log':
   a=(r['fromTxNum']-1)//5000000;b=(r['toTxNum']-1)//5000000
   if a==b:out[a][r['kind']+'_bytes']+=r['size']
@@ -32,7 +32,7 @@ for a in [4,5,6]:
  for x in rows:assert x['tx_range_count']==x['last']['BlockNum']-x['first']['BlockNum']+1
  c=out[a];c['real_transactions']=c['tx_numbers']-c['blocks'];c['state_history_bytes']=sum(c[k+'_bytes'] for k in ['history','accessor','inverted']);c['total_bytes']=c['state_history_bytes']+sum(c[k+'_bytes'] for k in ['event-log','event-log-index'])
  g=s['current']['groups'][f'{a*5}M-{(a+1)*5}M']['counts']
- assert all(c[k]==g[k] for k in ['records','tx_numbers','history_bytes','accessor_bytes','inverted_bytes'])
+ assert all(c[k]==g[k] for k in ['records','logical_seg_bytes','tx_numbers','history_bytes','accessor_bytes','inverted_bytes'])
  print(a*5,(a+1)*5,'published bytes',c['total_bytes'],'state bytes/real tx',c['state_history_bytes']/c['real_transactions'])
 keys=records=count=0;domains=collections.defaultdict(lambda:collections.defaultdict(collections.Counter));frozen=collections.defaultdict(collections.Counter)
 with gzip.open(P/'frozen-kv-domains.jsonl.gz','rt') as f:
