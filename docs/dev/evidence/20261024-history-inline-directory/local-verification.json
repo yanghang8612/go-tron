@@ -1,0 +1,12 @@
+{
+  "archive": "/Users/asuka/Downloads/gtron-kv-inline-directory-final-20261024-01.zip",
+  "sha256": "8a6286fcb8571c81bdfe0d2464ccff318d2eae1f14d1220bf60312cae5223b94",
+  "archive_bytes": 13194626,
+  "entries_verified": 551,
+  "full_end_sha_files": 19949,
+  "all_corpus_counts_recomputed": true,
+  "http_resource_recomputation_matches": true,
+  "resource_comparison_note": "Server table additionally carries the RPC tag; all locally recomputed metrics and groups match exactly.",
+  "native_production_sources_match_local": 1075,
+  "request_window_trace_recomputation_matches": true
+}

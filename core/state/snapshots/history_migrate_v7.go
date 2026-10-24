@@ -216,7 +216,7 @@ func historyCandidateUsesCurrentV7(dir string, candidate historyCompactionCandid
 	return currentCompression &&
 		historyHeader.version == stateDomainChangeBinaryVersionV6 &&
 		indexHeader.version == stateDomainChangeBinaryIndexCurrentVersion &&
-		accessorHeader.version == stateDomainChangeBinaryVersionV7, nil
+		isStateDomainChangeFramedAccessor(accessorHeader.version), nil
 }
 
 func historyUsesCurrentCompression(path string) (bool, error) {

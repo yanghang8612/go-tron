@@ -334,7 +334,7 @@ func iterateHistoryRoutingSourceKeys(ctx context.Context, dir string, history, a
 	if _, err := f.ReadAt(version[:], 0); err != nil {
 		return err
 	}
-	if v := binary.BigEndian.Uint32(version[8:]); v != stateDomainChangeBinaryVersionV6 && v != stateDomainChangeBinaryVersionV7 {
+	if v := binary.BigEndian.Uint32(version[8:]); !isStateDomainChangeKeyAccessor(v) {
 		return errSystemHistoryRoutingBudget
 	}
 	hash := sha256.New()

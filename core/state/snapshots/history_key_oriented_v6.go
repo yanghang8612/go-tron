@@ -44,11 +44,12 @@ type stateDomainChangeBinaryAccessorV6Posting struct {
 }
 
 type stateDomainChangeBinaryAccessorV6Key struct {
-	key          []byte
-	keyID        uint32
-	postingOff   uint64
-	postings     []stateDomainChangeBinaryAccessorV6Posting
-	postingCount uint32
+	key           []byte
+	keyID         uint32
+	postingOff    uint64
+	postings      []stateDomainChangeBinaryAccessorV6Posting
+	postingCount  uint32
+	inlinePosting stateDomainChangeBinaryAccessorV6Posting
 }
 
 type stateDomainChangeBinaryAccessorV6Block struct {
@@ -67,13 +68,16 @@ type stateDomainChangeBinaryAccessorV6Header struct {
 	recordCount, keyCount, blockCount   uint64
 	blockDirLen, keyDataLen, postingLen uint64
 	dictionaryDigest                    [sha256.Size]byte
+	sparseLen                           uint64
 }
 
 type stateDomainChangeBinaryAccessorV6Record struct {
-	key        []byte
-	keyID      uint32
-	postingOff uint64
-	postings   uint32
+	key           []byte
+	keyID         uint32
+	postingOff    uint64
+	postings      uint32
+	inline        bool
+	inlinePosting stateDomainChangeBinaryAccessorV6Posting
 }
 
 func stateDomainChangeBinaryAccessorV6Keys(entries []stateDomainChangeBinaryAccessorEntry) ([]stateDomainChangeBinaryAccessorV6Key, []uint32, error) {
@@ -286,7 +290,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(r io.ReaderAt, h s
 	}
 	dirStart := h.headerSize
 	entriesStart := dirStart + h.blockCount*8
-	dirEnd := dirStart + h.blockDirLen
+	dirEnd := dirStart + h.blockDirLen - h.sparseLen
 	// Adjacent offsets and the complete CRC-protected entry each need one
 	// bounded read, rather than four small ReaderAt calls per binary-search step.
 	var offsets [16]byte
@@ -356,7 +360,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 	if block.dataOff < keyStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff || postingStart+h.postingLen != fileSize {
 		return nil, errors.New("snapshots: V6 accessor key block outside key data")
 	}
-	maxRaw := uint64(block.keyCount) * (math.MaxUint16 + 2*binary.MaxVarintLen64 + 2*binary.MaxVarintLen32)
+	maxRaw := uint64(block.keyCount) * (math.MaxUint16 + 5*binary.MaxVarintLen64 + binary.MaxVarintLen32)
 	if uint64(block.rawLen) > h.keyDataLen || uint64(block.rawLen) > maxRaw {
 		return nil, errors.New("snapshots: V6 accessor key block decoded length is excessive")
 	}
@@ -395,32 +399,43 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 		if _, err := io.ReadFull(br, key[prefix:]); err != nil {
 			return nil, err
 		}
-		postingOff, err := binary.ReadUvarint(br)
-		if err != nil {
-			return nil, err
-		}
-		postingCount, err := binary.ReadUvarint(br)
-		if err != nil || postingCount > math.MaxUint32 {
-			return nil, errors.New("snapshots: invalid V6 accessor posting count")
-		}
-		if postingOff > h.postingLen {
-			return nil, errors.New("snapshots: key-oriented accessor posting offset outside section")
-		}
-		if h.version == stateDomainChangeBinaryVersionV6 {
-			postingBytes := postingCount * stateDomainChangeBinaryAccessorV6PostingSize
-			if postingBytes > h.postingLen-postingOff {
-				return nil, errors.New("snapshots: V6 accessor postings outside section")
+		var rec stateDomainChangeBinaryAccessorV6Record
+		if h.version == stateDomainChangeBinaryAccessorVersionV8 {
+			rec, err = readStateDomainChangeAccessorV8Meta(br, h)
+			if err != nil {
+				return nil, err
 			}
-		} else if postingCount != 0 && postingOff == h.postingLen {
-			return nil, errors.New("snapshots: V7 accessor posting offset at section end")
+		} else {
+			postingOff, err := binary.ReadUvarint(br)
+			if err != nil {
+				return nil, err
+			}
+			postingCount, err := binary.ReadUvarint(br)
+			if err != nil || postingCount > math.MaxUint32 {
+				return nil, errors.New("snapshots: invalid V6 accessor posting count")
+			}
+			if postingOff > h.postingLen {
+				return nil, errors.New("snapshots: key-oriented accessor posting offset outside section")
+			}
+			if h.version == stateDomainChangeBinaryVersionV6 {
+				postingBytes := postingCount * stateDomainChangeBinaryAccessorV6PostingSize
+				if postingBytes > h.postingLen-postingOff {
+					return nil, errors.New("snapshots: V6 accessor postings outside section")
+				}
+			} else if postingCount != 0 && postingOff == h.postingLen {
+				return nil, errors.New("snapshots: V7 accessor posting offset at section end")
+			}
+			rec.postingOff, rec.postings = postingOff, uint32(postingCount)
 		}
+
 		if i == 0 && !bytes.Equal(key, block.firstKey) {
 			return nil, errors.New("snapshots: V6 accessor first key mismatch")
 		}
 		if i > 0 && bytes.Compare(previous, key) >= 0 {
 			return nil, errors.New("snapshots: V6 accessor keys not sorted")
 		}
-		records = append(records, stateDomainChangeBinaryAccessorV6Record{key: key, keyID: firstKeyID + i, postingOff: postingOff, postings: uint32(postingCount)})
+		rec.key, rec.keyID = key, firstKeyID+i
+		records = append(records, rec)
 		previous = key
 	}
 	if br.Len() != 0 {
@@ -468,7 +483,7 @@ func stateDomainChangeBinaryAccessorV6Lookup(r io.ReaderAt, fileSize uint64, loo
 }
 
 func stateDomainChangeBinaryAccessorV6KeyByID(r io.ReaderAt, fileSize uint64, keyID uint32) ([]byte, error) {
-	h, err := decodeStateDomainChangeBinaryAccessorV6Header(r, fileSize)
+	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(r, fileSize)
 	if err != nil {
 		return nil, err
 	}

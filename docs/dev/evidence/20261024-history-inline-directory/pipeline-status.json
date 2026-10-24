@@ -1,0 +1,8 @@
+{
+  "complete": true,
+  "phase": "complete-with-environment-change",
+  "production_mutations": false,
+  "environment_identity_changed": true,
+  "utc": "2026-10-24T06:14:27.378647+00:00",
+  "diagnostic_errors_retained": true
+}

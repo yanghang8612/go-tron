@@ -1,0 +1,17 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "before_identity": {
+    "MainPID": "5408",
+    "ActiveState": "active",
+    "sha256": "d8e24fc5e21001a41f5037854c6c815dc2231296788df71751606f12ab6709f4"
+  },
+  "phase": "complete",
+  "utc": "2026-10-24T05:18:27.346331+00:00",
+  "input_manifest_sha256": "28fa5c8a7093a21716071ca7f717b2b7585af45c7cba59a00a40da91a1567d48",
+  "after_identity": {
+    "MainPID": "5408",
+    "ActiveState": "active",
+    "sha256": "d8e24fc5e21001a41f5037854c6c815dc2231296788df71751606f12ab6709f4"
+  }
+}

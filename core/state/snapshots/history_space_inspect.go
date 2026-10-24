@@ -324,7 +324,7 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 	var totalRecords, totalKeys, totalIndexEntries, totalIndexFrames uint64
 	var totalRecordDirectoryEntries uint64
 	var totalAccessorPosting, totalAccessorMetadata uint64
-	allV7 := true
+	allV6, allV7, allV8 := true, true, true
 	for i, trio := range trios {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -344,9 +344,11 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 		totalRecordDirectoryEntries += ceilDiv(h.records, historySpaceRecordDirectoryEntries)
 		totalAccessorPosting += h.accessorPosting
 		totalAccessorMetadata += h.accessorMetadata
+		allV6 = allV6 && h.accessorVersion == stateDomainChangeBinaryVersionV6
 		allV7 = allV7 && h.accessorVersion == stateDomainChangeBinaryVersionV7
+		allV8 = allV8 && h.accessorVersion == stateDomainChangeBinaryAccessorVersionV8
 		if !h.accessorV6 {
-			return nil, fmt.Errorf("snapshots: history-space benchmark requires a key-oriented V6/V7 accessor %s", trio.accessor.Path)
+			return nil, fmt.Errorf("snapshots: history-space benchmark requires a key-oriented V6/V7/V8 accessor %s", trio.accessor.Path)
 		}
 		if !h.historyCompressed {
 			return nil, fmt.Errorf("snapshots: history-space benchmark requires compressed history %s", trio.history.Path)
@@ -440,9 +442,14 @@ func InspectHistorySpaceFromManifest(dir string, manifest *Manifest, opts Histor
 	}
 
 	recordDirectoryBytes := uint64(len(trios))*historySpaceCandidateHeaderBytes + totalRecordDirectoryEntries*historySpaceRecordDirectoryEntry
-	currentName := "current-v6"
-	if allV7 {
+	currentName := "current-mixed"
+	switch {
+	case allV6:
+		currentName = "current-v6"
+	case allV7:
 		currentName = "current-v7"
+	case allV8:
+		currentName = "current-v8"
 	}
 	current := HistorySpaceCandidate{
 		Name:                   currentName,
@@ -635,7 +642,7 @@ func inspectHistorySpaceHeaders(dir string, trio historySpaceTrio) (historySpace
 		return out, err
 	}
 	accessorVersion := binary.BigEndian.Uint32(fixed[8:12])
-	if string(fixed[:8]) == string(stateDomainChangeBinaryAccessorMagic[:]) && (accessorVersion == stateDomainChangeBinaryVersionV6 || accessorVersion == stateDomainChangeBinaryVersionV7) {
+	if string(fixed[:8]) == string(stateDomainChangeBinaryAccessorMagic[:]) && (isStateDomainChangeKeyAccessor(accessorVersion)) {
 		h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(accessor, uint64(stat.Size()))
 		if err != nil {
 			return out, err
@@ -955,7 +962,7 @@ func estimateHistorySpacePostingKey(file io.ReaderAt, h stateDomainChangeBinaryA
 	if count == 0 {
 		return 0, errors.New("snapshots: key-oriented accessor key has zero postings")
 	}
-	if h.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(h.version) {
 		return stateDomainChangeBinaryAccessorV7PostingListLength(file, h, record)
 	}
 	first, err := stateDomainChangeBinaryAccessorV6PostingAt(file, h, record, 0)

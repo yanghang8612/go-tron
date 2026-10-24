@@ -1,0 +1,49 @@
+File: baseline.test
+Build ID: da3884baf7a3fd178902ee01c477cd7a9a4956fb
+Type: cpu
+Time: 2026-10-24 06:12:32 UTC
+Duration: 10.17s, Total samples = 10.10s (99.32%)
+Showing nodes accounting for 8.92s, 88.32% of 10.10s total
+Dropped 289 nodes (cum <= 0.05s)
+Showing top 40 nodes out of 199
+      flat  flat%   sum%        cum   cum%
+     1.72s 17.03% 17.03%      1.72s 17.03%  crypto/internal/fips140/sha256.blockAVX2
+     1.51s 14.95% 31.98%      1.54s 15.25%  github.com/golang/snappy.decode
+        1s  9.90% 41.88%         1s  9.90%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     0.88s  8.71% 50.59%      0.88s  8.71%  runtime.duffcopy
+     0.51s  5.05% 55.64%      0.51s  5.05%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.33s  3.27% 58.91%      0.33s  3.27%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.30s  2.97% 61.88%      0.99s  9.80%  runtime.mapaccess1_faststr
+     0.27s  2.67% 64.55%      4.91s 48.61%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.24s  2.38% 66.93%      0.98s  9.70%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).latestSegmentRef
+     0.23s  2.28% 69.21%      0.23s  2.28%  memeqbody
+     0.23s  2.28% 71.49%      0.23s  2.28%  runtime.memclrNoHeapPointers
+     0.22s  2.18% 73.66%      0.22s  2.18%  runtime.memmove
+     0.21s  2.08% 75.74%      0.21s  2.08%  aeshashbody
+     0.20s  1.98% 77.72%      3.39s 33.56%  github.com/tronprotocol/go-tron/core/rawdb.iterateHistoryOwnerSpans
+     0.18s  1.78% 79.50%      0.18s  1.78%  internal/runtime/syscall.Syscall6
+     0.16s  1.58% 81.09%      0.16s  1.58%  cmpbody
+     0.15s  1.49% 82.57%      0.47s  4.65%  github.com/tronprotocol/go-tron/core/rawdb.decodeHistoryOwnerSpansInto
+     0.07s  0.69% 83.27%      0.07s  0.69%  encoding/binary.Uvarint (inline)
+     0.06s  0.59% 83.86%      0.07s  0.69%  context.(*cancelCtx).Err
+     0.06s  0.59% 84.46%      1.82s 18.02%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.05s   0.5% 84.95%      1.10s 10.89%  github.com/tronprotocol/go-tron/core/state/snapshots.(*systemHistoryRouting).mayContain
+     0.04s   0.4% 85.35%      0.17s  1.68%  github.com/tronprotocol/go-tron/core/state/snapshots.systemHistoryRoutingQuery
+     0.03s   0.3% 85.64%      0.07s  0.69%  github.com/cockroachdb/pebble/sstable.(*blockIter).SeekGE
+     0.03s   0.3% 85.94%      0.14s  1.39%  github.com/tronprotocol/go-tron/core/state/snapshots.findManifestRef.func1 (inline)
+     0.03s   0.3% 86.24%      0.16s  1.58%  runtime.mallocgcSmallNoscan
+     0.03s   0.3% 86.53%      0.08s  0.79%  runtime.scanobject
+     0.02s   0.2% 86.73%      0.15s  1.49%  crypto/internal/fips140/sha256.(*Digest).checkSum
+     0.02s   0.2% 86.93%      0.06s  0.59%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint
+     0.02s   0.2% 87.13%      1.07s 10.59%  github.com/tronprotocol/go-tron/core/state/snapshots.systemHistoryRoutingPairID
+     0.02s   0.2% 87.33%      0.45s  4.46%  runtime.mallocgc
+     0.01s 0.099% 87.43%      0.07s  0.69%  bytes.Compare (inline)
+     0.01s 0.099% 87.52%      0.16s  1.58%  github.com/cockroachdb/pebble.(*DB).getInternal
+     0.01s 0.099% 87.62%      0.08s  0.79%  github.com/cockroachdb/pebble.(*Iterator).nextUserKey
+     0.01s 0.099% 87.72%      0.14s  1.39%  github.com/cockroachdb/pebble.(*getIter).Next
+     0.01s 0.099% 87.82%      0.09s  0.89%  github.com/cockroachdb/pebble/sstable.(*singleLevelIterator).loadBlock
+     0.01s 0.099% 87.92%      0.53s  5.25%  github.com/klauspost/compress/zstd.(*blockDec).decodeBuf
+     0.01s 0.099% 88.02%      3.61s 35.74%  github.com/tronprotocol/go-tron/core/rawdb.(*stateHistoryQueryTailView).iterateOwnerLocked
+     0.01s 0.099% 88.12%      0.16s  1.58%  github.com/tronprotocol/go-tron/core/state/snapshots.findManifestRef
+     0.01s 0.099% 88.22%      0.99s  9.80%  github.com/tronprotocol/go-tron/core/state/snapshots.loadSystemHistoryRouting
+     0.01s 0.099% 88.32%      1.01s 10.00%  golang.org/x/crypto/blake2b.Sum256

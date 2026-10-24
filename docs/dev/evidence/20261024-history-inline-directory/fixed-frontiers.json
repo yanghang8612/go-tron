@@ -1,0 +1,20 @@
+{
+  "progress": {
+    "historyBuildTxNum": 568104018,
+    "accessorBuildTxNum": 568104018,
+    "hotPruneTxNum": 568104018,
+    "hotPruneBlockNum": 11488345
+  },
+  "visibleTxStart": 1,
+  "visibleTxEnd": 568104018,
+  "source_manifest_sha256": "28fa5c8a7093a21716071ca7f717b2b7585af45c7cba59a00a40da91a1567d48",
+  "kind_counts": {
+    "event-log": 4932,
+    "event-log-index": 4932,
+    "accessor": 4609,
+    "account-history-routing": 1,
+    "history": 4609,
+    "inverted": 4609,
+    "system-history-routing": 1
+  }
+}

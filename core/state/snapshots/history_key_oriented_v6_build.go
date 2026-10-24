@@ -479,20 +479,21 @@ type stateDomainChangeV6PostingWriter struct {
 // but publishes one delta-framed stream per logical key. A single key is the
 // only buffered unit; the global posting set remains an external sort.
 type stateDomainChangeV7PostingWriter struct {
-	ctx      context.Context
-	postings *bufio.Writer
-	meta     *bufio.Writer
-	scratch  *historyPostingScratch
-	expected uint32
-	fromTx   uint64
-	keyID    uint32
-	haveKey  bool
-	offset   uint64
-	rows     uint64
-	current  []stateDomainChangeBinaryAccessorV6Posting
-	frames   []stateDomainChangeBinaryAccessorV7Frame
-	last     stateDomainChangeBinaryAccessorV6Posting
-	haveLast bool
+	ctx              context.Context
+	postings         *bufio.Writer
+	meta             *bufio.Writer
+	scratch          *historyPostingScratch
+	expected         uint32
+	fromTx           uint64
+	keyID            uint32
+	haveKey          bool
+	offset           uint64
+	rows             uint64
+	current          []stateDomainChangeBinaryAccessorV6Posting
+	frames           []stateDomainChangeBinaryAccessorV7Frame
+	last             stateDomainChangeBinaryAccessorV6Posting
+	haveLast         bool
+	inlineSingletons bool
 }
 
 func (w *stateDomainChangeV7PostingWriter) Put(key, value []byte) error {
@@ -540,6 +541,16 @@ func (*stateDomainChangeV7PostingWriter) Delete([]byte) error {
 }
 
 func (w *stateDomainChangeV7PostingWriter) flushKey() error {
+	if w.inlineSingletons && len(w.frames) == 0 && len(w.current) == 1 {
+		if err := w.writeMeta(w.offset, 1, w.current[0]); err != nil {
+			return err
+		}
+		w.current = w.current[:0]
+		w.haveLast = false
+		historyPostingMemoryKeys.Inc(1)
+		return w.scratch.Reset()
+	}
+
 	if len(w.current) != 0 {
 		if err := w.flushFrame(); err != nil {
 			return err
@@ -552,12 +563,10 @@ func (w *stateDomainChangeV7PostingWriter) flushKey() error {
 	if err != nil {
 		return err
 	}
-	var raw [12]byte
-	binary.BigEndian.PutUint64(raw[:8], w.offset)
-	binary.BigEndian.PutUint32(raw[8:12], count)
-	if _, err := w.meta.Write(raw[:]); err != nil {
+	if err := w.writeMeta(w.offset, count, stateDomainChangeBinaryAccessorV6Posting{}); err != nil {
 		return err
 	}
+
 	w.offset += written
 	w.current = w.current[:0]
 	w.frames = w.frames[:0]
@@ -569,6 +578,21 @@ func (w *stateDomainChangeV7PostingWriter) flushKey() error {
 		historyPostingMemoryKeys.Inc(1)
 	}
 	return w.scratch.Reset()
+}
+
+func (w *stateDomainChangeV7PostingWriter) writeMeta(off uint64, count uint32, p stateDomainChangeBinaryAccessorV6Posting) error {
+	var raw [32]byte
+	binary.BigEndian.PutUint64(raw[:8], off)
+	binary.BigEndian.PutUint32(raw[8:12], count)
+	size := 12
+	if w.inlineSingletons {
+		size = 32
+		binary.BigEndian.PutUint64(raw[12:20], p.txNum)
+		binary.BigEndian.PutUint64(raw[20:28], p.offset)
+		binary.BigEndian.PutUint32(raw[28:32], p.recordIndex)
+	}
+	_, err := w.meta.Write(raw[:size])
+	return err
 }
 
 func (w *stateDomainChangeV7PostingWriter) flushFrame() error {
@@ -681,6 +705,18 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 }
 
 func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
+	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV8)
+}
+
+func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Context, dir string, ref SegmentRef, recordCount uint64, version uint32) (SegmentRef, etl.Stats, error) {
+	if !isStateDomainChangeFramedAccessor(version) {
+		return SegmentRef{}, etl.Stats{}, errors.New("snapshots: unsupported accessor build version")
+	}
+	metaSize := 12
+	if version == stateDomainChangeBinaryAccessorVersionV8 {
+		metaSize = 32
+	}
+
 	if err := contextError(ctx); err != nil {
 		return SegmentRef{}, etl.Stats{}, err
 	}
@@ -703,7 +739,7 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 	defer func() { _ = metaFile.Close(); _ = os.Remove(metaName) }()
 	scratch := &historyPostingScratch{ctx: ctx, dir: filepath.Dir(abs), base: filepath.Base(abs) + ".posting-frames"}
 	defer scratch.Close()
-	writer := &stateDomainChangeV7PostingWriter{ctx: ctx, postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratch, expected: b.keyCount, fromTx: ref.FromTxNum}
+	writer := &stateDomainChangeV7PostingWriter{ctx: ctx, postings: bufio.NewWriterSize(postingFile, 1<<20), meta: bufio.NewWriterSize(metaFile, 1<<20), scratch: scratch, expected: b.keyCount, fromTx: ref.FromTxNum, inlineSingletons: version == stateDomainChangeBinaryAccessorVersionV8}
 	postingStats, err := loadHistoryETLContext(ctx, b.postings, writer)
 	if err != nil {
 		return SegmentRef{}, postingStats, err
@@ -721,7 +757,7 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 		return SegmentRef{}, postingStats, err
 	}
 	defer func() { _ = keyData.Close(); _ = os.Remove(keyDataName) }()
-	metaReader := bufio.NewReaderSize(io.NewSectionReader(metaFile, 0, int64(b.keyCount)*12), 64<<10)
+	metaReader := bufio.NewReaderSize(io.NewSectionReader(metaFile, 0, int64(b.keyCount)*int64(metaSize)), 64<<10)
 	keyWriter := bufio.NewWriterSize(keyData, 1<<20)
 	var keyOffset uint64
 	var largestRawKeyBlock int
@@ -737,13 +773,18 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 		records := make([]stateDomainChangeBinaryAccessorV6Key, len(keys))
 		for i, key := range keys {
 			keyID := uint32(blockIndex*stateDomainChangeBinaryAccessorV6BlockKeys + i)
-			var raw [12]byte
-			if _, err := io.ReadFull(metaReader, raw[:]); err != nil {
+			var raw [32]byte
+			if _, err := io.ReadFull(metaReader, raw[:metaSize]); err != nil {
 				return SegmentRef{}, postingStats, err
 			}
-			records[i] = stateDomainChangeBinaryAccessorV6Key{key: key, keyID: keyID, postingOff: binary.BigEndian.Uint64(raw[:8]), postingCount: binary.BigEndian.Uint32(raw[8:12])}
+			records[i] = stateDomainChangeBinaryAccessorV6Key{key: key, keyID: keyID, postingOff: binary.BigEndian.Uint64(raw[:8]), postingCount: binary.BigEndian.Uint32(raw[8:12]), inlinePosting: stateDomainChangeBinaryAccessorV6Posting{txNum: binary.BigEndian.Uint64(raw[12:20]), offset: binary.BigEndian.Uint64(raw[20:28]), recordIndex: binary.BigEndian.Uint32(raw[28:32])}}
 		}
-		raw, err := encodeStateDomainChangeBinaryAccessorV6KeyBlock(records)
+		var raw []byte
+		if version == stateDomainChangeBinaryAccessorVersionV8 {
+			raw, err = encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
+		} else {
+			raw, err = encodeStateDomainChangeBinaryAccessorV6KeyBlock(records)
+		}
 		if err != nil {
 			return SegmentRef{}, postingStats, err
 		}
@@ -774,6 +815,11 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 		dirLen += 2 + uint64(len(block.firstKey)) + stateDomainChangeBinaryAccessorV6BlockTail
 	}
 	dirLen += uint64(len(blocks)) * 8
+	var sparse []byte
+	if version == stateDomainChangeBinaryAccessorVersionV8 {
+		sparse = encodeHistoryAccessorSparseDirectory(blocks)
+	}
+	dirLen += uint64(len(sparse))
 	tmp, tmpName, err := createStateDomainChangeBinaryTempFileInDir(filepath.Dir(abs), filepath.Base(abs))
 	if err != nil {
 		return SegmentRef{}, postingStats, err
@@ -783,7 +829,7 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 	metadata := newSnapshotMetadataWriter(output)
 	var header [stateDomainChangeBinaryAccessorV7HeaderSize]byte
 	copy(header[:8], stateDomainChangeBinaryAccessorMagic[:])
-	binary.BigEndian.PutUint32(header[8:12], stateDomainChangeBinaryVersionV7)
+	binary.BigEndian.PutUint32(header[8:12], version)
 	binary.BigEndian.PutUint64(header[12:20], ref.FromTxNum)
 	binary.BigEndian.PutUint64(header[20:28], ref.ToTxNum)
 	binary.BigEndian.PutUint64(header[28:36], recordCount)
@@ -794,7 +840,8 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 	binary.BigEndian.PutUint64(header[64:72], uint64(keyStat.Size()))
 	copy(header[72:104], b.dictionaryDigest[:])
 	binary.BigEndian.PutUint64(header[104:112], uint64(postingStat.Size()))
-	binary.BigEndian.PutUint32(header[112:116], crc32.ChecksumIEEE(header[:112]))
+	binary.BigEndian.PutUint32(header[116:120], uint32(len(sparse)))
+	binary.BigEndian.PutUint32(header[112:116], stateDomainChangeAccessorHeaderCRC(header[:], version))
 	if _, err := metadata.Write(header[:]); err != nil {
 		return SegmentRef{}, postingStats, err
 	}
@@ -833,6 +880,9 @@ func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir
 		if _, err := metadata.Write(tail[:]); err != nil {
 			return SegmentRef{}, postingStats, err
 		}
+	}
+	if _, err := metadata.Write(sparse); err != nil {
+		return SegmentRef{}, postingStats, err
 	}
 	for _, src := range []*os.File{keyData, postingFile} {
 		if _, err := src.Seek(0, io.SeekStart); err != nil {

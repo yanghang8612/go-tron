@@ -347,7 +347,7 @@ func experimentalBuildRealV7Fixture(t testing.TB) (string, SegmentRef, SegmentRe
 		}
 	}
 	dir := t.TempDir()
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1_700_000_000, 1_700_002_047, "history/state-domain-change-experiment.seg")
+	refs, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 1_700_000_000, 1_700_002_047, "history/state-domain-change-experiment.seg")
 	if err != nil {
 		t.Fatal(err)
 	}

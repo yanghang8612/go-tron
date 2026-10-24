@@ -568,7 +568,7 @@ func accountRoutingDictionaryCost(dir string, ref SegmentRef) (uint64, error) {
 		return 0, err
 	}
 	version := binary.BigEndian.Uint32(raw[8:])
-	if version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 {
+	if !isStateDomainChangeKeyAccessor(version) {
 		return 0, errSystemHistoryRoutingBudget
 	}
 	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(f, ref.Size)

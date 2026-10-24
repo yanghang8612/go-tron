@@ -104,13 +104,13 @@ func HistoryReferenceTranscodeWorkBytesContext(ctx context.Context, dir string, 
 	}
 	version := accessorHeader.version
 	var etl uint64
-	if version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(version) {
 		if header.count > historyReferenceMaxLogical/128 {
 			return 0, fmt.Errorf("%w: verifier ETL record count", errHistoryReferenceBudget)
 		}
 		etl = header.count * 128
 	} else if version != stateDomainChangeBinaryVersionV6 {
-		return 0, errors.New("snapshots: work estimate requires V6/V7 accessor for bounded verification")
+		return 0, errors.New("snapshots: work estimate requires V6/V7/V8 accessor for bounded verification")
 	}
 	return 2*unique + 2*companions + 2*historyReferenceMaxMetadata + (1 << 30) + etl, ctx.Err()
 }

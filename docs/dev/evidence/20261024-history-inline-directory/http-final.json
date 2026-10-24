@@ -1,0 +1,38 @@
+{
+  "complete": true,
+  "all_responses_correct": true,
+  "requests": 288,
+  "measured_requests": 238,
+  "cold_residency_proofs": 56,
+  "max_pre_start_residency": 8.960436982590767e-07,
+  "head": {
+    "gomaxprocs": 2,
+    "head": 11818192,
+    "head_hash": "0000000000b454d09a46886a40d09d8cbec73812d013f57de1fc803784acfdf6",
+    "head_tx": 601386177,
+    "history_cache_mib": 512,
+    "hot_cache_mib": 512,
+    "manifest_generation": 5321,
+    "pid": 23948,
+    "read_only": true,
+    "root": "8fbf149684146a59b1650b318a768f0edbae0c8c1c3ceb2c5c610129c10f76a5",
+    "url": "http://127.0.0.1:8246/"
+  },
+  "raw_host_head": {
+    "gomaxprocs": 2,
+    "head": 11818192,
+    "head_hash": "30303030303030303030623435346430396134363838366134306430396438636265633733383132643031336635376465316663383033373834616366646636",
+    "head_tx": 601386177,
+    "history_cache_mib": 512,
+    "hot_cache_mib": 512,
+    "manifest_generation": 5321,
+    "pid": 23948,
+    "read_only": true,
+    "root": "38666266313439363834313436613539623136353062333138613736386630656462616530633863316333636562326335633631303132396331306637366135",
+    "url": "http://127.0.0.1:8246/"
+  },
+  "host_hash_display_note": "Host fmt %x used a Stringer; normalized head/root decode one ASCII-hex layer only. Original ready receipts are retained.",
+  "baseline_sha256": "28ae05240465cf1dadb46944baefb68416b624958f28a33a47a3659f0d4eba15",
+  "candidate_sha256": "e5b8f4a5bf8382ea752e7981b6a47d3a9e3528f3d06a27838c96169a4bc27c37",
+  "oracle_specs_sha256": "e50b5e0a67ceb7ba7c9e692308b91acf996a987f01d42ee4f1512cd92f1d818c"
+}

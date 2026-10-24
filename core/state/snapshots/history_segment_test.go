@@ -558,7 +558,7 @@ func TestValidateBuiltStateDomainChangeBinaryFilesRejectsCorruptV7Directory(t *t
 	}); err != nil {
 		t.Fatal(err)
 	}
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 10, "history/state-domain-change-10-10.seg")
+	refs, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 10, 10, "history/state-domain-change-10-10.seg")
 	if err != nil {
 		t.Fatalf("build history: %v", err)
 	}

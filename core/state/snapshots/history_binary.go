@@ -1103,7 +1103,7 @@ func collectStateDomainChangeBinarySegmentV6Keys(ctx context.Context, dir string
 			return err
 		}
 		defer accessor.Close()
-		if (accessorHeader.version != stateDomainChangeBinaryVersionV6 && accessorHeader.version != stateDomainChangeBinaryVersionV7) || accessorHeader.fromTxNum != header.fromTxNum || accessorHeader.toTxNum != header.toTxNum || accessorHeader.count != header.count {
+		if (!isStateDomainChangeKeyAccessor(accessorHeader.version)) || accessorHeader.fromTxNum != header.fromTxNum || accessorHeader.toTxNum != header.toTxNum || accessorHeader.count != header.count {
 			return fmt.Errorf("snapshots: V6 accessor %q changed while collecting dictionary keys", source.accessor.Path)
 		}
 		if err := verifyStateDomainChangeBinaryV6DictionaryPair(reader, accessor, accessorSize); err != nil {
@@ -1149,7 +1149,7 @@ func stateDomainChangeBinaryCompactionV6KeyRemap(ctx context.Context, dir string
 		return nil, err
 	}
 	defer accessor.Close()
-	if (accessorHeader.version != stateDomainChangeBinaryVersionV6 && accessorHeader.version != stateDomainChangeBinaryVersionV7) || accessorHeader.fromTxNum != source.segmentHeader.fromTxNum || accessorHeader.toTxNum != source.segmentHeader.toTxNum || accessorHeader.count != source.segmentHeader.count {
+	if (!isStateDomainChangeKeyAccessor(accessorHeader.version)) || accessorHeader.fromTxNum != source.segmentHeader.fromTxNum || accessorHeader.toTxNum != source.segmentHeader.toTxNum || accessorHeader.count != source.segmentHeader.count {
 		return nil, fmt.Errorf("snapshots: V6 accessor %q changed while building key remap", source.accessor.Path)
 	}
 	if err := verifyStateDomainChangeBinaryV6DictionaryPair(segment, accessor, accessorSize); err != nil {
@@ -1650,7 +1650,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		// complete structure and semantics in one gate. Legacy layouts retain the
 		// standalone structural scan before their older coverage algorithms.
 		checkAccessor := CheckStateDomainChangeAccessorSegmentContext
-		if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+		if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 			// The joint gate above already authenticated this exact ref's size and
 			// physical SHA. Keep V7's complete layout scan: the sequential tuple
 			// cursor does not independently prove every posting-byte boundary.
@@ -1681,7 +1681,7 @@ func verifyStateDomainChangeBinaryCompanionsAgainstSegmentContext(ctx context.Co
 		}
 		return verifyStateDomainChangeBinaryAccessorV4CollectedContext(ctx, scratch, accessorRef, segmentHeader.count, accessorReader, accessorSize, accessorHeader, collectors)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 		v7Header, err := decodeStateDomainChangeBinaryAccessorV7Header(accessorReader, accessorSize)
 		if err != nil {
 			return err
@@ -2457,7 +2457,7 @@ func readStateDomainChangeBinaryAccessor(dir string, ref SegmentRef) ([]stateDom
 	if header.version == stateDomainChangeBinaryVersionV6 {
 		return readStateDomainChangeBinaryAccessorV6Debug(accessorFile, fileSize)
 	}
-	if header.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(header.version) {
 		return readStateDomainChangeBinaryAccessorV7Debug(accessorFile, fileSize)
 	}
 	offsetTableLen := header.count * 8
@@ -2574,7 +2574,7 @@ func checkStateDomainChangeBinaryAccessorValidationContext(ctx context.Context, 
 			return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
 		}
 	}
-	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 || header.version == stateDomainChangeBinaryVersionV7) && fileSize > math.MaxInt64 {
+	if (header.version == stateDomainChangeBinaryVersionV3 || header.version == stateDomainChangeBinaryVersionV4 || header.version == stateDomainChangeBinaryVersionV5 || header.version == stateDomainChangeBinaryVersionV6 || header.version == stateDomainChangeBinaryVersionV7 || header.version == stateDomainChangeBinaryAccessorVersionV8) && fileSize > math.MaxInt64 {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q logical size %d exceeds int64", ref.Path, fileSize)
 	}
 	if header.version == stateDomainChangeBinaryVersionV3 {
@@ -2597,7 +2597,7 @@ func checkStateDomainChangeBinaryAccessorValidationContext(ctx context.Context, 
 		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
 		return checkStateDomainChangeBinaryAccessorV6(contextReaderAt{ctx: ctx, r: buffered}, fileSize)
 	}
-	if header.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(header.version) {
 		buffered := acquireStateDomainChangeAccessorValidationReader(accessorReader, fileSize)
 		defer releaseStateDomainChangeAccessorValidationReader(&buffered)
 		return checkStateDomainChangeBinaryAccessorV7(contextReaderAt{ctx: ctx, r: buffered}, fileSize)
@@ -2914,7 +2914,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx context.Context
 	if accessorHeader.fromTxNum != ref.FromTxNum || accessorHeader.toTxNum != ref.ToTxNum {
 		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want [%d,%d]", accessorRef.Path, accessorHeader.fromTxNum, accessorHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV6 || accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeKeyAccessor(accessorHeader.version) {
 		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
 			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
 				return err
@@ -2922,7 +2922,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx context.Context
 			accessorOwned = false
 		}
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 		return iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx, segmentFile, segmentSize, contextReaderAt{ctx: ctx, r: accessorFile}, accessorSize, lookupKeys, fromTxNum, toTxNum, fn)
 	}
 	for _, lookupKey := range lookupKeys {
@@ -2961,7 +2961,7 @@ func iterateStateDomainChangeBinarySegmentByOpenAccessorKey(segmentFile io.Reade
 	if accessorHeader.version == stateDomainChangeBinaryVersionV6 {
 		return iterateStateDomainChangeBinarySegmentByAccessorV6Key(segmentFile, segmentSize, accessorFile, accessorSize, lookupKey, fromTxNum, toTxNum, fn)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 		return iterateStateDomainChangeBinarySegmentByAccessorV7Key(segmentFile, segmentSize, accessorFile, accessorSize, lookupKey, fromTxNum, toTxNum, fn)
 	}
 
@@ -3051,7 +3051,7 @@ func iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir string, ref S
 		}
 		return iterateStateDomainChangeBinarySegmentByAccessorV6Prefix(segmentFile, segmentSize, accessorFile, accessorSize, lookupPrefix, fromTxNum, toTxNum, fn)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 		if history, ok := segmentFile.(*stateDomainChangeHistoryReader); ok {
 			if err := history.attachV6Accessor(accessorFile, accessorSize); err != nil {
 				return err
@@ -3541,7 +3541,7 @@ func decodeStateDomainChangeBinaryHeader(data []byte, magic [8]byte) (stateDomai
 		return stateDomainChangeBinaryHeader{}, nil, errors.New("snapshots: invalid state-domain-change binary magic")
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && magic == stateDomainChangeBinaryIndexMagic) {
+	if version != stateDomainChangeBinaryVersionV1 && version != stateDomainChangeBinaryVersionV2 && version != stateDomainChangeBinaryVersionV3 && version != stateDomainChangeBinaryVersionV4 && version != stateDomainChangeBinaryVersionV5 && version != stateDomainChangeBinaryVersionV6 && version != stateDomainChangeBinaryVersionV7 && !(version == 8 && (magic == stateDomainChangeBinaryIndexMagic || magic == stateDomainChangeBinaryAccessorMagic)) {
 		return stateDomainChangeBinaryHeader{}, nil, fmt.Errorf("snapshots: unsupported state-domain-change binary version %d", version)
 	}
 	return stateDomainChangeBinaryHeader{
@@ -3657,7 +3657,7 @@ func (r *stateDomainChangeHistoryReader) v6Key(keyID uint32) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if header.version != stateDomainChangeBinaryVersionV6 && header.version != stateDomainChangeBinaryVersionV7 {
+		if !isStateDomainChangeKeyAccessor(header.version) {
 			_ = accessor.Close()
 			return nil, fmt.Errorf("snapshots: key-oriented history accessor has version %d", header.version)
 		}
@@ -3718,7 +3718,7 @@ func (r *stateDomainChangeHistoryReader) prepareV6AccessorContext(ctx context.Co
 		return err
 	}
 	fail := func(err error) error { _ = accessor.Close(); return err }
-	if header.version != stateDomainChangeBinaryVersionV6 && header.version != stateDomainChangeBinaryVersionV7 {
+	if !isStateDomainChangeKeyAccessor(header.version) {
 		return fail(fmt.Errorf("snapshots: key-oriented history accessor has version %d", header.version))
 	}
 	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(contextReaderAt{ctx: ctx, r: accessor}, size)
@@ -4191,7 +4191,7 @@ func openStateDomainChangeBinaryAccessorReaderContext(ctx context.Context, dir s
 			_ = reader.Close()
 			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v6 layout: %w", ref.Path, err)
 		}
-	} else if header.version == stateDomainChangeBinaryVersionV7 {
+	} else if isStateDomainChangeFramedAccessor(header.version) {
 		if _, err := decodeStateDomainChangeBinaryAccessorV7Header(reader, logicalSize); err != nil {
 			_ = reader.Close()
 			return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q v7 layout: %w", ref.Path, err)

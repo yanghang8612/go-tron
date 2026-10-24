@@ -69,7 +69,7 @@ func buildStateDomainChangeV7AccessorBytes(t testing.TB, keys int) []byte {
 			t.Fatal(err)
 		}
 	}
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, uint64(keys), "history/state-domain-change-validation.seg")
+	refs, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 1, uint64(keys), "history/state-domain-change-validation.seg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestStateDomainChangeV7FramedAccessorQuery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 300, "history/state-domain-change-1-300.seg")
+	refs, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 1, 300, "history/state-domain-change-1-300.seg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,11 +330,11 @@ func TestManagerBatchesFirstStateDomainChangesAcrossV7Segment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 50, "history/state-domain-change-1-50.seg")
+	refs, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 1, 50, "history/state-domain-change-1-50.seg")
 	if err != nil {
 		t.Fatal(err)
 	}
-	later, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 51, 100, "history/state-domain-change-51-100.seg")
+	later, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 51, 100, "history/state-domain-change-51-100.seg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestStateDomainChangeV7SequentialVerificationExternalSort(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 300, "history/state-domain-change-1-300.seg")
+	refs, err := buildStateDomainChangeV7SegmentsForTest(t, db, dir, 1, 300, "history/state-domain-change-1-300.seg")
 	if err != nil {
 		t.Fatal(err)
 	}

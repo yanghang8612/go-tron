@@ -297,7 +297,7 @@ func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef,
 		_ = accessor.Close()
 		return fmt.Errorf("snapshots: state-domain-change history accessor count %d, want %d", accessorHeader.count, recordCount)
 	}
-	if accessorHeader.version == stateDomainChangeBinaryVersionV6 || accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+	if isStateDomainChangeKeyAccessor(accessorHeader.version) {
 		var v6Header stateDomainChangeBinaryAccessorV6Header
 		v6Header, err = decodeStateDomainChangeBinaryAccessorKeyHeader(accessor, accessorSize)
 		if err == nil {
@@ -313,7 +313,7 @@ func validateBuiltStateDomainChangeBinaryFiles(dir string, segmentRef, indexRef,
 			}
 		}
 		if err == nil {
-			if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+			if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 				err = checkStateDomainChangeBinaryAccessorV7(accessor, accessorSize)
 			} else {
 				err = checkStateDomainChangeBinaryAccessorV6(accessor, accessorSize)

@@ -1,0 +1,1766 @@
+[
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff954",
+    "height": 3144020,
+    "n": 3,
+    "milliseconds": {
+      "median": 207.18136429786682,
+      "min": 204.7743946313858,
+      "max": 214.43770825862885
+    },
+    "server_ms": {
+      "median": 204.635544,
+      "min": 202.669553,
+      "max": 212.511865
+    },
+    "cpu_ms": {
+      "median": 205.61899999999997,
+      "min": 203.94,
+      "max": 213.79500000000002
+    },
+    "alloc_bytes": {
+      "median": 36396208,
+      "min": 36353200,
+      "max": 36400112
+    },
+    "rchar": {
+      "median": 23620449,
+      "min": 23620449,
+      "max": 23620455
+    },
+    "syscr": {
+      "median": 1932,
+      "min": 1932,
+      "max": 1933
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff955",
+    "height": 3144021,
+    "n": 3,
+    "milliseconds": {
+      "median": 207.25809037685394,
+      "min": 200.85805654525757,
+      "max": 215.9312292933464
+    },
+    "server_ms": {
+      "median": 205.218192,
+      "min": 198.883731,
+      "max": 213.906446
+    },
+    "cpu_ms": {
+      "median": 206.44400000000007,
+      "min": 200.603,
+      "max": 226.1679999999999
+    },
+    "alloc_bytes": {
+      "median": 36355024,
+      "min": 36353824,
+      "max": 36411624
+    },
+    "rchar": {
+      "median": 23621068,
+      "min": 23621068,
+      "max": 23621068
+    },
+    "syscr": {
+      "median": 1932,
+      "min": 1932,
+      "max": 1932
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 1617920
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x4c4b40",
+    "height": 5000000,
+    "n": 3,
+    "milliseconds": {
+      "median": 197.53367453813553,
+      "min": 196.27927243709564,
+      "max": 214.81992304325104
+    },
+    "server_ms": {
+      "median": 195.436284,
+      "min": 194.183792,
+      "max": 212.862851
+    },
+    "cpu_ms": {
+      "median": 196.856,
+      "min": 195.70700000000005,
+      "max": 213.824
+    },
+    "alloc_bytes": {
+      "median": 35878240,
+      "min": 35863552,
+      "max": 35922128
+    },
+    "rchar": {
+      "median": 23340417,
+      "min": 23340417,
+      "max": 23340420
+    },
+    "syscr": {
+      "median": 1892,
+      "min": 1892,
+      "max": 1893
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x895440",
+    "height": 9000000,
+    "n": 3,
+    "milliseconds": {
+      "median": 173.44441264867783,
+      "min": 172.49993234872818,
+      "max": 177.914597094059
+    },
+    "server_ms": {
+      "median": 171.525999,
+      "min": 170.51029,
+      "max": 175.991263
+    },
+    "cpu_ms": {
+      "median": 174.23600000000005,
+      "min": 172.149,
+      "max": 177.32600000000008
+    },
+    "alloc_bytes": {
+      "median": 31702904,
+      "min": 31631384,
+      "max": 31963368
+    },
+    "rchar": {
+      "median": 22678869,
+      "min": 22678869,
+      "max": 22678869
+    },
+    "syscr": {
+      "median": 1871,
+      "min": 1871,
+      "max": 1871
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb453d0",
+    "height": 11817936,
+    "n": 3,
+    "milliseconds": {
+      "median": 80.81571757793427,
+      "min": 78.37805896997452,
+      "max": 82.172691822052
+    },
+    "server_ms": {
+      "median": 78.828507,
+      "min": 76.530129,
+      "max": 79.20497
+    },
+    "cpu_ms": {
+      "median": 79.63399999999996,
+      "min": 77.14100000000002,
+      "max": 79.83599999999996
+    },
+    "alloc_bytes": {
+      "median": 10366904,
+      "min": 10366520,
+      "max": 10366920
+    },
+    "rchar": {
+      "median": 5530043,
+      "min": 5530043,
+      "max": 5530043
+    },
+    "syscr": {
+      "median": 313,
+      "min": 313,
+      "max": 313
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb454cf",
+    "height": 11818191,
+    "n": 3,
+    "milliseconds": {
+      "median": 28.807058930397034,
+      "min": 27.694769203662872,
+      "max": 34.438252449035645
+    },
+    "server_ms": {
+      "median": 26.964621,
+      "min": 25.891316,
+      "max": 32.591327
+    },
+    "cpu_ms": {
+      "median": 27.48100000000005,
+      "min": 26.538999999999987,
+      "max": 33.26899999999989
+    },
+    "alloc_bytes": {
+      "median": 3984744,
+      "min": 3966040,
+      "max": 3985224
+    },
+    "rchar": {
+      "median": 1152813,
+      "min": 1152813,
+      "max": 1152813
+    },
+    "syscr": {
+      "median": 54,
+      "min": 54,
+      "max": 54
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "latest",
+    "height": 11818192,
+    "n": 3,
+    "milliseconds": {
+      "median": 6.180755794048309,
+      "min": 6.146416068077087,
+      "max": 6.6415369510650635
+    },
+    "server_ms": {
+      "median": 4.500828,
+      "min": 4.4517,
+      "max": 4.839858
+    },
+    "cpu_ms": {
+      "median": 4.9710000000000605,
+      "min": 4.904000000000053,
+      "max": 5.504999999999939
+    },
+    "alloc_bytes": {
+      "median": 175232,
+      "min": 168304,
+      "max": 175600
+    },
+    "rchar": {
+      "median": 1046774,
+      "min": 1046774,
+      "max": 1046774
+    },
+    "syscr": {
+      "median": 31,
+      "min": 31,
+      "max": 31
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff954",
+    "height": 3144020,
+    "n": 4,
+    "milliseconds": {
+      "median": 867.4101307988167,
+      "min": 849.0839153528214,
+      "max": 921.5368703007698
+    },
+    "server_ms": {
+      "median": 865.11952,
+      "min": 847.210883,
+      "max": 919.313142
+    },
+    "cpu_ms": {
+      "median": 275.70449999999994,
+      "min": 259.1579999999999,
+      "max": 289.89199999999994
+    },
+    "alloc_bytes": {
+      "median": 36644436.0,
+      "min": 36406824,
+      "max": 36745056
+    },
+    "rchar": {
+      "median": 23620458.0,
+      "min": 23620458,
+      "max": 23620458
+    },
+    "syscr": {
+      "median": 1932.0,
+      "min": 1932,
+      "max": 1933
+    },
+    "read_bytes": {
+      "median": 35913728.0,
+      "min": 35913728,
+      "max": 35913728
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff955",
+    "height": 3144021,
+    "n": 4,
+    "milliseconds": {
+      "median": 860.3720478713512,
+      "min": 838.4307771921158,
+      "max": 915.8373922109604
+    },
+    "server_ms": {
+      "median": 858.3877219999999,
+      "min": 836.062745,
+      "max": 913.615925
+    },
+    "cpu_ms": {
+      "median": 269.114,
+      "min": 243.23700000000002,
+      "max": 299.3659999999999
+    },
+    "alloc_bytes": {
+      "median": 36401164.0,
+      "min": 36360320,
+      "max": 36725632
+    },
+    "rchar": {
+      "median": 23621077.0,
+      "min": 23621077,
+      "max": 23621077
+    },
+    "syscr": {
+      "median": 1932.0,
+      "min": 1932,
+      "max": 1932
+    },
+    "read_bytes": {
+      "median": 35913728.0,
+      "min": 35913728,
+      "max": 35913728
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x4c4b40",
+    "height": 5000000,
+    "n": 4,
+    "milliseconds": {
+      "median": 835.8304463326931,
+      "min": 826.5798091888428,
+      "max": 1109.1111078858376
+    },
+    "server_ms": {
+      "median": 833.7806315,
+      "min": 824.585439,
+      "max": 1106.381674
+    },
+    "cpu_ms": {
+      "median": 248.70649999999992,
+      "min": 235.38400000000001,
+      "max": 308.39200000000005
+    },
+    "alloc_bytes": {
+      "median": 36234072.0,
+      "min": 35913296,
+      "max": 36277544
+    },
+    "rchar": {
+      "median": 23340426.0,
+      "min": 23340426,
+      "max": 23340426
+    },
+    "syscr": {
+      "median": 1892.0,
+      "min": 1892,
+      "max": 1893
+    },
+    "read_bytes": {
+      "median": 33255424.0,
+      "min": 33255424,
+      "max": 33255424
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x895440",
+    "height": 9000000,
+    "n": 4,
+    "milliseconds": {
+      "median": 807.004276663065,
+      "min": 796.4563593268394,
+      "max": 933.2610219717026
+    },
+    "server_ms": {
+      "median": 805.0634955,
+      "min": 794.467977,
+      "max": 931.065731
+    },
+    "cpu_ms": {
+      "median": 209.46650000000005,
+      "min": 204.36699999999996,
+      "max": 237.885
+    },
+    "alloc_bytes": {
+      "median": 31678468.0,
+      "min": 31651624,
+      "max": 32000688
+    },
+    "rchar": {
+      "median": 22678878.0,
+      "min": 22678878,
+      "max": 22678878
+    },
+    "syscr": {
+      "median": 1871.0,
+      "min": 1871,
+      "max": 1871
+    },
+    "read_bytes": {
+      "median": 28024832.0,
+      "min": 28024832,
+      "max": 28024832
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0xb453d0",
+    "height": 11817936,
+    "n": 4,
+    "milliseconds": {
+      "median": 108.90525206923485,
+      "min": 102.57456451654434,
+      "max": 110.43842881917953
+    },
+    "server_ms": {
+      "median": 106.99945249999999,
+      "min": 100.68202,
+      "max": 108.459674
+    },
+    "cpu_ms": {
+      "median": 83.05749999999995,
+      "min": 81.40000000000003,
+      "max": 83.83300000000008
+    },
+    "alloc_bytes": {
+      "median": 10546252.0,
+      "min": 10367144,
+      "max": 10739696
+    },
+    "rchar": {
+      "median": 5530052.0,
+      "min": 5530052,
+      "max": 5530052
+    },
+    "syscr": {
+      "median": 313.0,
+      "min": 313,
+      "max": 313
+    },
+    "read_bytes": {
+      "median": 5607424.0,
+      "min": 5607424,
+      "max": 6209536
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0xb454cf",
+    "height": 11818191,
+    "n": 4,
+    "milliseconds": {
+      "median": 57.465407997369766,
+      "min": 50.50177127122879,
+      "max": 63.169240951538086
+    },
+    "server_ms": {
+      "median": 55.537695,
+      "min": 48.553985,
+      "max": 61.026181
+    },
+    "cpu_ms": {
+      "median": 30.113999999999947,
+      "min": 29.014999999999986,
+      "max": 56.83399999999989
+    },
+    "alloc_bytes": {
+      "median": 3986308.0,
+      "min": 3966216,
+      "max": 4032512
+    },
+    "rchar": {
+      "median": 1152822.0,
+      "min": 1152822,
+      "max": 1152822
+    },
+    "syscr": {
+      "median": 54.0,
+      "min": 54,
+      "max": 54
+    },
+    "read_bytes": {
+      "median": 1228800.0,
+      "min": 1228800,
+      "max": 1228800
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "latest",
+    "height": 11818192,
+    "n": 4,
+    "milliseconds": {
+      "median": 19.601818174123764,
+      "min": 17.335057258605957,
+      "max": 22.216908633708954
+    },
+    "server_ms": {
+      "median": 17.673113999999998,
+      "min": 15.441733,
+      "max": 20.345322
+    },
+    "cpu_ms": {
+      "median": 5.9220000000000255,
+      "min": 5.618999999999971,
+      "max": 6.8829999999999245
+    },
+    "alloc_bytes": {
+      "median": 169192.0,
+      "min": 157264,
+      "max": 175408
+    },
+    "rchar": {
+      "median": 1046783.0,
+      "min": 1046783,
+      "max": 1046783
+    },
+    "syscr": {
+      "median": 31.0,
+      "min": 31,
+      "max": 31
+    },
+    "read_bytes": {
+      "median": 1097728.0,
+      "min": 1097728,
+      "max": 4825088
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x2ff954",
+    "height": 3144020,
+    "n": 10,
+    "milliseconds": {
+      "median": 169.60251331329346,
+      "min": 166.8349876999855,
+      "max": 182.27246403694153
+    },
+    "server_ms": {
+      "median": 168.0190525,
+      "min": 165.926112,
+      "max": 181.314119
+    },
+    "cpu_ms": {
+      "median": 168.7774999999999,
+      "min": 166.24199999999968,
+      "max": 182.026
+    },
+    "alloc_bytes": {
+      "median": 30915848.0,
+      "min": 30915712,
+      "max": 31152240
+    },
+    "rchar": {
+      "median": 8067901.0,
+      "min": 8067899,
+      "max": 8067903
+    },
+    "syscr": {
+      "median": 289.0,
+      "min": 289,
+      "max": 290
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x2ff955",
+    "height": 3144021,
+    "n": 10,
+    "milliseconds": {
+      "median": 169.30602863430977,
+      "min": 167.21540689468384,
+      "max": 178.642638027668
+    },
+    "server_ms": {
+      "median": 168.23967950000002,
+      "min": 166.164535,
+      "max": 177.512492
+    },
+    "cpu_ms": {
+      "median": 168.6609999999998,
+      "min": 166.5130000000005,
+      "max": 196.6020000000002
+    },
+    "alloc_bytes": {
+      "median": 30915552.0,
+      "min": 30915072,
+      "max": 30927624
+    },
+    "rchar": {
+      "median": 8068520.5,
+      "min": 8068519,
+      "max": 8068522
+    },
+    "syscr": {
+      "median": 289.0,
+      "min": 289,
+      "max": 289
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x4c4b40",
+    "height": 5000000,
+    "n": 10,
+    "milliseconds": {
+      "median": 161.46573424339294,
+      "min": 153.21189165115356,
+      "max": 173.34671318531036
+    },
+    "server_ms": {
+      "median": 160.3885775,
+      "min": 152.144326,
+      "max": 169.900522
+    },
+    "cpu_ms": {
+      "median": 162.93200000000004,
+      "min": 152.85900000000026,
+      "max": 172.92799999999977
+    },
+    "alloc_bytes": {
+      "median": 28127456.0,
+      "min": 28126768,
+      "max": 28224736
+    },
+    "rchar": {
+      "median": 7173067.5,
+      "min": 7173066,
+      "max": 7173069
+    },
+    "syscr": {
+      "median": 229.0,
+      "min": 229,
+      "max": 229
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x895440",
+    "height": 9000000,
+    "n": 10,
+    "milliseconds": {
+      "median": 131.80803135037422,
+      "min": 125.11753290891647,
+      "max": 142.82239228487015
+    },
+    "server_ms": {
+      "median": 130.727526,
+      "min": 124.074961,
+      "max": 141.509654
+    },
+    "cpu_ms": {
+      "median": 132.56850000000014,
+      "min": 124.3570000000002,
+      "max": 145.82600000000048
+    },
+    "alloc_bytes": {
+      "median": 24134360.0,
+      "min": 24134072,
+      "max": 24140704
+    },
+    "rchar": {
+      "median": 6368087.5,
+      "min": 6368086,
+      "max": 6368089
+    },
+    "syscr": {
+      "median": 165.0,
+      "min": 165,
+      "max": 165
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0xb453d0",
+    "height": 11817936,
+    "n": 10,
+    "milliseconds": {
+      "median": 71.36710733175278,
+      "min": 69.26564872264862,
+      "max": 79.35547828674316
+    },
+    "server_ms": {
+      "median": 70.2749825,
+      "min": 68.097446,
+      "max": 78.306594
+    },
+    "cpu_ms": {
+      "median": 70.69400000000027,
+      "min": 68.26400000000012,
+      "max": 92.52099999999996
+    },
+    "alloc_bytes": {
+      "median": 10008224.0,
+      "min": 10008104,
+      "max": 10475080
+    },
+    "rchar": {
+      "median": 116.5,
+      "min": 115,
+      "max": 118
+    },
+    "syscr": {
+      "median": 2.0,
+      "min": 2,
+      "max": 2
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 585728
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0xb454cf",
+    "height": 11818191,
+    "n": 10,
+    "milliseconds": {
+      "median": 24.248935282230377,
+      "min": 22.36107736825943,
+      "max": 37.153035402297974
+    },
+    "server_ms": {
+      "median": 23.244595500000003,
+      "min": 21.379468,
+      "max": 31.684284
+    },
+    "cpu_ms": {
+      "median": 23.343999999999937,
+      "min": 21.48700000000008,
+      "max": 48.63100000000003
+    },
+    "alloc_bytes": {
+      "median": 3812816.0,
+      "min": 3812792,
+      "max": 3825840
+    },
+    "rchar": {
+      "median": 116.5,
+      "min": 115,
+      "max": 118
+    },
+    "syscr": {
+      "median": 2.0,
+      "min": 2,
+      "max": 2
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "latest",
+    "height": 11818192,
+    "n": 10,
+    "milliseconds": {
+      "median": 1.3038963079452515,
+      "min": 1.2237653136253357,
+      "max": 4.5347660779953
+    },
+    "server_ms": {
+      "median": 0.4308555,
+      "min": 0.399804,
+      "max": 2.159932
+    },
+    "cpu_ms": {
+      "median": 0.511000000000422,
+      "min": 0.4570000000003347,
+      "max": 2.423000000000229
+    },
+    "alloc_bytes": {
+      "median": 62688.0,
+      "min": 62640,
+      "max": 177280
+    },
+    "rchar": {
+      "median": 116.5,
+      "min": 115,
+      "max": 118
+    },
+    "syscr": {
+      "median": 2.0,
+      "min": 2,
+      "max": 2
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff954",
+    "height": 3144020,
+    "n": 3,
+    "milliseconds": {
+      "median": 204.18736338615417,
+      "min": 202.72528380155563,
+      "max": 204.9391344189644
+    },
+    "server_ms": {
+      "median": 202.188871,
+      "min": 200.727978,
+      "max": 202.956622
+    },
+    "cpu_ms": {
+      "median": 204.212,
+      "min": 202.438,
+      "max": 204.65800000000007
+    },
+    "alloc_bytes": {
+      "median": 36590056,
+      "min": 36588408,
+      "max": 36605384
+    },
+    "rchar": {
+      "median": 23386977,
+      "min": 23386977,
+      "max": 23386982
+    },
+    "syscr": {
+      "median": 1875,
+      "min": 1875,
+      "max": 1875
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff955",
+    "height": 3144021,
+    "n": 3,
+    "milliseconds": {
+      "median": 205.5053487420082,
+      "min": 204.9284502863884,
+      "max": 213.91794830560684
+    },
+    "server_ms": {
+      "median": 203.554652,
+      "min": 202.919653,
+      "max": 211.82301
+    },
+    "cpu_ms": {
+      "median": 204.94100000000003,
+      "min": 204.63600000000002,
+      "max": 213.40800000000002
+    },
+    "alloc_bytes": {
+      "median": 36593336,
+      "min": 36576504,
+      "max": 36639320
+    },
+    "rchar": {
+      "median": 23387596,
+      "min": 23387596,
+      "max": 23387596
+    },
+    "syscr": {
+      "median": 1875,
+      "min": 1875,
+      "max": 1875
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 143360
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x4c4b40",
+    "height": 5000000,
+    "n": 3,
+    "milliseconds": {
+      "median": 195.54432481527328,
+      "min": 194.46779787540436,
+      "max": 202.0726054906845
+    },
+    "server_ms": {
+      "median": 193.454643,
+      "min": 192.487669,
+      "max": 200.011603
+    },
+    "cpu_ms": {
+      "median": 194.75499999999988,
+      "min": 193.39999999999998,
+      "max": 200.91100000000012
+    },
+    "alloc_bytes": {
+      "median": 36093064,
+      "min": 36087608,
+      "max": 36349648
+    },
+    "rchar": {
+      "median": 23135617,
+      "min": 23135617,
+      "max": 23135620
+    },
+    "syscr": {
+      "median": 1842,
+      "min": 1842,
+      "max": 1842
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x895440",
+    "height": 9000000,
+    "n": 3,
+    "milliseconds": {
+      "median": 170.45193910598755,
+      "min": 164.6738275885582,
+      "max": 172.7667674422264
+    },
+    "server_ms": {
+      "median": 168.553506,
+      "min": 159.872995,
+      "max": 170.685687
+    },
+    "cpu_ms": {
+      "median": 169.42299999999994,
+      "min": 160.998,
+      "max": 171.55399999999992
+    },
+    "alloc_bytes": {
+      "median": 31897288,
+      "min": 31893736,
+      "max": 32185856
+    },
+    "rchar": {
+      "median": 22527787,
+      "min": 22527787,
+      "max": 22527787
+    },
+    "syscr": {
+      "median": 1834,
+      "min": 1834,
+      "max": 1834
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb453d0",
+    "height": 11817936,
+    "n": 3,
+    "milliseconds": {
+      "median": 79.94657009840012,
+      "min": 79.36469465494156,
+      "max": 79.99726384878159
+    },
+    "server_ms": {
+      "median": 78.0133,
+      "min": 77.419229,
+      "max": 78.130436
+    },
+    "cpu_ms": {
+      "median": 78.93600000000009,
+      "min": 78.03000000000003,
+      "max": 79.27100000000002
+    },
+    "alloc_bytes": {
+      "median": 10365000,
+      "min": 10347176,
+      "max": 10365896
+    },
+    "rchar": {
+      "median": 5530046,
+      "min": 5530043,
+      "max": 5530046
+    },
+    "syscr": {
+      "median": 313,
+      "min": 313,
+      "max": 313
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb454cf",
+    "height": 11818191,
+    "n": 3,
+    "milliseconds": {
+      "median": 37.37642616033554,
+      "min": 27.742594480514526,
+      "max": 39.74910080432892
+    },
+    "server_ms": {
+      "median": 35.365826,
+      "min": 25.89741,
+      "max": 37.781347
+    },
+    "cpu_ms": {
+      "median": 36.18300000000005,
+      "min": 26.480000000000075,
+      "max": 38.35699999999997
+    },
+    "alloc_bytes": {
+      "median": 3983960,
+      "min": 3983672,
+      "max": 3983992
+    },
+    "rchar": {
+      "median": 1152813,
+      "min": 1152813,
+      "max": 1152813
+    },
+    "syscr": {
+      "median": 54,
+      "min": 54,
+      "max": 54
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "latest",
+    "height": 11818192,
+    "n": 3,
+    "milliseconds": {
+      "median": 6.288468837738037,
+      "min": 5.50428032875061,
+      "max": 6.398148834705353
+    },
+    "server_ms": {
+      "median": 4.481071,
+      "min": 3.812106,
+      "max": 4.570312
+    },
+    "cpu_ms": {
+      "median": 5.104999999999961,
+      "min": 4.231999999999971,
+      "max": 5.246000000000038
+    },
+    "alloc_bytes": {
+      "median": 175136,
+      "min": 156608,
+      "max": 175408
+    },
+    "rchar": {
+      "median": 1046774,
+      "min": 1046774,
+      "max": 1046774
+    },
+    "syscr": {
+      "median": 31,
+      "min": 31,
+      "max": 31
+    },
+    "read_bytes": {
+      "median": 0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff954",
+    "height": 3144020,
+    "n": 4,
+    "milliseconds": {
+      "median": 835.8582966029644,
+      "min": 738.129273056984,
+      "max": 862.1754422783852
+    },
+    "server_ms": {
+      "median": 833.9471699999999,
+      "min": 736.158295,
+      "max": 859.979263
+    },
+    "cpu_ms": {
+      "median": 258.97149999999993,
+      "min": 242.67600000000004,
+      "max": 294.01800000000003
+    },
+    "alloc_bytes": {
+      "median": 36653740.0,
+      "min": 36608016,
+      "max": 36945832
+    },
+    "rchar": {
+      "median": 23386986.0,
+      "min": 23386986,
+      "max": 23386986
+    },
+    "syscr": {
+      "median": 1875.0,
+      "min": 1875,
+      "max": 1875
+    },
+    "read_bytes": {
+      "median": 33800192.0,
+      "min": 33800192,
+      "max": 33800192
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff955",
+    "height": 3144021,
+    "n": 4,
+    "milliseconds": {
+      "median": 854.579746723175,
+      "min": 832.2770819067955,
+      "max": 860.0968047976494
+    },
+    "server_ms": {
+      "median": 852.6429069999999,
+      "min": 830.196761,
+      "max": 858.213722
+    },
+    "cpu_ms": {
+      "median": 260.67100000000005,
+      "min": 236.34800000000007,
+      "max": 271.66099999999983
+    },
+    "alloc_bytes": {
+      "median": 36615592.0,
+      "min": 36602768,
+      "max": 36860864
+    },
+    "rchar": {
+      "median": 23387605.0,
+      "min": 23387605,
+      "max": 23387605
+    },
+    "syscr": {
+      "median": 1875.0,
+      "min": 1875,
+      "max": 1875
+    },
+    "read_bytes": {
+      "median": 33800192.0,
+      "min": 33771520,
+      "max": 33800192
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x4c4b40",
+    "height": 5000000,
+    "n": 4,
+    "milliseconds": {
+      "median": 825.100053101778,
+      "min": 777.379110455513,
+      "max": 868.6406686902046
+    },
+    "server_ms": {
+      "median": 822.8649355,
+      "min": 775.234053,
+      "max": 866.646976
+    },
+    "cpu_ms": {
+      "median": 240.65550000000005,
+      "min": 234.2439999999998,
+      "max": 260.96900000000005
+    },
+    "alloc_bytes": {
+      "median": 36133328.0,
+      "min": 36091280,
+      "max": 36472792
+    },
+    "rchar": {
+      "median": 23135626.0,
+      "min": 23135626,
+      "max": 23135626
+    },
+    "syscr": {
+      "median": 1842.0,
+      "min": 1842,
+      "max": 1843
+    },
+    "read_bytes": {
+      "median": 30216192.0,
+      "min": 30208000,
+      "max": 32686080
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x895440",
+    "height": 9000000,
+    "n": 4,
+    "milliseconds": {
+      "median": 809.9965676665306,
+      "min": 795.4570949077606,
+      "max": 816.6847452521324
+    },
+    "server_ms": {
+      "median": 807.843923,
+      "min": 793.502201,
+      "max": 814.616582
+    },
+    "cpu_ms": {
+      "median": 222.871,
+      "min": 211.91699999999992,
+      "max": 231.75599999999997
+    },
+    "alloc_bytes": {
+      "median": 32045352.0,
+      "min": 31904920,
+      "max": 32253504
+    },
+    "rchar": {
+      "median": 22527796.0,
+      "min": 22527796,
+      "max": 22527796
+    },
+    "syscr": {
+      "median": 1834.0,
+      "min": 1834,
+      "max": 1834
+    },
+    "read_bytes": {
+      "median": 28655616.0,
+      "min": 28594176,
+      "max": 28655616
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0xb453d0",
+    "height": 11817936,
+    "n": 4,
+    "milliseconds": {
+      "median": 107.96194896101952,
+      "min": 104.19781506061554,
+      "max": 117.7605390548706
+    },
+    "server_ms": {
+      "median": 106.05661950000001,
+      "min": 101.447598,
+      "max": 115.686502
+    },
+    "cpu_ms": {
+      "median": 83.57650000000004,
+      "min": 81.74200000000002,
+      "max": 87.04499999999996
+    },
+    "alloc_bytes": {
+      "median": 10366088.0,
+      "min": 10350328,
+      "max": 10366648
+    },
+    "rchar": {
+      "median": 5530052.0,
+      "min": 5530052,
+      "max": 5530052
+    },
+    "syscr": {
+      "median": 313.0,
+      "min": 313,
+      "max": 313
+    },
+    "read_bytes": {
+      "median": 5607424.0,
+      "min": 5607424,
+      "max": 15179776
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0xb454cf",
+    "height": 11818191,
+    "n": 4,
+    "milliseconds": {
+      "median": 49.114204943180084,
+      "min": 48.167914152145386,
+      "max": 49.14131015539169
+    },
+    "server_ms": {
+      "median": 46.8494865,
+      "min": 46.09608,
+      "max": 47.230217
+    },
+    "cpu_ms": {
+      "median": 27.371499999999997,
+      "min": 27.335000000000036,
+      "max": 28.215000000000032
+    },
+    "alloc_bytes": {
+      "median": 3971064.0,
+      "min": 3966824,
+      "max": 3983104
+    },
+    "rchar": {
+      "median": 1152822.0,
+      "min": 1152822,
+      "max": 1152822
+    },
+    "syscr": {
+      "median": 54.0,
+      "min": 54,
+      "max": 54
+    },
+    "read_bytes": {
+      "median": 1228800.0,
+      "min": 1228800,
+      "max": 1228800
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "latest",
+    "height": 11818192,
+    "n": 4,
+    "milliseconds": {
+      "median": 19.95040848851204,
+      "min": 19.4501131772995,
+      "max": 22.48496562242508
+    },
+    "server_ms": {
+      "median": 18.231413,
+      "min": 17.608596,
+      "max": 20.320391
+    },
+    "cpu_ms": {
+      "median": 5.917999999999921,
+      "min": 5.56799999999987,
+      "max": 7.564999999999941
+    },
+    "alloc_bytes": {
+      "median": 164632.0,
+      "min": 156480,
+      "max": 175968
+    },
+    "rchar": {
+      "median": 1046783.0,
+      "min": 1046783,
+      "max": 1046783
+    },
+    "syscr": {
+      "median": 31.0,
+      "min": 31,
+      "max": 31
+    },
+    "read_bytes": {
+      "median": 1097728.0,
+      "min": 1097728,
+      "max": 4349952
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x2ff954",
+    "height": 3144020,
+    "n": 10,
+    "milliseconds": {
+      "median": 186.80459633469582,
+      "min": 168.1782454252243,
+      "max": 198.0639025568962
+    },
+    "server_ms": {
+      "median": 185.5718795,
+      "min": 167.208465,
+      "max": 196.905597
+    },
+    "cpu_ms": {
+      "median": 186.27700000000002,
+      "min": 167.6480000000002,
+      "max": 206.35200000000003
+    },
+    "alloc_bytes": {
+      "median": 31162760.0,
+      "min": 31162472,
+      "max": 31171160
+    },
+    "rchar": {
+      "median": 7834424.0,
+      "min": 7834423,
+      "max": 7834427
+    },
+    "syscr": {
+      "median": 232.0,
+      "min": 232,
+      "max": 232
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x2ff955",
+    "height": 3144021,
+    "n": 10,
+    "milliseconds": {
+      "median": 172.8312224149704,
+      "min": 168.81844401359558,
+      "max": 182.829350233078
+    },
+    "server_ms": {
+      "median": 171.71234950000002,
+      "min": 167.694832,
+      "max": 179.944636
+    },
+    "cpu_ms": {
+      "median": 175.42549999999983,
+      "min": 168.58900000000023,
+      "max": 190.5260000000004
+    },
+    "alloc_bytes": {
+      "median": 31162192.0,
+      "min": 31161832,
+      "max": 31168464
+    },
+    "rchar": {
+      "median": 7835043.0,
+      "min": 7835043,
+      "max": 7835046
+    },
+    "syscr": {
+      "median": 232.0,
+      "min": 232,
+      "max": 233
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x4c4b40",
+    "height": 5000000,
+    "n": 10,
+    "milliseconds": {
+      "median": 162.5761166214943,
+      "min": 155.27763962745667,
+      "max": 176.89798027276993
+    },
+    "server_ms": {
+      "median": 161.4212375,
+      "min": 154.179423,
+      "max": 175.539701
+    },
+    "cpu_ms": {
+      "median": 161.82949999999997,
+      "min": 154.51999999999987,
+      "max": 175.99900000000042
+    },
+    "alloc_bytes": {
+      "median": 28338512.0,
+      "min": 28338376,
+      "max": 28354520
+    },
+    "rchar": {
+      "median": 6968262.0,
+      "min": 6968262,
+      "max": 6968265
+    },
+    "syscr": {
+      "median": 179.0,
+      "min": 179,
+      "max": 180
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x895440",
+    "height": 9000000,
+    "n": 10,
+    "milliseconds": {
+      "median": 133.9077763259411,
+      "min": 125.790536403656,
+      "max": 165.55485874414444
+    },
+    "server_ms": {
+      "median": 132.8318635,
+      "min": 124.738745,
+      "max": 158.78359
+    },
+    "cpu_ms": {
+      "median": 144.41249999999977,
+      "min": 125.01700000000022,
+      "max": 154.25200000000007
+    },
+    "alloc_bytes": {
+      "median": 24258128.0,
+      "min": 24257880,
+      "max": 24726056
+    },
+    "rchar": {
+      "median": 6217000.0,
+      "min": 6217000,
+      "max": 6217003
+    },
+    "syscr": {
+      "median": 128.0,
+      "min": 128,
+      "max": 129
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0xb453d0",
+    "height": 11817936,
+    "n": 10,
+    "milliseconds": {
+      "median": 71.39618322253227,
+      "min": 68.18962097167969,
+      "max": 80.10407537221909
+    },
+    "server_ms": {
+      "median": 70.314448,
+      "min": 67.156204,
+      "max": 79.050434
+    },
+    "cpu_ms": {
+      "median": 70.55399999999986,
+      "min": 67.31400000000014,
+      "max": 89.73599999999982
+    },
+    "alloc_bytes": {
+      "median": 10008280.0,
+      "min": 10008104,
+      "max": 10019736
+    },
+    "rchar": {
+      "median": 111.0,
+      "min": 111,
+      "max": 114
+    },
+    "syscr": {
+      "median": 2.0,
+      "min": 2,
+      "max": 3
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 4096
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0xb454cf",
+    "height": 11818191,
+    "n": 10,
+    "milliseconds": {
+      "median": 23.641154170036316,
+      "min": 22.64787256717682,
+      "max": 28.195418417453766
+    },
+    "server_ms": {
+      "median": 22.576438,
+      "min": 21.587901,
+      "max": 27.108769
+    },
+    "cpu_ms": {
+      "median": 22.68750000000017,
+      "min": 21.691999999999553,
+      "max": 27.224000000000046
+    },
+    "alloc_bytes": {
+      "median": 3812904.0,
+      "min": 3812792,
+      "max": 3813624
+    },
+    "rchar": {
+      "median": 112.5,
+      "min": 111,
+      "max": 114
+    },
+    "syscr": {
+      "median": 2.0,
+      "min": 2,
+      "max": 2
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "latest",
+    "height": 11818192,
+    "n": 10,
+    "milliseconds": {
+      "median": 1.4588572084903717,
+      "min": 1.2456923723220825,
+      "max": 4.547007381916046
+    },
+    "server_ms": {
+      "median": 0.53345,
+      "min": 0.395999,
+      "max": 3.337252
+    },
+    "cpu_ms": {
+      "median": 0.5970000000004063,
+      "min": 0.4560000000000173,
+      "max": 3.405999999999949
+    },
+    "alloc_bytes": {
+      "median": 62688.0,
+      "min": 62640,
+      "max": 175904
+    },
+    "rchar": {
+      "median": 113.0,
+      "min": 111,
+      "max": 114
+    },
+    "syscr": {
+      "median": 2.0,
+      "min": 2,
+      "max": 2
+    },
+    "read_bytes": {
+      "median": 0.0,
+      "min": 0,
+      "max": 0
+    }
+  }
+]

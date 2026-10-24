@@ -51,12 +51,12 @@ func InspectStateDomainHistoryVerificationContext(ctx context.Context, dir strin
 			return 0, err
 		}
 		if header.version != stateDomainChangeBinaryVersionV6 ||
-			(accessorHeader.version != stateDomainChangeBinaryVersionV6 && accessorHeader.version != stateDomainChangeBinaryVersionV7) ||
+			(!isStateDomainChangeKeyAccessor(accessorHeader.version)) ||
 			header.count != accessorHeader.count || header.fromTxNum != accessorHeader.fromTxNum || header.toTxNum != accessorHeader.toTxNum {
-			return 0, errors.New("snapshots: offline verification requires matching V6 history and V6/V7 accessor headers")
+			return 0, errors.New("snapshots: offline verification requires matching V6 history and V6/V7/V8 accessor headers")
 		}
 		needed := uint64(1 << 20)
-		if accessorHeader.version == stateDomainChangeBinaryVersionV7 {
+		if isStateDomainChangeFramedAccessor(accessorHeader.version) {
 			if header.count > (math.MaxUint64-needed)/51 {
 				return 0, errors.New("snapshots: offline verification scratch overflows")
 			}

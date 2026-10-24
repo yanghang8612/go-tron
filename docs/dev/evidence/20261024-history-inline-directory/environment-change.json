@@ -1,0 +1,32 @@
+{
+  "before": {
+    "pid": 5408,
+    "sha256": "d8e24fc5e21001a41f5037854c6c815dc2231296788df71751606f12ab6709f4",
+    "active_state": "active"
+  },
+  "after": {
+    "MainPID": "27692",
+    "ExecMainStartTimestamp": "Sat 2026-10-24 05:57:01 UTC",
+    "ActiveState": "active",
+    "sha256": "7e4e5dfd592903e7a8bf657df5b9d9dbe32ac412917e24d3e4e7bd018dacba0c"
+  },
+  "regime_time_envelopes": {
+    "warm": {
+      "first_ready_utc": "2026-10-24T05:46:12.806427+00:00",
+      "last_requests_utc": "2026-10-24T05:46:38.354600+00:00",
+      "hosts": 4
+    },
+    "fresh": {
+      "first_ready_utc": "2026-10-24T05:46:39.402607+00:00",
+      "last_requests_utc": "2026-10-24T05:48:06.283198+00:00",
+      "hosts": 42
+    },
+    "cold": {
+      "first_ready_utc": "2026-10-24T05:57:39.099996+00:00",
+      "last_requests_utc": "2026-10-24T06:06:59.849721+00:00",
+      "hosts": 56
+    }
+  },
+  "interpretation": "Production binary changed externally during private cache preparation, after warm and fresh measurements and before all OS-cold measurements. Each within-regime A/B keeps immutable input and test binary, but regimes have different production background loads. No production deployment or restart was performed by this experiment. Not evidence of production performance or a cross-regime speed ratio.",
+  "measured_requests_repeated": 0
+}
