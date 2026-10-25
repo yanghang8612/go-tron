@@ -12,6 +12,7 @@ OUTER = {
     "local-source-and-harness.zip": "a89e1eac58bd2265beea8ad46c04bed1beb2e458fea4dd7f8e0e8fd67cd333b7",
     "native-progress-and-acceptance.zip": "e4569b6f517f2c76c7eeb966528e636f0d741cbe552c9a5e10136c206cd1b5fc",
     "publish-control-and-live-progress.zip": "5cecb0ac5694af98d83bb52ee54e05f84e750f426916333ea6af191d5bf91815",
+    "policy-census-and-adoption.zip": "5dafb2dc6401d088014db68e2ea777f5958c199b7163df48e348bd20ef527fe1",
 }
 
 
@@ -85,11 +86,52 @@ def main():
     assert not live["progress"]["complete"]
     assert not live["acceptance"]["complete"] and not live["publish"]["complete"]
     assert live["progress"]["before_bytes"] - live["progress"]["after_bytes"] == 751604682
+    policy = bundles["policy-census-and-adoption.zip"]
+    for local_name, remote_name in [
+        ("server-policy-census-01.json", "policy-census-01.json"),
+        ("server-progress-live-07.json", "progress-live-07.json"),
+    ]:
+        data = policy[local_name]
+        transport = json.loads(policy[local_name + ".transport.json"])
+        assert transport["name"] == remote_name and transport["nonce"]
+        assert transport["bytes"] == len(data) and transport["sha256"] == sha(data)
+    census = json.loads(policy["server-policy-census-01.json"])
+    assert census["complete"] and not census["production_mutations"]
+    assert census["source_versions"] == {"2": {"files": 4609, "bytes": 48379318571}}
+    assert census["source_manifest_sha256"] == "c0c642f3172bfb33013e868576f84e5d55d1947a562a954978b3686d1535eee2"
+    completed = census["completed_by_source_version"]["2"]
+    assert completed["files"] == completed["converted_files"] == census["complete_receipts_at_observation"] == 1631
+    assert completed["kept_source_files"] == 0
+    assert completed["source_bytes"] - completed["after_bytes"] == 1372209271
+    log = policy["adoption-policy-stress.log"].decode()
+    stress = json.loads(next(line[line.index("{"):] for line in log.splitlines() if '"trios"' in line))
+    assert "--- PASS: TestRecordColumnFreshPolicyStress" in log
+    assert stress["all_row_and_range_digests_identical"] and stress["offline_retained_cdc_source"]
+    assert not stress["from_genesis_explicit_5_keeps_cdc_heuristic"]
+    trios = {r["Format"]: r for r in stress["trios"]}
+    assert {k: r["Files"] for k, r in trios.items()} == {
+        "2": 8393548, "3": 2409637, "auto": 2409637, "5": 8393614,
+    }
+    assert trios["auto"]["PhysicalVersion"] == 3 and trios["5"]["PhysicalVersion"] == 5
+    assert all(r["Logical"] == trios["2"]["Logical"] for r in trios.values())
+    fallback = stress["offline_stats"]
+    assert not fallback["Converted"] and fallback["AfterBytes"] == fallback["BeforeBytes"] < fallback["CandidateBytes"]
+    negative = json.loads(policy["native-transfer-negative-01.json"])
+    assert negative["rejected"] and not negative["local_payload_created"]
+    latest = json.loads(policy["server-progress-live-07.json"])
+    assert latest["progress"]["files"] == 2280 and latest["progress"]["total"] == 4609
+    assert latest["progress"]["before_bytes"] - latest["progress"]["after_bytes"] == 2019200049
+    assert all(j["proc_exists"] and j["pid"] for j in latest["jobs"].values())
+    assert "391 28550" in latest["jobs"]["capture"]["ps"]
+    assert not any(latest[k]["complete"] for k in ("capture", "progress", "acceptance", "publish"))
+    assert not latest["production_mutations"]
     print(json.dumps({
         "source_files_verified": len(manifest), "native_checks_passed": len(expected),
         "initial_capture_files": capture["files"],
-        "latest_verified_live_capture_files": live["progress"]["files"],
-        "verified_live_at": live["utc"], "full_acceptance_complete": False,
+        "latest_verified_live_capture_files": latest["progress"]["files"],
+        "verified_live_at": latest["utc"], "all_source_headers_verified": census["all_source_files"],
+        "synthetic_cdc_adoption_counterexample_verified": True,
+        "full_acceptance_complete": False,
         "scope": "Frozen progress receipt; not full-copy or rollout acceptance",
     }, indent=2))
 
