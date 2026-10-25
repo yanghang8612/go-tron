@@ -1,0 +1,286 @@
+package snapshots
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// A test-only fixed-copy transformation. It is intentionally not a production
+// migration command and accepts only the explicit new laboratory directory.
+func TestOfflineColdQueryLayout(t *testing.T) {
+	root := os.Getenv("GTRON_LAYOUT_ROOT")
+	if root == "" {
+		t.Skip("explicit isolated lab required")
+	}
+	if root != "/data/gtron/cold-query-layout-20261020-01" {
+		t.Fatal("wrong lab root")
+	}
+	phase := os.Getenv("GTRON_LAYOUT_PHASE")
+	dir := filepath.Join(root, phase+"-final-input", "state-snapshots")
+	if phase != "prefix" && phase != "merged" {
+		t.Fatal("unknown phase")
+	}
+	ctx := context.Background()
+	save := func(name string, value any) {
+		b, e := json.MarshalIndent(value, "", "  ")
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(filepath.Join(root, name+".json"), b, 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	before := historyCompactionCandidates(manifest, cfg)
+	started := time.Now()
+	if phase == "merged" {
+		for pass := 0; pass < 500; pass++ {
+			r, e := CompactHistoryDomainContext(ctx, dir, SegmentDatasetStateDomainChange, CompactionConfig{MaxSteps: 64, MinSteps: 64, MaxInputRecords: 128_000_000, MaxInputLogicalBytes: 32 << 30, MaxInputBytes: 4 << 30, MaxSources: 64})
+			if e != nil {
+				t.Fatal(e)
+			}
+			f, e := os.OpenFile(filepath.Join(root, "merge-final-passes.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+			if e != nil {
+				t.Fatal(e)
+			}
+			b, _ := json.Marshal(r)
+			fmt.Fprintln(f, string(b))
+			f.Close()
+			save("merge-final-status", map[string]any{"pass": pass, "last": r, "seconds": time.Since(started).Seconds(), "complete": !r.Merged})
+			if !r.Merged {
+				if r.Deferred {
+					t.Fatal("bounded merge deferred", r.DeferReason, r.InputBytes, r.InputLogicalBytes, r.InputRecords)
+				}
+				break
+			}
+		}
+		after, e := LoadProductionManifest(dir)
+		if e != nil {
+			t.Fatal(e)
+		}
+		save("merge-final-complete", map[string]any{"before": len(before), "after": len(historyCompactionCandidates(after, cfg)), "seconds": time.Since(started).Seconds(), "complete": true, "manifest": after})
+		return
+	}
+	var rows []map[string]any
+	for i, c := range before {
+		old := c.history
+		path := filepath.Join(dir, old.Path)
+		size, sum, e := stateDomainChangeBinaryFileMetadata(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if size != old.Size || sum != old.Checksum {
+			t.Fatal("source checksum mismatch", path)
+		}
+		r, e := openCompressedBlockReaderWithCacheLimitContext(ctx, path, 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if r.cdc != nil {
+			r.Close()
+			rows = append(rows, map[string]any{"source": old.Path, "cdc_unchanged": true})
+			continue
+		}
+		first, e := r.blockBytes(0)
+		if e != nil {
+			t.Fatal(e)
+		}
+		cut := min(len(first), historyHeaderPrefixBytes)
+		w, e := newCompressedBlockStreamBody(dir, true)
+		if e != nil {
+			t.Fatal(e)
+		}
+		w.uncTotal = uint64(cut)
+		if len(first) > cut {
+			enc := w.enc.EncodeAll(first[cut:], nil)
+			if e = w.appendEncodedBlock(len(first)-cut, enc); e != nil {
+				t.Fatal(e)
+			}
+		}
+		bodyDigest := sha256.New()
+		for n := 1; n < len(r.table); n++ {
+			comp, expected, e := r.readCompressedBlock(n)
+			if e != nil {
+				t.Fatal(e)
+			}
+			bodyDigest.Write(comp)
+			if e = w.appendEncodedBlock(int(expected), comp); e != nil {
+				t.Fatal(e)
+			}
+		}
+		tmp := filepath.Join(dir, fmt.Sprintf(".small-prefix-%d.seg", i))
+		var metadata snapshotFileMetadata
+		if e = w.finishWithFooterContext(ctx, tmp, first[:cut], &metadata); e != nil {
+			t.Fatal(e)
+		}
+		check, e := openCompressedBlockReaderWithCacheLimitContext(ctx, tmp, 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if check.uncSize != r.uncSize {
+			t.Fatal("logical size changed")
+		}
+		got := make([]byte, len(first))
+		if _, e = check.ReadAt(got, 0); e != nil || !bytes.Equal(got, first) {
+			t.Fatal("first block logical bytes changed", e)
+		}
+		checkDigest := sha256.New()
+		start := 1
+		if len(first) > cut {
+			start = 2
+		}
+		for n := start; n < len(check.table); n++ {
+			sourceN := n - start + 1
+			comp, expected, e := check.readCompressedBlock(n)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if check.table[n].uncompressedStart != r.table[sourceN].uncompressedStart {
+				t.Fatal("virtual body offsets changed")
+			}
+			sourceExpected, e := compressedBlockExpectedLen(r.table, r.uncSize, sourceN)
+			if e != nil || expected != sourceExpected {
+				t.Fatal("body length changed", e)
+			}
+			checkDigest.Write(comp)
+		}
+		if !bytes.Equal(bodyDigest.Sum(nil), checkDigest.Sum(nil)) {
+			t.Fatal("compressed body changed")
+		}
+		r.Close()
+		check.Close()
+		newRef := old
+		newRef.Checksum = "sha256:" + hex.EncodeToString(metadata.checksum[:])
+		newRef.Size = metadata.size
+		newRef.Path = contentAddressedSnapshotPath(cfg.HistoryPath(old.FromTxNum, old.ToTxNum), newRef.Checksum)
+		if e = os.MkdirAll(filepath.Dir(filepath.Join(dir, newRef.Path)), 0700); e != nil {
+			t.Fatal(e)
+		}
+		if e = os.Rename(tmp, filepath.Join(dir, newRef.Path)); e != nil {
+			t.Fatal(e)
+		}
+		repl := map[string]SegmentRef{old.Path: newRef}
+		for _, companion := range c.companions {
+			nr := companion
+			switch nr.Kind {
+			case SegmentAccessor:
+				nr.Path = stateDomainChangeBinaryAccessorPath(newRef.Path)
+			case SegmentInverted:
+				nr.Path = stateDomainChangeBinaryIndexPath(newRef.Path)
+			default:
+				t.Fatal("unknown companion")
+			}
+			if nr.Path != companion.Path {
+				if e = os.Link(filepath.Join(dir, companion.Path), filepath.Join(dir, nr.Path)); e != nil {
+					t.Fatal(e)
+				}
+			}
+			repl[companion.Path] = nr
+		}
+		for j, ref := range manifest.Segments {
+			if nr, ok := repl[ref.Path]; ok {
+				manifest.Segments[j] = nr
+			}
+		}
+		rows = append(rows, map[string]any{"source": old, "output": newRef, "source_file_verified": true, "unchanged_encoded_body_sha256": hex.EncodeToString(bodyDigest.Sum(nil)), "first_logical_sha256": fmt.Sprintf("%x", sha256.Sum256(first))})
+		if i%25 == 0 {
+			save("prefix-status", map[string]any{"completed": i + 1, "total": len(before), "seconds": time.Since(started).Seconds(), "complete": false})
+		}
+	}
+	manifest.Generation++
+	if err = PublishManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	// Close+reopen every published pair through production readers. Absence,
+	// owner/generation and record checks remain in the normal query path.
+	for _, c := range historyCompactionCandidates(manifest, cfg) {
+		r, _, _, e := openStateDomainChangeBinarySegmentReader(dir, c.history)
+		if e != nil {
+			t.Fatal(e)
+		}
+		r.Close()
+	}
+	save("prefix-complete", map[string]any{"complete": true, "seconds": time.Since(started).Seconds(), "rows": rows, "manifest": manifest})
+	save("prefix-status", map[string]any{"completed": len(before), "total": len(before), "seconds": time.Since(started).Seconds(), "complete": true})
+	_ = io.EOF
+}
+
+func TestOfflinePrefixWriterEquivalence(t *testing.T) {
+	root := os.Getenv("GTRON_LAYOUT_ROOT")
+	if root == "" {
+		t.Skip("explicit isolated lab required")
+	}
+	if root != "/data/gtron/cold-query-layout-20261020-01" {
+		t.Fatal("wrong lab")
+	}
+	var proof struct {
+		Rows []struct{ Source, Output SegmentRef }
+	}
+	data, err := os.ReadFile(filepath.Join(root, "prefix-complete.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(data, &proof); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "prefix-input", "state-snapshots")
+	outdir := filepath.Join(root, "writer-equivalence")
+	if err = os.Mkdir(outdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var receipts []map[string]any
+	for _, i := range []int{0, len(proof.Rows) / 4, len(proof.Rows) / 2, 3 * len(proof.Rows) / 4, len(proof.Rows) - 1} {
+		row := proof.Rows[i]
+		r, err := openCompressedBlockReaderWithCacheLimit(filepath.Join(dir, row.Source.Path), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := newHistoryCompressedStreamFormat(context.Background(), outdir, historyCompressChunkSize, 1, "2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 1<<20)
+		for off := uint64(0); off < r.uncSize; {
+			part := buf[:min(uint64(len(buf)), r.uncSize-off)]
+			if _, err = r.ReadAt(part, int64(off)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = w.Write(part); err != nil {
+				t.Fatal(err)
+			}
+			off += uint64(len(part))
+		}
+		path := filepath.Join(outdir, fmt.Sprintf("%d.seg", i))
+		meta, err := w.FinishWithMetadataContext(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Abort()
+		r.Close()
+		actual := "sha256:" + hex.EncodeToString(meta.checksum[:])
+		if actual != row.Output.Checksum || meta.size != row.Output.Size {
+			t.Fatal("diagnostic and production writer disagree", i, actual, row.Output.Checksum, meta.size, row.Output.Size)
+		}
+		receipts = append(receipts, map[string]any{"index": i, "source": row.Source.Path, "expected": row.Output, "actual_sha256": actual, "actual_bytes": meta.size})
+	}
+	data, err = json.MarshalIndent(map[string]any{"complete": true, "samples": receipts}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "writer-equivalence.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1,0 +1,11 @@
+{
+  "after_allocated": 3792666624,
+  "after_bytes": 3790152341,
+  "before_allocated": 4278476800,
+  "before_bytes": 4276977871,
+  "complete": false,
+  "files": 750,
+  "production_mutations": false,
+  "seconds": 364.550825308,
+  "total": 4609
+}

@@ -1,0 +1,66 @@
+{
+  "local-bounded-cli.log": {
+    "bytes": 54,
+    "sha256": "e882e891c8aa8d57cecb937ab6d63569182482273703e692a8b8083fba6f8ba6"
+  },
+  "local-cache-bounded-packages.log": {
+    "bytes": 174,
+    "sha256": "a3806e585d9533876ae2c0f27d18acb6d6c03b58f8d5382132a5f5723022f382"
+  },
+  "local-controls-fixture.log": {
+    "bytes": 172,
+    "sha256": "0c2ff04d51ecb4d4ca6e61748c32ffb7b63b98bc66a4047e67b094864316848b"
+  },
+  "local-controls-resume-fixture.log": {
+    "bytes": 172,
+    "sha256": "716b3ea37f75f16e1b79c599a85408dd4bc6a1afc635a5c41c208d39f0f9d395"
+  },
+  "local-decoder-harness-compile.log": {
+    "bytes": 65,
+    "sha256": "3983c5446b4d5bef56a9cd1285a38f21c30412f0c6dc45c30ff401f52e3ce1fe"
+  },
+  "local-decoder-ownership-fixture.log": {
+    "bytes": 184,
+    "sha256": "53457891acfc63c03b3156542096712052a669a6f7c62fbf7a7ee767d4b6877c"
+  },
+  "local-final-packages.log": {
+    "bytes": 285,
+    "sha256": "04635227f2b7dd760d4f390545992d0d5c107f57831b12480642a42405dc783d"
+  },
+  "local-final-vet.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-fuzz-columns.log": {
+    "bytes": 790,
+    "sha256": "ed131bb4c4d1fb80258df78e871f50f6b090475d604b77b4743ca6c7a714c5af"
+  },
+  "local-fuzz-numeric.log": {
+    "bytes": 770,
+    "sha256": "4ac14143135c373908112b26e74fe5786f76e7b86877a40bc7224e30e4288d9a"
+  },
+  "local-fuzz-pages.log": {
+    "bytes": 782,
+    "sha256": "0630db322bd1da7134f8dc261612a1bb9005cc119d5aa280f61f6fda989dd4dd"
+  },
+  "local-numeric-race.log": {
+    "bytes": 65,
+    "sha256": "f0c3e8f5961313ef69d701fdc968b1823518684c530cb53ed978afbbd7e01940"
+  },
+  "local-numeric-regressions.log": {
+    "bytes": 65,
+    "sha256": "f6dc07bdd095339440682f0223b13e4aed624ebd6a034bbdc79993065ec3d473"
+  },
+  "local-packages.log": {
+    "bytes": 285,
+    "sha256": "c1872ba03e61816820762e3b7d58a9efdce891f30d3ff1f80748b4dd3e8c601f"
+  },
+  "local-race.log": {
+    "bytes": 66,
+    "sha256": "835af12ab6bfb9aff3f824a786953038e9014b4a05f359e962ae2683d7df7357"
+  },
+  "local-vet.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

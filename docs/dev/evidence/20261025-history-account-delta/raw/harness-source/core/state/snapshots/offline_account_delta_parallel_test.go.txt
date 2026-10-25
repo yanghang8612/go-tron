@@ -1,0 +1,97 @@
+package snapshots
+import("context";"bytes";"crypto/sha256";"encoding/binary";"encoding/json";"fmt";"os";"path/filepath";"reflect";"sort";"syscall";"io";"sync";"golang.org/x/sync/errgroup";"testing";"time")
+func saveADParallel(t *testing.T,path string,value any){t.Helper();b,e:=json.MarshalIndent(value,"","  ");if e==nil{e=os.WriteFile(path+".tmp",b,0600)};if e==nil{e=os.Rename(path+".tmp",path)};if e!=nil{t.Fatal(e)}}
+func TestOfflineAccountDeltaCaptureParallel(t *testing.T){
+ root:=os.Getenv("GTRON_ACCOUNT_DELTA_ROOT");if root==""{t.Skip("isolated fixed capture")};src:=filepath.Join(root,"baseline-input/state-snapshots");dst:=filepath.Join(root,"candidate-input/state-snapshots");raw,e:=os.ReadFile(filepath.Join(src,"manifest.json"));if e!=nil{t.Fatal(e)};m,e:=decodeProductionManifest(raw);if e!=nil{t.Fatal(e)};before:=cloneManifest(m);ctx:=context.Background();changed:=map[string]SegmentRef{};cfg,_:=DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange);var histories []SegmentRef;for _,h:=range m.Segments{if h.Kind==SegmentHistory&&h.normalizedDataset()==SegmentDatasetStateDomainChange{histories=append(histories,h)}};sort.Slice(histories,func(i,j int)bool{return histories[i].FromTxNum<histories[j].FromTxNum});f,e:=os.OpenFile(filepath.Join(root,"complete-input-files.jsonl"),os.O_APPEND|os.O_WRONLY,0600);if e!=nil{t.Fatal(e)};defer f.Close();var oldBytes,newBytes,oldAlloc,newAlloc uint64;started:=time.Now();done:=0
+ status:=func(complete bool){saveADParallel(t,filepath.Join(root,"complete-input-status.json"),map[string]any{"complete":complete,"files":done,"total":len(histories),"before_bytes":oldBytes,"after_bytes":newBytes,"before_allocated":oldAlloc,"after_allocated":newAlloc,"seconds":time.Since(started).Seconds(),"production_mutations":false})};status(false)
+ type receipt struct{Source,Candidate []SegmentRef;Audit HistoryAccountDeltaStats};previous:=map[string]bool{};expected:=map[string]SegmentRef{};for _,r:=range before.Segments{expected[r.Path]=r};pf,e:=os.Open(filepath.Join(root,"complete-input-files.jsonl"));if e!=nil{t.Fatal(e)};dec:=json.NewDecoder(pf);for {var row receipt;e=dec.Decode(&row);if e==io.EOF{break};if e!=nil{t.Fatal(e)};if len(row.Source)!=3||len(row.Candidate)!=3||previous[row.Source[0].Path]{t.Fatal("bad resume receipt")};if e=verifyStateDomainChangeBinaryCompanionChecksumsContext(ctx,src,row.Source[0],row.Source[1],row.Source[2]);e!=nil{t.Fatal(e)};if e=verifyStateDomainChangeBinaryCompanionChecksumsContext(ctx,dst,row.Candidate[0],row.Candidate[1],row.Candidate[2]);e!=nil{t.Fatal(e)};for i,r:=range row.Source{if !reflect.DeepEqual(expected[r.Path],r){t.Fatal("resume source differs from original manifest")};c:=row.Candidate[i];cp:=r;cp.Path=c.Path;cp.Size=c.Size;cp.Checksum=c.Checksum;if !reflect.DeepEqual(cp,c){t.Fatal("resume candidate changes canonical fields")};if i>0&&(c.Size!=r.Size||c.Checksum!=r.Checksum){t.Fatal("resume companion differs")};changed[r.Path]=c};previous[row.Source[0].Path]=true;aa,e:=os.Stat(filepath.Join(src,row.Source[0].Path));if e!=nil{t.Fatal(e)};bb,e:=os.Stat(filepath.Join(dst,row.Candidate[0].Path));if e!=nil{t.Fatal(e)};oldBytes+=uint64(aa.Size());newBytes+=uint64(bb.Size());oldAlloc+=uint64(aa.Sys().(*syscall.Stat_t).Blocks)*512;newAlloc+=uint64(bb.Sys().(*syscall.Stat_t).Blocks)*512;done++};pf.Close();status(false)
+ group,work:=errgroup.WithContext(ctx);group.SetLimit(4);var mu sync.Mutex
+ for _,h:=range histories {if previous[h.Path]{continue};h:=h;group.Go(func()error{a,ok:=cfg.HistoryAccessorRef(before,h);if !ok{return fmt.Errorf("accessor missing")};var idx SegmentRef;for _,r:=range before.Segments {if r.Path==cfg.HistoryIndexPathFor(h.Path){idx=r;break}};if idx.Path==""{return fmt.Errorf("index missing")};refs:=[]SegmentRef{h,idx,a};out,stats,e:=ReencodeHistoryAccountDeltaTrioContext(work,dst,refs);if e!=nil{return fmt.Errorf("%s: %w",h.Path,e)};aa,e:=os.Stat(filepath.Join(src,h.Path));if e!=nil{return e};bb,e:=os.Stat(filepath.Join(dst,out[0].Path));if e!=nil{return e};mu.Lock();defer mu.Unlock();oldBytes+=h.Size;newBytes+=out[0].Size;oldAlloc+=uint64(aa.Sys().(*syscall.Stat_t).Blocks)*512;newAlloc+=uint64(bb.Sys().(*syscall.Stat_t).Blocks)*512;for i,r:=range refs{changed[r.Path]=out[i]};if e=json.NewEncoder(f).Encode(map[string]any{"source":refs,"candidate":out,"audit":stats,"source_inode":aa.Sys().(*syscall.Stat_t).Ino,"candidate_inode":bb.Sys().(*syscall.Stat_t).Ino});e!=nil{return e};done++;if done%10==0{if e=f.Sync();e!=nil{return e};status(false)};return nil})};if e=group.Wait();e!=nil{t.Fatal(e)}
+ for i,r:=range m.Segments {if nr,ok:=changed[r.Path];ok{m.Segments[i]=nr}}
+		cfg, _ = DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+		ids := map[[32]byte][32]byte{}
+		for _, h := range before.Segments {
+			if h.Kind != SegmentHistory || h.normalizedDataset() != SegmentDatasetStateDomainChange {
+				continue
+			}
+			a, ok := cfg.HistoryAccessorRef(before, h)
+			if !ok {
+				t.Fatal("missing source accessor")
+			}
+			nh:=h;if n,exists:=changed[h.Path];exists{nh=n}
+ z, ok := cfg.HistoryAccessorRef(m, nh)
+			if !ok {
+				t.Fatal("missing candidate accessor")
+			}
+			ids[systemHistoryRoutingPairID(h, a)] = systemHistoryRoutingPairID(nh, z)
+		}
+		receipts := []any{}
+		for i, ref := range m.Segments {
+			if ref.Kind != SegmentAccountHistoryRouting && ref.Kind != SegmentSystemHistoryRouting {
+				continue
+			}
+			old, err := os.ReadFile(filepath.Join(src, ref.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprintf("sha256:%x", sha256.Sum256(old)) != ref.Checksum {
+				t.Fatal("route SHA")
+			}
+			out := append([]byte(nil), old...)
+			start, n := 40, int(binary.BigEndian.Uint32(out[12:16]))
+			if ref.Kind == SegmentAccountHistoryRouting {
+				start = 64
+			}
+			for j := 0; j < n; j++ {
+				off := start + j*32
+				var id [32]byte
+				copy(id[:], out[off:off+32])
+				z, ok := ids[id]
+				if !ok {
+					t.Fatal("unknown covered pair")
+				}
+				copy(out[off:off+32], z[:])
+			}
+			if !bytes.Equal(old[start+n*32:], out[start+n*32:]) {
+				t.Fatal("routing memberships changed")
+			}
+			nr := ref
+			nr.Checksum = fmt.Sprintf("sha256:%x", sha256.Sum256(out))
+			if ref.Kind == SegmentAccountHistoryRouting {
+				h, err := decodeAccountRoutingHeader(out[:64], ref)
+				if err != nil {
+					t.Fatal(err)
+				}
+				nr.LookupRoot = fmt.Sprintf("sha256:%x", sha256.Sum256(out[:h.metadataBytes()]))
+			}
+			target := filepath.Join(dst, ref.Path)
+			if err = os.WriteFile(target+".private", out, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Rename(target+".private", target); err != nil {
+				t.Fatal(err)
+			}
+			m.Segments[i] = nr
+			receipts = append(receipts, map[string]any{"kind": ref.Kind, "covered_pairs": n, "membership_payload_unchanged": true, "bytes": len(out)})
+		}
+		if !reflect.DeepEqual(before.Progress, m.Progress) || !reflect.DeepEqual(before.Chain, m.Chain) {
+			t.Fatal("frontiers/chain changed")
+		}
+		if err := PublishManifest(dst, m); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range m.Segments {
+			if r.Kind == SegmentSystemHistoryRouting {
+				if err := checkSystemHistoryRoutingContext(ctx, dst, m, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if r.Kind == SegmentAccountHistoryRouting {
+				if err := checkAccountHistoryRoutingContext(ctx, dst, m, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		saveADParallel(t, filepath.Join(root,"complete-input-routing.json"), map[string]any{"complete": true, "strict_reconstruction_passed": true, "canonical_frontiers_unchanged": true, "routes": receipts})
+ f.Sync();status(true)
+}

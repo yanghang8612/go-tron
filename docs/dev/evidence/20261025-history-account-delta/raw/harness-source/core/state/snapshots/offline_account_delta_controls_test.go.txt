@@ -1,0 +1,415 @@
+package snapshots
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"golang.org/x/sync/errgroup"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+type adControlReceipt struct {
+	Source, Candidate []SegmentRef
+	Audit             HistoryAccountDeltaStats
+}
+type adControlRow struct {
+	Source, Candidate                                                                                                         SegmentRef
+	ControlPath, ControlSHA256, CanonicalSHA256                                                                               string
+	SourceAllocated, CandidateAllocated, ControlFileBytes, ControlAllocated, EffectiveControlBytes, EffectiveControlAllocated uint64
+	AccountPages, NumericPages, PlainPages, Pages, LogicalBytes                                                               uint64
+	Stats                                                                                                                     accountDeltaStats
+}
+
+func saveADControl(t *testing.T, path string, v any) {
+	t.Helper()
+	b, e := json.MarshalIndent(v, "", "  ")
+	if e == nil {
+		e = os.WriteFile(path+".tmp", b, 0600)
+	}
+	if e == nil {
+		e = os.Rename(path+".tmp", path)
+	}
+	if e != nil {
+		t.Fatal(e)
+	}
+}
+func verifyADControlResume(base, dir, control string, row adControlRow, receipt adControlReceipt) (adControlRow, error) {
+	if !reflect.DeepEqual(row.Source, receipt.Source[0]) || !reflect.DeepEqual(row.Candidate, receipt.Candidate[0]) {
+		return row, fmt.Errorf("resume source identity differs")
+	}
+	stat := func(root string, r SegmentRef) (uint64, error) {
+		s, e := os.Stat(filepath.Join(root, r.Path))
+		if e != nil {
+			return 0, e
+		}
+		if uint64(s.Size()) != r.Size {
+			return 0, fmt.Errorf("resume file length differs")
+		}
+		return uint64(s.Sys().(*syscall.Stat_t).Blocks) * 512, nil
+	}
+	var e error
+	row.SourceAllocated, e = stat(base, row.Source)
+	if e != nil {
+		return row, e
+	}
+	row.CandidateAllocated, e = stat(dir, row.Candidate)
+	if e != nil {
+		return row, e
+	}
+	if receipt.Audit.Converted {
+		if row.ControlPath != filepath.Join(control, filepath.Base(row.Source.Path)) || len(row.CanonicalSHA256) != 64 {
+			return row, fmt.Errorf("resume control path/digest")
+		}
+		f, e := os.Open(row.ControlPath)
+		if e != nil {
+			return row, e
+		}
+		h := sha256.New()
+		_, e = io.CopyBuffer(h, f, make([]byte, 64<<10))
+		st, se := f.Stat()
+		ce := f.Close()
+		if e != nil {
+			return row, e
+		}
+		if se != nil {
+			return row, se
+		}
+		if ce != nil {
+			return row, ce
+		}
+		if uint64(st.Size()) != row.ControlFileBytes || fmt.Sprintf("%x", h.Sum(nil)) != row.ControlSHA256 {
+			return row, fmt.Errorf("resume control SHA differs")
+		}
+		row.ControlAllocated = uint64(st.Sys().(*syscall.Stat_t).Blocks) * 512
+	}
+	row.EffectiveControlBytes, row.EffectiveControlAllocated = row.Source.Size, row.SourceAllocated
+	if row.ControlPath != "" && row.ControlFileBytes < row.Source.Size {
+		row.EffectiveControlBytes, row.EffectiveControlAllocated = row.ControlFileBytes, row.ControlAllocated
+	}
+	return row, nil
+}
+func TestOfflineAccountDeltaActualControls(t *testing.T) {
+	root := os.Getenv("GTRON_ACCOUNT_DELTA_ROOT")
+	if root == "" {
+		t.Skip("isolated lab")
+	}
+	dir := filepath.Join(root, "candidate-input/state-snapshots")
+	base := filepath.Join(root, "baseline-input/state-snapshots")
+	control := filepath.Join(root, "plain-controls")
+	if e := os.MkdirAll(control, 0700); e != nil {
+		t.Fatal(e)
+	}
+	f, e := os.Open(filepath.Join(root, "complete-input-files.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	dec := json.NewDecoder(f)
+	var receipts []adControlReceipt
+	expected := map[string]adControlReceipt{}
+	for {
+		var r adControlReceipt
+		e = dec.Decode(&r)
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(r.Source) != 3 || len(r.Candidate) != 3 {
+			t.Fatal("trio receipt")
+		}
+		if _, ok := expected[r.Source[0].Path]; ok {
+			t.Fatal("duplicate source")
+		}
+		expected[r.Source[0].Path] = r
+		receipts = append(receipts, r)
+	}
+	f.Close()
+	path := filepath.Join(root, "account-controls-files.jsonl")
+	var resumed []adControlRow
+	seen := map[string]bool{}
+	if old, e := os.Open(path); e == nil {
+		d := json.NewDecoder(old)
+		for {
+			var row adControlRow
+			e = d.Decode(&row)
+			if e == io.EOF {
+				break
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			r, ok := expected[row.Source.Path]
+			if !ok || seen[row.Source.Path] {
+				t.Fatal("invalid/duplicate resume row")
+			}
+			row, e = verifyADControlResume(base, dir, control, row, r)
+			if e != nil {
+				t.Fatal(e)
+			}
+			seen[row.Source.Path] = true
+			resumed = append(resumed, row)
+		}
+		old.Close()
+	} else if !os.IsNotExist(e) {
+		t.Fatal(e)
+	}
+	out, e := os.CreateTemp(root, "controls-resume-*.jsonl")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, r := range resumed {
+		if e = json.NewEncoder(out).Encode(r); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = out.Sync(); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(out.Name(), path); e != nil {
+		t.Fatal(e)
+	}
+	defer out.Close()
+	started := time.Now()
+	var sourceBytes, candidateBytes, controlBytes, sourceAlloc, candidateAlloc, controlAlloc uint64
+	done := 0
+	var aggregate accountDeltaStats
+	var mu sync.Mutex
+	add := func(row adControlRow) {
+		sourceBytes += row.Source.Size
+		candidateBytes += row.Candidate.Size
+		controlBytes += row.EffectiveControlBytes
+		sourceAlloc += row.SourceAllocated
+		candidateAlloc += row.CandidateAllocated
+		controlAlloc += row.EffectiveControlAllocated
+		aggregate.Values += row.Stats.Values
+		aggregate.Full += row.Stats.Full
+		aggregate.Deltas += row.Stats.Deltas
+		aggregate.Identical += row.Stats.Identical
+		aggregate.PrefixSuffix += row.Stats.PrefixSuffix
+		aggregate.Masks += row.Stats.Masks
+		aggregate.Numeric += row.Stats.Numeric
+		aggregate.MaxDepth = max(aggregate.MaxDepth, row.Stats.MaxDepth)
+		done++
+	}
+	for _, row := range resumed {
+		add(row)
+	}
+	status := func(complete bool) {
+		saveADControl(t, filepath.Join(root, "account-controls-status.json"), map[string]any{"complete": complete, "files": done, "total": len(receipts), "resumed_files": len(resumed), "workers": 4, "source_bytes": sourceBytes, "candidate_bytes": candidateBytes, "plain_control_bytes": controlBytes, "source_allocated": sourceAlloc, "candidate_allocated": candidateAlloc, "plain_control_allocated": controlAlloc, "account_transform_increment_bytes": int64(controlBytes) - int64(candidateBytes), "stats": aggregate, "seconds": time.Since(started).Seconds(), "controls_fsynced_and_canonical_sha_equal": true, "resume_controls_full_physical_sha_verified": true})
+	}
+	status(false)
+	group, _ := errgroup.WithContext(context.Background())
+	group.SetLimit(4)
+	for _, receipt := range receipts {
+		if seen[receipt.Source[0].Path] {
+			continue
+		}
+		receipt := receipt
+		group.Go(func() error {
+			row, e := buildADActualControl(base, dir, control, receipt)
+			if e != nil {
+				return fmt.Errorf("%s: %w", receipt.Source[0].Path, e)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if e = json.NewEncoder(out).Encode(row); e != nil {
+				return e
+			}
+			add(row)
+			if done%25 == 0 {
+				if e = out.Sync(); e != nil {
+					return e
+				}
+				status(false)
+			}
+			return nil
+		})
+	}
+	if e = group.Wait(); e != nil {
+		t.Fatal(e)
+	}
+	if done != len(receipts) {
+		t.Fatal("incomplete controls")
+	}
+	if e = out.Sync(); e != nil {
+		t.Fatal(e)
+	}
+	status(true)
+}
+
+func buildADActualControl(base, dir, control string, receipt adControlReceipt) (row adControlRow, err error) {
+	row.Source, row.Candidate = receipt.Source[0], receipt.Candidate[0]
+	a, e := os.Stat(filepath.Join(base, row.Source.Path))
+	if e != nil {
+		return row, e
+	}
+	b, e := os.Stat(filepath.Join(dir, row.Candidate.Path))
+	if e != nil {
+		return row, e
+	}
+	if uint64(a.Size()) != row.Source.Size || uint64(b.Size()) != row.Candidate.Size {
+		return row, fmt.Errorf("file size differs")
+	}
+	row.SourceAllocated = uint64(a.Sys().(*syscall.Stat_t).Blocks) * 512
+	row.CandidateAllocated = uint64(b.Sys().(*syscall.Stat_t).Blocks) * 512
+	row.EffectiveControlBytes = row.Source.Size
+	row.EffectiveControlAllocated = row.SourceAllocated
+	if !receipt.Audit.Converted {
+		return row, nil
+	}
+	c, e := openCompressedBlockReaderWithCacheLimit(filepath.Join(dir, row.Candidate.Path), 1)
+	if e != nil {
+		return row, e
+	}
+	defer c.Close()
+	if !c.accountDelta {
+		return row, fmt.Errorf("converted file is not account-page container")
+	}
+	row.LogicalBytes = c.uncSize
+	var space syscall.Statfs_t
+	if e = syscall.Statfs(control, &space); e != nil {
+		return row, e
+	}
+	if space.Bavail*uint64(space.Bsize) < c.uncSize+(16<<30) {
+		return row, fmt.Errorf("control file exceeds lab free-space reserve")
+	}
+	w, e := newCompressedBlockStreamWriterWithFooter(control, accountDeltaPageMax, 1, true)
+	if e != nil {
+		return row, e
+	}
+	defer w.Abort()
+	body := w.body
+	z, _, e := cbCodec()
+	if e != nil {
+		return row, e
+	}
+	ad, e := accountDeltaCodecDecoder()
+	if e != nil {
+		return row, e
+	}
+	var prefix []byte
+	sum := sha256.New()
+	for i := range c.table {
+		stored, n, e := c.readCompressedBlock(i)
+		if e != nil {
+			return row, e
+		}
+		raw, e := c.decodeBlock(i, stored, n)
+		if e != nil {
+			return row, e
+		}
+		sum.Write(raw)
+		row.Pages++
+		var plain []byte
+		if stored[0] == 0 {
+			row.PlainPages++
+			plain = stored[1:]
+		} else {
+			row.AccountPages++
+			trans, e := ad.DecodeAll(stored[1:], make([]byte, 0, 3*int(n)+accountDeltaColumnHeader+accountDeltaHeaderSize+1))
+			if e != nil {
+				return row, e
+			}
+			again, s, e := decodeAccountDeltaColumns(trans, n, nil)
+			if e != nil || !bytes.Equal(again, raw) {
+				return row, fmt.Errorf("account page stats oracle: %v", e)
+			}
+			row.Stats.Values += s.Values
+			row.Stats.Full += s.Full
+			row.Stats.Deltas += s.Deltas
+			row.Stats.Identical += s.Identical
+			row.Stats.PrefixSuffix += s.PrefixSuffix
+			row.Stats.Masks += s.Masks
+			row.Stats.Numeric += s.Numeric
+			row.Stats.MaxDepth = max(row.Stats.MaxDepth, s.MaxDepth)
+			if s.Numeric > 0 {
+				row.NumericPages++
+			}
+			plain = z.EncodeAll(raw, nil)
+		}
+		if i == 0 {
+			prefix = bytes.Clone(raw)
+			body.uncTotal = n
+		} else if e = body.appendEncodedBlock(int(n), plain); e != nil {
+			return row, e
+		}
+	}
+	output := filepath.Join(control, filepath.Base(row.Source.Path))
+	var meta snapshotFileMetadata
+	w.body = nil
+	if e = body.finishWithFooterContext(context.Background(), output, prefix, &meta); e != nil {
+		return row, e
+	}
+	row.ControlPath = output
+	row.ControlFileBytes = meta.size
+	row.ControlSHA256 = fmt.Sprintf("%x", meta.checksum[:])
+	row.CanonicalSHA256 = fmt.Sprintf("%x", sum.Sum(nil))
+	r, e := openCompressedBlockReaderWithCacheLimit(output, 1)
+	if e != nil {
+		return row, e
+	}
+	h := sha256.New()
+	_, e = io.CopyBuffer(h, io.NewSectionReader(r, 0, int64(r.UncompressedSize())), make([]byte, 64<<10))
+	e2 := r.Close()
+	if e != nil {
+		return row, e
+	}
+	if e2 != nil {
+		return row, e2
+	}
+	if !bytes.Equal(h.Sum(nil), sum.Sum(nil)) {
+		return row, fmt.Errorf("plain control canonical SHA differs")
+	}
+	st, e := os.Stat(output)
+	if e != nil {
+		return row, e
+	}
+	row.ControlAllocated = uint64(st.Sys().(*syscall.Stat_t).Blocks) * 512
+	if meta.size < row.Source.Size {
+		row.EffectiveControlBytes = meta.size
+		row.EffectiveControlAllocated = row.ControlAllocated
+	}
+	return row, nil
+}
+
+func TestAccountDeltaActualControlFixture(t *testing.T) {
+	dir := t.TempDir()
+	var changes []*rawdb.StateDomainChange
+	for i := uint64(1); i <= 4000; i++ {
+		changes = append(changes, &rawdb.StateDomainChange{BlockNum: i, TxNum: i, Seq: 1, FlatDomain: rawdb.StateFlatDomainAccountLatest, Owner: common.Address{0: 0x41, 20: byte(i % 7)}, PrevExists: true, Prev: bytes.Repeat([]byte{byte(i % 7)}, 90)})
+	}
+	refs := writeV6StateDomainHistorySegmentForTest(t, dir, 1, 4000, changes)
+	candidate, audit, e := ReencodeHistoryAccountDeltaTrioContext(context.Background(), dir, refs)
+	if e != nil || !audit.Converted {
+		t.Fatal(audit, e)
+	}
+	r, e := buildADActualControl(dir, dir, t.TempDir(), adControlReceipt{refs, candidate, audit})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = verifyADControlResume(dir, dir, filepath.Dir(r.ControlPath), r, adControlReceipt{refs, candidate, audit}); e != nil {
+		t.Fatal(e)
+	}
+	bad := r
+	bad.ControlSHA256 = "bad"
+	if _, e = verifyADControlResume(dir, dir, filepath.Dir(r.ControlPath), bad, adControlReceipt{refs, candidate, audit}); e == nil {
+		t.Fatal("accepted corrupt resume control")
+	}
+	b, e := os.ReadFile(r.ControlPath)
+	if e != nil || len(b) < 12 || binary.BigEndian.Uint32(b[8:12]) != compressedBlockFooterVersion || r.ControlFileBytes != uint64(len(b)) || r.Pages == 0 || r.CanonicalSHA256 == "" {
+		t.Fatal("control footer/closure", r, e)
+	}
+}

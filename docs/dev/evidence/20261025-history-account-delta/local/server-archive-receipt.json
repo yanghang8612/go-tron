@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-25T16:10:05.712562+00:00",
+  "bytes": 14539613,
+  "sha256": "bceae43bca71bae1f75a402d11e3855869c7d8ab751e323ea624fe20ba9d94f3",
+  "members": 906,
+  "hashed_members": 905,
+  "manifest": "evidence-sha256.json",
+  "production_mutations": false,
+  "scope": "All root lab reports, logs, scripts and comparison outputs; database trees and binaries excluded."
+}

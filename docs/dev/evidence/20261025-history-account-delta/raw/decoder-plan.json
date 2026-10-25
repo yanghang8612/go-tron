@@ -1,0 +1,267 @@
+[
+  {
+    "Path": "history/state-domain-change-415031468-415154209-1263b0a7eec52e9d.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 246646
+      },
+      {
+        "Offset": 246694,
+        "Bytes": 206253
+      },
+      {
+        "Offset": 452947,
+        "Bytes": 209316
+      },
+      {
+        "Offset": 9551258,
+        "Bytes": 1488
+      },
+      {
+        "Offset": 9551382,
+        "Bytes": 1364
+      },
+      {
+        "Offset": 9552698,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-415154210-415295913-4c92b8f11450df79.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 255792
+      },
+      {
+        "Offset": 3122628,
+        "Bytes": 203741
+      },
+      {
+        "Offset": 10936204,
+        "Bytes": 1684
+      },
+      {
+        "Offset": 10936328,
+        "Bytes": 1560
+      },
+      {
+        "Offset": 10937840,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-415295914-415417316-1387182735b26625.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 244690
+      },
+      {
+        "Offset": 6798478,
+        "Bytes": 192749
+      },
+      {
+        "Offset": 8327609,
+        "Bytes": 1376
+      },
+      {
+        "Offset": 8327733,
+        "Bytes": 1252
+      },
+      {
+        "Offset": 8328937,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-422948837-422979781-647d7fd7994f8c4d.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 235169
+      },
+      {
+        "Offset": 452497,
+        "Bytes": 221105
+      },
+      {
+        "Offset": 2726737,
+        "Bytes": 563
+      },
+      {
+        "Offset": 2726860,
+        "Bytes": 440
+      },
+      {
+        "Offset": 2727252,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-425136716-425262405-46da9e3998e58f75.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 305239
+      },
+      {
+        "Offset": 8971861,
+        "Bytes": 230191
+      },
+      {
+        "Offset": 11347899,
+        "Bytes": 1599
+      },
+      {
+        "Offset": 11348022,
+        "Bytes": 1476
+      },
+      {
+        "Offset": 11349450,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-433829627-434011803-9d05b61503a50d0a.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 271462
+      },
+      {
+        "Offset": 2620681,
+        "Bytes": 222228
+      },
+      {
+        "Offset": 12256231,
+        "Bytes": 1824
+      },
+      {
+        "Offset": 12256355,
+        "Bytes": 1700
+      },
+      {
+        "Offset": 12258007,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-501549223-501674319-2aa7cebf66dfdb0b.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 285974
+      },
+      {
+        "Offset": 4659648,
+        "Bytes": 206348
+      },
+      {
+        "Offset": 8620156,
+        "Bytes": 1348
+      },
+      {
+        "Offset": 8620280,
+        "Bytes": 1224
+      },
+      {
+        "Offset": 8621456,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-501796887-501901595-6354cc7a0b419511.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 333764
+      },
+      {
+        "Offset": 333812,
+        "Bytes": 212815
+      },
+      {
+        "Offset": 7860742,
+        "Bytes": 1236
+      },
+      {
+        "Offset": 7860866,
+        "Bytes": 1112
+      },
+      {
+        "Offset": 7861930,
+        "Bytes": 48
+      }
+    ]
+  },
+  {
+    "Path": "history/state-domain-change-504857868-505009272-a7019c0f49bb719b.seg",
+    "Reads": [
+      {
+        "Offset": 0,
+        "Bytes": 4096
+      },
+      {
+        "Offset": 48,
+        "Bytes": 267997
+      },
+      {
+        "Offset": 5484682,
+        "Bytes": 267288
+      },
+      {
+        "Offset": 8384767,
+        "Bytes": 1348
+      },
+      {
+        "Offset": 8384891,
+        "Bytes": 1224
+      },
+      {
+        "Offset": 8386067,
+        "Bytes": 48
+      }
+    ]
+  }
+]

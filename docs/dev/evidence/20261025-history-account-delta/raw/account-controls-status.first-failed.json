@@ -1,0 +1,23 @@
+{
+  "account_transform_increment_bytes": 0,
+  "candidate_allocated": 0,
+  "candidate_bytes": 0,
+  "complete": false,
+  "controls_fsynced_and_canonical_sha_equal": true,
+  "files": 0,
+  "plain_control_allocated": 0,
+  "plain_control_bytes": 0,
+  "seconds": 0.000026941,
+  "source_allocated": 0,
+  "source_bytes": 0,
+  "stats": {
+    "Values": 0,
+    "Full": 0,
+    "Deltas": 0,
+    "Identical": 0,
+    "PrefixSuffix": 0,
+    "Masks": 0,
+    "Numeric": 0,
+    "MaxDepth": 0
+  }
+}

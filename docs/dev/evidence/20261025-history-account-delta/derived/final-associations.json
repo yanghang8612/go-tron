@@ -1,0 +1,91 @@
+{
+  "source_inventory_files": 1089,
+  "go_files": 1085,
+  "module_files": 4,
+  "manifests_metadata_equal": true,
+  "companion_receipts_verified": 9218,
+  "unique_physical_sha_receipts": 42131,
+  "physical_bytes_hashed": 192045094662,
+  "materialized_controls_verified": 4609,
+  "decoder": {
+    "samples": 8,
+    "arms": {
+      "old-128KiB-existing-decoder": {
+        "batches": 10,
+        "median_ns_per_decode": 203498.673828125,
+        "min_ns_per_decode": 203261.89453125,
+        "max_ns_per_decode": 203830.05078125,
+        "relative_to_old": 1.0
+      },
+      "new-1MiB-existing-decoder": {
+        "batches": 10,
+        "median_ns_per_decode": 1645040.060546875,
+        "min_ns_per_decode": 1642867.85546875,
+        "max_ns_per_decode": 1691682.78125,
+        "relative_to_old": 8.08378762181161
+      },
+      "new-1MiB-bounded-lowmem": {
+        "batches": 10,
+        "median_ns_per_decode": 1648671.88671875,
+        "min_ns_per_decode": 1643526.8359375,
+        "max_ns_per_decode": 1662082.65625,
+        "relative_to_old": 8.101634549772145
+      },
+      "new-1MiB-bounded-default-memory": {
+        "batches": 10,
+        "median_ns_per_decode": 1644785.9765625,
+        "min_ns_per_decode": 1641961.796875,
+        "max_ns_per_decode": 2065777.91796875,
+        "relative_to_old": 8.082539043727069
+      }
+    },
+    "query_file_page_modes": [
+      {
+        "path": "history/state-domain-change-415031468-415154209-1263b0a7eec52e9d.seg",
+        "account_pages": 0,
+        "pages": 47
+      },
+      {
+        "path": "history/state-domain-change-415154210-415295913-4c92b8f11450df79.seg",
+        "account_pages": 0,
+        "pages": 54
+      },
+      {
+        "path": "history/state-domain-change-415295914-415417316-1387182735b26625.seg",
+        "account_pages": 0,
+        "pages": 43
+      },
+      {
+        "path": "history/state-domain-change-422948837-422979781-647d7fd7994f8c4d.seg",
+        "account_pages": 0,
+        "pages": 14
+      },
+      {
+        "path": "history/state-domain-change-425136716-425262405-46da9e3998e58f75.seg",
+        "account_pages": 0,
+        "pages": 51
+      },
+      {
+        "path": "history/state-domain-change-433829627-434011803-9d05b61503a50d0a.seg",
+        "account_pages": 0,
+        "pages": 59
+      },
+      {
+        "path": "history/state-domain-change-501549223-501674319-2aa7cebf66dfdb0b.seg",
+        "account_pages": 0,
+        "pages": 42
+      },
+      {
+        "path": "history/state-domain-change-501796887-501901595-6354cc7a0b419511.seg",
+        "account_pages": 0,
+        "pages": 38
+      },
+      {
+        "path": "history/state-domain-change-504857868-505009272-a7019c0f49bb719b.seg",
+        "account_pages": 0,
+        "pages": 42
+      }
+    ]
+  },
+  "production_mutations": false
+}

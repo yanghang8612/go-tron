@@ -1,0 +1,23 @@
+{
+  "account_transform_increment_bytes": 3246,
+  "candidate_allocated": 8466137088,
+  "candidate_bytes": 8461148398,
+  "complete": false,
+  "controls_fsynced_and_canonical_sha_equal": true,
+  "files": 1375,
+  "plain_control_allocated": 8466182144,
+  "plain_control_bytes": 8461151644,
+  "seconds": 460.108854753,
+  "source_allocated": 9650880512,
+  "source_bytes": 9648109877,
+  "stats": {
+    "Values": 206673,
+    "Full": 43788,
+    "Deltas": 162885,
+    "Identical": 0,
+    "PrefixSuffix": 15773,
+    "Masks": 6,
+    "Numeric": 147106,
+    "MaxDepth": 4
+  }
+}

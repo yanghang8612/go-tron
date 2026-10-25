@@ -1,0 +1,20 @@
+{
+  "utc": "2026-10-25T16:10:05.712562+00:00",
+  "production_mutations": false,
+  "production_identity": "MainPID=0\nActiveState=inactive\n",
+  "loadavg": "4.11 4.68 5.61 2/1372 30595\n",
+  "meminfo": "MemTotal:       64298988 kB\nMemFree:          358100 kB\nMemAvailable:   45615940 kB\nBuffers:          317624 kB\nCached:         48143788 kB\nSwapCached:            0 kB\nActive:         36958164 kB\nInactive:       24421824 kB\nActive(anon):   15395728 kB\nInactive(anon):  1539640 kB\nActive(file):   21562436 kB\nInactive(file): 22882184 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:              6268 kB\nWriteback:             0 kB\nAnonPages:      12918808 kB\nMapped:           167332 kB\nShmem:           4016592 kB\nSlab:            1524876 kB\nSReclaimable:    1339184 kB\nSUnreclaim:       185692 kB\nKernelStack:       22192 kB\nPageTables:       254576 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32149492 kB\nCommitted_AS:   31130864 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      122724 kB\nVmallocChunk:   34359548308 kB\nPercpu:            10624 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    366592 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nDirectMap4k:      309156 kB\nDirectMap2M:    43249664 kB\nDirectMap1G:    22020096 kB\n",
+  "disk": "Filesystem         1B-blocks          Used    Available Use% Mounted on\n/dev/nvme1n1   7609457909760 7319185297408 289846235136  97% /data\n",
+  "task_units": {
+    "gtron-account-delta-final-layout-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n",
+    "gtron-account-delta-bounded-native-v2-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n",
+    "gtron-account-delta-muhash-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n",
+    "gtron-account-delta-acceptance-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n",
+    "gtron-account-delta-postprocess-20261025-01": "MainPID=0\nResult=exit-code\nExecMainStatus=1\nCPUQuotaPerSecUSec=2s\nMemoryLimit=4294967296\nNice=15\nActiveState=failed\n",
+    "gtron-account-delta-decoder-study-20261025-01": "MainPID=0\nResult=exit-code\nExecMainStatus=1\nCPUQuotaPerSecUSec=2s\nMemoryLimit=2147483648\nNice=15\nActiveState=failed\n",
+    "gtron-account-delta-postprocess-v2-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n",
+    "gtron-account-delta-postprocess-v3-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n",
+    "gtron-account-delta-decoder-study-v2-20261025-01": "MainPID=0\nResult=exit-code\nExecMainStatus=1\nCPUQuotaPerSecUSec=2s\nMemoryLimit=2147483648\nNice=15\nActiveState=failed\n",
+    "gtron-account-delta-decoder-study-v3-20261025-01": "MainPID=0\nResult=success\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nMemoryLimit=18446744073709551615\nNice=0\nActiveState=inactive\n"
+  }
+}

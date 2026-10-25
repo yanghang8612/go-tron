@@ -1,0 +1,19 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "parallel_workers": 4,
+  "before_identity": {
+    "MainPID": "0",
+    "ActiveState": "inactive",
+    "sha256": null
+  },
+  "phase": "complete",
+  "utc": "2026-10-25T15:13:27.884762+00:00",
+  "input_manifest_sha256": "c0c642f3172bfb33013e868576f84e5d55d1947a562a954978b3686d1535eee2",
+  "after_identity": {
+    "MainPID": "0",
+    "ActiveState": "inactive",
+    "sha256": null
+  },
+  "environment_identity_changed": false
+}

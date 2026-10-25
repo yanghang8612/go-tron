@@ -1,0 +1,10 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "parallel_workers": 4,
+  "original_snapshot_binary_sha256": "9812cceb2404c517ba955a75bb8df0df2632088127a4ca941a869cb10a84b2a8",
+  "resumed_receipts": 418,
+  "phase": "parallel-convert-and-strictly-check",
+  "utc": "2026-10-25T12:57:28.016864+00:00",
+  "parallel_binary_sha256": "0568c597532dda1461ed94ed70be163da99b0cdc1a18e62928030ecf1e022b91"
+}

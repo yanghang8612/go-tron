@@ -1,0 +1,14 @@
+{
+  "binaries": {
+    "baseline.test": "fff5e1dd9f51fdaa3fb25f5a93d73147178403890e95bdc5a0fb32d9b741d4bf",
+    "candidate.test": "9817303c751e6dd5a592a6be373e30ab85c1057555f89d2eda1686366d37f9d4",
+    "snapshots.test": "db788ecff6bcd09cf296beab55e1e76f3506147f8a4567533f29de74522342d5",
+    "bounded-snapshots.test": "4b9c51c3ac0f22ad190f70e4ac2e56edf72043e51d0488b394f1dcebeaa8aca5",
+    "gtron-numeric-bounded": "d2af42a72e8a263a4c6d79f7b282c502e3bbd55edde4706a51a5e2d7888323c2",
+    "post-snapshots.test": "f5b4894d8bee472366651e0c98496a82af9c93599afe349ff89a689edd426075",
+    "decoder-snapshots.test": "5c325a4bcd6f86932a30b40734bc87fd8a38e634ac686a3d2c78f89fffc6c515"
+  },
+  "source_inventory_sha256": "3c61eea2a4c0724992e5747fde1b252979c4f895ad77ecaee3b20ee542eda925",
+  "http_harness_sha256": "10e6015af7666bf83b5c405543681c368b7537f428b8278a3344f0312aacd3bf",
+  "controls_harness_sha256": "52fb8b3989981f48aecf0e54a70720296f65aecc7db35f4752349893d86a29f4"
+}

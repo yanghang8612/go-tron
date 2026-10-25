@@ -1,0 +1,48 @@
+{
+  "utc": "2026-10-25T15:40:04.793216+00:00",
+  "production_mutations": false,
+  "reason": "Correct the offline ordinary-Zstd control generator to finish its footer stream through finishWithFooterContext; add a native/local footer fixture. HTTP binaries and fixed source/candidate inputs are unchanged.",
+  "archived": [
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/postprocess-status.first-failed.json",
+      "bytes": 1183,
+      "sha256": "0bc7d4bab87b733a1aa74ee9d2558400e7d4c6bf48b81c9bd791b2ac21329396"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/post-snapshots-build.first-failed.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/account-controls.first-failed.log",
+      "bytes": 280,
+      "sha256": "b9a600c221cddde1215e70568a51e519d12adc6897c69a8ba99addf12e29e7d0"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/account-controls-status.first-failed.json",
+      "bytes": 477,
+      "sha256": "ed6691f9c8c3d3ecde1d2344ac294663f7c7f86c0697e457ed80761bd466fb02"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/account-controls-files.first-failed.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/decoder-study-status.first-failed.json",
+      "bytes": 748,
+      "sha256": "86adc871895b006d307df68775da211aaf1f9cdbe9025a45621f952ab5c95819"
+    }
+  ],
+  "failed_control_files": [
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/plain-controls.first-failed/state-domain-change-1-5714-450834875e1ff12b.seg",
+      "bytes": 270364,
+      "sha256": "507620a5bb341bd40c5387f6474573edf4105cff9d46a41e47e3d9698e62cdfb"
+    }
+  ],
+  "old_harness_sha256": "0225ab9ece9316e3ae4a0af31024c6c8768e8a6652f27d37d43bb03a8d4f7539",
+  "new_harness_sha256": "1631fb685453bccf46ee74dd20f03f98745be6e6db000adb8357b61c0fece20c",
+  "candidate_binary_sha256": "9817303c751e6dd5a592a6be373e30ab85c1057555f89d2eda1686366d37f9d4",
+  "candidate_manifest_sha256": "d782090faf2ad510766e04c64cc7e9c74326fbf2cec1c5fcc031640dab8fb351"
+}

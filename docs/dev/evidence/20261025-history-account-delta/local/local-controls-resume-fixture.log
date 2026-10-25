@@ -1,0 +1,4 @@
+=== RUN   TestAccountDeltaActualControlFixture
+--- PASS: TestAccountDeltaActualControlFixture (0.10s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	1.896s

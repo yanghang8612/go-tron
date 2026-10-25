@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "phase": "failed",
+  "utc": "2026-10-25T15:34:51.393440+00:00",
+  "error": "RuntimeError(\"CalledProcessError(1, ['/data/gtron/history-account-delta-20261025-01/post-snapshots.test', '-test.run=^TestOfflineAccountDeltaActualControls$', '-test.v', '-test.timeout=120m'])\",)",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/history-account-delta-20261025-01/decoder-study.py\", line 17, in <module>\n    if d.get('phase')=='failed':raise RuntimeError(d.get('error'))\nRuntimeError: CalledProcessError(1, ['/data/gtron/history-account-delta-20261025-01/post-snapshots.test', '-test.run=^TestOfflineAccountDeltaActualControls$', '-test.v', '-test.timeout=120m'])\n"
+}

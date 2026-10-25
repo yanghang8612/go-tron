@@ -1,0 +1,194 @@
+package snapshots
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+	"time"
+)
+
+type adProbePlan struct {
+	Dir               string
+	History, Accessor SegmentRef
+}
+type adProbeDepth struct {
+	Variant                                                     string
+	Depth                                                       uint8
+	CandidateBytes, DeltaPages, EligibleBytes, TransformedBytes uint64
+	Stats                                                       accountDeltaStats
+}
+type adProbeRow struct {
+	Path                                                                                                                 string
+	SourceBytes, LogicalBytes, Records, AccountRecords, AccountBytes, Crossing, Oversized, Pages, PlainRecompressedBytes uint64
+	Depths                                                                                                               []adProbeDepth
+	Seconds                                                                                                              float64
+}
+
+func adProbeSHA(path string) string {
+	f, e := os.Open(path)
+	if e != nil {
+		panic(e)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		panic(e)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+}
+func TestOfflineAccountDeltaProbe(t *testing.T) {
+	root := os.Getenv("GTRON_ACCOUNT_DELTA_ROOT")
+	if root == "" {
+		t.Skip("isolated lab")
+	}
+	p, e := os.ReadFile(filepath.Join(root, "probe-plan.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var plan []adProbePlan
+	if e = json.Unmarshal(p, &plan); e != nil {
+		t.Fatal(e)
+	}
+	out, e := os.Create(filepath.Join(root, "probe-rows.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer out.Close()
+	enc := json.NewEncoder(out)
+	for _, entry := range plan {
+		row, e := adProbeSegment(entry)
+		if e != nil {
+			t.Fatalf("%s: %v", entry.History.Path, e)
+		}
+		if e = enc.Encode(row); e != nil {
+			t.Fatal(e)
+		}
+		out.Sync()
+		t.Log(entry.History.Path, row.SourceBytes, row.Depths)
+	}
+	b, _ := json.Marshal(map[string]any{"complete": true, "files": len(plan)})
+	os.WriteFile(filepath.Join(root, "probe-status.json"), b, 0600)
+}
+func adProbeSegment(p adProbePlan) (adProbeRow, error) {
+	start := time.Now()
+	row := adProbeRow{Path: p.History.Path, SourceBytes: p.History.Size}
+	fail := func(e error) (adProbeRow, error) { return row, e }
+	if adProbeSHA(filepath.Join(p.Dir, p.History.Path)) != p.History.Checksum || adProbeSHA(filepath.Join(p.Dir, p.Accessor.Path)) != p.Accessor.Checksum {
+		return fail(fmt.Errorf("physical SHA mismatch"))
+	}
+	f, e := os.Open(filepath.Join(p.Dir, p.Accessor.Path))
+	if e != nil {
+		return fail(e)
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	h, e := decodeStateDomainChangeBinaryAccessorKeyHeader(f, uint64(st.Size()))
+	if e != nil {
+		return fail(e)
+	}
+	if h.keyCount > 1<<20 {
+		return fail(fmt.Errorf("key cap"))
+	}
+	bs, e := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(f, h)
+	if e != nil {
+		return fail(e)
+	}
+	accounts := make([]bool, h.keyCount)
+	for bi, b := range bs {
+		ks, e := stateDomainChangeBinaryAccessorV6ReadBlock(f, uint64(st.Size()), h, b, uint32(bi*128))
+		if e != nil {
+			return fail(e)
+		}
+		for _, k := range ks {
+			accounts[k.keyID] = k.key[0] == 1
+		}
+	}
+	r, sh, size, e := openStateDomainChangeBinaryCompactionRecordReader(context.Background(), p.Dir, p.History)
+	if e != nil {
+		return fail(e)
+	}
+	defer r.Close()
+	sr, ok := r.(*stateDomainChangeHistoryReader)
+	if !ok {
+		return fail(fmt.Errorf("reader type"))
+	}
+	c, ok := sr.historySegmentReader.(*compressedBlockReader)
+	if !ok || c.cdc != nil {
+		return fail(fmt.Errorf("probe currently requires footer V2"))
+	}
+	row.LogicalBytes = size
+	row.Records = sh.count
+	row.Pages = uint64(len(c.table))
+	notes := make([][]accountDeltaValue, len(c.table))
+	_, off, e := readStateDomainChangeBinaryTxRangeTableAt(r, size, p.History, sh)
+	if e != nil {
+		return fail(e)
+	}
+	var scratch []byte
+	for i := uint64(0); i < sh.count; i++ {
+		payload, next, borrowed, e := c.ReadRecordFrameAt(off, scratch)
+		if e != nil {
+			return fail(e)
+		}
+		if !borrowed {
+			scratch = payload
+		}
+		if len(payload) < 17 {
+			return fail(fmt.Errorf("short frame"))
+		}
+		id := binary.BigEndian.Uint32(payload[:4])
+		n := binary.BigEndian.Uint32(payload[13:17])
+		if int(n) != len(payload)-17 || int(id) >= len(accounts) {
+			return fail(fmt.Errorf("record fields"))
+		}
+		if accounts[id] && payload[12] == 1 {
+			row.AccountRecords++
+			row.AccountBytes += uint64(n)
+			if n > accountDeltaValueMax {
+				row.Oversized++
+			} else if n > 0 {
+				v := off + 21
+				page := sort.Search(len(c.table), func(j int) bool { return c.table[j].uncompressedStart > v }) - 1
+				if page < 0 {
+					return fail(fmt.Errorf("value page"))
+				}
+				length, e := compressedBlockExpectedLen(c.table, c.uncSize, page)
+				if e != nil {
+					return fail(e)
+				}
+				if v+uint64(n) > c.table[page].uncompressedStart+length {
+					row.Crossing++
+				} else {
+					notes[page] = append(notes[page], accountDeltaValue{uint32(v - c.table[page].uncompressedStart), n, id})
+				}
+			}
+		}
+		off = next
+	}
+	if off != size {
+		return fail(fmt.Errorf("EOF"))
+	}
+	z,_,e:=cbCodec();if e!=nil{return fail(e)}
+ var global []accountDeltaValue
+ for i,ns:=range notes {for _,n:=range ns {n.Offset+=uint32(c.table[i].uncompressedStart);global=append(global,n)}}
+ for _,pageSize:=range []int{128<<10,512<<10,1<<20} {for _,variant:=range []string{"plain","owner-plain","owner-delta","template-delta"} {
+ d:=adProbeDepth{Variant:fmt.Sprintf("%d/%s",pageSize,variant),Depth:4,CandidateBytes:compressedBlockHeaderSize+compressedBlockTrailerSize};ni:=0
+ for off:=uint64(0);off<size; {n:=uint64(pageSize);if off==0{n=128};if n>size-off{n=size-off};raw:=make([]byte,n);if _,e:=c.ReadAt(raw,int64(off));e!=nil{return fail(e)};var ns []accountDeltaValue
+ for ni<len(global)&&uint64(global[ni].Offset)<off+n {note:=global[ni];ni++;if uint64(note.Offset)>=off && uint64(note.Offset)+uint64(note.Length)<=off+n {note.Offset-=uint32(off);ns=append(ns,note)}}
+ best:=z.EncodeAll(raw,nil);var selected accountDeltaStats
+ if variant!="plain"&&len(ns)>0 {if variant=="template-delta"{ns=accountDeltaTemplateNotes(raw,ns)};transformed,s,e:=encodeAccountDeltaColumnsOrder(raw,ns,4,variant!="owner-plain",true);if e!=nil{return fail(e)};got,ds,e:=decodeAccountDeltaColumns(transformed,n,nil);if e!=nil||!bytes.Equal(got,raw)||ds!=s{return fail(fmt.Errorf("ordered oracle %v",e))};comp:=z.EncodeAll(transformed,nil);if len(comp)<len(best){best=comp;selected=s;d.DeltaPages++;d.EligibleBytes+=n;d.TransformedBytes+=uint64(len(transformed))}}
+ d.CandidateBytes+=uint64(len(best))+1+compressedBlockTableEntry;d.Stats.Values+=selected.Values;d.Stats.Full+=selected.Full;d.Stats.Deltas+=selected.Deltas;d.Stats.Identical+=selected.Identical;d.Stats.PrefixSuffix+=selected.PrefixSuffix;d.Stats.Masks+=selected.Masks;d.Stats.Numeric+=selected.Numeric;d.Stats.MaxDepth=max(d.Stats.MaxDepth,selected.MaxDepth);off+=n
+ };if d.CandidateBytes>row.SourceBytes{d.CandidateBytes=row.SourceBytes};row.Depths=append(row.Depths,d)
+ }}
+	row.Seconds = time.Since(start).Seconds()
+	return row, nil
+}

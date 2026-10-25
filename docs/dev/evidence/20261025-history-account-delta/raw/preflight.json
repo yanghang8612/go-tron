@@ -1,0 +1,27 @@
+{
+  "MainPID": "0",
+  "ExecMainStartTimestamp": "Sat 2026-10-24 05:57:01 UTC",
+  "ActiveState": "inactive",
+  "utc": "2026-10-25T12:15:47.843419+00:00",
+  "sha256": null,
+  "free_bytes": 405360599040,
+  "meminfo": "MemTotal:       64298988 kB\nMemFree:          364304 kB\nMemAvailable:   45843584 kB\nBuffers:          363048 kB\nCached:         47713736 kB\nSwapCached:            0 kB\nActive:         28192468 kB\nInactive:       32416328 kB\nActive(anon):   15006460 kB\nInactive(anon):  1640056 kB\nActive(file):   13186008 kB\nInactive(file): 30776272 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:              4840 kB\nWriteback:             0 kB\nAnonPages:      12532056 kB\nMapped:           284040 kB\nShmem:           4114712 kB\nSlab:            2231668 kB\nSReclaimable:    2042964 kB\nSUnreclaim:       188704 kB\nKernelStack:       22048 kB\nPageTables:       253348 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32149492 kB\nCommitted_AS:   30896512 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      122724 kB\nVmallocChunk:   34359548308 kB\nPercpu:            10624 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    366592 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nDirectMap4k:      309156 kB\nDirectMap2M:    43249664 kB\nDirectMap1G:    22020096 kB\n",
+  "production_mutations": false,
+  "sample_headers": [
+    {
+      "path": "history/state-domain-change-1-5714-450834875e1ff12b.seg",
+      "size": 273578,
+      "header": "677463626c6b30310000000200000001"
+    },
+    {
+      "path": "history/state-domain-change-260327242-260467989-0d421f79c3873feb.seg",
+      "size": 12926954,
+      "header": "677463626c6b30310000000200000001"
+    },
+    {
+      "path": "history/state-domain-change-567993008-568104018-5eeefed8dc4f9569.seg",
+      "size": 9787731,
+      "header": "677463626c6b30310000000200000001"
+    }
+  ]
+}

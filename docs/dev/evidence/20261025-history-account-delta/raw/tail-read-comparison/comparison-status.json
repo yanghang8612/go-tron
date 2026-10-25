@@ -1,0 +1,49 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "before_identity": {
+    "pid": 0,
+    "sha256": null,
+    "active_state": "inactive",
+    "process_start_ticks": null
+  },
+  "utc": "2026-10-25T15:34:23.129328+00:00",
+  "baseline_binary_sha256": "fff5e1dd9f51fdaa3fb25f5a93d73147178403890e95bdc5a0fb32d9b741d4bf",
+  "candidate_binary_sha256": "9817303c751e6dd5a592a6be373e30ab85c1057555f89d2eda1686366d37f9d4",
+  "query_code": "V11-versus-account-delta-pages-decoded-byte-cache-budget-identical-canonical-state",
+  "head": {
+    "gomaxprocs": 2,
+    "head": 11818192,
+    "head_hash": "30303030303030303030623435346430396134363838366134306430396438636265633733383132643031336635376465316663383033373834616366646636",
+    "head_tx": 601386177,
+    "history_cache_mib": 512,
+    "hot_cache_mib": 512,
+    "manifest_generation": 5321,
+    "pid": 12095,
+    "read_only": true,
+    "root": "38666266313439363834313436613539623136353062333138613736386630656462616530633863316333636562326335633631303132396331306637366135",
+    "url": "http://127.0.0.1:29762/"
+  },
+  "last_result": {
+    "id": 286,
+    "mode": "candidate",
+    "cache": "profile-warmup-excluded",
+    "repeat": 0,
+    "height": 9000000,
+    "tag": "0x895440",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000cf",
+    "reference": "independent fixed before-image oracle, rechecked by baseline storage",
+    "milliseconds": 202.51762866973877,
+    "correct": true
+  },
+  "after_identity": {
+    "pid": 0,
+    "sha256": null,
+    "active_state": "inactive",
+    "process_start_ticks": null
+  },
+  "environment_identity_changed": false,
+  "requests": 286,
+  "all_responses_correct": true
+}

@@ -1,0 +1,45 @@
+{
+  "utc": "2026-10-25T15:48:10.433199+00:00",
+  "production_mutations": false,
+  "resume_rows": 1379,
+  "dropped_incomplete_last_line_bytes": 0,
+  "archived": [
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/account-controls-files.serial-interrupted.jsonl",
+      "bytes": 1755308,
+      "sha256": "b61c68a0a50ec1cc40557ca232925b8242475295636756536ffbff50a46839a8"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/account-controls-status.serial-interrupted.json",
+      "bytes": 562,
+      "sha256": "7ca14444e335831e046794463b77b0fbee07eda8d0999d96580d0fc46dd6a4ac"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/account-controls.serial-interrupted.log",
+      "bytes": 48,
+      "sha256": "eaf1113782e3bf6e50ff8ff01e3554a2775df80389c052655f008440155325f9"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/postprocess-status.serial-interrupted.json",
+      "bytes": 132,
+      "sha256": "2a71007f324a1afaa468487a2b6fcf000e3c0eb9339fa4166bf4e4ec7e1f67e6"
+    },
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/controls-fixture.serial-interrupted.log",
+      "bytes": 107,
+      "sha256": "875d51623f96ef9fb7985791e76603710b79c447ec7e7906f15531acaacbcd52"
+    }
+  ],
+  "preserved_unreferenced_files": [
+    {
+      "path": "/data/gtron/history-account-delta-20261025-01/control-serial-orphans/state-domain-change-128417596-128588512-89602a5d565f38dc.seg",
+      "bytes": 11030719,
+      "sha256": "ecbb0432ce9e1ac218d7c9788d59017ceda3ca242e36a468fe86c67219ab884f"
+    }
+  ],
+  "source_harness_sha256": "1631fb685453bccf46ee74dd20f03f98745be6e6db000adb8357b61c0fece20c",
+  "resume_harness_sha256": "52fb8b3989981f48aecf0e54a70720296f65aecc7db35f4752349893d86a29f4",
+  "candidate_binary_sha256": "9817303c751e6dd5a592a6be373e30ab85c1057555f89d2eda1686366d37f9d4",
+  "candidate_manifest_sha256": "d782090faf2ad510766e04c64cc7e9c74326fbf2cec1c5fcc031640dab8fb351",
+  "proof": "Only the owned serial postprocess unit stopped; all completed control rows are rechecked against source refs and full control SHA before four-worker continuation. Previous rows and orphan files are retained."
+}

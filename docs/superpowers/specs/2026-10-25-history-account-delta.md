@@ -28,6 +28,9 @@ literals. Every checkpoint is complete; the candidate uses depth four, with a ha
 maximum eight, and every base must be an earlier registered
 account value of the same page. Never follow an external segment, hot DB,
 arbitrary logical byte range or an unbounded historical chain.
+The current `ReadAt` implementation still reconstructs the complete physical
+page. A four-level base bound does not mean a random query reads only four
+records; this distinction must be included in the performance evaluation.
 
 Trial depth limits 1/4/8 on actual fixed and mature files. Compare prefix/suffix
 patches and equal-width change masks after the existing Zstd codec, counting

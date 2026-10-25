@@ -1,0 +1,269 @@
+package snapshots
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"github.com/klauspost/compress/zstd"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+	"time"
+)
+
+type adDecoderRange struct{ Offset, Bytes uint64 }
+type adDecoderPlan struct {
+	Path  string
+	Reads []adDecoderRange
+}
+type adDecoderSample struct {
+	Path                        string
+	Logical, NewBytes, OldBytes uint64
+	New, Old, Want              []byte
+	OldAt                       int
+}
+
+// readCompressedBlock borrows the reader scratch; keep frames before any
+// subsequent read on that reader, including the independent source oracle.
+func copyADStudyFrame(r *compressedBlockReader, i int) ([]byte, uint64, error) {
+	b, n, e := r.readCompressedBlock(i)
+	return bytes.Clone(b), n, e
+}
+
+func TestAccountDeltaDecoderStudyFrameOwnership(t *testing.T) {
+	dir := t.TempDir()
+	w, e := newCompressedBlockStreamWriterWithFooter(dir, historyCompressChunkSize, 1, true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer w.Abort()
+	raw := make([]byte, 2<<20)
+	for i := range raw {
+		raw[i] = byte(i*31 + i/97)
+	}
+	if _, e = w.Write(raw); e != nil {
+		t.Fatal(e)
+	}
+	path := filepath.Join(dir, "frames.seg")
+	if e = w.Finish(path); e != nil {
+		t.Fatal(e)
+	}
+	r, e := openCompressedBlockReaderWithCacheLimit(path, 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer r.Close()
+	frame, n, e := copyADStudyFrame(r, 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = r.ReadAt(make([]byte, 8), int64(r.table[5].uncompressedStart+13)); e != nil {
+		t.Fatal(e)
+	}
+	_, dec, e := cbCodec()
+	if e != nil {
+		t.Fatal(e)
+	}
+	got, e := dec.DecodeAll(frame, make([]byte, 0, n))
+	at := r.table[1].uncompressedStart
+	if e != nil || !bytes.Equal(got, raw[at:at+n]) {
+		t.Fatal("borrowed frame changed after reader advanced", e)
+	}
+}
+
+func TestOfflineAccountDeltaDecoderCost(t *testing.T) {
+	root := os.Getenv("GTRON_ACCOUNT_DELTA_ROOT")
+	if root == "" {
+		t.Skip("isolated decoder study")
+	}
+	var plan []adDecoderPlan
+	raw, e := os.ReadFile(filepath.Join(root, "decoder-plan.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = json.Unmarshal(raw, &plan); e != nil {
+		t.Fatal(e)
+	}
+	file, e := os.Open(filepath.Join(root, "complete-input-files.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer file.Close()
+	type receipt struct{ Source, Candidate []SegmentRef }
+	dec := json.NewDecoder(file)
+	pairs := map[string]receipt{}
+	for dec.More() {
+		var r receipt
+		if e = dec.Decode(&r); e != nil {
+			t.Fatal(e)
+		}
+		pairs[r.Candidate[0].Path] = r
+	}
+	var samples []adDecoderSample
+	for _, p := range plan {
+		r, ok := pairs[p.Path]
+		if !ok {
+			continue
+		}
+		a, e := openCompressedBlockReaderWithCacheLimit(filepath.Join(root, "baseline-input/state-snapshots", r.Source[0].Path), 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		b, e := openCompressedBlockReaderWithCacheLimit(filepath.Join(root, "candidate-input/state-snapshots", p.Path), 1)
+		if e != nil {
+			a.Close()
+			t.Fatal(e)
+		}
+		if a.cdc != nil || b.cdc != nil {
+			a.Close()
+			b.Close()
+			continue
+		}
+		for i, x := range b.table {
+			n, e := compressedBlockExpectedLen(b.table, b.uncSize, i)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if n < 512<<10 {
+				continue
+			}
+			physical := uint64(compressedBlockHeaderSize) + x.compressedStart
+			seen := false
+			for _, q := range p.Reads {
+				if physical >= q.Offset && physical+x.compressedLen <= q.Offset+q.Bytes {
+					seen = true
+				}
+			}
+			if !seen {
+				continue
+			}
+			stored, _, e := copyADStudyFrame(b, i)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if len(stored) == 0 || stored[0] != 0 {
+				continue
+			}
+			logical := x.uncompressedStart + 4096
+			j := sort.Search(len(a.table), func(k int) bool { return a.table[k].uncompressedStart > logical }) - 1
+			if j < 0 {
+				t.Fatal("source page")
+			}
+			old, oldn, e := copyADStudyFrame(a, j)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if oldn > 128<<10 {
+				continue
+			}
+			want := make([]byte, n)
+			if _, e = a.ReadAt(want, int64(x.uncompressedStart)); e != nil {
+				t.Fatal(e)
+			}
+			samples = append(samples, adDecoderSample{p.Path, logical, n, oldn, stored[1:], old, want, int(logical - a.table[j].uncompressedStart)})
+			if len(samples) >= 8 {
+				break
+			}
+		}
+		a.Close()
+		b.Close()
+		if len(samples) >= 8 {
+			break
+		}
+	}
+	if len(samples) == 0 {
+		t.Fatal("no actual query-read plain pages sampled")
+	}
+	_, ordinary, e := cbCodec()
+	if e != nil {
+		t.Fatal(e)
+	}
+	low, e := accountDeltaCodecDecoder()
+	if e != nil {
+		t.Fatal(e)
+	}
+	high, e := zstd.NewReader(nil, zstd.WithDecoderConcurrency(4), zstd.WithDecoderMaxMemory(8<<20), zstd.WithDecoderMaxWindow(8<<20), zstd.WithDecodeAllCapLimit(true), zstd.WithDecoderLowmem(false))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer high.Close()
+	type arm struct {
+		Name  string
+		Codec *zstd.Decoder
+		Old   bool
+	}
+	arms := []arm{{"old-128KiB-existing-decoder", ordinary, true}, {"new-1MiB-existing-decoder", ordinary, false}, {"new-1MiB-bounded-lowmem", low, false}, {"new-1MiB-bounded-default-memory", high, false}}
+	for _, s := range samples {
+		for _, a := range arms {
+			src, n := s.New, s.NewBytes
+			if a.Old {
+				src, n = s.Old, s.OldBytes
+			}
+			got, e := a.Codec.DecodeAll(src, make([]byte, 0, n))
+			if e != nil || len(got) != int(n) {
+				t.Fatal("decode oracle", a.Name, e)
+			}
+			if a.Old {
+				if !bytes.Equal(got[s.OldAt:s.OldAt+8], s.Want[4096:4104]) {
+					t.Fatal("old point oracle")
+				}
+			} else if !bytes.Equal(got, s.Want) {
+				t.Fatal("new page oracle", a.Name)
+			}
+		}
+	}
+	var rows []any
+	for block := 0; block < 2; block++ {
+		for k := range arms {
+			i := k
+			if block == 1 {
+				i = len(arms) - 1 - k
+			}
+			a := arms[i]
+			for repeat := 0; repeat < 5; repeat++ {
+				buffers := make([][]byte, len(samples))
+				for j, s := range samples {
+					n := s.NewBytes
+					if a.Old {
+						n = s.OldBytes
+					}
+					buffers[j] = make([]byte, 0, n)
+				}
+				var total uint64
+				start := time.Now()
+				const iterations = 32
+				for iteration := 0; iteration < iterations; iteration++ {
+					for j, s := range samples {
+						src, n := s.New, s.NewBytes
+						at := 4096
+						if a.Old {
+							src, n, at = s.Old, s.OldBytes, s.OldAt
+						}
+						got, e := a.Codec.DecodeAll(src, buffers[j][:0])
+						if e != nil || len(got) != int(n) || !bytes.Equal(got[at:at+8], s.Want[4096:4104]) {
+							t.Fatal("timed point oracle", a.Name, e)
+						}
+						buffers[j] = got
+						total += n
+					}
+				}
+				elapsed := time.Since(start)
+				rows = append(rows, map[string]any{"arm": a.Name, "block": block, "repeat": repeat, "decodes": len(samples) * iterations, "decoded_bytes": total, "nanoseconds": elapsed.Nanoseconds(), "ns_per_decode": float64(elapsed.Nanoseconds()) / float64(len(samples)*iterations)})
+			}
+		}
+	}
+	ss := []any{}
+	for _, s := range samples {
+		ss = append(ss, map[string]any{"path": s.Path, "logical_point": s.Logical, "old_page_bytes": s.OldBytes, "new_page_bytes": s.NewBytes, "old_compressed_bytes": len(s.Old), "new_compressed_bytes": len(s.New)})
+	}
+	output := map[string]any{"complete": true, "all_canonical_and_point_oracles_equal": true, "scope": "CPU-only resident compressed frames actually read by the 9M HTTP trace; reused output buffers, ABBA arms. This is not HTTP latency and excludes file IO/allocation of the output buffer.", "samples": ss, "rows": rows}
+	data, e := json.MarshalIndent(output, "", "  ")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(root, "decoder-cost.json"), data, 0600); e != nil {
+		t.Fatal(e)
+	}
+	t.Log(fmt.Sprint("sample pages ", len(samples)))
+}

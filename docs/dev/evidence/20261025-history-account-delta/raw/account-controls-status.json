@@ -1,0 +1,27 @@
+{
+  "account_transform_increment_bytes": 381218,
+  "candidate_allocated": 40509177856,
+  "candidate_bytes": 40487129601,
+  "complete": true,
+  "controls_fsynced_and_canonical_sha_equal": true,
+  "files": 4609,
+  "plain_control_allocated": 40509779968,
+  "plain_control_bytes": 40487510819,
+  "resume_controls_full_physical_sha_verified": true,
+  "resumed_files": 1379,
+  "seconds": 421.25337064,
+  "source_allocated": 48388751360,
+  "source_bytes": 48379318571,
+  "stats": {
+    "Values": 1279822,
+    "Full": 274238,
+    "Deltas": 1005584,
+    "Identical": 0,
+    "PrefixSuffix": 91699,
+    "Masks": 8,
+    "Numeric": 913877,
+    "MaxDepth": 4
+  },
+  "total": 4609,
+  "workers": 4
+}

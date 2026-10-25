@@ -1,0 +1,324 @@
+[
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 1,
+      "toTxNum": 5714,
+      "aggregationSteps": 4,
+      "path": "history/state-domain-change-1-5714-450834875e1ff12b.seg",
+      "size": 273578,
+      "checksum": "sha256:450834875e1ff12bcf5b5589b36ca5f0fbd3c0318529fbcc8637e8938c3714fc"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 1,
+      "toTxNum": 5714,
+      "aggregationSteps": 4,
+      "path": "history/state-domain-change-1-5714-450834875e1ff12b.kv",
+      "size": 94613,
+      "checksum": "sha256:32a304e800f2c57f94c9afcfc9cdcc5383edfaebe53e5c3c38a1de27fe639685"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 5715,
+      "toTxNum": 12941,
+      "aggregationSteps": 4,
+      "path": "history/state-domain-change-5715-12941-0460b2399efe1642.seg",
+      "size": 366957,
+      "checksum": "sha256:0460b2399efe1642dd3f70f16ffde8bcaccacca261de6789381f569fe0bd8bd0"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 5715,
+      "toTxNum": 12941,
+      "aggregationSteps": 4,
+      "path": "history/state-domain-change-5715-12941-0460b2399efe1642.kv",
+      "size": 101636,
+      "checksum": "sha256:7e2d834c3d23d7f5cf612356e12c80e337dba6fbb5df7407d2e33a5b0d1877f9"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 27539232,
+      "toTxNum": 27700565,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-27539232-27700565-5850e881afe43c7d.seg",
+      "size": 11379699,
+      "checksum": "sha256:5850e881afe43c7db5ff14df78cf0c5d3214887fd00e622b178be24fff348bb6"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 27539232,
+      "toTxNum": 27700565,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-27539232-27700565-5850e881afe43c7d.kv",
+      "size": 4907388,
+      "checksum": "sha256:e1e622c95e8fb13a333a5974c3da563b7abb1f0967a19afabf10e436067d6795"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 154913516,
+      "toTxNum": 155089304,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-154913516-155089304-40a2134552cd720f.seg",
+      "size": 14332697,
+      "checksum": "sha256:40a2134552cd720f8b3005316eddb8242852dec7df070d5bf26f4b7401400d84"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 154913516,
+      "toTxNum": 155089304,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-154913516-155089304-40a2134552cd720f.kv",
+      "size": 5008698,
+      "checksum": "sha256:8f399ab7685a2b6404b41d6d44a29b0914325ad6c922c4f4903d093c6739aafd"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 260327242,
+      "toTxNum": 260467989,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-260327242-260467989-0d421f79c3873feb.seg",
+      "size": 12926954,
+      "checksum": "sha256:0d421f79c3873febbfd98536b14e00b9206c51519da2203efac71701c6e7f694"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 260327242,
+      "toTxNum": 260467989,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-260327242-260467989-0d421f79c3873feb.kv",
+      "size": 4859671,
+      "checksum": "sha256:1a98b265ed8a2433739ac40bc4bf969a9f4c4e3bc44a7e8d34480758bcdc47f7"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 359565373,
+      "toTxNum": 359672586,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-359565373-359672586-9c573cae60724c41.seg",
+      "size": 10984658,
+      "checksum": "sha256:9c573cae60724c41c0c55dba49b812eb11c6b89f6bf0985622dbd074700eed14"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 359565373,
+      "toTxNum": 359672586,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-359565373-359672586-9c573cae60724c41.kv",
+      "size": 4168444,
+      "checksum": "sha256:b616a05bffaa67517fd690b3dd63ca3b7a3fb550238b8f2f8401eed21d26f4f9"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 496335020,
+      "toTxNum": 496465576,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-496335020-496465576-d56bb32b53847da1.seg",
+      "size": 10376362,
+      "checksum": "sha256:d56bb32b53847da1882e4668f78164be320b918e334e8986cd1af679c913948f"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 496335020,
+      "toTxNum": 496465576,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-496335020-496465576-d56bb32b53847da1.kv",
+      "size": 4758442,
+      "checksum": "sha256:c1c5488d3a3c47c96b5b350dccce4c8bd85ae75bb8a5ce3117e725662c7258be"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 567864500,
+      "toTxNum": 567993007,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-567864500-567993007-6caf1b3cc4f2c014.seg",
+      "size": 10359766,
+      "checksum": "sha256:6caf1b3cc4f2c014f226e7624651bfa8e40bc6dbf289844457333df9925d6170"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 567864500,
+      "toTxNum": 567993007,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-567864500-567993007-6caf1b3cc4f2c014.kv",
+      "size": 3307116,
+      "checksum": "sha256:4f99f3de9befeecc15fd7834e8f123227b6c92ed0bf7fd9cadad72586e58d88b"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/candidate-input/state-snapshots",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 567993008,
+      "toTxNum": 568104018,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-567993008-568104018-5eeefed8dc4f9569.seg",
+      "size": 9787731,
+      "checksum": "sha256:5eeefed8dc4f9569351a436f24f015e47233059b2cbd544f25417080e5c724fb"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 567993008,
+      "toTxNum": 568104018,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-567993008-568104018-5eeefed8dc4f9569.kv",
+      "size": 2994199,
+      "checksum": "sha256:31df5a5db7a0080f625f5d3376810eaa8a5e645d62fb65ac3c5154a8ac945faa"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/census-input",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 1343727081,
+      "toTxNum": 1343810332,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-1343727081-1343810332-212ba4fdd6db2382.seg",
+      "size": 10300178,
+      "checksum": "sha256:212ba4fdd6db238264c9c6d0926f0e701f6bc791a623db9573ae2e4594d5aabf"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 1343727081,
+      "toTxNum": 1343810332,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-1343727081-1343810332-212ba4fdd6db2382.kv",
+      "size": 5495364,
+      "checksum": "sha256:775bf70f8977acb9808ca2a93b4a73aad49e87b1790048dcc3e7e265bf90607e"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/census-input",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 1543318108,
+      "toTxNum": 1543552534,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-1543318108-1543552534-4c140163b0fcb408.seg",
+      "size": 21759170,
+      "checksum": "sha256:4c140163b0fcb4082e5bbc48ae00c2a836241773e94b1374d67c7854d85cc449"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 1543318108,
+      "toTxNum": 1543552534,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-1543318108-1543552534-4c140163b0fcb408.kv",
+      "size": 12178144,
+      "checksum": "sha256:b6c8072f7ecc0f06fa575dc01f35e44cc58d6acfd83abbdb6e5b9fb4eadde435"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/census-input",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 1834257969,
+      "toTxNum": 1834406730,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-1834257969-1834406730-e69ef0daa7bae688.seg",
+      "size": 10514558,
+      "checksum": "sha256:e69ef0daa7bae6886a6fec7bef009949e840c04de058320d06f6be971af5defa"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 1834257969,
+      "toTxNum": 1834406730,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-1834257969-1834406730-e69ef0daa7bae688.kv",
+      "size": 7292242,
+      "checksum": "sha256:60defb9ccd16195eb7a6a5e54f6ae0c4bf89ca625294f17ed19acef68d8026bb"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/census-input",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 2293453060,
+      "toTxNum": 2293827670,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-2293453060-2293827670-a18ddc74abdc6603.seg",
+      "size": 21705023,
+      "checksum": "sha256:a18ddc74abdc6603205ef165bb51d5c181b6a1334ab81841e1d75bc2c2262ec6"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 2293453060,
+      "toTxNum": 2293827670,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-2293453060-2293827670-a18ddc74abdc6603.kv",
+      "size": 18049567,
+      "checksum": "sha256:5edd200c75ea9007f500eaed95ca7e498ece998422ddb3e31e65ce95ff4c20f0"
+    }
+  },
+  {
+    "Dir": "/data/gtron/history-tx-runs-20261025-01/census-input",
+    "History": {
+      "dataset": "state-domain-change",
+      "kind": "history",
+      "fromTxNum": 2567143861,
+      "toTxNum": 2567258888,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-2567143861-2567258888-058498c8035968b9.seg",
+      "size": 10684241,
+      "checksum": "sha256:058498c8035968b944d3a7ac2522d8853e825a44b5084fde7dbb16e2db38f5b9"
+    },
+    "Accessor": {
+      "dataset": "state-domain-change",
+      "kind": "accessor",
+      "fromTxNum": 2567143861,
+      "toTxNum": 2567258888,
+      "aggregationSteps": 1,
+      "path": "history/state-domain-change-2567143861-2567258888-058498c8035968b9.kv",
+      "size": 8592766,
+      "checksum": "sha256:dfe63a8adf7740d8fd33e80394c38bdeca636d98867533d4dadb0296902de0fc"
+    }
+  }
+]

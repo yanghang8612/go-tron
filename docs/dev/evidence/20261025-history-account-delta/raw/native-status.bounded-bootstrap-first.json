@@ -1,0 +1,9 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "candidate": "owner-columns-bounded-numeric-deltas-1MiB-depth4-cache-byte-budget",
+  "phase": "failed",
+  "error": "FileNotFoundError(2, 'No such file or directory')",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/history-account-delta-20261025-01/bounded-native.py\", line 14, in <module>\n    inv=json.loads((P/'bounded-source-inventory.json').read_text());state['production_source_inventory']=inv\n  File \"/usr/lib64/python3.6/pathlib.py\", line 1196, in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n  File \"/usr/lib64/python3.6/pathlib.py\", line 1183, in open\n    opener=self._opener)\n  File \"/usr/lib64/python3.6/pathlib.py\", line 1037, in _opener\n    return self._accessor.open(self, flags, mode)\n  File \"/usr/lib64/python3.6/pathlib.py\", line 387, in wrapped\n    return strfunc(str(pathobj), *args)\nFileNotFoundError: [Errno 2] No such file or directory: '/data/gtron/history-account-delta-20261025-01/bounded-source-inventory.json'\n",
+  "utc": "2026-10-25T13:27:56.773441+00:00"
+}

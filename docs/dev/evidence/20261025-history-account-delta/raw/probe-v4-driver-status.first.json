@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "phase": "failed",
+  "error": "CalledProcessError(5, ['systemctl', 'stop', 'gtron-account-delta-layout-20261025-01'])",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/history-account-delta-20261025-01/probe-v4.py\", line 12, in <module>\n    for unit in ['gtron-account-delta-resume-20261025-01','gtron-account-delta-layout-20261025-01']:subprocess.run(['systemctl','stop',unit],check=True)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 438, in run\n    output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['systemctl', 'stop', 'gtron-account-delta-layout-20261025-01']' returned non-zero exit status 5.\n",
+  "utc": "2026-10-25T13:03:36.813379+00:00"
+}

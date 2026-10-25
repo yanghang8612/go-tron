@@ -1,0 +1,4 @@
+=== RUN   TestOfflineAccountDeltaActualControls
+    offline_account_delta_controls_test.go:30: history/state-domain-change-1-5714-450834875e1ff12b.seg: snapshots: compressed-block data end 270316, want file size 270364
+--- FAIL: TestOfflineAccountDeltaActualControls (0.02s)
+FAIL

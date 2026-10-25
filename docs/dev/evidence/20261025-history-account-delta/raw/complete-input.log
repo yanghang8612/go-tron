@@ -1,0 +1,3 @@
+=== RUN   TestOfflineAccountDeltaCaptureParallel
+--- PASS: TestOfflineAccountDeltaCaptureParallel (7003.89s)
+PASS

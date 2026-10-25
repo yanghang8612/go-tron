@@ -1,0 +1,96 @@
+package state
+
+import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
+)
+
+// The complete 227222 chaindata cut is combined with later immutable cold
+// history. Every temporal read is capped at that cut's TxNum; future cold
+// records cannot contribute. This is not a current-head whole-RPC benchmark.
+func TestOfflineColdBalanceCheckpoint(t *testing.T) {
+	dir := os.Getenv("GTRON_CHECKPOINT_DB")
+	if dir == "" {
+		t.Skip("offline checkpoint required")
+	}
+	db, err := rawdb.NewPebbleDBReadOnly(dir, 32, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	head, ok, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil || !ok {
+		t.Fatalf("head %v", err)
+	}
+	if head.BlockNum != 227222 {
+		t.Fatal("unexpected checkpoint cut")
+	}
+	m, err := snapshots.OpenManager(os.Getenv("GTRON_COLD_QUERY_CORPUS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, release, err := m.PinHistoryReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	addr := func(s string) common.Address {
+		v, e := hex.DecodeString("41" + s)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return common.BytesToAddress(v)
+	}
+	sender := addr("71b0af54e0a1182a5e0947d6a64f3b22740ef318")
+	receiver := addr("b87f2be4dede9fc25387f8df7e0944b5cb7900e1")
+	type q struct {
+		Name     string
+		Owner    common.Address
+		Height   uint64
+		Expected int64
+	}
+	qs := []q{{"genesis-sender", sender, 0, 99000000000000000}, {"sender-341", sender, 341, 99000000000000000}, {"sender-342", sender, 342, 65748192475900000}, {"receiver-341", receiver, 341, 0}, {"receiver-342", receiver, 342, 33251807524000000}}
+	var rows []map[string]any
+	for round := 0; round < 3; round++ {
+		for _, q := range qs {
+			view, releaseView, e := rawdb.AcquireStateHistoryReadView(db)
+			if e != nil {
+				t.Fatal(e)
+			}
+			r := NewPersistentHistoryReaderWithColdHistory(rawdb.WithStateHistoryQueryTailCache(view), nil, head.BlockNum, m)
+			r.SetContext(context.Background())
+			if err := r.SetHotHistoryBlockRange(q.Height, head.BlockNum); err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			v, err := r.BalanceAt(q.Owner, q.Height)
+			elapsed := time.Since(started)
+			releaseView()
+			if err != nil || v != q.Expected {
+				t.Fatalf("%s value=%d want=%d err=%v", q.Name, v, q.Expected, err)
+			}
+			rows = append(rows, map[string]any{"round": round, "query": q.Name, "sun": v, "milliseconds": float64(elapsed.Nanoseconds()) / 1e6})
+		}
+	}
+	after, ok, err := rawdb.ReadStateCommitmentHead(db)
+	if err != nil || !ok || after.Root != head.Root || after.TxNum != head.TxNum {
+		t.Fatal("queries changed HEAD")
+	}
+	out := map[string]any{"head_block": head.BlockNum, "head_tx": head.TxNum, "root": fmt.Sprintf("%x", head.Root), "unchanged_head": true, "results": rows, "note": "Full PersistentHistoryReader balance path on a real 227222 consistent chaindata copy plus fixed later cold corpus, clipped to checkpoint TxNum. No HTTP/RPC timing, no current 9M root claim."}
+	raw, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("GTRON_CHECKPOINT_OUT"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

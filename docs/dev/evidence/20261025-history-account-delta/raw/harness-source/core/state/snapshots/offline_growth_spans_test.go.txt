@@ -1,0 +1,91 @@
+package snapshots
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// Read-only metadata census. Missing old immutable paths are reported, never
+// recreated or substituted with a different segment having the same tx range.
+func TestOfflineGrowthSpans(t *testing.T) {
+	root := os.Getenv("GTRON_GROWTH_ROOT")
+	if root == "" {
+		t.Skip("explicit lab required")
+	}
+	dir := "/data/gtron/main/datadir/gtron/state-snapshots"
+	out, err := os.OpenFile(filepath.Join(root, "growth-spans.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	seen := map[string]SegmentRef{}
+	start := time.Now()
+	scanned, failures := 0, 0
+	for _, name := range []string{"/data/gtron/kv-accessor-analysis-20261024-01/source-manifest.json", filepath.Join(root, "growth-live-manifest.json")} {
+		data, e := os.ReadFile(name)
+		if e != nil {
+			t.Fatal(e)
+		}
+		m, e := decodeProductionManifest(data)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, ref := range m.Segments {
+			if ref.Kind != SegmentHistory || ref.normalizedDataset() != SegmentDatasetStateDomainChange {
+				continue
+			}
+			if previous, ok := seen[ref.Path]; ok {
+				if previous != ref {
+					t.Fatal("same path changed immutable ref")
+				}
+				continue
+			}
+			seen[ref.Path] = ref
+			row := map[string]any{"ref": ref}
+			f, h, size, e := openStateDomainChangeBinarySegmentReaderWithCacheLimit(dir, ref, 1)
+			if e == nil {
+				count, _, readErr := stateDomainChangeBinaryTxRangeTableBoundsAt(f, size, ref, h)
+				e = readErr
+				if e == nil && count == 0 {
+					e = fmt.Errorf("no block range table")
+				}
+				if e == nil {
+					first, e1 := readStateDomainChangeBinaryTxRangeAt(f, ref, h.version, 0)
+					last, e2 := readStateDomainChangeBinaryTxRangeAt(f, ref, h.version, count-1)
+					if e1 != nil {
+						e = e1
+					} else if e2 != nil {
+						e = e2
+					} else {
+						row["first"] = first
+						row["last"] = last
+						row["records"] = h.count
+						row["logical_bytes"] = size
+						row["tx_range_count"] = count
+						row["version"] = h.version
+					}
+				}
+				f.Close()
+			}
+			if e != nil {
+				row["error"] = e.Error()
+				failures++
+			}
+			scanned++
+			if e = json.NewEncoder(out).Encode(row); e != nil {
+				t.Fatal(e)
+			}
+			if scanned%250 == 0 {
+				saveV9Audit(t, filepath.Join(root, "growth-spans-status.json"), map[string]any{"complete": false, "files": scanned, "failures": failures, "seconds": time.Since(start).Seconds()})
+			}
+		}
+	}
+	if err = out.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	saveV9Audit(t, filepath.Join(root, "growth-spans-status.json"), map[string]any{"complete": true, "files": scanned, "failures": failures, "seconds": time.Since(start).Seconds(), "read_only_metadata": true})
+}

@@ -1,0 +1,433 @@
+{
+  "all_canonical_and_point_oracles_equal": true,
+  "complete": true,
+  "rows": [
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52085360,
+      "ns_per_decode": 203458.4375,
+      "repeat": 0
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52120626,
+      "ns_per_decode": 203596.1953125,
+      "repeat": 1
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52071601,
+      "ns_per_decode": 203404.69140625,
+      "repeat": 2
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52083453,
+      "ns_per_decode": 203450.98828125,
+      "repeat": 3
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52035045,
+      "ns_per_decode": 203261.89453125,
+      "repeat": 4
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420650341,
+      "ns_per_decode": 1643165.39453125,
+      "repeat": 0
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 423385013,
+      "ns_per_decode": 1653847.70703125,
+      "repeat": 1
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421138830,
+      "ns_per_decode": 1645073.5546875,
+      "repeat": 2
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420574171,
+      "ns_per_decode": 1642867.85546875,
+      "repeat": 3
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421557301,
+      "ns_per_decode": 1646708.20703125,
+      "repeat": 4
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 422543223,
+      "ns_per_decode": 1650559.46484375,
+      "repeat": 0
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420742870,
+      "ns_per_decode": 1643526.8359375,
+      "repeat": 1
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421373978,
+      "ns_per_decode": 1645992.1015625,
+      "repeat": 2
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 425036722,
+      "ns_per_decode": 1660299.6953125,
+      "repeat": 3
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421020036,
+      "ns_per_decode": 1644609.515625,
+      "repeat": 4
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420828730,
+      "ns_per_decode": 1643862.2265625,
+      "repeat": 0
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420342220,
+      "ns_per_decode": 1641961.796875,
+      "repeat": 1
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 426243591,
+      "ns_per_decode": 1665014.02734375,
+      "repeat": 2
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420923632,
+      "ns_per_decode": 1644232.9375,
+      "repeat": 3
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 0,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 528839147,
+      "ns_per_decode": 2065777.91796875,
+      "repeat": 4
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 437319144,
+      "ns_per_decode": 1708277.90625,
+      "repeat": 0
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 420830105,
+      "ns_per_decode": 1643867.59765625,
+      "repeat": 1
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421093438,
+      "ns_per_decode": 1644896.2421875,
+      "repeat": 2
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421958452,
+      "ns_per_decode": 1648275.203125,
+      "repeat": 3
+    },
+    {
+      "arm": "new-1MiB-bounded-default-memory",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421036982,
+      "ns_per_decode": 1644675.7109375,
+      "repeat": 4
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421405948,
+      "ns_per_decode": 1646116.984375,
+      "repeat": 0
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421579546,
+      "ns_per_decode": 1646795.1015625,
+      "repeat": 1
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 425493160,
+      "ns_per_decode": 1662082.65625,
+      "repeat": 2
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 422540460,
+      "ns_per_decode": 1650548.671875,
+      "repeat": 3
+    },
+    {
+      "arm": "new-1MiB-bounded-lowmem",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 423668950,
+      "ns_per_decode": 1654956.8359375,
+      "repeat": 4
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421121681,
+      "ns_per_decode": 1645006.56640625,
+      "repeat": 0
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421111430,
+      "ns_per_decode": 1644966.5234375,
+      "repeat": 1
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421069953,
+      "ns_per_decode": 1644804.50390625,
+      "repeat": 2
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 421200874,
+      "ns_per_decode": 1645315.9140625,
+      "repeat": 3
+    },
+    {
+      "arm": "new-1MiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 268419072,
+      "decodes": 256,
+      "nanoseconds": 433070792,
+      "ns_per_decode": 1691682.78125,
+      "repeat": 4
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52140360,
+      "ns_per_decode": 203673.28125,
+      "repeat": 0
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52180493,
+      "ns_per_decode": 203830.05078125,
+      "repeat": 1
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52167551,
+      "ns_per_decode": 203779.49609375,
+      "repeat": 2
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52086052,
+      "ns_per_decode": 203461.140625,
+      "repeat": 3
+    },
+    {
+      "arm": "old-128KiB-existing-decoder",
+      "block": 1,
+      "decoded_bytes": 33538048,
+      "decodes": 256,
+      "nanoseconds": 52105269,
+      "ns_per_decode": 203536.20703125,
+      "repeat": 4
+    }
+  ],
+  "samples": [
+    {
+      "logical_point": 4224,
+      "new_compressed_bytes": 246645,
+      "new_page_bytes": 1048448,
+      "old_compressed_bytes": 66943,
+      "old_page_bytes": 130944,
+      "path": "history/state-domain-change-415031468-415154209-1263b0a7eec52e9d.seg"
+    },
+    {
+      "logical_point": 1052672,
+      "new_compressed_bytes": 206252,
+      "new_page_bytes": 1048576,
+      "old_compressed_bytes": 31549,
+      "old_page_bytes": 131072,
+      "path": "history/state-domain-change-415031468-415154209-1263b0a7eec52e9d.seg"
+    },
+    {
+      "logical_point": 2101248,
+      "new_compressed_bytes": 209315,
+      "new_page_bytes": 1048576,
+      "old_compressed_bytes": 31540,
+      "old_page_bytes": 131072,
+      "path": "history/state-domain-change-415031468-415154209-1263b0a7eec52e9d.seg"
+    },
+    {
+      "logical_point": 4224,
+      "new_compressed_bytes": 255791,
+      "new_page_bytes": 1048448,
+      "old_compressed_bytes": 75379,
+      "old_page_bytes": 130944,
+      "path": "history/state-domain-change-415154210-415295913-4c92b8f11450df79.seg"
+    },
+    {
+      "logical_point": 15732736,
+      "new_compressed_bytes": 203740,
+      "new_page_bytes": 1048576,
+      "old_compressed_bytes": 40688,
+      "old_page_bytes": 131072,
+      "path": "history/state-domain-change-415154210-415295913-4c92b8f11450df79.seg"
+    },
+    {
+      "logical_point": 4224,
+      "new_compressed_bytes": 244689,
+      "new_page_bytes": 1048448,
+      "old_compressed_bytes": 67616,
+      "old_page_bytes": 130944,
+      "path": "history/state-domain-change-415295914-415417316-1387182735b26625.seg"
+    },
+    {
+      "logical_point": 35655680,
+      "new_compressed_bytes": 192748,
+      "new_page_bytes": 1048576,
+      "old_compressed_bytes": 29103,
+      "old_page_bytes": 131072,
+      "path": "history/state-domain-change-415295914-415417316-1387182735b26625.seg"
+    },
+    {
+      "logical_point": 4224,
+      "new_compressed_bytes": 235168,
+      "new_page_bytes": 1048448,
+      "old_compressed_bytes": 43300,
+      "old_page_bytes": 130944,
+      "path": "history/state-domain-change-422948837-422979781-647d7fd7994f8c4d.seg"
+    }
+  ],
+  "scope": "CPU-only resident compressed frames actually read by the 9M HTTP trace; reused output buffers, ABBA arms. This is not HTTP latency and excludes file IO/allocation of the output buffer."
+}

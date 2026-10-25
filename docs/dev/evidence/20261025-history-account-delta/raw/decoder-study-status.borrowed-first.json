@@ -1,0 +1,10 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "phase": "failed",
+  "utc": "2026-10-25T16:02:04.351199+00:00",
+  "harness_sha256": "cf488f293b4880ab00e3750858f88903eea4d9d173c1eacf26eaf8574cfe10aa",
+  "binary_sha256": "99bbd6404e43947377f1ac1d69f1347c991af31dfb35df8e82ca66cef46e208b",
+  "error": "CalledProcessError(1, ['/data/gtron/history-account-delta-20261025-01/decoder-snapshots.test', '-test.run=^TestOfflineAccountDeltaDecoderCost$', '-test.v', '-test.timeout=180s'])",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/history-account-delta-20261025-01/decoder-study.py\", line 49, in <module>\n    run('decoder-study',[str(P/'decoder-snapshots.test'),'-test.run=^TestOfflineAccountDeltaDecoderCost$','-test.v','-test.timeout=180s'],env,200)\n  File \"/data/gtron/history-account-delta-20261025-01/decoder-study.py\", line 12, in run\n    with (P/(label+'.log')).open('wb')as out:subprocess.run(args,cwd=str(S),env=env,stdout=out,stderr=subprocess.STDOUT,check=True,timeout=timeout)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 438, in run\n    output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/data/gtron/history-account-delta-20261025-01/decoder-snapshots.test', '-test.run=^TestOfflineAccountDeltaDecoderCost$', '-test.v', '-test.timeout=180s']' returned non-zero exit status 1.\n"
+}

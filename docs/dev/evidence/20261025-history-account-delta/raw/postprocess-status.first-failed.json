@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "production_mutations": false,
+  "phase": "failed",
+  "utc": "2026-10-25T15:34:49.917544+00:00",
+  "error": "CalledProcessError(1, ['/data/gtron/history-account-delta-20261025-01/post-snapshots.test', '-test.run=^TestOfflineAccountDeltaActualControls$', '-test.v', '-test.timeout=120m'])",
+  "traceback": "Traceback (most recent call last):\n  File \"/data/gtron/history-account-delta-20261025-01/postprocess.py\", line 26, in <module>\n    run('account-controls',[str(P/'post-snapshots.test'),'-test.run=^TestOfflineAccountDeltaActualControls$','-test.v','-test.timeout=120m'],env,7250)\n  File \"/data/gtron/history-account-delta-20261025-01/postprocess.py\", line 12, in run\n    with (P/(label+'.log')).open('wb')as f:subprocess.run(args,cwd=str(S),env=env,stdout=f,stderr=subprocess.STDOUT,timeout=timeout,check=True)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 438, in run\n    output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/data/gtron/history-account-delta-20261025-01/post-snapshots.test', '-test.run=^TestOfflineAccountDeltaActualControls$', '-test.v', '-test.timeout=120m']' returned non-zero exit status 1.\n"
+}

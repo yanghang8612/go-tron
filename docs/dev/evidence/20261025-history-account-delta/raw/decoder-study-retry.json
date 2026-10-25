@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-25T16:06:22.658801+00:00",
+  "production_mutations": false,
+  "archived": [
+    "/data/gtron/history-account-delta-20261025-01/decoder-study-status.borrowed-first.json",
+    "/data/gtron/history-account-delta-20261025-01/decoder-study.borrowed-first.log",
+    "/data/gtron/history-account-delta-20261025-01/decoder-study-build.borrowed-first.log",
+    "/data/gtron/history-account-delta-20261025-01/decoder-plan.borrowed-first.json",
+    "/data/gtron/history-account-delta-20261025-01/decoder-snapshots.borrowed-first.test"
+  ],
+  "old_harness_sha256": "cf488f293b4880ab00e3750858f88903eea4d9d173c1eacf26eaf8574cfe10aa",
+  "new_harness_sha256": "9d2ffb2acc721c6d78095254de86bf4e19726a287ff2a0a3477a7813d22739ad",
+  "reason": "The diagnostic sampled a borrowed compressed reader buffer, then advanced that same reader for the source oracle before copying it. Copy immediately and add a local/native ownership fixture; core codec and HTTP inputs/binaries are unchanged."
+}

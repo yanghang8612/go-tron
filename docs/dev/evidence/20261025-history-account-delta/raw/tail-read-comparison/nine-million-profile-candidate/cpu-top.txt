@@ -1,0 +1,44 @@
+File: candidate.test
+Build ID: 0ee9fd22c20882ce1aead20d8e3b959661e11e5b
+Type: cpu
+Time: 2026-10-25 15:34:10 UTC
+Duration: 10.17s, Total samples = 10.13s (99.59%)
+Showing nodes accounting for 9.06s, 89.44% of 10.13s total
+Dropped 303 nodes (cum <= 0.05s)
+Showing top 35 nodes out of 193
+      flat  flat%   sum%        cum   cum%
+     1.77s 17.47% 17.47%      1.77s 17.47%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     1.53s 15.10% 32.58%      1.60s 15.79%  github.com/golang/snappy.decode
+     1.12s 11.06% 43.63%      1.12s 11.06%  crypto/internal/fips140/sha256.blockAVX2
+     1.07s 10.56% 54.20%      1.07s 10.56%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     0.91s  8.98% 63.18%      0.91s  8.98%  runtime.duffcopy
+     0.28s  2.76% 65.94%      0.67s  6.61%  github.com/tronprotocol/go-tron/core/rawdb.decodeHistoryOwnerSpansInto
+     0.28s  2.76% 68.71%      0.28s  2.76%  runtime.memclrNoHeapPointers
+     0.27s  2.67% 71.37%      0.27s  2.67%  runtime.memmove
+     0.19s  1.88% 73.25%      3.64s 35.93%  github.com/tronprotocol/go-tron/core/rawdb.iterateHistoryOwnerSpans
+     0.15s  1.48% 74.73%      0.15s  1.48%  github.com/klauspost/compress/zstd/internal/xxhash.writeBlocks
+     0.15s  1.48% 76.21%      0.15s  1.48%  internal/runtime/syscall.Syscall6
+     0.14s  1.38% 77.59%      0.14s  1.38%  aeshashbody
+     0.14s  1.38% 78.97%      0.14s  1.38%  encoding/binary.Uvarint (inline)
+     0.14s  1.38% 80.36%      0.97s  9.58%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).latestSegmentRef
+     0.13s  1.28% 81.64%      0.13s  1.28%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.12s  1.18% 82.82%      0.12s  1.18%  memeqbody
+     0.08s  0.79% 83.61%      4.46s 44.03%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.06s  0.59% 84.21%      0.06s  0.59%  cmpbody
+     0.06s  0.59% 84.80%      0.06s  0.59%  context.(*cancelCtx).Err
+     0.06s  0.59% 85.39%      0.26s  2.57%  runtime.mapaccess1_faststr
+     0.05s  0.49% 85.88%      0.10s  0.99%  runtime.greyobject
+     0.04s  0.39% 86.28%      0.30s  2.96%  github.com/tronprotocol/go-tron/core/state/snapshots.(*systemHistoryRouting).mayContain
+     0.03s   0.3% 86.57%      0.21s  2.07%  github.com/cockroachdb/pebble.(*getIter).Next
+     0.03s   0.3% 86.87%      0.07s  0.69%  github.com/cockroachdb/pebble/internal/cache.(*shard).Get
+     0.03s   0.3% 87.17%      0.09s  0.89%  github.com/cockroachdb/pebble/sstable.(*blockIter).SeekGE
+     0.03s   0.3% 87.46%      0.87s  8.59%  github.com/tronprotocol/go-tron/core/state/snapshots.loadSystemHistoryRouting
+     0.03s   0.3% 87.76%      0.10s  0.99%  github.com/tronprotocol/go-tron/core/state/snapshots.systemHistoryRoutingQuery
+     0.03s   0.3% 88.06%      0.08s  0.79%  runtime.mapaccess2_faststr
+     0.02s   0.2% 88.25%      1.18s 11.65%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.02s   0.2% 88.45%      0.23s  2.27%  github.com/cockroachdb/pebble.(*DB).getInternal
+     0.02s   0.2% 88.65%      0.13s  1.28%  github.com/tronprotocol/go-tron/core/rawdb.cloneStateDomainChange
+     0.02s   0.2% 88.85%      0.08s  0.79%  github.com/tronprotocol/go-tron/core/state/snapshots.decodeHistoryTxFooter
+     0.02s   0.2% 89.04%      0.06s  0.59%  github.com/tronprotocol/go-tron/core/state/snapshots.findManifestRef
+     0.02s   0.2% 89.24%      0.16s  1.58%  runtime.gcDrain
+     0.02s   0.2% 89.44%      0.17s  1.68%  runtime.growslice

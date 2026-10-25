@@ -1,0 +1,8 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "utc": "2026-10-25T15:34:23.187431+00:00",
+  "toolchain_go_version": "go1.25.5",
+  "muhash_verified": true
+}

@@ -1,0 +1,4 @@
+=== RUN   TestOfflineAccountDeltaDecoderCost
+    offline_account_delta_decoder_test.go:268: sample pages 8
+--- PASS: TestOfflineAccountDeltaDecoderCost (13.57s)
+PASS
