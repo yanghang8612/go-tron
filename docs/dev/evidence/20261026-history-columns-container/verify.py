@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Read-only verifier for the frozen integration-progress evidence."""
 import argparse
+import base64
+import collections
+import gzip
 import hashlib
 import io
 import json
 import pathlib
 import zipfile
+import zlib
 
 HERE = pathlib.Path(__file__).resolve().parent
 OUTER = {
@@ -13,6 +17,7 @@ OUTER = {
     "native-progress-and-acceptance.zip": "e4569b6f517f2c76c7eeb966528e636f0d741cbe552c9a5e10136c206cd1b5fc",
     "publish-control-and-live-progress.zip": "5cecb0ac5694af98d83bb52ee54e05f84e750f426916333ea6af191d5bf91815",
     "policy-census-and-adoption.zip": "5dafb2dc6401d088014db68e2ea777f5958c199b7163df48e348bd20ef527fe1",
+    "mature-source-formats.zip": "70237d4fa1c49d847cc36696e7f6a12d427a696062604c9ccd582fddaad27c54",
 }
 
 
@@ -125,12 +130,64 @@ def main():
     assert "391 28550" in latest["jobs"]["capture"]["ps"]
     assert not any(latest[k]["complete"] for k in ("capture", "progress", "acceptance", "publish"))
     assert not latest["production_mutations"]
+    mature = bundles["mature-source-formats.zip"]
+    for name in ("mature-source-formats-01", "mature-source-prefixes-01",
+                 "mature-formats-archive-receipt", "mature-source-locations-01", "progress-live-08"):
+        data = mature["server-" + name + ".json"]
+        transport = json.loads(mature["server-" + name + ".json.transport.json"])
+        assert transport["name"] == name + ".json" and transport["nonce"]
+        assert transport["bytes"] == len(data) and transport["sha256"] == sha(data)
+    mature_summary = json.loads(mature["server-mature-source-formats-01.json"])
+    prefixes = json.loads(mature["server-mature-source-prefixes-01.json"])
+    assert mature_summary["complete"] and mature_summary["header_only"]
+    assert not mature_summary["physical_sha_recomputed"] and not prefixes["physical_sha_recomputed"]
+    assert not mature_summary["production_mutations"] and not prefixes["production_mutations"]
+    plan_raw = gzip.decompress((HERE.parent / "20261025-history-tx-runs/census/census-plan.json.gz").read_bytes())
+    assert sha(plan_raw) == prefixes["source_plan_sha256"] == mature_summary["source_plan_sha256"] == "108728f335f23009784a9af2931e70ba9176f28bd22bcc92b2130d8bead66b6c"
+    plan = json.loads(plan_raw)
+    assert len(plan) == prefixes["files"] == mature_summary["source_files"] == 8651
+    assert prefixes["header_prefix_bytes"] == 16
+    decoder = zlib.decompressobj()
+    raw_headers = decoder.decompress(base64.b64decode(prefixes["ordered_prefixes_zlib_base64"], validate=True), len(plan) * 16 + 1)
+    assert decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+    assert len(raw_headers) == len(plan) * 16 and sha(raw_headers) == prefixes["ordered_prefixes_sha256"]
+    assert prefixes["full_rows_sha256"] == mature_summary["rows_sha256"] == "459847497ca77e5799a369cf6a4a9976385e59bc8efc9b10f634b31d199ccd04"
+    groups = collections.defaultdict(lambda: dict(files=0, physical_bytes=0, records=0, logical_bytes=0))
+    windows = collections.defaultdict(lambda: collections.defaultdict(lambda: dict(files=0, physical_bytes=0)))
+    for i, row in enumerate(plan):
+        header = raw_headers[i*16:(i+1)*16]
+        assert header[:8] == b"gtcblk01"
+        version = str(int.from_bytes(header[8:12], "big"))
+        g = groups[version]
+        g["files"] += 1
+        g["physical_bytes"] += row["history_ref"]["size"]
+        g["records"] += row["records"]
+        g["logical_bytes"] += row["logical_bytes"]
+        window = ("25M-30M" if row["first_block"] >= 25000000 and row["last_block"] < 30000000 else
+                  "30M-35M" if row["first_block"] >= 30000000 and row["last_block"] <= 35000000 else "boundary")
+        windows[window][version]["files"] += 1
+        windows[window][version]["physical_bytes"] += row["history_ref"]["size"]
+    assert dict(groups) == mature_summary["groups"]
+    assert {k: dict(v) for k, v in windows.items()} == mature_summary["windows"]
+    assert groups["2"]["files"] == 8651 and len(groups) == 1
+    assert groups["2"]["physical_bytes"] == mature_summary["source_physical_bytes"] == 99504679277
+    full_archive = json.loads(mature["server-mature-formats-archive-receipt.json"])
+    assert full_archive["bytes"] == 442721 and full_archive["sha256"] == "96ea01fc84e8ff8354b1137035f48d2937c611fcd2f9a87b9c6a3b5f34be4433"
+    # This verifies the server receipt, not an unavailable local copy of that ZIP.
+    latest = json.loads(mature["server-progress-live-08.json"])
+    assert latest["progress"]["files"] == 2330
+    assert latest["progress"]["before_bytes"] - latest["progress"]["after_bytes"] == 2075235778
+    assert all(j["proc_exists"] and j["pid"] for j in latest["jobs"].values())
+    assert "391 28550" in latest["jobs"]["capture"]["ps"]
+    assert not any(latest[k]["complete"] for k in ("capture", "progress", "acceptance", "publish"))
     print(json.dumps({
         "source_files_verified": len(manifest), "native_checks_passed": len(expected),
         "initial_capture_files": capture["files"],
         "latest_verified_live_capture_files": latest["progress"]["files"],
         "verified_live_at": latest["utc"], "all_source_headers_verified": census["all_source_files"],
         "synthetic_cdc_adoption_counterexample_verified": True,
+        "mature_format_prefixes_verified": len(plan),
+        "mature_file_bodies_rehashed_by_this_census": False,
         "full_acceptance_complete": False,
         "scope": "Frozen progress receipt; not full-copy or rollout acceptance",
     }, indent=2))
