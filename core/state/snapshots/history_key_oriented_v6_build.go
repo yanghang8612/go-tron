@@ -60,6 +60,7 @@ type stateDomainChangeV6Build struct {
 	keyHashSeed       maphash.Seed
 	dictionaryDigest  [sha256.Size]byte
 	offsets           *historyAccessorOffsetBuilder
+	txRuns            *historyTxBuilder
 }
 
 func newStateDomainChangeV6Build(opts etl.Options, dir, base string) (*stateDomainChangeV6Build, error) {
@@ -99,6 +100,8 @@ func (b *stateDomainChangeV6Build) Close() {
 	}
 	b.offsets.Close()
 	b.offsets = nil
+	b.txRuns.Close()
+	b.txRuns = nil
 	b.keyDedup = nil
 	b.keyDedupBytes = 0
 	if b.keys != nil {
@@ -375,6 +378,8 @@ func (b *stateDomainChangeV6Build) ResetPostings() error {
 	b.postings = postings
 	b.offsets.Close()
 	b.offsets = nil
+	b.txRuns.Close()
+	b.txRuns = nil
 	return nil
 }
 
@@ -454,6 +459,16 @@ func (b *stateDomainChangeV6Build) CollectPosting(keyID uint32, txNum, offset, r
 		if err != nil {
 			return err
 		}
+	}
+	if b.txRuns == nil {
+		var err error
+		b.txRuns, err = newHistoryTxBuilder(filepath.Dir(b.dictName), filepath.Base(b.dictName))
+		if err != nil {
+			return err
+		}
+	}
+	if err := b.txRuns.Add(txNum, uint32(recordIndex)); err != nil {
+		return err
 	}
 	if err := b.offsets.Add(recordIndex, offset); err != nil {
 		return err
@@ -721,7 +736,7 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 }
 
 func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
-	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV10)
+	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV11)
 }
 
 func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Context, dir string, ref SegmentRef, recordCount uint64, version uint32) (SegmentRef, etl.Stats, error) {
@@ -739,14 +754,29 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	if b == nil || b.postings == nil || uint64(b.keyCount) > recordCount {
 		return SegmentRef{}, etl.Stats{}, errors.New("snapshots: invalid V6 accessor build")
 	}
+	if version == stateDomainChangeBinaryAccessorVersionV11 {
+		if b.txRuns == nil {
+			version = stateDomainChangeBinaryAccessorVersionV10
+		} else {
+			if err := b.txRuns.Finish(); err != nil {
+				return SegmentRef{}, etl.Stats{}, err
+			}
+			if b.txRuns.rows != recordCount {
+				return SegmentRef{}, etl.Stats{}, errors.New("snapshots: transaction table row count")
+			}
+			if b.txRuns.tooLarge || uint64(b.keyCount) == recordCount {
+				version = stateDomainChangeBinaryAccessorVersionV10
+			}
+		}
+	}
 	var owners *historyOwnerTable
-	if version == stateDomainChangeBinaryAccessorVersionV10 {
+	if version == stateDomainChangeBinaryAccessorVersionV10 || version == stateDomainChangeBinaryAccessorVersionV11 {
 		var err error
 		owners, err = b.buildHistoryOwnerTable(ctx)
 		if err != nil {
 			return SegmentRef{}, etl.Stats{}, err
 		}
-		if owners == nil {
+		if owners == nil && version != stateDomainChangeBinaryAccessorVersionV11 {
 			version = stateDomainChangeBinaryAccessorVersionV9
 		}
 	}
@@ -877,7 +907,9 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			return SegmentRef{}, postingStats, err
 		}
 		if uint64(keyStat.Size())+owners.size() >= uint64(plainStat.Size()) {
-			version = stateDomainChangeBinaryAccessorVersionV9
+			if version != stateDomainChangeBinaryAccessorVersionV11 {
+				version = stateDomainChangeBinaryAccessorVersionV9
+			}
 			owners = nil
 			keyData, keyStat, blocks = plainData, plainStat, plainBlocks
 		}
@@ -981,6 +1013,11 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	}
 	if owners != nil {
 		if err := owners.appendTo(metadata, metadata.size); err != nil {
+			return SegmentRef{}, postingStats, err
+		}
+	}
+	if version == stateDomainChangeBinaryAccessorVersionV11 {
+		if err := b.txRuns.AppendTo(metadata, metadata.size, owners != nil); err != nil {
 			return SegmentRef{}, postingStats, err
 		}
 	}

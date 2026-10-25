@@ -1761,6 +1761,12 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 	if err := checkHistoryOwnerDictionary(accessor, accessorHeader); err != nil {
 		return err
 	}
+	if accessorHeader.txRuns != nil {
+		if err := accessorHeader.txRuns.Check(); err != nil {
+			return err
+		}
+	}
+	txCursor := historyTxSequentialCursor{table: accessorHeader.txRuns}
 	var locator *historyAccessorOffsetResolver
 	if isHistoryOffsetAccessor(accessorHeader.version) {
 		if err := checkHistoryAccessorOffsets(accessor, accessorHeader); err != nil {
@@ -1806,6 +1812,15 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 			payload, keyID, next, err = readStateDomainChangeBinaryRecordV6FrameRawInto(segment, offset, segmentSize, payload, &change)
 			if err != nil {
 				return err
+			}
+			if accessorHeader.txRuns != nil {
+				got, err := txCursor.Next(recordIndex)
+				if err != nil {
+					return err
+				}
+				if got != change.TxNum {
+					return errors.New("snapshots: V11 shared transaction/history mismatch")
+				}
 			}
 			if change.TxNum != entry.txNum {
 				return fmt.Errorf("snapshots: state-domain-change binary index %q tx %d read segment tx %d", indexRef.Path, entry.txNum, change.TxNum)

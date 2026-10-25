@@ -159,7 +159,7 @@ func TestStateDomainChangeV9StrictCoverageRejectsForgedLocator(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(bytes.NewReader(data), uint64(len(data)))
-	if err != nil || h.version != 9 {
+	if err != nil || !isHistoryOffsetAccessor(h.version) {
 		t.Fatal(h, err)
 	}
 	entry := data[h.offsetDirectory : h.offsetDirectory+12]

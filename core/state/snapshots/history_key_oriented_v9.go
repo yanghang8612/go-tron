@@ -24,7 +24,7 @@ func isHistoryInlineAccessor(version uint32) bool {
 }
 
 func isHistoryOffsetAccessor(version uint32) bool {
-	return version == stateDomainChangeBinaryAccessorVersionV9 || version == stateDomainChangeBinaryAccessorVersionV10
+	return version == stateDomainChangeBinaryAccessorVersionV9 || version == stateDomainChangeBinaryAccessorVersionV10 || version == stateDomainChangeBinaryAccessorVersionV11
 }
 
 func historyOffsetCRC(page uint64, entry, payload []byte) uint32 {
@@ -97,10 +97,12 @@ func historyOffsetEntryBounds(h stateDomainChangeBinaryAccessorV6Header, raw []b
 
 // The cache is private to one iterator/request; immutable decoded pages only.
 type historyAccessorOffsetResolver struct {
-	r     io.ReaderAt
-	h     stateDomainChangeBinaryAccessorV6Header
-	pages map[uint64][]uint64
-	order []uint64
+	r                                              io.ReaderAt
+	h                                              stateDomainChangeBinaryAccessorV6Header
+	pages                                          map[uint64][]uint64
+	order                                          []uint64
+	boundsHave                                     bool
+	boundsFrom, boundsTo, boundsLower, boundsUpper uint64
 }
 
 func newHistoryAccessorOffsetResolver(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header) *historyAccessorOffsetResolver {

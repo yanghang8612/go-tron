@@ -89,7 +89,7 @@ func buildOwnerAccessorFixture(t testing.TB, version uint32, count int, repeated
 }
 
 func TestHistoryOwnerRoundTripAndFallback(t *testing.T) {
-	for _, version := range []uint32{7, 8, 9, 10} {
+	for _, version := range []uint32{7, 8, 9, 10, 11} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			data, expected := buildOwnerAccessorFixture(t, version, 4200, true)
 			r := bytes.NewReader(data)

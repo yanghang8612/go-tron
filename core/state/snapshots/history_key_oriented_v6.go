@@ -71,6 +71,7 @@ type stateDomainChangeBinaryAccessorV6Header struct {
 	sparseLen                                      uint64
 	offsetDataBase, offsetDataLen, offsetDirectory uint64
 	owners                                         *historyOwnerHeader
+	txRuns                                         *historyTxTable
 }
 
 type stateDomainChangeBinaryAccessorV6Record struct {
@@ -366,6 +367,9 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 			fileEnd = h.owners.fileSize
 		}
 	}
+	if h.txRuns != nil {
+		fileEnd = h.txRuns.prefix + h.txRuns.dataLen + uint64(len(h.txRuns.pages))*historyTxEntrySize + historyTxFooterSize
+	}
 	if block.dataOff < keyStart || block.dataOff > postingStart || storedLen > postingStart-block.dataOff || fileEnd != fileSize {
 		return nil, errors.New("snapshots: V6 accessor key block outside key data")
 	}
@@ -392,7 +396,7 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 		return nil, errors.New("snapshots: V6 accessor key block checksum mismatch")
 	}
 	compactOwners := false
-	if h.version == stateDomainChangeBinaryAccessorVersionV10 {
+	if h.owners != nil {
 		if len(decoded) == 0 || decoded[0] > 1 {
 			return nil, errors.New("snapshots: invalid V10 key page tag")
 		}
