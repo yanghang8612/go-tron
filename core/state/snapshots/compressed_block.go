@@ -167,6 +167,7 @@ type compressedBlockWriter struct {
 	compTotal      uint64
 	recCount       uint64
 	footerMetadata *snapshotMetadataWriter
+	accountDelta   bool
 }
 
 type snapshotFileMetadata struct {
@@ -484,6 +485,7 @@ func writeCompressedBlockHeaderAndTable(out io.Writer, blockSize int, recCount, 
 // decompresses each block exactly once). Concurrent callers are serialized on mu
 // and always receive a private copy, so the reader is safe to share.
 type compressedBlockReader struct {
+	accountDelta bool
 	cdc          *cdcReader
 	prefixCache  *historyHeaderCache
 	headerPrefix *historyHeaderPrefix
@@ -581,15 +583,15 @@ func openCompressedBlockFileWithCacheLimitContext(ctx context.Context, f compres
 		cdc.src = f
 		return &compressedBlockReader{f: f, dec: dec, uncSize: cdc.logical, fileSize: fileSize, cdc: cdc}, nil
 	}
-	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockFooterVersion {
+	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockFooterVersion || accountDeltaFooterVersion(hdr) {
 		layout, err := readCompressedBlockFooterLayoutContext(ctx, contextReaderAt{ctx: ctx, r: f}, fileSize, hdr)
 		if err != nil {
 			_ = f.Close()
 			return nil, err
 		}
-		return &compressedBlockReader{f: f, dec: dec, blockSize: layout.blockSize,
+		return &compressedBlockReader{accountDelta: accountDeltaFooterVersion(hdr), f: f, dec: dec, blockSize: layout.blockSize,
 			recCount: layout.recCount, uncSize: layout.uncSize, dataOff: compressedBlockHeaderSize,
-			fileSize: fileSize, table: layout.table, cacheLimit: cacheLimit}, nil
+			fileSize: fileSize, table: layout.table, cacheLimit: accountDeltaDecodedCacheLimit(hdr, layout, cacheLimit)}, nil
 	}
 	if ver := binary.BigEndian.Uint32(hdr[8:12]); ver != compressedBlockVersion {
 		_ = f.Close()
@@ -844,7 +846,13 @@ func (r *compressedBlockReader) decodeBlock(i int, comp []byte, expectedLen uint
 	if uint64(cap(decoded)) < expectedLen {
 		decoded = make([]byte, 0, int(expectedLen))
 	}
-	dst, err := r.dec.DecodeAll(comp, decoded)
+	var dst []byte
+	var err error
+	if r.accountDelta {
+		dst, err = decodeAccountDeltaStoredPage(comp, expectedLen, decoded)
+	} else {
+		dst, err = r.dec.DecodeAll(comp, decoded)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1026,10 +1034,13 @@ func decompressBlockBlob(data []byte) ([]byte, error) {
 	if version == compressedBlockCDCVersion {
 		return decompressCDCBlob(data)
 	}
-	if version == compressedBlockFooterVersion {
+	if version == compressedBlockFooterVersion || version == compressedBlockAccountDeltaVersion {
 		layout, err := readCompressedBlockFooterLayout(bytes.NewReader(data), uint64(len(data)), data[:compressedBlockHeaderSize])
 		if err != nil {
 			return nil, err
+		}
+		if version == compressedBlockAccountDeltaVersion {
+			return decompressAccountDeltaBlob(data, layout)
 		}
 		return decodeCompressedBlockBlob(data, dec, layout.table, layout.uncSize, compressedBlockHeaderSize)
 	}
@@ -1371,18 +1382,19 @@ func (p *orderedCompressionPipeline) releaseAvailableBuffers() {
 // after the measured break-even size, encoding moves to the ordered worker
 // pipeline above. No complete uncompressed segment is written to disk.
 type compressedBlockStreamWriter struct {
-	dir        string
-	chunkSize  int
-	prefixSize int
-	workers    int
-	body       *compressedBlockWriter
-	first      []byte
-	chunk      []byte
-	parallel   *orderedCompressionPipeline
-	logical    uint64
-	bodyStart  bool
-	footer     bool
-	closed     bool
+	accountDeltas *accountDeltaStreamNotes
+	dir           string
+	chunkSize     int
+	prefixSize    int
+	workers       int
+	body          *compressedBlockWriter
+	first         []byte
+	chunk         []byte
+	parallel      *orderedCompressionPipeline
+	logical       uint64
+	bodyStart     bool
+	footer        bool
+	closed        bool
 }
 
 func newCompressedBlockStreamWriter(dir string, chunkSize, workers int) (*compressedBlockStreamWriter, error) {
@@ -1489,6 +1501,18 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 		w.body.uncTotal = uint64(len(w.first))
 		w.bodyStart = true
 	}
+	if w.accountDeltas != nil {
+		notes := w.accountNotesForPage(w.body.uncTotal, len(w.chunk))
+		stored, _, err := encodeAccountDeltaStoredPage(w.chunk, notes, w.accountDeltas.depth, w.body.enc, nil)
+		if err != nil {
+			return err
+		}
+		if err = w.body.appendEncodedBlock(len(w.chunk), stored); err != nil {
+			return err
+		}
+		w.chunk = w.chunk[:0]
+		return nil
+	}
 	if w.parallel == nil && w.workers > 1 && w.logical >= minParallelHistoryCompressionBytes {
 		w.parallel = newOrderedCompressionPipeline(w.body, w.chunkSize, w.workers)
 	}
@@ -1575,7 +1599,7 @@ func (w *compressedBlockStreamWriter) Reset() error {
 		return errors.New("snapshots: compressed stream writer is closed")
 	}
 	w.abortBody()
-	body, err := newCompressedBlockStreamBody(w.dir, w.footer)
+	body, err := newCompressedBlockStreamBodyFormat(w.dir, w.footer, w.accountDeltas != nil)
 	if err != nil {
 		w.closed = true
 		return err
@@ -1588,6 +1612,9 @@ func (w *compressedBlockStreamWriter) Reset() error {
 	}
 	w.logical = 0
 	w.bodyStart = false
+	if w.accountDeltas != nil {
+		w.accountDeltas.values = w.accountDeltas.values[:0]
+	}
 	return nil
 }
 

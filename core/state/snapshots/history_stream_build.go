@@ -756,6 +756,11 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteStreamedV6Change(ctx context
 		header[16] = 1
 	}
 	binary.BigEndian.PutUint32(header[17:21], uint32(prevLen))
+	if change.FlatDomain == rawdb.StateFlatDomainAccountLatest && change.PrevExists {
+		if err := noteHistoryAccountValue(w.segment, targetKeyID, w.segmentOff+21, prevLen); err != nil {
+			return err
+		}
+	}
 	if n, err := w.segment.Write(header[:]); err != nil {
 		return err
 	} else if n != len(header) {
@@ -871,6 +876,11 @@ func (w *stateDomainChangeHistoryRecordWriter) writeChangeWithV6KeyID(change *ra
 		return err
 	}
 	w.recordScratch = frame
+	if w.v6 != nil && change.FlatDomain == rawdb.StateFlatDomainAccountLatest && change.PrevExists {
+		if err := noteHistoryAccountValue(w.segment, v6KeyID, w.segmentOff+21, uint64(len(change.Prev))); err != nil {
+			return err
+		}
+	}
 	if _, err := w.segment.Write(frame); err != nil {
 		return err
 	}

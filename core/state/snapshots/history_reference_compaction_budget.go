@@ -227,7 +227,7 @@ func readHistoryReferenceCompactionInputBudget(ctx context.Context, dir string, 
 		case compressedBlockVersion:
 			out.LogicalBytes, err = readHistoryCompactionContainerLogicalBytes(reader, size, h[:])
 			count = binary.BigEndian.Uint64(h[24:32])
-		case compressedBlockFooterVersion:
+		case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion:
 			layout, e := readCompressedBlockFooterInfo(reader, size, h[:])
 			err = e
 			out.LogicalBytes, count = layout.uncSize, layout.blockCount

@@ -62,8 +62,8 @@ func BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx con
 	if workers != 2 && workers != 4 && workers != 8 || !pipeline && workers != 2 {
 		return nil, rawdb.ErrStateHistoryPipelineWorkers
 	}
-	if format != "auto" && format != "2" && format != "3" {
-		return nil, errors.New("snapshots: diagnostic compression policy must be auto, 2 or 3")
+	if format != "auto" && format != "2" && format != "3" && format != "4" {
+		return nil, errors.New("snapshots: diagnostic compression policy must be auto, 2, 3 or 4")
 	}
 	if !CompressHistorySegments {
 		return nil, errors.New("snapshots: diagnostic requires compression enabled")

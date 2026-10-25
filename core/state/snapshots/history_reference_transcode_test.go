@@ -79,7 +79,7 @@ func referenceTranscodeFixture(t *testing.T, format string) (string, []SegmentRe
 }
 
 func TestHistoryReferenceTranscodeAllFormatsFullTrio(t *testing.T) {
-	for _, format := range []string{"raw", "1", "2", "3"} {
+	for _, format := range []string{"raw", "1", "2", "3", "4"} {
 		t.Run(format, func(t *testing.T) {
 			dir, source, before := referenceTranscodeFixture(t, format)
 			estimate, err := HistoryReferenceTranscodeWorkBytesContext(context.Background(), dir, source)

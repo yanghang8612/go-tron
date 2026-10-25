@@ -326,7 +326,7 @@ func readHistoryCompactionContainerLogicalBytes(reader io.ReaderAt, size uint64,
 		return 0, errors.New("snapshots: invalid compaction compression header")
 	}
 	switch binary.BigEndian.Uint32(header[8:12]) {
-	case compressedBlockFooterVersion:
+	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion:
 		info, err := readCompressedBlockFooterInfo(reader, size, header)
 		return info.uncSize, err
 	case compressedBlockCDCVersion:

@@ -112,7 +112,7 @@ func historyCDCIsCurrent(dir string, ref SegmentRef) (bool, error) {
 	switch binary.BigEndian.Uint32(h[8:12]) {
 	case compressedBlockCDCVersion:
 		return true, nil
-	case compressedBlockFooterVersion:
+	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion:
 		return false, nil
 	default:
 		return false, errors.New("snapshots: CDC migration only supports R1/V2/V3 containers")

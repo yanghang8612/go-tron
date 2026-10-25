@@ -531,7 +531,7 @@ func openBusinessSampleFile(dir string, ref SegmentRef, budget *businessSampleBu
 		if binary.BigEndian.Uint64(h[40:48]) != dataOff || dataOff > uint64(stat.Size()) {
 			return nil, errors.New("snapshots: invalid sample compressed table bounds")
 		}
-	case compressedBlockFooterVersion:
+	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion:
 		info, err = readCompressedBlockFooterInfo(out, uint64(stat.Size()), h[:])
 		if err != nil {
 			return nil, err

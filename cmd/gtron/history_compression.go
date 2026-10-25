@@ -15,7 +15,7 @@ var historyCompressionFormatFlag = &cli.StringFlag{
 	Name:    "history.compression-format",
 	Value:   "auto",
 	EnvVars: []string{"GTRON_HISTORY_COMPRESSION_FORMAT"},
-	Usage:   "Cold history container: auto selects CDC for repeated large values, 1=legacy, 2=streaming footer, 3=CDC for every history segment",
+	Usage:   "Cold history container: auto selects CDC for repeated large values, 1=legacy, 2=streaming footer, 3=CDC for every history segment, 4=bounded account delta pages (experimental)",
 }
 
 // Configure once before opening stores/starting any node lifecycle. Individual
@@ -27,9 +27,9 @@ func applyRuntimeHistoryCompression(ctx *cli.Context) (string, error) {
 		format = "auto"
 	}
 	switch format {
-	case "auto", "1", "2", "3":
+	case "auto", "1", "2", "3", "4":
 	default:
-		return "", fmt.Errorf("invalid history.compression-format %q (want auto, 1, 2 or 3)", format)
+		return "", fmt.Errorf("invalid history.compression-format %q (want auto, 1, 2, 3 or 4)", format)
 	}
 	if err := os.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", format); err != nil {
 		return "", err

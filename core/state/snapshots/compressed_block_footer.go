@@ -34,14 +34,17 @@ func historyCompressionFooterEnabled() (bool, error) {
 	switch value := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"); value {
 	case "", "1":
 		return false, nil
-	case "2", "3", "auto":
+	case "2", "3", "4", "auto":
 		return true, nil
 	default:
-		return false, fmt.Errorf("snapshots: invalid GTRON_HISTORY_COMPRESSION_FORMAT %q (want auto, 1, 2 or 3)", value)
+		return false, fmt.Errorf("snapshots: invalid GTRON_HISTORY_COMPRESSION_FORMAT %q (want auto, 1, 2, 3 or 4)", value)
 	}
 }
 
 func newCompressedBlockStreamBody(dir string, footer bool) (*compressedBlockWriter, error) {
+	return newCompressedBlockStreamBodyFormat(dir, footer, false)
+}
+func newCompressedBlockStreamBodyFormat(dir string, footer, delta bool) (*compressedBlockWriter, error) {
 	w, err := newCompressedBlockWriter(dir, 1)
 	if err != nil || !footer {
 		return w, err
@@ -50,7 +53,12 @@ func newCompressedBlockStreamBody(dir string, footer bool) (*compressedBlockWrit
 	w.tmpWriter.Reset(w.footerMetadata)
 	var header [compressedBlockHeaderSize]byte
 	copy(header[:8], compressedBlockMagic)
-	binary.BigEndian.PutUint32(header[8:12], compressedBlockFooterVersion)
+	version := compressedBlockFooterVersion
+	if delta {
+		version = compressedBlockAccountDeltaVersion
+		w.accountDelta = true
+	}
+	binary.BigEndian.PutUint32(header[8:12], version)
 	binary.BigEndian.PutUint32(header[12:16], uint32(w.blockSize))
 	if _, err := w.tmpWriter.Write(header[:]); err != nil {
 		releaseStateDomainChangeHistoryBlockTable(&w.table)
@@ -94,6 +102,9 @@ func (w *compressedBlockWriter) finishWithFooterContext(ctx context.Context, pat
 		}
 		w.encoded = w.enc.EncodeAll(prefix, w.encoded[:0])
 		prefixComp = w.encoded
+		if w.accountDelta {
+			prefixComp = append([]byte{0}, prefixComp...)
+		}
 		recCount++
 	} else if recCount != 0 {
 		return errors.New("snapshots: compressed body has no retained prefix")
@@ -140,7 +151,11 @@ func (w *compressedBlockWriter) finishWithFooterContext(ctx context.Context, pat
 		}
 	}
 	var trailer [compressedBlockTrailerSize]byte
-	copy(trailer[:8], compressedBlockFooterMagic)
+	magic := compressedBlockFooterMagic
+	if w.accountDelta {
+		magic = compressedBlockAccountDeltaEndMagic
+	}
+	copy(trailer[:8], magic)
 	binary.BigEndian.PutUint64(trailer[8:16], recCount)
 	binary.BigEndian.PutUint64(trailer[16:24], blockCount)
 	binary.BigEndian.PutUint64(trailer[24:32], uncTotal)
@@ -192,7 +207,7 @@ func readCompressedBlockFooterInfo(src io.ReaderAt, size uint64, header []byte) 
 	if size < compressedBlockHeaderSize+compressedBlockTrailerSize || size > uint64(1<<63-1) || len(header) != compressedBlockHeaderSize {
 		return info, errors.New("snapshots: invalid footer file size")
 	}
-	if string(header[:8]) != compressedBlockMagic || binary.BigEndian.Uint32(header[8:12]) != compressedBlockFooterVersion {
+	if string(header[:8]) != compressedBlockMagic || (binary.BigEndian.Uint32(header[8:12]) != compressedBlockFooterVersion && !accountDeltaFooterVersion(header)) {
 		return info, errors.New("snapshots: invalid footer header")
 	}
 	for _, b := range header[16:] {
@@ -208,7 +223,11 @@ func readCompressedBlockFooterInfo(src io.ReaderAt, size uint64, header []byte) 
 	if _, err := src.ReadAt(trailer[:], int64(size-compressedBlockTrailerSize)); err != nil {
 		return info, err
 	}
-	if string(trailer[:8]) != compressedBlockFooterMagic {
+	magic := compressedBlockFooterMagic
+	if accountDeltaFooterVersion(header) {
+		magic = compressedBlockAccountDeltaEndMagic
+	}
+	if string(trailer[:8]) != magic {
 		return info, errors.New("snapshots: missing compressed-block footer trailer")
 	}
 	info.recCount = binary.BigEndian.Uint64(trailer[8:16])
@@ -261,6 +280,11 @@ func readCompressedBlockFooterLayoutContext(ctx context.Context, src io.ReaderAt
 	}
 	if err := validateCompressedBlockPhysicalTableContext(ctx, layout.table, info.recCount, info.uncSize, compressedBlockHeaderSize, info.tableOff, true); err != nil {
 		return layout, err
+	}
+	if accountDeltaFooterVersion(header) {
+		if err := validateAccountDeltaBlocks(layout.table, info.uncSize); err != nil {
+			return layout, err
+		}
 	}
 	return layout, nil
 }

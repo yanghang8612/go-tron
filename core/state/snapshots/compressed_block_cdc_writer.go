@@ -57,6 +57,8 @@ func newHistoryCompressedStream(ctx context.Context, dir string, prefixSize, wor
 func newHistoryCompressedStreamFormat(ctx context.Context, dir string, chunkSize, workers int, format string) (historyCompressedStream, error) {
 	prefixSize := min(historyHeaderPrefixBytes, chunkSize)
 	switch format {
+	case "4":
+		return newAccountDeltaStreamWriter(dir, accountDeltaPageMax, prefixSize, 4)
 	case "3":
 		// CDC chunk boundaries affect deduplication as well as point reads.
 		// Keep that separately measured policy unchanged in this V1/V2 change.

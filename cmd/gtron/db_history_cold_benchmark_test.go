@@ -112,7 +112,7 @@ func TestDBHistoryColdBenchmarkCompleteModesAndReadOnly(t *testing.T) {
 	// An invalid process environment must neither select a different format nor
 	// be rewritten by this standalone diagnostic.
 	t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "invalid-diagnostic-control")
-	for _, format := range []string{"auto", "2", "3"} {
+	for _, format := range []string{"auto", "2", "3", "4"} {
 		var reports []historyColdBenchmarkReport
 		for _, mode := range []string{"defensive", "owned"} {
 			opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), mode))
