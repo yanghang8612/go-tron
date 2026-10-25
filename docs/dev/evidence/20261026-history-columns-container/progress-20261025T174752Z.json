@@ -1,0 +1,20 @@
+{
+  "capture_files": 180,
+  "capture_total": 4609,
+  "cold_publication_throughput_measured": false,
+  "full_capture_complete": false,
+  "full_muhash_complete": false,
+  "http_comparison_complete": false,
+  "native_checks_passed": true,
+  "production_reclaimed_bytes": 0,
+  "real_history_restore_complete": false,
+  "same_boundary_controls_complete": false,
+  "seg_after_bytes": 434122045,
+  "seg_before_bytes": 493732036,
+  "seg_saved_allocated": 59596800,
+  "seg_saved_bytes": 59609991,
+  "source_commit": "92c7214acce271d3c4fa9d8453e77487f721d6f2",
+  "source_files_verified": 2145,
+  "source_mismatches": [],
+  "utc": "2026-10-25T17:47:52.910819+00:00"
+}
