@@ -18,6 +18,8 @@ OUTER = {
     "publish-control-and-live-progress.zip": "5cecb0ac5694af98d83bb52ee54e05f84e750f426916333ea6af191d5bf91815",
     "policy-census-and-adoption.zip": "5dafb2dc6401d088014db68e2ea777f5958c199b7163df48e348bd20ef527fe1",
     "mature-source-formats.zip": "70237d4fa1c49d847cc36696e7f6a12d427a696062604c9ccd582fddaad27c54",
+    "mature-source-full.zip": "96ea01fc84e8ff8354b1137035f48d2937c611fcd2f9a87b9c6a3b5f34be4433",
+    "binary-transfer-and-live-progress.zip": "58d5d65feaa54b9c85f84381d98e08bb836bff27a12d34c820ceb077104e33dd",
 }
 
 
@@ -68,11 +70,11 @@ def main():
     }
     status = files["native-status.json"]
     assert status["complete"] and not status["production_mutations"]
-    expected = {
+    expected_checks = {
         "native-record-tests", "native-snapshots-build", "native-http-build",
         "native-packages", "native-race", "native-vet", "native-sapling-build",
     }
-    assert {c["label"] for c in status["checks"]} == expected
+    assert {c["label"] for c in status["checks"]} == expected_checks
     assert all(c["returncode"] == 0 for c in status["checks"])
     capture = files["complete-input-status.json"]
     assert capture["files"] == 180 and capture["total"] == 4609
@@ -173,20 +175,75 @@ def main():
     assert groups["2"]["physical_bytes"] == mature_summary["source_physical_bytes"] == 99504679277
     full_archive = json.loads(mature["server-mature-formats-archive-receipt.json"])
     assert full_archive["bytes"] == 442721 and full_archive["sha256"] == "96ea01fc84e8ff8354b1137035f48d2937c611fcd2f9a87b9c6a3b5f34be4433"
-    # This verifies the server receipt, not an unavailable local copy of that ZIP.
+    # The compact-prefix archive preceded the full ZIP transfer; keep both.
     latest = json.loads(mature["server-progress-live-08.json"])
     assert latest["progress"]["files"] == 2330
     assert latest["progress"]["before_bytes"] - latest["progress"]["after_bytes"] == 2075235778
     assert all(j["proc_exists"] and j["pid"] for j in latest["jobs"].values())
     assert "391 28550" in latest["jobs"]["capture"]["ps"]
     assert not any(latest[k]["complete"] for k in ("capture", "progress", "acceptance", "publish"))
+    full = bundles["mature-source-full.zip"]
+    assert len((HERE / "mature-source-full.zip").read_bytes()) == full_archive["bytes"]
+    assert full["mature-source-formats-01.json"] == mature["server-mature-source-formats-01.json"]
+    assert full["progress-live-08.json"] == mature["server-progress-live-08.json"]
+    assert full["census-mature-formats.py"] == mature["census-mature-formats.py"]
+    rows_raw = full["mature-source-formats-rows.jsonl"]
+    assert sha(rows_raw) == mature_summary["rows_sha256"] and len(rows_raw) == mature_summary["rows_bytes"]
+    rows = [json.loads(line) for line in rows_raw.splitlines()]
+    assert len(rows) == len(plan)
+    all_prefixes = bytearray()
+    inodes = set()
+    for row, planned in zip(rows, plan):
+        header = bytes.fromhex(row["header_hex"])
+        assert len(header) == 48 and header[:8] == b"gtcblk01"
+        assert int.from_bytes(header[8:12], "big") == row["physical_version"] == 2
+        assert row["path"] == planned["history_ref"]["path"]
+        assert row["bytes"] == planned["history_ref"]["size"]
+        assert (row["first_block"], row["last_block"]) == (planned["first_block"], planned["last_block"])
+        assert row["inode"] > 0 and row["device"] > 0 and row["mtime_ns"] > 0
+        inodes.add((row["device"], row["inode"]))
+        all_prefixes.extend(header[:16])
+    assert len(inodes) == len(rows) and all_prefixes == raw_headers
+    transfer = bundles["binary-transfer-and-live-progress.zip"]
+    archive_data = (HERE / "mature-source-full.zip").read_bytes()
+    chunks = sorted((json.loads(data) for name, data in transfer.items() if name.startswith("chunk-receipts/")), key=lambda m: m["offset"])
+    assert len(chunks) == 79 and len({m["nonce"] for m in chunks}) == 79
+    assert len({(str(m["inode"]), str(m["device"])) for m in chunks}) == 1
+    offset = 0
+    for chunk in chunks:
+        assert chunk["offset"] == offset and chunk["file_bytes"] == len(archive_data)
+        assert chunk["name"] == "gtron-mature-formats-20261026-01.zip"
+        data = archive_data[offset:offset+chunk["bytes"]]
+        assert len(data) == chunk["bytes"] and sha(data) == chunk["sha256"]
+        offset += chunk["bytes"]
+    assert offset == len(archive_data)
+    completed_transfer = json.loads(transfer["binary-transfer-complete.json"])
+    assert completed_transfer["complete"] and completed_transfer["chunks"] == len(chunks)
+    assert completed_transfer["zip_crc_verified"] and completed_transfer["member_sha_verified"]
+    assert completed_transfer["sha256"] == sha(archive_data)
+    assert completed_transfer["exact_archive_body_preserved"] and not completed_transfer["production_mutations"]
+    for number in ("09", "10", "11"):
+        name = "server-progress-live-" + number + ".json"
+        data = transfer[name]
+        meta = json.loads(transfer[name + ".transport.json"])
+        assert meta["name"] == "progress-live-" + number + ".json" and meta["nonce"]
+        assert meta["sha256"] == sha(data) and meta["bytes"] == len(data)
+    latest = json.loads(transfer["server-progress-live-11.json"])
+    assert latest["progress"]["files"] == 3080
+    assert latest["progress"]["before_bytes"] - latest["progress"]["after_bytes"] == 2882475759
+    assert all(j["proc_exists"] and j["pid"] for j in latest["jobs"].values())
+    assert "391 28550" in latest["jobs"]["capture"]["ps"]
+    assert not any(latest[k]["complete"] for k in ("capture", "progress", "acceptance", "publish"))
+    assert not latest["production_mutations"]
     print(json.dumps({
-        "source_files_verified": len(manifest), "native_checks_passed": len(expected),
+        "source_files_verified": len(manifest), "native_checks_passed": len(expected_checks),
         "initial_capture_files": capture["files"],
         "latest_verified_live_capture_files": latest["progress"]["files"],
         "verified_live_at": latest["utc"], "all_source_headers_verified": census["all_source_files"],
         "synthetic_cdc_adoption_counterexample_verified": True,
         "mature_format_prefixes_verified": len(plan),
+        "mature_full_header_stat_rows_verified": len(rows),
+        "full_header_archive_transfer_chunks_verified": len(chunks),
         "mature_file_bodies_rehashed_by_this_census": False,
         "full_acceptance_complete": False,
         "scope": "Frozen progress receipt; not full-copy or rollout acceptance",
