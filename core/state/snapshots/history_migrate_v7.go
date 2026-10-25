@@ -249,7 +249,9 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 	switch format {
 	case "3":
 		return reader.cdc != nil, nil
-	case "auto":
+	case "auto", historyCompressionAutoColumns:
+		// An emission policy must not force existing compatible files to be
+		// rewritten. Explicit numeric modes retain their stricter checks.
 		if reader.cdc != nil {
 			return true, nil
 		}

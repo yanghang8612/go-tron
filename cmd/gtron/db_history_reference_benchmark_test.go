@@ -78,6 +78,7 @@ func TestDBHistoryReferenceBenchmarkCLIAndInvalidTopology(t *testing.T) {
 		func(o *historyColdBenchmarkOptions) { o.CopyMode = "defensive" },
 		func(o *historyColdBenchmarkOptions) { o.CDCCompressionWorkers = 1 },
 		func(o *historyColdBenchmarkOptions) { o.CompressionFormat = "3" },
+		func(o *historyColdBenchmarkOptions) { o.CompressionFormat = "auto-columns" },
 	} {
 		opts := coldBenchmarkOptions(input, filepath.Join(t.TempDir(), "invalid"))
 		opts.ReferenceContainer = true

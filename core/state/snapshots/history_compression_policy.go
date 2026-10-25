@@ -8,12 +8,26 @@ import (
 )
 
 const (
+	historyCompressionAutoColumns    = "auto-columns"
 	historyCompressionLargePrevBytes = uint64(128 << 10)
 	historyCompressionIdentityLimit  = 4096
 	// Bound retained variable-length identities as well as the entry count.
 	// A missed identity only makes the policy fall back to the ordinary codec.
 	historyCompressionIdentityBytes = 4 << 20
 )
+
+// Automatic policies share the same bounded CDC evidence. Only their ordinary
+// V6 output differs; explicit and legacy formats never enter that observer.
+func historyAutomaticOrdinaryFormat(format string) (ordinary string, automatic bool) {
+	switch format {
+	case "auto":
+		return "2", true
+	case historyCompressionAutoColumns:
+		return "5", true
+	default:
+		return format, false
+	}
+}
 
 // historyCompressionPolicy observes records during the existing dictionary-key
 // collection pass. It never retains Prev bytes or scans them for similarity.

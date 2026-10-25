@@ -20,7 +20,7 @@ import (
 func TestDBHistorySharedPipelineFullTrioByteEquivalence(t *testing.T) {
 	source, input, _ := parallelHistoryFixture(t)
 	sourceBefore, inputBefore := historyInspectionFileHashes(t, source), historyInspectionFileHashes(t, input)
-	for _, format := range []string{"auto", "2", "3"} {
+	for _, format := range []string{"auto", "auto-columns", "2", "3"} {
 		t.Run(format, func(t *testing.T) {
 			var serial historyColdBenchmarkReport
 			var files [][]byte
@@ -28,7 +28,7 @@ func TestDBHistorySharedPipelineFullTrioByteEquivalence(t *testing.T) {
 				pipeline bool
 				workers  int
 			}{{false, 2}, {true, 2}}
-			if format == "auto" {
+			if format == "auto" || format == "auto-columns" {
 				settings = append(settings, struct {
 					pipeline bool
 					workers  int

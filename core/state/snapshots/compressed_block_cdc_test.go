@@ -480,9 +480,13 @@ func TestCDCVariableChunksRetainBoundedDecodeStorage(t *testing.T) {
 }
 
 func TestCDCAutoBuildAndMergeSelection(t *testing.T) {
-	for _, large := range []bool{false, true} {
-		t.Run(fmt.Sprintf("large=%v", large), func(t *testing.T) {
-			t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", "auto")
+	for _, tc := range []struct {
+		format string
+		large  bool
+	}{{"auto", false}, {"auto", true}, {historyCompressionAutoColumns, false}, {historyCompressionAutoColumns, true}} {
+		t.Run(fmt.Sprintf("%s/large=%v", tc.format, tc.large), func(t *testing.T) {
+			large := tc.large
+			t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", tc.format)
 			dir := t.TempDir()
 			db := rawdb.NewMemoryDatabase()
 			for i := uint64(1); i <= 2; i++ {
@@ -516,6 +520,9 @@ func TestCDCAutoBuildAndMergeSelection(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := compressedBlockFooterVersion
+			if tc.format == historyCompressionAutoColumns {
+				want = compressedBlockRecordColumnsVersion
+			}
 			if large {
 				want = compressedBlockCDCVersion
 			}

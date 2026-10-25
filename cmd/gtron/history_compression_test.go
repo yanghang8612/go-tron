@@ -15,6 +15,8 @@ func TestRuntimeHistoryCompressionPrecedence(t *testing.T) {
 	}{
 		{"", "", "auto", false}, {"2", "", "2", false}, {"2", "auto", "auto", false},
 		{"auto", "3", "3", false}, {"", "1", "1", false}, {"", "4", "4", false}, {"", "5", "5", false}, {"", "bad", "", true},
+		{"", "auto-columns", "auto-columns", false}, {"auto-columns", "", "auto-columns", false},
+		{"auto-columns", "auto", "auto", false}, {"auto", "auto-columns", "auto-columns", false},
 	} {
 		t.Run(tc.env+"/"+tc.explicit, func(t *testing.T) {
 			t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", tc.env)

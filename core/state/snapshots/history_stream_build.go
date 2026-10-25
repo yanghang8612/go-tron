@@ -103,12 +103,13 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextExecution(ctx 
 		return result, err
 	}
 	defer v6Build.Close()
+	ordinaryFormat, automaticFormat := historyAutomaticOrdinaryFormat(format)
 	var compressionPolicy historyCompressionPolicy
 	if err := iterateStateDomainChangeHistoryChanges(db, cfg, ref.FromTxNum, ref.ToTxNum, blockRange, func(change *rawdb.StateDomainChange) (bool, error) {
 		if change == nil {
 			return false, errors.New("snapshots: nil state-domain-change history key")
 		}
-		if format == "auto" {
+		if automaticFormat {
 			compressionPolicy.Observe(change)
 		}
 		return true, v6Build.CollectKey(change)
@@ -119,8 +120,8 @@ func buildStateDomainChangeHistoryBinarySegmentsFromDBRangeContextExecution(ctx 
 		return result, err
 	}
 	result.keyETL = v6Build.keyStats
-	if format == "auto" {
-		format = "2"
+	if automaticFormat {
+		format = ordinaryFormat
 		if compressionPolicy.RecommendCDC() {
 			format = "3"
 		}

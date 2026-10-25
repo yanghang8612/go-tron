@@ -65,7 +65,10 @@ func newHistoryCompressedStreamFormat(ctx context.Context, dir string, chunkSize
 		// CDC chunk boundaries affect deduplication as well as point reads.
 		// Keep that separately measured policy unchanged in this V1/V2 change.
 		return newCDCStreamWriterWorkers(ctx, dir, chunkSize, workers)
-	case "2", "auto":
+	case "2", "auto", historyCompressionAutoColumns:
+		// Full V6 builders/merges resolve automatic policies before this call.
+		// Legacy/unannotated callers lack the row evidence needed for CDC or
+		// record-column annotations; preserve their existing auto fallback.
 		return newCompressedBlockStreamWriterWithPrefix(dir, chunkSize, prefixSize, workers, true)
 	case "", "1":
 		return newCompressedBlockStreamWriterWithPrefix(dir, chunkSize, prefixSize, workers, false)
@@ -628,11 +631,12 @@ func (w *cdcStreamWriter) Reset() error {
 }
 
 // An automatic merge preserves CDC when any verified input already uses it.
-// Old-only inputs keep V2: dictionary-only collection is not evidence of value
-// repetition, and automatic merging must not introduce an extra value scan.
+// Other inputs keep the automatic policy's ordinary codec: dictionary-only
+// collection is not evidence of value repetition and adds no value scan.
 func historyMergeCompressionFormat(dir string, sources []stateDomainChangeBinaryCompactionSource) (string, error) {
 	format := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT")
-	if format != "auto" {
+	ordinary, automatic := historyAutomaticOrdinaryFormat(format)
+	if !automatic {
 		return format, nil
 	}
 	for _, source := range sources {
@@ -653,5 +657,5 @@ func historyMergeCompressionFormat(dir string, sources []stateDomainChangeBinary
 			return "3", nil
 		}
 	}
-	return "2", nil
+	return ordinary, nil
 }

@@ -16,7 +16,7 @@ import (
 )
 
 // BuildDiagnosticStateHistoryTrioContext uses the complete production bounded
-// builder with an explicit compression policy (auto, 2 or 3). It only creates an immutable
+// builder with an explicit compression policy. It only creates an immutable
 // trio; publication, metadata registration, pruning and lifecycle work are absent.
 func BuildDiagnosticStateHistoryTrioContext(ctx context.Context, db ethdb.Iteratee, dir string, fromTx, toTx, fromBlock, toBlock uint64, path, format string) ([]SegmentRef, error) {
 	return BuildDiagnosticStateHistoryTrioWithETLContext(ctx, db, dir, fromTx, toTx, fromBlock, toBlock, path, format, etl.Options{})
@@ -62,8 +62,8 @@ func BuildDiagnosticStateHistoryTrioWithReadWorkersAndCompressionContext(ctx con
 	if workers != 2 && workers != 4 && workers != 8 || !pipeline && workers != 2 {
 		return nil, rawdb.ErrStateHistoryPipelineWorkers
 	}
-	if format != "auto" && format != "2" && format != "3" && format != "4" && format != "5" {
-		return nil, errors.New("snapshots: diagnostic compression policy must be auto, 2, 3, 4 or 5")
+	if format != "auto" && format != historyCompressionAutoColumns && format != "2" && format != "3" && format != "4" && format != "5" {
+		return nil, errors.New("snapshots: diagnostic compression policy must be auto, auto-columns, 2, 3, 4 or 5")
 	}
 	if !CompressHistorySegments {
 		return nil, errors.New("snapshots: diagnostic requires compression enabled")

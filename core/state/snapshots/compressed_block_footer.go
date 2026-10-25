@@ -34,10 +34,10 @@ func historyCompressionFooterEnabled() (bool, error) {
 	switch value := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"); value {
 	case "", "1":
 		return false, nil
-	case "2", "3", "4", "5", "auto":
+	case "2", "3", "4", "5", "auto", historyCompressionAutoColumns:
 		return true, nil
 	default:
-		return false, fmt.Errorf("snapshots: invalid GTRON_HISTORY_COMPRESSION_FORMAT %q (want auto, 1, 2, 3, 4 or 5)", value)
+		return false, fmt.Errorf("snapshots: invalid GTRON_HISTORY_COMPRESSION_FORMAT %q (want auto, auto-columns, 1, 2, 3, 4 or 5)", value)
 	}
 }
 
