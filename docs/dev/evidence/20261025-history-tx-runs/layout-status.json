@@ -1,0 +1,18 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "before_identity": {
+    "MainPID": "27692",
+    "ActiveState": "active",
+    "sha256": "7e4e5dfd592903e7a8bf657df5b9d9dbe32ac412917e24d3e4e7bd018dacba0c"
+  },
+  "phase": "complete",
+  "utc": "2026-10-25T10:28:44.782926+00:00",
+  "input_manifest_sha256": "a07b6aaa0cb4d03147abf2d88c0ead7b425d30932ab6a9c8f5e66ea3f1bc28f9",
+  "after_identity": {
+    "MainPID": "27692",
+    "ActiveState": "active",
+    "sha256": "7e4e5dfd592903e7a8bf657df5b9d9dbe32ac412917e24d3e4e7bd018dacba0c"
+  },
+  "environment_identity_changed": false
+}

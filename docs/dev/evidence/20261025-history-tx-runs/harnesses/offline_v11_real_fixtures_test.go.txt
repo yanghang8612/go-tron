@@ -1,0 +1,60 @@
+package snapshots
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestOfflineV11RealFixtures(t *testing.T) {
+	root := os.Getenv("GTRON_TX_RUN_FIXTURES")
+	if root == "" {
+		t.Skip("explicit downloaded immutable fixtures")
+	}
+	raw, e := os.ReadFile(filepath.Join(root, "fixtures.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var refs []struct {
+		Source, Candidate SegmentRef
+		Audit             accessorV11TranscodeAudit
+	}
+	if e = json.Unmarshal(raw, &refs); e != nil {
+		t.Fatal(e)
+	}
+	var receipts []map[string]any
+	for i, ref := range refs {
+		source, e := os.ReadFile(filepath.Join(root, "baseline", fmt.Sprint(i)+".kv"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		want, e := os.ReadFile(filepath.Join(root, "candidate", fmt.Sprint(i)+".kv"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if fmt.Sprintf("sha256:%x", sha256.Sum256(source)) != ref.Source.Checksum || fmt.Sprintf("sha256:%x", sha256.Sum256(want)) != ref.Candidate.Checksum {
+			t.Fatal("source identity")
+		}
+		got, a, e := transcodeHistoryAccessorV11ForTest(source, t.TempDir())
+		if e != nil {
+			t.Fatal(e)
+		}
+		if !bytes.Equal(got, want) || !reflect.DeepEqual(a, ref.Audit) {
+			t.Fatal("native/local bytes or complete audit differ", i, a, ref.Audit)
+		}
+		if e = checkStateDomainChangeBinaryAccessorV7(bytes.NewReader(got), uint64(len(got))); e != nil {
+			t.Fatal(e)
+		}
+		receipts = append(receipts, map[string]any{"source": ref.Source, "candidate": ref.Candidate, "audit": a, "native_local_bytes_identical": true, "full_layout_checked": true})
+		t.Logf("fixture %d rows=%d native bytes identical, %d -> %d", i, a.Records, a.SourceBytes, a.CandidateBytes)
+	}
+	proof, _ := json.MarshalIndent(map[string]any{"complete": true, "fixtures": receipts}, "", "  ")
+	if e = os.WriteFile(filepath.Join(root, "local-equivalence.json"), proof, 0600); e != nil {
+		t.Fatal(e)
+	}
+}

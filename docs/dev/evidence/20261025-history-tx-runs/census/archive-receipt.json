@@ -1,0 +1,16 @@
+{
+  "path": "/Users/asuka/Downloads/gtron-history-tx-runs-census-20261025-01.zip",
+  "bytes": 9062873,
+  "sha256": "b7ac81db7ff0257ed7f08328d10142be4ba8e429c765d3ab79016031d6ce5736",
+  "verified_members": 8,
+  "source_sha256s": {
+    "census-summary.json": "2e2d1cd6716b49037bac3b8270a9d62775d1ad899c0613ea1ddce9565cc039b6",
+    "census-status.json": "e210a63da4831e7c01d9b4c4a7811b3b859c2d29b19a9f4e549c632c887ce22d",
+    "census-native-status.json": "8b036dc8e4a9065b17fc9ede6f2a89b20d66173972201b22ac3cf30b0c5e563b",
+    "census-rows.jsonl": "977ac83f572aca52cb07a667e2c87ae3096d9eaa5f6ef0bcdc6a25e6969d4d40",
+    "census-plan.json": "108728f335f23009784a9af2931e70ba9176f28bd22bcc92b2130d8bead66b6c",
+    "census-pin-receipt.json": "d6baa9eaa20b9892b696e86d02dcf5e58a0f202edc1ddbd5078472cf52374b6a",
+    "census-summary.py": "83f0f5cd321ea026b1f331721b6ee4fc5953a6f3a0d27e16ba49e1fca0dbd705",
+    "offline_v11_census_test.go": "763834f326687859426c70e7aa6c974d7690be3be21ffb8ecbfe594166483fea"
+  }
+}

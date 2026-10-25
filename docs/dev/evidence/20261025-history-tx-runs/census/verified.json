@@ -1,0 +1,263 @@
+{
+  "complete": true,
+  "files": 8651,
+  "selected_rows": 5610054750,
+  "selected_payload_bytes": 214475903513,
+  "physical_overlapping_files": 99504679277,
+  "physical_fully_contained_buckets": [
+    {
+      "files": 4473,
+      "physical_bytes": 46987513997,
+      "logical_bytes": 164247603171,
+      "records": 2695570015
+    },
+    {
+      "files": 4175,
+      "physical_bytes": 52485865984,
+      "logical_bytes": 168544701946,
+      "records": 2913586474
+    }
+  ],
+  "domains": {
+    "flat/1": {
+      "Rows": 3034234889,
+      "Present": 2989298224,
+      "Absent": 44936665,
+      "Empty": 0,
+      "PayloadBytes": 153528730830,
+      "FrameBytes": 63718932669
+    },
+    "kv/256": {
+      "Rows": 1089815314,
+      "Present": 918136573,
+      "Absent": 171678741,
+      "Empty": 0,
+      "PayloadBytes": 29380370336,
+      "FrameBytes": 22886121594
+    },
+    "kv/524": {
+      "Rows": 535661276,
+      "Present": 511319106,
+      "Absent": 24342170,
+      "Empty": 0,
+      "PayloadBytes": 14555555501,
+      "FrameBytes": 11248886796
+    },
+    "kv/7": {
+      "Rows": 16877705,
+      "Present": 11830174,
+      "Absent": 5047531,
+      "Empty": 0,
+      "PayloadBytes": 6477800788,
+      "FrameBytes": 354431805
+    },
+    "kv/515": {
+      "Rows": 734989318,
+      "Present": 555554421,
+      "Absent": 179434897,
+      "Empty": 0,
+      "PayloadBytes": 4444435368,
+      "FrameBytes": 15434775678
+    },
+    "kv/769": {
+      "Rows": 17321741,
+      "Present": 11816564,
+      "Absent": 5505177,
+      "Empty": 0,
+      "PayloadBytes": 4213122678,
+      "FrameBytes": 363756561
+    },
+    "kv/768": {
+      "Rows": 10148598,
+      "Present": 10148500,
+      "Absent": 98,
+      "Empty": 0,
+      "PayloadBytes": 1182298455,
+      "FrameBytes": 213120558
+    },
+    "kv/1": {
+      "Rows": 62332481,
+      "Present": 62332472,
+      "Absent": 9,
+      "Empty": 0,
+      "PayloadBytes": 513044365,
+      "FrameBytes": 1308982101
+    },
+    "kv/520": {
+      "Rows": 4429602,
+      "Present": 3036281,
+      "Absent": 1393321,
+      "Empty": 0,
+      "PayloadBytes": 93989213,
+      "FrameBytes": 93021642
+    },
+    "kv/10": {
+      "Rows": 13012205,
+      "Present": 7411231,
+      "Absent": 5600974,
+      "Empty": 0,
+      "PayloadBytes": 59289848,
+      "FrameBytes": 273256305
+    },
+    "kv/525": {
+      "Rows": 2163978,
+      "Present": 1291584,
+      "Absent": 872394,
+      "Empty": 0,
+      "PayloadBytes": 22941496,
+      "FrameBytes": 45443538
+    },
+    "kv/513": {
+      "Rows": 88781470,
+      "Present": 51427,
+      "Absent": 88730043,
+      "Empty": 0,
+      "PayloadBytes": 3143217,
+      "FrameBytes": 1864410870
+    },
+    "kv/2": {
+      "Rows": 836,
+      "Present": 836,
+      "Absent": 0,
+      "Empty": 0,
+      "PayloadBytes": 796787,
+      "FrameBytes": 17556
+    },
+    "kv/3": {
+      "Rows": 312,
+      "Present": 285,
+      "Absent": 27,
+      "Empty": 0,
+      "PayloadBytes": 236677,
+      "FrameBytes": 6552
+    },
+    "kv/4": {
+      "Rows": 2381,
+      "Present": 2377,
+      "Absent": 4,
+      "Empty": 0,
+      "PayloadBytes": 64179,
+      "FrameBytes": 50001
+    },
+    "kv/6": {
+      "Rows": 548,
+      "Present": 547,
+      "Absent": 1,
+      "Empty": 0,
+      "PayloadBytes": 38308,
+      "FrameBytes": 11508
+    },
+    "flat/3": {
+      "Rows": 3474,
+      "Present": 3474,
+      "Absent": 0,
+      "Empty": 0,
+      "PayloadBytes": 27792,
+      "FrameBytes": 72954
+    },
+    "kv/258": {
+      "Rows": 270141,
+      "Present": 39,
+      "Absent": 270102,
+      "Empty": 0,
+      "PayloadBytes": 11326,
+      "FrameBytes": 5672961
+    },
+    "kv/5": {
+      "Rows": 4495,
+      "Present": 139,
+      "Absent": 4356,
+      "Empty": 0,
+      "PayloadBytes": 5133,
+      "FrameBytes": 94395
+    },
+    "kv/517": {
+      "Rows": 128,
+      "Present": 92,
+      "Absent": 36,
+      "Empty": 0,
+      "PayloadBytes": 736,
+      "FrameBytes": 2688
+    },
+    "kv/523": {
+      "Rows": 44,
+      "Present": 22,
+      "Absent": 22,
+      "Empty": 0,
+      "PayloadBytes": 408,
+      "FrameBytes": 924
+    },
+    "kv/519": {
+      "Rows": 45,
+      "Present": 9,
+      "Absent": 36,
+      "Empty": 0,
+      "PayloadBytes": 72,
+      "FrameBytes": 945
+    },
+    "kv/8": {
+      "Rows": 3769,
+      "Present": 0,
+      "Absent": 3769,
+      "Empty": 0,
+      "PayloadBytes": 0,
+      "FrameBytes": 79149
+    }
+  },
+  "numeric_widths": {
+    "kv/256": {
+      "histogram": [
+        0,
+        29391286,
+        28508579,
+        53925932,
+        261906526,
+        186363368,
+        103339045,
+        82532005,
+        13387761,
+        21383160,
+        32736446,
+        9672442,
+        3698779,
+        1552143,
+        16045681,
+        744861,
+        1421649,
+        1668870,
+        1560057,
+        2191405,
+        6737065,
+        1220258,
+        3924804,
+        1145270,
+        2382501,
+        1607414,
+        669823,
+        2846439,
+        4946430,
+        4007901,
+        3777096,
+        3698957,
+        29142620
+      ],
+      "significant_bytes": 6459871687,
+      "zero_prefix_bytes": 22920498649
+    },
+    "kv/515": {
+      "histogram": [
+        4106925,
+        32799113,
+        51510813,
+        125933147,
+        173904557,
+        125953503,
+        26546760,
+        9928423,
+        4871180
+      ],
+      "significant_bytes": 2106754884,
+      "zero_prefix_bytes": 2337680484
+    }
+  }
+}

@@ -1,0 +1,195 @@
+package snapshots
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+)
+
+func TestOfflineAccountHistoryRouting(t *testing.T) {
+	root := os.Getenv("GTRON_ROUTING_ROOT")
+	if root == "" {
+		t.Skip("offline routing diagnostic")
+	}
+	dir := "/data/gtron/cold-query-layout-20261020-01/hot-owner-spans-20261021-03/owner-index-input/state-snapshots"
+	started := time.Now()
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := 0
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentHistory && ref.normalizedDataset() == SegmentDatasetStateDomainChange {
+			expected++
+		}
+	}
+	save := func(name string, value any) {
+		data, e := json.MarshalIndent(value, "", "  ")
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(filepath.Join(root, name), data, 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	save("account2-build-before.json", manifest)
+	for pass := 1; pass <= 512; pass++ {
+		begin := time.Now()
+		ref, built, e := BuildAccountHistoryRoutingContext(context.Background(), dir, manifest, 64)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if !built {
+			t.Fatalf("no routing progress at pass %d", pass)
+		}
+		manifest, e = NewAggregator(dir).Integrate(manifest.VisibleTxStart, manifest.VisibleTxEnd, []SegmentRef{ref})
+		if e != nil {
+			t.Fatal(e)
+		}
+		routing, e := openAccountHistoryRouting(context.Background(), dir, ref)
+		if e != nil {
+			t.Fatal(e)
+		}
+		covered := len(routing.metadata.covered)
+		routing.Close()
+		status := map[string]any{"complete": false, "pass": pass, "sources": covered, "expected": expected, "keys": routing.metadata.header.rows, "ref": ref, "pass_seconds": time.Since(begin).Seconds(), "seconds": time.Since(started).Seconds()}
+		save("account2-build-status.json", status)
+		data, _ := json.Marshal(status)
+		f, e := os.OpenFile(filepath.Join(root, "account2-build-passes.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, e = f.Write(append(data, '\n'))
+		f.Close()
+		if e != nil {
+			t.Fatal(e)
+		}
+		if covered == expected {
+			save("account2-build-after.json", manifest)
+			// Independently reconstruct all scoped memberships from authenticated
+			// authoritative accessor dictionaries, rather than trusting the builder.
+			if e := checkAccountHistoryRoutingContext(context.Background(), dir, manifest, ref); e != nil {
+				t.Fatal(e)
+			}
+			status["complete"] = true
+			status["seconds"] = time.Since(started).Seconds()
+			status["strict_dictionary_check"] = true
+			save("account2-build-complete.json", status)
+			return
+		}
+	}
+	t.Fatal("bounded routing diagnostic passes exhausted")
+}
+
+func TestOfflineAccountHistoryRestore(t *testing.T) {
+	root := os.Getenv("GTRON_ROUTING_ROOT")
+	if root == "" {
+		t.Skip("offline routing restore diagnostic")
+	}
+	original, err := OpenManager("/data/gtron/eth-call-fixed-20261020-01/capture-1/state-snapshots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := OpenManager(filepath.Join(os.Getenv("GTRON_FIXED_INPUT"), "state-snapshots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipts []any
+	for _, start := range []uint64{3144020, 5000000, 9000000} {
+		end := start + 19
+		beginRange, ok, e := original.StateTxRangeForBlock(start)
+		if e != nil || !ok {
+			t.Fatalf("begin range: %v %v", ok, e)
+		}
+		endRange, ok, e := original.StateTxRangeForBlock(end)
+		if e != nil || !ok {
+			t.Fatalf("end range: %v %v", ok, e)
+		}
+		from, to := beginRange.BeginTxNum, endRange.EndTxNum
+		digest := func(m *Manager) (string, uint64) {
+			h := sha256.New()
+			count, payload := uint64(0), uint64(0)
+			e := m.IterateStateDomainChanges(from, to, func(row *rawdb.StateDomainChange) (bool, error) {
+				payload += uint64(len(row.Key) + len(row.Prev))
+				if payload > 256<<20 {
+					return false, fmt.Errorf("restore sample payload budget exceeded")
+				}
+				data, e := json.Marshal(row)
+				if e != nil {
+					return false, e
+				}
+				h.Write(data)
+				h.Write([]byte{'\n'})
+				count++
+				return true, nil
+			})
+			if e != nil {
+				t.Fatal(e)
+			}
+			return fmt.Sprintf("%x", h.Sum(nil)), count
+		}
+		before, rows := digest(original)
+		after, candidateRows := digest(candidate)
+		if before != after || rows != candidateRows {
+			t.Fatal("candidate full-row stream mismatch")
+		}
+		db := rawdb.NewMemoryDatabase()
+		result, e := candidate.RestoreStateDomainHistory(db, from, to)
+		if e != nil {
+			db.Close()
+			t.Fatal(e)
+		}
+		hash := sha256.New()
+		restoredRows := uint64(0)
+		for block := start; block <= end; block++ {
+			e := rawdb.IterateStateDomainChanges(db, block, func(row *rawdb.StateDomainChange) (bool, error) {
+				// Direct block iteration intentionally omits block context; restore
+				// it from the separately verified canonical transaction range.
+				contextRange, present, contextErr := rawdb.ReadStateTxRange(db, block)
+				if contextErr != nil || !present {
+					return false, fmt.Errorf("restored block context missing: %v", contextErr)
+				}
+				row.BlockHash = contextRange.BlockHash
+				data, e := json.Marshal(row)
+				if e != nil {
+					return false, e
+				}
+				hash.Write(data)
+				hash.Write([]byte{'\n'})
+				restoredRows++
+				return true, nil
+			})
+			if e != nil {
+				db.Close()
+				t.Fatal(e)
+			}
+			want, ok, e := original.StateTxRangeForBlock(block)
+			if e != nil || !ok {
+				db.Close()
+				t.Fatal(e)
+			}
+			got, ok, e := rawdb.ReadStateTxRange(db, block)
+			if e != nil || !ok || !reflect.DeepEqual(got, want) {
+				db.Close()
+				t.Fatalf("restored range %d mismatch", block)
+			}
+		}
+		db.Close()
+		restoredHash := fmt.Sprintf("%x", hash.Sum(nil))
+		if restoredRows != rows || restoredHash != before || result.ChangesRestored != rows {
+			t.Fatalf("restore stream mismatch rows=%d/%d hashes=%s/%s", restoredRows, rows, restoredHash, before)
+		}
+		receipts = append(receipts, map[string]any{"from_block": start, "to_block": end, "from_tx": from, "to_tx": to, "rows": rows, "full_row_sha256": before, "candidate_row_sha256": after, "restored_row_sha256": restoredHash, "range_rows_verified": end - start + 1, "result": result})
+	}
+	data, _ := json.MarshalIndent(map[string]any{"complete": true, "windows": receipts}, "", "  ")
+	if err := os.WriteFile(filepath.Join(root, "history-restore.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

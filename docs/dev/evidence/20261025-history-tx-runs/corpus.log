@@ -1,0 +1,4 @@
+=== RUN   TestOfflineV11Corpus
+    offline_v11_corpus_test.go:149: resumed after full SHA reread of 2698 source/candidate pairs
+--- PASS: TestOfflineV11Corpus (4011.46s)
+PASS

@@ -1,0 +1,46 @@
+{
+  "complete": true,
+  "commit": "b6a6fdf508b281f6864f888563e92eaa656be594",
+  "pushed": false,
+  "go_version": "go version go1.27.3 darwin/arm64",
+  "go_platform": [
+    "darwin",
+    "arm64"
+  ],
+  "native_production_source_files_matched": 1078,
+  "checks": {
+    "all-snapshots.log": {
+      "sha256": "7e5cfd0d80460aee113d4d9ecf6935ea0258cf3bd03e054e1a59c810847ef88e",
+      "successful": true
+    },
+    "packages.log": {
+      "sha256": "2b85a1b7d2bf55f5cbe74d983b63b3ca6493c37aaa8a879793bf183c46c8f63f",
+      "successful": true
+    },
+    "final-snapshots.log": {
+      "sha256": "851fcec9ecc69a3df175df9f29e6a84da3c6bc4c2f7283d1a3acf8fb08373a9b",
+      "successful": true
+    },
+    "final-joint.log": {
+      "sha256": "6884743becf00b0074acac7e7aec36fe50f47a8c6b1c858ed6661cfe6c58de6d",
+      "successful": true
+    },
+    "final-race.log": {
+      "sha256": "c090080ad2cb47267d992eadeaeab11494e7d4cf533731b745fc9ef1dd32d6aa",
+      "successful": true
+    },
+    "final-vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "successful": true
+    },
+    "final-build.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "successful": true
+    },
+    "local-real-fixtures.log": {
+      "sha256": "2d5c977d335a77810775223fac97622aaeac4cdad2d393cb89b74f8c70ad3ec0",
+      "successful": true
+    }
+  },
+  "notes": "Initial all-package run preceded the final request-bound cache and singleton joint-proof refinement. Final local snapshots, race, vet, build and real fixture runs cover the final source; native all-five-package tests cover the final source."
+}

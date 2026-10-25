@@ -1,0 +1,16 @@
+{
+  "MainPID": "0",
+  "ExecMainStartTimestamp": "Sat 2026-10-24 05:57:01 UTC",
+  "ActiveState": "inactive",
+  "utc": "2026-10-25T11:56:02.282201+00:00",
+  "exe": null,
+  "sha256": null,
+  "cpu_count": 16,
+  "load": [
+    5.38,
+    5.36,
+    5.94
+  ],
+  "meminfo": "MemTotal:       64298988 kB\nMemFree:          513112 kB\nMemAvailable:   45725284 kB\nBuffers:          353392 kB\nCached:         47405260 kB\nSwapCached:            0 kB\nActive:         26962092 kB\nInactive:       33447184 kB\nActive(anon):   15124716 kB\nInactive(anon):  1640456 kB\nActive(file):   11837376 kB\nInactive(file): 31806728 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:             21100 kB\nWriteback:             0 kB\nAnonPages:      12650028 kB\nMapped:           245960 kB\nShmem:           4114740 kB\nSlab:            2281248 kB\nSReclaimable:    2094032 kB\nSUnreclaim:       187216 kB\nKernelStack:       22144 kB\nPageTables:       253196 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32149492 kB\nCommitted_AS:   31010008 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      122724 kB\nVmallocChunk:   34359548308 kB\nPercpu:            10624 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    366592 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nDirectMap4k:      309156 kB\nDirectMap2M:    43249664 kB\nDirectMap1G:    22020096 kB\n",
+  "df": "Filesystem         1B-blocks          Used    Available Use% Mounted on\n/dev/nvme1n1   7609457909760 7203542446080 405489086464  95% /data\n/dev/nvme0n1p1   85887791104   58775060480  27112730624  69% /\n"
+}

@@ -1,0 +1,1 @@
+{"utc": "2026-10-25T10:10:13.652943+00:00", "reason": "Bounded offline throughput adjustment; complete SHA reread enforced by harness resume", "retained_receipts": 2698, "discarded_incomplete_tail": 0, "workers": 4, "memory_limit": "4G", "production_mutations": false}

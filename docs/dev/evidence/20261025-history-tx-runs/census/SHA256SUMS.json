@@ -1,0 +1,12 @@
+{
+  "archive-receipt.json": "c3a2ec54bca962ff5d2ba04fdb9e3981afd5411687c2441f411d003ca7ca2a12",
+  "census-native-status.json.gz": "6a9d10d2da135b8dce896706facd2a84e0d3ea07dc0e0be483ffdc769b65a378",
+  "census-pin-receipt.json.gz": "c1ae7aa0cdd5bbddc9d74809fb644e248ee74fa431521c19f459c4a57d7cd9eb",
+  "census-plan.json.gz": "03427533ae79daa621a0fcedab73c928fd94279398958af5c6cc4bd3ea76af7c",
+  "census-rows.jsonl.gz": "de8223998acdd96aa1ff31097cd93eba07a59f18fb3919575888d96630b815da",
+  "census-status.json": "e210a63da4831e7c01d9b4c4a7811b3b859c2d29b19a9f4e549c632c887ce22d",
+  "census-summary.json": "2e2d1cd6716b49037bac3b8270a9d62775d1ad899c0613ea1ddce9565cc039b6",
+  "census-summary.py": "83f0f5cd321ea026b1f331721b6ee4fc5953a6f3a0d27e16ba49e1fca0dbd705",
+  "offline_v11_census_test.go.txt": "763834f326687859426c70e7aa6c974d7690be3be21ffb8ecbfe594166483fea",
+  "verify.py": "6187796193acae75f75415e974a885cc229e2306cfaeb124af10ec5ad2eefad7"
+}

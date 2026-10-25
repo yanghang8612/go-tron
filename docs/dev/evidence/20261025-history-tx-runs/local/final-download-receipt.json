@@ -1,0 +1,16 @@
+{
+  "complete": true,
+  "path": "/Users/asuka/Downloads/gtron-history-tx-runs-final-20261025-01.zip",
+  "server_archive_path": "/tmp/gtron-history-tx-runs-final-20261025-01.zip",
+  "bytes": 42768406,
+  "sha256": "27047551265f6a6785a20748018c5f05c00e7a9e2459f5aed56531f65a9790ed",
+  "members": 549,
+  "sha_verified_members": 548,
+  "zip_crc_verified": true,
+  "server_finalizer": {
+    "complete": true,
+    "production_mutations": false,
+    "phase": "complete",
+    "utc": "2026-10-25T11:56:12.221345+00:00"
+  }
+}

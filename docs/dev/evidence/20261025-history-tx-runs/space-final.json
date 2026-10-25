@@ -1,0 +1,344 @@
+{
+  "complete": true,
+  "files": 19949,
+  "counts": {
+    "Keys": 2443423104,
+    "Records": 14302423656,
+    "Singletons": 1847492115,
+    "MultiLists": 595930989,
+    "MultiRows": 12454931541,
+    "SourceBytes": 119501234404,
+    "CandidateBytes": 106894161498,
+    "SourcePostingBytes": 44616979985,
+    "PostingBytes": 26887239353,
+    "SourceKeyBytes": 40575020326,
+    "CandidateKeyBytes": 40598478468,
+    "DirectoryBytes": 1570197655,
+    "OffsetBytes": 16287163453,
+    "OwnerDataBytes": 16327678280,
+    "OwnerDirectoryBytes": 117264726,
+    "OwnerFooterBytes": 1261632,
+    "TxRuns": 2400130160,
+    "TxDataBytes": 4800874163,
+    "TxDirectoryBytes": 300333152,
+    "TxFooterBytes": 1276736
+  },
+  "formats": {
+    "11": 19949
+  },
+  "saving_bins": {
+    ">=5%": 18798,
+    "<5%": 1150,
+    "<1%": 1
+  },
+  "saved_bytes": 12607072906,
+  "saved_percent": 10.549742828077434,
+  "source_allocated": 119551246336,
+  "candidate_allocated": 106953322496,
+  "allocated_saved_bytes": 12597923840,
+  "smaller_files": 19949,
+  "larger_files": 0,
+  "equal_files": 0,
+  "components": [
+    {
+      "part": "header",
+      "source": 2393880,
+      "candidate": 2393880
+    },
+    {
+      "part": "directory",
+      "source": 1570197655,
+      "candidate": 1570197655
+    },
+    {
+      "part": "key_pages",
+      "source": 40575020326,
+      "candidate": 40598478468
+    },
+    {
+      "part": "multi_postings",
+      "source": 44616979985,
+      "candidate": 26887239353
+    },
+    {
+      "part": "shared_offset_locator",
+      "source": 16287163453,
+      "candidate": 16287163453
+    },
+    {
+      "part": "owner_data",
+      "source": 16330929279,
+      "candidate": 16327678280
+    },
+    {
+      "part": "owner_directory",
+      "source": 117287874,
+      "candidate": 117264726
+    },
+    {
+      "part": "owner_footer",
+      "source": 1261952,
+      "candidate": 1261632
+    },
+    {
+      "part": "shared_transaction_data",
+      "source": 0,
+      "candidate": 4800874163
+    },
+    {
+      "part": "shared_transaction_directory",
+      "source": 0,
+      "candidate": 300333152
+    },
+    {
+      "part": "shared_transaction_footer",
+      "source": 0,
+      "candidate": 1276736
+    }
+  ],
+  "largest_savings": [
+    {
+      "path": "history/state-domain-change-301780280-302101090-43a76302a4569d09.kv",
+      "source_bytes": 15210896,
+      "candidate_bytes": 11942232,
+      "saved_bytes": 3268664
+    },
+    {
+      "path": "history/state-domain-change-299631645-299949197-2bf62ac93fa83142.kv",
+      "source_bytes": 14615845,
+      "candidate_bytes": 11411959,
+      "saved_bytes": 3203886
+    },
+    {
+      "path": "history/state-domain-change-303913833-304199148-894fa7cc7eff4ae4.kv",
+      "source_bytes": 14330719,
+      "candidate_bytes": 11153631,
+      "saved_bytes": 3177088
+    },
+    {
+      "path": "history/state-domain-change-304471880-304759990-339ed9bbfd7e408f.kv",
+      "source_bytes": 14462601,
+      "candidate_bytes": 11317686,
+      "saved_bytes": 3144915
+    },
+    {
+      "path": "history/state-domain-change-296503408-296812504-2030d686daf69f44.kv",
+      "source_bytes": 14242266,
+      "candidate_bytes": 11109985,
+      "saved_bytes": 3132281
+    },
+    {
+      "path": "history/state-domain-change-356253736-356501718-ceb220d492cab2de.kv",
+      "source_bytes": 14461307,
+      "candidate_bytes": 11376664,
+      "saved_bytes": 3084643
+    },
+    {
+      "path": "history/state-domain-change-301469215-301780279-fa25ee6d44b595a6.kv",
+      "source_bytes": 14443871,
+      "candidate_bytes": 11369242,
+      "saved_bytes": 3074629
+    },
+    {
+      "path": "history/state-domain-change-292569895-292897078-5c14a976329021f1.kv",
+      "source_bytes": 14236598,
+      "candidate_bytes": 11204991,
+      "saved_bytes": 3031607
+    },
+    {
+      "path": "history/state-domain-change-303630716-303913832-5375dd8d49662749.kv",
+      "source_bytes": 13946880,
+      "candidate_bytes": 10920204,
+      "saved_bytes": 3026676
+    },
+    {
+      "path": "history/state-domain-change-297572683-297871763-424848aacd94f644.kv",
+      "source_bytes": 13747606,
+      "candidate_bytes": 10743808,
+      "saved_bytes": 3003798
+    },
+    {
+      "path": "history/state-domain-change-309247295-309540926-2ef7b27babb71d4c.kv",
+      "source_bytes": 14846501,
+      "candidate_bytes": 11851708,
+      "saved_bytes": 2994793
+    },
+    {
+      "path": "history/state-domain-change-309540927-309820604-d62a5f2d20477c8e.kv",
+      "source_bytes": 14454839,
+      "candidate_bytes": 11478886,
+      "saved_bytes": 2975953
+    },
+    {
+      "path": "history/state-domain-change-300550985-300863093-473abbc6aaeebcb3.kv",
+      "source_bytes": 14440565,
+      "candidate_bytes": 11490029,
+      "saved_bytes": 2950536
+    },
+    {
+      "path": "history/state-domain-change-301162609-301469214-ff66b05dd1e5af3b.kv",
+      "source_bytes": 14084890,
+      "candidate_bytes": 11168279,
+      "saved_bytes": 2916611
+    },
+    {
+      "path": "history/state-domain-change-304759991-305030251-ea4d625c0ce314c9.kv",
+      "source_bytes": 13513690,
+      "candidate_bytes": 10608296,
+      "saved_bytes": 2905394
+    },
+    {
+      "path": "history/state-domain-change-290727148-291078014-9fc1fbe02cdc2138.kv",
+      "source_bytes": 13693027,
+      "candidate_bytes": 10839931,
+      "saved_bytes": 2853096
+    },
+    {
+      "path": "history/state-domain-change-356012731-356253735-775a725eed32dc3d.kv",
+      "source_bytes": 13345498,
+      "candidate_bytes": 10530450,
+      "saved_bytes": 2815048
+    },
+    {
+      "path": "history/state-domain-change-300241113-300550984-eb18ece10a8c0fd6.kv",
+      "source_bytes": 13889849,
+      "candidate_bytes": 11095455,
+      "saved_bytes": 2794394
+    },
+    {
+      "path": "history/state-domain-change-299949198-300241112-6843a658c324fd55.kv",
+      "source_bytes": 13404020,
+      "candidate_bytes": 10614463,
+      "saved_bytes": 2789557
+    },
+    {
+      "path": "history/state-domain-change-304199149-304471879-d6352975c0274fee.kv",
+      "source_bytes": 13285379,
+      "candidate_bytes": 10520008,
+      "saved_bytes": 2765371
+    }
+  ],
+  "smallest_savings": [
+    {
+      "path": "history/state-domain-change-955602-959346-c04b065affc206ab.kv",
+      "source_bytes": 103056,
+      "candidate_bytes": 99497,
+      "saved_bytes": 3559
+    },
+    {
+      "path": "history/state-domain-change-1-5714-0a8e0df0a8adfa93.kv",
+      "source_bytes": 99432,
+      "candidate_bytes": 94613,
+      "saved_bytes": 4819
+    },
+    {
+      "path": "history/state-domain-change-5715-12941-4d518b1faac307fd.kv",
+      "source_bytes": 108512,
+      "candidate_bytes": 101636,
+      "saved_bytes": 6876
+    },
+    {
+      "path": "history/state-domain-change-959347-967833-0623f4e9e0f00c4e.kv",
+      "source_bytes": 315369,
+      "candidate_bytes": 305727,
+      "saved_bytes": 9642
+    },
+    {
+      "path": "history/state-domain-change-967834-978079-e29fa2c958ab0552.kv",
+      "source_bytes": 291150,
+      "candidate_bytes": 279585,
+      "saved_bytes": 11565
+    },
+    {
+      "path": "history/state-domain-change-12942-27489-43bbb21820173007.kv",
+      "source_bytes": 187210,
+      "candidate_bytes": 173072,
+      "saved_bytes": 14138
+    },
+    {
+      "path": "history/state-domain-change-978080-991353-586d0f9d7975e5a1.kv",
+      "source_bytes": 439120,
+      "candidate_bytes": 422925,
+      "saved_bytes": 16195
+    },
+    {
+      "path": "history/state-domain-change-134865-155449-9aff12f4f380daf2.kv",
+      "source_bytes": 253964,
+      "candidate_bytes": 233003,
+      "saved_bytes": 20961
+    },
+    {
+      "path": "history/state-domain-change-113774-134864-a4f0fe504aaf9a44.kv",
+      "source_bytes": 267772,
+      "candidate_bytes": 246781,
+      "saved_bytes": 20991
+    },
+    {
+      "path": "history/state-domain-change-176940-198363-afa7690fba8847ac.kv",
+      "source_bytes": 275570,
+      "candidate_bytes": 254098,
+      "saved_bytes": 21472
+    },
+    {
+      "path": "history/state-domain-change-198364-220118-68a6e69249263120.kv",
+      "source_bytes": 277088,
+      "candidate_bytes": 254683,
+      "saved_bytes": 22405
+    },
+    {
+      "path": "history/state-domain-change-397569-419488-466063d01d2ba155.kv",
+      "source_bytes": 305536,
+      "candidate_bytes": 282708,
+      "saved_bytes": 22828
+    },
+    {
+      "path": "history/state-domain-change-27490-48933-7e05e738eb22475a.kv",
+      "source_bytes": 275299,
+      "candidate_bytes": 252139,
+      "saved_bytes": 23160
+    },
+    {
+      "path": "history/state-domain-change-220119-242668-236bb7df13b93e00.kv",
+      "source_bytes": 330098,
+      "candidate_bytes": 306880,
+      "saved_bytes": 23218
+    },
+    {
+      "path": "history/state-domain-change-242669-264259-8c1ceadda4d62425.kv",
+      "source_bytes": 290595,
+      "candidate_bytes": 267355,
+      "saved_bytes": 23240
+    },
+    {
+      "path": "history/state-domain-change-155450-176939-14e866eb8ee7acc8.kv",
+      "source_bytes": 281621,
+      "candidate_bytes": 258237,
+      "saved_bytes": 23384
+    },
+    {
+      "path": "history/state-domain-change-285517-307135-6d1a64c14a7ff8e3.kv",
+      "source_bytes": 292478,
+      "candidate_bytes": 269090,
+      "saved_bytes": 23388
+    },
+    {
+      "path": "history/state-domain-change-264260-285516-17b4458c52fe8478.kv",
+      "source_bytes": 278135,
+      "candidate_bytes": 254625,
+      "saved_bytes": 23510
+    },
+    {
+      "path": "history/state-domain-change-466826-489015-3cce5acd497f7be2.kv",
+      "source_bytes": 323475,
+      "candidate_bytes": 299923,
+      "saved_bytes": 23552
+    },
+    {
+      "path": "history/state-domain-change-70279-91580-2208317350cbcbc0.kv",
+      "source_bytes": 279086,
+      "candidate_bytes": 255273,
+      "saved_bytes": 23813
+    }
+  ],
+  "allocation_note": "Final counts after fsync and full source/candidate SHA reread; initial writeback allocation not used. Both larger and smaller files included; shared table directories and checksums fully counted. Offline candidates remain additional disk occupancy until a separately authorized replacement."
+}

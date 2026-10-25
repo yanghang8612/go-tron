@@ -1,0 +1,312 @@
+package snapshots
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+	"time"
+)
+
+type v11CensusPlan struct {
+	HistoryRef   SegmentRef `json:"history_ref"`
+	AccessorRef  SegmentRef `json:"accessor_ref"`
+	FirstBlock   uint64     `json:"first_block"`
+	LastBlock    uint64     `json:"last_block"`
+	Records      uint64     `json:"records"`
+	LogicalBytes uint64     `json:"logical_bytes"`
+}
+type v11CensusDomain struct {
+	Name                                                                    string
+	Rows, Present, Absent, Empty, PayloadBytes, LogicalKeyBytes, FrameBytes uint64
+	LengthBins                                                              [10]uint64
+	Width8                                                                  [9]uint64
+	Width32                                                                 [33]uint64
+}
+type v11CensusRow struct {
+	Path                                                                                                              string
+	FirstBlock, LastBlock, Records, LogicalBytes, PhysicalBytes, AccessorBytes, RangeBytes, RecordBytes, ExcludedRows uint64
+	Domains                                                                                                           [2][]v11CensusDomain
+	SHA256, AccessorSHA256                                                                                            string
+	Seconds                                                                                                           float64
+}
+type v11CensusKey struct{ domain, keyLen uint32 }
+
+func v11CensusSHA(path string) (string, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return "", e
+	}
+	defer f.Close()
+	h := sha256.New()
+	_, e = io.Copy(h, f)
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), e
+}
+func TestOfflineV11MatureCensus(t *testing.T) {
+	root := os.Getenv("GTRON_TX_RUN_ROOT")
+	if root == "" {
+		t.Skip("isolated immutable lab only")
+	}
+	raw, e := os.ReadFile(filepath.Join(root, "census-plan.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var plans []v11CensusPlan
+	if e = json.Unmarshal(raw, &plans); e != nil {
+		t.Fatal(e)
+	}
+	out, e := os.OpenFile(filepath.Join(root, "census-rows.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer out.Close()
+	bw := bufio.NewWriter(out)
+	enc := json.NewEncoder(bw)
+	start := time.Now()
+	done := 0
+	status := func(complete bool) {
+		if e = bw.Flush(); e != nil {
+			t.Fatal(e)
+		}
+		if e = out.Sync(); e != nil {
+			t.Fatal(e)
+		}
+		data, _ := json.Marshal(map[string]any{"complete": complete, "files": done, "total": len(plans), "seconds": time.Since(start).Seconds(), "target_first": 25000000, "target_last": 35000000, "read_only": true})
+		if e = os.WriteFile(filepath.Join(root, "census-status.json.tmp"), data, 0600); e != nil {
+			t.Fatal(e)
+		}
+		if e = os.Rename(filepath.Join(root, "census-status.json.tmp"), filepath.Join(root, "census-status.json")); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for _, p := range plans {
+		row, e := v11CensusSegment(filepath.Join(root, "census-input"), p)
+		if e != nil {
+			t.Fatalf("%s: %v", p.HistoryRef.Path, e)
+		}
+		if e = enc.Encode(row); e != nil {
+			t.Fatal(e)
+		}
+		done++
+		if done%25 == 0 {
+			status(false)
+		}
+	}
+	status(true)
+}
+func v11CensusSegment(dir string, p v11CensusPlan) (v11CensusRow, error) {
+	start := time.Now()
+	q := v11CensusRow{Path: p.HistoryRef.Path, FirstBlock: p.FirstBlock, LastBlock: p.LastBlock, Records: p.Records, LogicalBytes: p.LogicalBytes, PhysicalBytes: p.HistoryRef.Size, AccessorBytes: p.AccessorRef.Size}
+	fail := func(e error) (v11CensusRow, error) { return q, e }
+	var e error
+	q.SHA256, e = v11CensusSHA(filepath.Join(dir, p.HistoryRef.Path))
+	if e != nil {
+		return fail(e)
+	}
+	if q.SHA256 != p.HistoryRef.Checksum {
+		return fail(fmt.Errorf("history physical checksum mismatch"))
+	}
+	q.AccessorSHA256, e = v11CensusSHA(filepath.Join(dir, p.AccessorRef.Path))
+	if e != nil {
+		return fail(e)
+	}
+	if q.AccessorSHA256 != p.AccessorRef.Checksum {
+		return fail(fmt.Errorf("accessor physical checksum mismatch"))
+	}
+	f, e := os.Open(filepath.Join(dir, p.AccessorRef.Path))
+	if e != nil {
+		return fail(e)
+	}
+	defer f.Close()
+	st, e := f.Stat()
+	if e != nil {
+		return fail(e)
+	}
+	h, e := decodeStateDomainChangeBinaryAccessorKeyHeader(f, uint64(st.Size()))
+	if e != nil {
+		return fail(e)
+	}
+	if h.keyCount > 32<<20 {
+		return fail(fmt.Errorf("key cap"))
+	}
+	bs, e := stateDomainChangeBinaryAccessorV6ReadBlockDirectory(f, h)
+	if e != nil {
+		return fail(e)
+	}
+	keys := make([]v11CensusKey, h.keyCount)
+	names := []string{}
+	domainIDs := map[string]uint32{}
+	digest := sha256.New()
+	var keylen [4]byte
+	for bi, b := range bs {
+		ks, e := stateDomainChangeBinaryAccessorV6ReadBlock(f, uint64(st.Size()), h, b, uint32(bi*128))
+		if e != nil {
+			return fail(e)
+		}
+		for _, k := range ks {
+			if len(k.key) < 21 || k.key[0] < 1 || k.key[0] > 3 {
+				return fail(fmt.Errorf("bad logical key"))
+			}
+			name := fmt.Sprintf("flat/%d", k.key[0])
+			length := uint32(0)
+			if k.key[0] == 2 {
+				if len(k.key) < 31 {
+					return fail(fmt.Errorf("short KV key"))
+				}
+				name = fmt.Sprintf("kv/%d", binary.BigEndian.Uint16(k.key[29:31]))
+				length = uint32(len(k.key) - 31)
+			}
+			id, ok := domainIDs[name]
+			if !ok {
+				id = uint32(len(names))
+				names = append(names, name)
+				domainIDs[name] = id
+			}
+			keys[k.keyID] = v11CensusKey{id, length}
+			binary.BigEndian.PutUint32(keylen[:], uint32(len(k.key)))
+			digest.Write(keylen[:])
+			digest.Write(k.key)
+		}
+	}
+	var canonical [32]byte
+	copy(canonical[:], digest.Sum(nil))
+	if canonical != h.dictionaryDigest {
+		return fail(fmt.Errorf("accessor dictionary digest"))
+	}
+	r, sh, size, e := openStateDomainChangeBinaryCompactionRecordReader(context.Background(), dir, p.HistoryRef)
+	if e != nil {
+		return fail(e)
+	}
+	defer r.Close()
+	if sh.version != 6 || sh.count != p.Records || size != p.LogicalBytes || sh.count != h.recordCount {
+		return fail(fmt.Errorf("segment metadata changed"))
+	}
+	commit, e := readStateDomainChangeBinaryV6DictionaryCommitment(r)
+	if e != nil || commit != canonical {
+		return fail(fmt.Errorf("history dictionary commitment %v", e))
+	}
+	ranges, off, e := readStateDomainChangeBinaryTxRangeTableAt(r, size, p.HistoryRef, sh)
+	if e != nil {
+		return fail(e)
+	}
+	q.RangeBytes = off
+	q.RecordBytes = size - off
+	if len(ranges) == 0 || ranges[0].BlockNum != p.FirstBlock || ranges[len(ranges)-1].BlockNum != p.LastBlock {
+		return fail(fmt.Errorf("block boundaries"))
+	}
+	for i := 1; i < len(ranges); i++ {
+		if ranges[i].BlockNum != ranges[i-1].BlockNum+1 {
+			return fail(fmt.Errorf("block gap"))
+		}
+	}
+	stats := [2][]v11CensusDomain{}
+	for i := range stats {
+		stats[i] = make([]v11CensusDomain, len(names))
+		for j, n := range names {
+			stats[i][j].Name = n
+		}
+	}
+	var compressed *compressedBlockReader
+	if contextual, ok := r.(*stateDomainChangeHistoryReader); ok {
+		compressed, _ = contextual.historySegmentReader.(*compressedBlockReader)
+	}
+	var scratch []byte
+	var change rawdb.StateDomainChange
+	ri := 0
+	var previous uint64
+	var totalFrames uint64
+	for ordinal := uint64(0); ordinal < sh.count; ordinal++ {
+		var id uint32
+		var next uint64
+		if compressed != nil {
+			payload, n, borrowed, err := compressed.ReadRecordFrameAt(off, scratch)
+			e = err
+			next = n
+			if !borrowed {
+				scratch = payload
+			}
+			if e == nil {
+				id, e = decodeStateDomainChangeRecordV6Into(payload, &change)
+			}
+		} else {
+			scratch, id, next, e = readStateDomainChangeBinaryRecordV6FrameRawInto(r, off, size, scratch, &change)
+		}
+		if e != nil {
+			return fail(e)
+		}
+		if uint64(id) >= uint64(len(keys)) || ordinal > 0 && change.TxNum < previous {
+			return fail(fmt.Errorf("bad key/record order"))
+		}
+		previous = change.TxNum
+		for ri < len(ranges) && change.TxNum > ranges[ri].EndTxNum {
+			ri++
+		}
+		if ri >= len(ranges) || change.TxNum < ranges[ri].BeginTxNum {
+			return fail(fmt.Errorf("uncovered record TxNum"))
+		}
+		br := ranges[ri]
+		if e = hydrateStateDomainChangeBinaryRecordV5FromRange(br, ordinal, &change); e != nil {
+			return fail(e)
+		}
+		if next-off != 21+uint64(len(change.Prev)) {
+			return fail(fmt.Errorf("frame length"))
+		}
+		totalFrames += next - off
+		off = next
+		block := br.BlockNum
+		if block < 25000000 || block > 35000000 {
+			q.ExcludedRows++
+			continue
+		}
+		bucket := 0
+		if block >= 30000000 {
+			bucket = 1
+		}
+		k := keys[id]
+		a := &stats[bucket][k.domain]
+		a.Rows++
+		a.FrameBytes += 21
+		a.LogicalKeyBytes += uint64(k.keyLen)
+		a.PayloadBytes += uint64(len(change.Prev))
+		if change.PrevExists {
+			a.Present++
+			if len(change.Prev) == 0 {
+				a.Empty++
+			}
+		} else {
+			a.Absent++
+			if len(change.Prev) != 0 {
+				return fail(fmt.Errorf("absent row has payload"))
+			}
+		}
+		n := len(change.Prev)
+		bin := sort.SearchInts([]int{0, 8, 16, 32, 64, 128, 256, 512, 1024}, n)
+		a.LengthBins[bin]++
+		if n == 8 || n == 32 {
+			zeros := 0
+			for zeros < n && change.Prev[zeros] == 0 {
+				zeros++
+			}
+			if n == 8 {
+				a.Width8[n-zeros]++
+			} else {
+				a.Width32[n-zeros]++
+			}
+		}
+	}
+	if off != size || totalFrames != q.RecordBytes {
+		return fail(fmt.Errorf("record coverage"))
+	}
+	q.Domains = stats
+	q.Seconds = time.Since(start).Seconds()
+	return q, nil
+}

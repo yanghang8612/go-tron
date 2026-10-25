@@ -1,0 +1,338 @@
+{
+  "os-cold-3-2-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 1,
+    "fraction": 5.979449350117568e-08,
+    "attempt": 1
+  },
+  "os-cold-2-6-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 3,
+    "fraction": 1.7931072241062467e-07,
+    "attempt": 1
+  },
+  "os-cold-3-6-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 6,
+    "fraction": 3.5876696100705405e-07,
+    "attempt": 1
+  },
+  "os-cold-2-3-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 7,
+    "fraction": 4.1856145450822976e-07,
+    "attempt": 1
+  },
+  "os-cold-1-0-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-5-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 4,
+    "fraction": 2.3917797400470274e-07,
+    "attempt": 1
+  },
+  "os-cold-0-1-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 31,
+    "fraction": 1.8528774649097882e-06,
+    "attempt": 1
+  },
+  "os-cold-1-4-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 13,
+    "fraction": 7.773284155152838e-07,
+    "attempt": 1
+  },
+  "os-cold-3-0-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 2,
+    "fraction": 1.1954048160708312e-07,
+    "attempt": 1
+  },
+  "os-cold-0-1-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-2-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 1,
+    "fraction": 5.977024080354156e-08,
+    "attempt": 1
+  },
+  "os-cold-1-3-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-5-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 5,
+    "fraction": 2.988512040177078e-07,
+    "attempt": 1
+  },
+  "os-cold-3-4-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-6-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-1-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-1-0-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 7,
+    "fraction": 4.183916856247909e-07,
+    "attempt": 1
+  },
+  "os-cold-2-2-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-2-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-6-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-3-3-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 6,
+    "fraction": 3.5862144482124933e-07,
+    "attempt": 1
+  },
+  "os-cold-3-3-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 2,
+    "fraction": 1.1958898700235137e-07,
+    "attempt": 1
+  },
+  "os-cold-0-0-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 6,
+    "fraction": 3.5876696100705405e-07,
+    "attempt": 1
+  },
+  "os-cold-2-5-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-1-5-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-1-4-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 6,
+    "fraction": 3.5862144482124933e-07,
+    "attempt": 1
+  },
+  "os-cold-0-4-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 2,
+    "fraction": 1.1958898700235137e-07,
+    "attempt": 1
+  },
+  "os-cold-1-1-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-3-5-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-4-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-1-2-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-3-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 8,
+    "fraction": 4.781619264283325e-07,
+    "attempt": 1
+  },
+  "os-cold-3-1-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 2,
+    "fraction": 1.1954048160708312e-07,
+    "attempt": 1
+  },
+  "os-cold-0-6-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-0-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-1-3-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-0-2-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 8,
+    "fraction": 4.783559480094055e-07,
+    "attempt": 1
+  },
+  "os-cold-2-4-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-3-1-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-0-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 8,
+    "fraction": 4.783559480094055e-07,
+    "attempt": 1
+  },
+  "os-cold-1-6-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 1,
+    "fraction": 5.977024080354156e-08,
+    "attempt": 1
+  },
+  "os-cold-3-5-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-1-6-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 4,
+    "fraction": 2.3917797400470274e-07,
+    "attempt": 1
+  },
+  "os-cold-0-3-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 14,
+    "fraction": 8.371229090164595e-07,
+    "attempt": 1
+  },
+  "os-cold-1-2-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 6,
+    "fraction": 3.5876696100705405e-07,
+    "attempt": 1
+  },
+  "os-cold-1-5-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 1,
+    "fraction": 5.977024080354156e-08,
+    "attempt": 1
+  },
+  "os-cold-2-4-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-3-2-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 1,
+    "fraction": 5.977024080354156e-08,
+    "attempt": 1
+  },
+  "os-cold-0-3-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 1,
+    "fraction": 5.977024080354156e-08,
+    "attempt": 1
+  },
+  "os-cold-3-4-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 2,
+    "fraction": 1.1958898700235137e-07,
+    "attempt": 1
+  },
+  "os-cold-2-1-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-3-0-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-5-candidate-residency.json": {
+    "pages": 16723948,
+    "resident_pages": 6,
+    "fraction": 3.5876696100705405e-07,
+    "attempt": 1
+  },
+  "os-cold-1-1-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-2-0-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  },
+  "os-cold-3-6-baseline-residency.json": {
+    "pages": 16730734,
+    "resident_pages": 0,
+    "fraction": 0.0,
+    "attempt": 1
+  }
+}

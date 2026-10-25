@@ -1,0 +1,46 @@
+{
+  "bins": {
+    "0-5000000": {
+      "files": 1265,
+      "SourceBytes": 3855769265,
+      "CandidateBytes": 3295632872
+    },
+    "5000000-10000000": {
+      "files": 2680,
+      "SourceBytes": 14090132616,
+      "CandidateBytes": 11843165101
+    },
+    "10000000-15000000": {
+      "files": 3283,
+      "SourceBytes": 12789186184,
+      "CandidateBytes": 10626429263
+    },
+    "15000000-20000000": {
+      "files": 2124,
+      "SourceBytes": 10182464115,
+      "CandidateBytes": 8633821107
+    },
+    "20000000-25000000": {
+      "files": 3384,
+      "SourceBytes": 21370670146,
+      "CandidateBytes": 19163958216
+    },
+    "25000000-30000000": {
+      "files": 4473,
+      "SourceBytes": 28936016455,
+      "CandidateBytes": 26613188300
+    },
+    "30000000-35000000": {
+      "files": 2734,
+      "SourceBytes": 28238717866,
+      "CandidateBytes": 26685063585
+    }
+  },
+  "boundary": {
+    "files": 6,
+    "SourceBytes": 38277757,
+    "CandidateBytes": 32903054
+  },
+  "max_height": 33248191,
+  "note": "Only complete segments in each bin; 30M-35M actually ends at 33,248,191. Range join uses canonical .seg metadata from the previous frozen census."
+}

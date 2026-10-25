@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "phase": "complete",
+  "utc": "2026-10-25T11:17:06.806062+00:00",
+  "source_manifest_sha256": "417eb2f4d27e945a2ecbf379eff52bd7a73eb664f0b935d6e91d5f0c2a2400de",
+  "original_manifest_sha256": "3280d5851a962b6bf82305dfde8e7fb039343c3c79810b4dee4e77e2ef66a80a",
+  "scope": "All 19949 V10/V9 accessors; not a complete restorable node."
+}

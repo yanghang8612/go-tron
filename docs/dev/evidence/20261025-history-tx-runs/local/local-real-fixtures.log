@@ -1,0 +1,7 @@
+=== RUN   TestOfflineV11RealFixtures
+    offline_v11_real_fixtures_test.go:54: fixture 0 rows=44615 native bytes identical, 187210 -> 173072
+    offline_v11_real_fixtures_test.go:54: fixture 1 rows=22320 native bytes identical, 108512 -> 101636
+    offline_v11_real_fixtures_test.go:54: fixture 2 rows=1042551 native bytes identical, 6596523 -> 5873299
+--- PASS: TestOfflineV11RealFixtures (0.64s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	2.283s

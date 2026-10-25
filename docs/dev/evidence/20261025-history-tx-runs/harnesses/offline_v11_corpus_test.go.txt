@@ -1,0 +1,374 @@
+package snapshots
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func saveV11Audit(t *testing.T, p string, v any) {
+	t.Helper()
+	b, e := json.MarshalIndent(v, "", "  ")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(p+".tmp", b, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(p+".tmp", p); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestOfflineV11Corpus(t *testing.T) {
+	root := os.Getenv("GTRON_V11_ROOT")
+	if root == "" {
+		t.Skip("explicit lab required")
+	}
+	src := os.Getenv("GTRON_V11_SOURCE")
+	dst := os.Getenv("GTRON_V11_TARGET")
+	mp := os.Getenv("GTRON_V11_MANIFEST")
+	label := os.Getenv("GTRON_V11_LABEL")
+	if src == "" || dst == "" || mp == "" || label == "" || src == dst {
+		t.Fatal("explicit distinct private paths required")
+	}
+	raw, e := os.ReadFile(mp)
+	if e != nil {
+		t.Fatal(e)
+	}
+	m, e := decodeProductionManifest(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	before := cloneManifest(m)
+	ctx := context.Background()
+	started := time.Now()
+	var mu sync.Mutex
+	var failure error
+	done := 0
+	var sum accessorV11TranscodeAudit
+	var oldAlloc, newAlloc uint64
+	changed := map[string]SegmentRef{}
+	jobs := make(chan SegmentRef)
+	var wg sync.WaitGroup
+	flags := os.O_CREATE | os.O_EXCL | os.O_WRONLY
+	if os.Getenv("GTRON_V11_RESUME") == "1" {
+		if os.Getenv("GTRON_V11_COMPLETE_INPUT") == "1" {
+			t.Fatal("resume only corpus")
+		}
+		receipts, err := os.Open(filepath.Join(root, label+"-files.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := map[string]SegmentRef{}
+		for _, r := range m.Segments {
+			expected[r.Path] = r
+		}
+		dec := json.NewDecoder(receipts)
+		for {
+			var row struct {
+				Source, Candidate SegmentRef
+				Audit             accessorV11TranscodeAudit
+			}
+			err = dec.Decode(&row)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := changed[row.Source.Path]; ok || !reflect.DeepEqual(expected[row.Source.Path], row.Source) {
+				t.Fatal("resume receipt differs from input manifest")
+			}
+			for _, item := range []struct {
+				dir string
+				ref SegmentRef
+			}{{src, row.Source}, {dst, row.Candidate}} {
+				file, err := os.Open(filepath.Join(item.dir, item.ref.Path))
+				if err != nil {
+					t.Fatal(err)
+				}
+				h := sha256.New()
+				n, err := io.Copy(h, file)
+				file.Close()
+				if err != nil || uint64(n) != item.ref.Size || fmt.Sprintf("sha256:%x", h.Sum(nil)) != item.ref.Checksum {
+					t.Fatal("resume SHA/size differs", item.ref.Path)
+				}
+			}
+			a, err := os.Stat(filepath.Join(src, row.Source.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.Stat(filepath.Join(dst, row.Candidate.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			aa := a.Sys().(*syscall.Stat_t)
+			bb := b.Sys().(*syscall.Stat_t)
+			if aa.Ino == bb.Ino && aa.Dev == bb.Dev {
+				t.Fatal("resume inode shared")
+			}
+			audit := row.Audit
+			done++
+			sum.Keys += audit.Keys
+			sum.Records += audit.Records
+			sum.Singletons += audit.Singletons
+			sum.MultiLists += audit.MultiLists
+			sum.MultiRows += audit.MultiRows
+			sum.SourceBytes += audit.SourceBytes
+			sum.CandidateBytes += audit.CandidateBytes
+			sum.SourcePostingBytes += audit.SourcePostingBytes
+			sum.PostingBytes += audit.PostingBytes
+			sum.SourceKeyBytes += audit.SourceKeyBytes
+			sum.CandidateKeyBytes += audit.CandidateKeyBytes
+			sum.DirectoryBytes += audit.DirectoryBytes
+			sum.OffsetBytes += audit.OffsetBytes
+			sum.OwnerDataBytes += audit.OwnerDataBytes
+			sum.OwnerDirectoryBytes += audit.OwnerDirectoryBytes
+			sum.OwnerFooterBytes += audit.OwnerFooterBytes
+			sum.TxRuns += audit.TxRuns
+			sum.TxDataBytes += audit.TxDataBytes
+			sum.TxDirectoryBytes += audit.TxDirectoryBytes
+			sum.TxFooterBytes += audit.TxFooterBytes
+			oldAlloc += uint64(aa.Blocks) * 512
+			newAlloc += uint64(bb.Blocks) * 512
+			changed[row.Source.Path] = row.Candidate
+		}
+		receipts.Close()
+		flags = os.O_APPEND | os.O_WRONLY
+		t.Logf("resumed after full SHA reread of %d source/candidate pairs", done)
+	}
+	f, e := os.OpenFile(filepath.Join(root, label+"-files.jsonl"), flags, 0600)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer f.Close()
+	status := func(complete bool) {
+		saveV11Audit(t, filepath.Join(root, label+"-status.json"), map[string]any{"complete": complete, "files": done, "audit": sum, "source_allocated": oldAlloc, "candidate_allocated": newAlloc, "elapsed_seconds": time.Since(started).Seconds(), "error": fmt.Sprint(failure)})
+	}
+	previous := map[string]bool{}
+	for path := range changed {
+		previous[path] = true
+	}
+	workers := 2
+	if os.Getenv("GTRON_V11_WORKERS") == "4" {
+		workers = 4
+	}
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ref := range jobs {
+				mu.Lock()
+				failed := failure != nil
+				mu.Unlock()
+				if failed {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(src, ref.Path))
+				var audit accessorV11TranscodeAudit
+				var out []byte
+				var a, b os.FileInfo
+				if err == nil && (uint64(len(data)) != ref.Size || fmt.Sprintf("sha256:%x", sha256.Sum256(data)) != ref.Checksum) {
+					err = fmt.Errorf("source SHA/size mismatch %s", ref.Path)
+				}
+				if err == nil {
+					out, audit, err = transcodeHistoryAccessorV11ForTest(data, root)
+				}
+				target := filepath.Join(dst, ref.Path)
+				nr := ref
+				if err == nil {
+					err = os.MkdirAll(filepath.Dir(target), 0755)
+				}
+				if err == nil {
+					err = os.WriteFile(target+".v11-private-tmp", out, 0600)
+				}
+				if err == nil {
+					err = os.Rename(target+".v11-private-tmp", target)
+				}
+				if err == nil {
+					file, x := os.OpenFile(target, os.O_RDWR, 0)
+					if x == nil {
+						x = file.Sync()
+						file.Close()
+					}
+					err = x
+				}
+				if err == nil {
+					a, err = os.Stat(filepath.Join(src, ref.Path))
+				}
+				if err == nil {
+					b, err = os.Stat(target)
+				}
+				if err == nil {
+					aa := a.Sys().(*syscall.Stat_t)
+					bb := b.Sys().(*syscall.Stat_t)
+					if aa.Ino == bb.Ino && aa.Dev == bb.Dev {
+						err = fmt.Errorf("output inode shared")
+					}
+				}
+				if err == nil {
+					nr.Size = uint64(len(out))
+					nr.Checksum = fmt.Sprintf("sha256:%x", sha256.Sum256(out))
+					reread, x := os.ReadFile(target)
+					if x != nil || !bytes.Equal(reread, out) {
+						err = fmt.Errorf("output disk reread differs %v", x)
+					}
+				}
+				mu.Lock()
+				if err != nil {
+					failure = fmt.Errorf("%s: %w", ref.Path, err)
+				} else {
+					done++
+					sum.Keys += audit.Keys
+					sum.Records += audit.Records
+					sum.Singletons += audit.Singletons
+					sum.MultiLists += audit.MultiLists
+					sum.MultiRows += audit.MultiRows
+					sum.SourceBytes += audit.SourceBytes
+					sum.CandidateBytes += audit.CandidateBytes
+					sum.SourcePostingBytes += audit.SourcePostingBytes
+					sum.PostingBytes += audit.PostingBytes
+					sum.SourceKeyBytes += audit.SourceKeyBytes
+					sum.CandidateKeyBytes += audit.CandidateKeyBytes
+					sum.DirectoryBytes += audit.DirectoryBytes
+					sum.OffsetBytes += audit.OffsetBytes
+					sum.OwnerDataBytes += audit.OwnerDataBytes
+					sum.OwnerDirectoryBytes += audit.OwnerDirectoryBytes
+					sum.OwnerFooterBytes += audit.OwnerFooterBytes
+					sum.TxRuns += audit.TxRuns
+					sum.TxDataBytes += audit.TxDataBytes
+					sum.TxDirectoryBytes += audit.TxDirectoryBytes
+					sum.TxFooterBytes += audit.TxFooterBytes
+					oldAlloc += uint64(a.Sys().(*syscall.Stat_t).Blocks) * 512
+					newAlloc += uint64(b.Sys().(*syscall.Stat_t).Blocks) * 512
+					changed[ref.Path] = nr
+					json.NewEncoder(f).Encode(map[string]any{"source": ref, "candidate": nr, "audit": audit, "source_inode": a.Sys().(*syscall.Stat_t).Ino, "candidate_inode": b.Sys().(*syscall.Stat_t).Ino})
+					if done%100 == 0 {
+						f.Sync()
+						status(false)
+					}
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, r := range m.Segments {
+		if r.Kind == SegmentAccessor && r.normalizedDataset() == SegmentDatasetStateDomainChange && filepath.Ext(r.Path) == ".kv" {
+			if !previous[r.Path] {
+				jobs <- r
+			}
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	f.Sync()
+	status(false)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	for i, r := range m.Segments {
+		if nr, ok := changed[r.Path]; ok {
+			m.Segments[i] = nr
+		}
+	}
+	if os.Getenv("GTRON_V11_COMPLETE_INPUT") == "1" {
+		// Only bind the optional accelerators after every dictionary ID, key and
+		// singleton tuple and every TxNum/ordinal have been compared; the complete locator section remains byte-identical.
+		cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+		ids := map[[32]byte][32]byte{}
+		for _, h := range before.Segments {
+			if h.Kind != SegmentHistory || h.normalizedDataset() != SegmentDatasetStateDomainChange {
+				continue
+			}
+			a, ok := cfg.HistoryAccessorRef(before, h)
+			if !ok {
+				t.Fatal("missing source accessor")
+			}
+			z, ok := cfg.HistoryAccessorRef(m, h)
+			if !ok {
+				t.Fatal("missing candidate accessor")
+			}
+			ids[systemHistoryRoutingPairID(h, a)] = systemHistoryRoutingPairID(h, z)
+		}
+		receipts := []any{}
+		for i, ref := range m.Segments {
+			if ref.Kind != SegmentAccountHistoryRouting && ref.Kind != SegmentSystemHistoryRouting {
+				continue
+			}
+			old, err := os.ReadFile(filepath.Join(src, ref.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprintf("sha256:%x", sha256.Sum256(old)) != ref.Checksum {
+				t.Fatal("route SHA")
+			}
+			out := append([]byte(nil), old...)
+			start, n := 40, int(binary.BigEndian.Uint32(out[12:16]))
+			if ref.Kind == SegmentAccountHistoryRouting {
+				start = 64
+			}
+			for j := 0; j < n; j++ {
+				off := start + j*32
+				var id [32]byte
+				copy(id[:], out[off:off+32])
+				z, ok := ids[id]
+				if !ok {
+					t.Fatal("unknown covered pair")
+				}
+				copy(out[off:off+32], z[:])
+			}
+			if !bytes.Equal(old[start+n*32:], out[start+n*32:]) {
+				t.Fatal("routing memberships changed")
+			}
+			nr := ref
+			nr.Checksum = fmt.Sprintf("sha256:%x", sha256.Sum256(out))
+			if ref.Kind == SegmentAccountHistoryRouting {
+				h, err := decodeAccountRoutingHeader(out[:64], ref)
+				if err != nil {
+					t.Fatal(err)
+				}
+				nr.LookupRoot = fmt.Sprintf("sha256:%x", sha256.Sum256(out[:h.metadataBytes()]))
+			}
+			target := filepath.Join(dst, ref.Path)
+			if err = os.WriteFile(target+".private", out, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Rename(target+".private", target); err != nil {
+				t.Fatal(err)
+			}
+			m.Segments[i] = nr
+			receipts = append(receipts, map[string]any{"kind": ref.Kind, "covered_pairs": n, "membership_payload_unchanged": true, "bytes": len(out)})
+		}
+		if !reflect.DeepEqual(before.Progress, m.Progress) || !reflect.DeepEqual(before.Chain, m.Chain) {
+			t.Fatal("frontiers/chain changed")
+		}
+		if err := PublishManifest(dst, m); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range m.Segments {
+			if r.Kind == SegmentSystemHistoryRouting {
+				if err := checkSystemHistoryRoutingContext(ctx, dst, m, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if r.Kind == SegmentAccountHistoryRouting {
+				if err := checkAccountHistoryRoutingContext(ctx, dst, m, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		saveV11Audit(t, filepath.Join(root, label+"-routing.json"), map[string]any{"complete": true, "strict_reconstruction_passed": true, "canonical_frontiers_unchanged": true, "routes": receipts})
+	}
+	status(true)
+}
