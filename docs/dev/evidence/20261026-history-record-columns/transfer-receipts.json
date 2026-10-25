@@ -1,0 +1,22 @@
+{
+  "probe": {
+    "bytes": 25236,
+    "sha256": "4c55dbb0295e3dd54b349cebe1a6a1156191188dccfd75dce4bf4a9797b25758",
+    "transfer": "Visible terminal output selection and clipboard from dedicated authorized JumpServer WebCLI; ZIP CRC and member SHA checked locally."
+  },
+  "round2": {
+    "bytes": 9906,
+    "sha256": "68827a638823a66aff42876c782a7b751887d32de6bcb00d982f317225631a1f",
+    "transfer": "Visible terminal output selection and clipboard from dedicated authorized JumpServer WebCLI; ZIP CRC and member SHA checked locally."
+  },
+  "round3": {
+    "bytes": 42830,
+    "sha256": "479e2dc8a5913a0485a0270303d825f6b27a039447a13be42fd2a89d6dd58099",
+    "transfer": "Visible terminal output selection and clipboard from dedicated authorized JumpServer WebCLI; ZIP CRC and member SHA checked locally."
+  },
+  "adaptive": {
+    "bytes": 13809,
+    "sha256": "5cd782e857bd3d1b64ec59a2a59a7a39c25f3c235b254640ed49e09bd382760b",
+    "transfer": "Visible terminal output selection and clipboard from dedicated authorized JumpServer WebCLI; ZIP CRC and member SHA checked locally."
+  }
+}

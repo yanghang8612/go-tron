@@ -1,0 +1,8 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/4 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 4/4 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 792 (264/sec), new interesting: 1 (total: 5)
+fuzz: elapsed: 6s, execs: 792 (0/sec), new interesting: 1 (total: 5)
+fuzz: elapsed: 9s, execs: 792 (0/sec), new interesting: 1 (total: 5)
+fuzz: elapsed: 11s, execs: 792 (0/sec), new interesting: 1 (total: 5)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	12.764s

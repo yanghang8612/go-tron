@@ -1,0 +1,46 @@
+{
+  "phase": "page-screening-only",
+  "whole_node_acceptance_complete": false,
+  "original_members_verified": 59,
+  "source_files_verified": 1091,
+  "cohorts": {
+    "all14": {
+      "files": 14,
+      "source_bytes": 155751572,
+      "projected_adaptive_bytes": 138569084,
+      "projected_saved_bytes": 17182488,
+      "projected_saved_percent": 11.031983677185615
+    },
+    "fixed9": {
+      "files": 9,
+      "source_bytes": 80788402,
+      "projected_adaptive_bytes": 73008893,
+      "projected_saved_bytes": 7779509,
+      "projected_saved_percent": 9.629487410829093
+    },
+    "mature5": {
+      "files": 5,
+      "source_bytes": 74963170,
+      "projected_adaptive_bytes": 65560191,
+      "projected_saved_bytes": 9402979,
+      "projected_saved_percent": 12.543465010884677
+    }
+  },
+  "cost_medians_ns": {
+    "probe": {
+      "ordinary-128KiB": 210936.642578125,
+      "record-columns-128KiB": 593223.44921875
+    },
+    "round2": {
+      "ordinary-128KiB": 210990.130859375,
+      "record-columns-128KiB": 593704.21484375
+    },
+    "round3": {
+      "ordinary-128KiB": 211563.51171875,
+      "record-columns-128KiB": 227576.2265625
+    }
+  },
+  "records": 10291276,
+  "canonical_bytes": 596391700,
+  "production_mutations": false
+}
