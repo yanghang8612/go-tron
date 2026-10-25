@@ -59,3 +59,27 @@ phase 为 `wait-frozen-acceptance-and-publication`，检查列表为空且 candi
 同份联合回执中，旧转换为 4,230 / 4,609 段，已处理 `.seg`
 43,172,018,441 → 39,076,602,648 B，少 4,095,415,793 B。
 完整 MuHash／恢复／HTTP／物理闭环和冷发布门槛仍未完成。
+
+## 原生检查已完成，尚不是完整副本验收
+
+后续旧实验全部验收和计时结束后，队列按计划复制独立源码／静态库并执行
+检查。UTC 2026-10-25 22:25:55 原生检查全部完成，单元随后正常退出。
+`native-complete.zip` 为 104,596 B，SHA256
+`712a640f494b3e4f5ca5f8067533c2e709215898a98612f4d1cb60e705f3ee3e`。
+运行 `python3 verify-native-complete.py` 只读复核这份后续完成证据。
+先前 waiting 回执仍保留原样，其校验器只报告相应历史时点。
+
+2,146 个源码／模块文件、1,060 个测试文件匹配，mismatches 为空，源码使用
+独立 inode。针对性测试、五包全量、race、vet、Sapling 构建及两个测试
+二进制构建七项均通过。Go 为 go1.25.5 linux/amd64；身份仍绑定
+`4d69f0720b27e7ab5c125b535975d042663694ac` 和完整源码指纹。
+
+三个原生构建物 SHA256：
+
+- `gtron-policy`: `7ffec8473efe83ec5a45295263837201fcfbd78137f83eac3b2b72d0e60fe175`
+- `policy-http.test`: `40fd5c92907e60da060119577e26e8eb578932ac695e702cc2a2980a4bac449b`
+- `policy-snapshots.test`: `067ca9d546e349f5fa09bdd1b6e9b130074566c33bd18808c1db3f29b2813f99`
+
+这是新策略的原生检查，不是其完整固定副本 MuHash／HTTP／实际新写入成本
+验收。旧冻结 V5 实验已量出明显冷发布退化，当前不建议开启这一普通分列
+写入路径；需要继续减少重复编码／分配并复测。没有推送、部署或启停线上服务。
