@@ -11,6 +11,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 OUTER = {
     "local-source-and-harness.zip": "a89e1eac58bd2265beea8ad46c04bed1beb2e458fea4dd7f8e0e8fd67cd333b7",
     "native-progress-and-acceptance.zip": "e4569b6f517f2c76c7eeb966528e636f0d741cbe552c9a5e10136c206cd1b5fc",
+    "publish-control-and-live-progress.zip": "5cecb0ac5694af98d83bb52ee54e05f84e750f426916333ea6af191d5bf91815",
 }
 
 
@@ -72,9 +73,23 @@ def main():
     assert capture["before_bytes"] - capture["after_bytes"] == 59609991
     assert not capture["complete"]
     assert not files["acceptance-status.json"]["complete"]
+    publishing = bundles["publish-control-and-live-progress.zip"]
+    uploaded = checked_zip(publishing["publish-addon.zip"], "publish-addon-manifest.json")
+    for name, content in uploaded.items():
+        assert publishing[name] == content, name
+    live_bytes = publishing["server-progress-live-04.json"]
+    assert sha(live_bytes) == "2dd5b5953288d9537a4a885d74debf623bccc99cbb6632aee50847a4a5048d68"
+    live = json.loads(live_bytes)
+    assert live["progress"]["files"] == 1090
+    assert all(j["proc_exists"] and j["pid"] for j in live["jobs"].values())
+    assert not live["progress"]["complete"]
+    assert not live["acceptance"]["complete"] and not live["publish"]["complete"]
+    assert live["progress"]["before_bytes"] - live["progress"]["after_bytes"] == 751604682
     print(json.dumps({
         "source_files_verified": len(manifest), "native_checks_passed": len(expected),
-        "partial_capture_files": capture["files"], "full_acceptance_complete": False,
+        "initial_capture_files": capture["files"],
+        "latest_verified_live_capture_files": live["progress"]["files"],
+        "verified_live_at": live["utc"], "full_acceptance_complete": False,
         "scope": "Frozen progress receipt; not full-copy or rollout acceptance",
     }, indent=2))
 

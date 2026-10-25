@@ -17,7 +17,7 @@ This plan is not a completion claim; unchecked items require new evidence.
 - Validate HRC2 page CRC32C plus unchanged whole-file/canonical-stream SHA256;
   do not remove the existing authenticated manifest/companion protocol.
 
-## B. Candidate physical container (implemented; native acceptance pending)
+## B. Candidate physical container (local and native checks passed)
 
 Local implementation and five-package/race/vet/Sapling checks are recorded in
 `docs/dev/history-record-columns-container-20261026.md`. Physical version 5 is
@@ -71,6 +71,12 @@ explicit-only. Whole fixed-capture and HTTP acceptance below remain pending.
   or production inodes. Retain all distributions and resource samples.
 - Trace/profile separately to attribute remaining hot-history, route, LSM and
   column-decode costs. Page-only CPU results are not HTTP acceptance.
+- After HTTP and all heavy census jobs finish, compare actual compaction/index/
+  fsync/manifest publication on three bounded real input pairs. Alternate explicit
+  formats 2 and 5, four timed samples per arm plus warmups, retaining all source
+  and output files and canonical/companion proofs. Record the explicit aggregate
+  span, which may exceed the default merge policy; this measures the selected
+  merge path, not fresh hot-history publication or mainnet sync throughput.
 - Report actual complete net space and all regressions. Keep default disabled
   if space/performance is not acceptable. No push or rollout in this phase.
 - Archive exact scripts, hashes, failures and nonwinning controls; provide a
