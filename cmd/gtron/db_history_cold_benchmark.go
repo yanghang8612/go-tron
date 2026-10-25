@@ -84,7 +84,7 @@ func dbHistoryColdBenchmarkCommand() *cli.Command {
 			&cli.StringFlag{Name: "input-dir", Required: true}, &cli.StringFlag{Name: "output-dir", Required: true},
 			&cli.IntFlag{Name: "iterations", Value: 3}, &cli.DurationFlag{Name: "max-duration", Value: 5 * time.Minute},
 			&cli.StringFlag{Name: "copy-mode", Value: "owned", Usage: "owned or defensive; only private snapshot Get ownership capability differs"},
-			&cli.StringFlag{Name: "compression-format", Value: "auto", Usage: "Production compression policy: auto, 2, 3 or experimental 4; explicit without changing environment"},
+			&cli.StringFlag{Name: "compression-format", Value: "auto", Usage: "Production compression policy: auto, 2, 3 or experimental 4/5; explicit without changing environment"},
 			&cli.BoolFlag{Name: "cpu-profile", Usage: "Write output-dir/cpu.pprof for the first complete build only"},
 			&cli.BoolFlag{Name: "shared-read-pipeline", Usage: "Offline-only shared authentication pipeline; requires owned copy mode, preserves one trio"},
 			&cli.IntFlag{Name: "shared-read-workers", Value: 2, Usage: "Offline authentication slots: 2, 4 or 8; shared 256MiB output budget, pipeline=false requires 2"},
@@ -130,8 +130,8 @@ func validateHistoryColdOptions(opts historyColdBenchmarkOptions) error {
 	if opts.SharedChunkCache && opts.CopyMode != "owned" {
 		return errors.New("shared chunk cache requires explicit owned copy mode")
 	}
-	if !filepath.IsAbs(opts.InputDir) || !filepath.IsAbs(opts.OutputDir) || opts.Iterations < 1 || opts.Iterations > 5 || opts.MaxDuration <= 0 || opts.MaxDuration > 10*time.Minute || (opts.CopyMode != "owned" && opts.CopyMode != "defensive") || (opts.CompressionFormat != "auto" && opts.CompressionFormat != "2" && opts.CompressionFormat != "3" && opts.CompressionFormat != "4") {
-		return errors.New("history cold benchmark requires absolute input/output paths, 1..5 iterations, duration (0,10m], copy-mode owned|defensive, and compression-format auto|2|3|4")
+	if !filepath.IsAbs(opts.InputDir) || !filepath.IsAbs(opts.OutputDir) || opts.Iterations < 1 || opts.Iterations > 5 || opts.MaxDuration <= 0 || opts.MaxDuration > 10*time.Minute || (opts.CopyMode != "owned" && opts.CopyMode != "defensive") || (opts.CompressionFormat != "auto" && opts.CompressionFormat != "2" && opts.CompressionFormat != "3" && opts.CompressionFormat != "4" && opts.CompressionFormat != "5") {
+		return errors.New("history cold benchmark requires absolute input/output paths, 1..5 iterations, duration (0,10m], copy-mode owned|defensive, and compression-format auto|2|3|4|5")
 	}
 	return nil
 }

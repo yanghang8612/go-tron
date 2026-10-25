@@ -168,6 +168,7 @@ type compressedBlockWriter struct {
 	recCount       uint64
 	footerMetadata *snapshotMetadataWriter
 	accountDelta   bool
+	recordColumns  bool
 }
 
 type snapshotFileMetadata struct {
@@ -485,18 +486,20 @@ func writeCompressedBlockHeaderAndTable(out io.Writer, blockSize int, recCount, 
 // decompresses each block exactly once). Concurrent callers are serialized on mu
 // and always receive a private copy, so the reader is safe to share.
 type compressedBlockReader struct {
-	accountDelta bool
-	cdc          *cdcReader
-	prefixCache  *historyHeaderCache
-	headerPrefix *historyHeaderPrefix
-	f            compressedBlockPhysicalFile
-	dec          *zstd.Decoder
-	blockSize    int
-	recCount     uint64
-	uncSize      uint64
-	dataOff      uint64
-	fileSize     uint64
-	table        []cbBlock
+	accountDelta  bool
+	recordColumns bool
+	columnScratch []byte
+	cdc           *cdcReader
+	prefixCache   *historyHeaderCache
+	headerPrefix  *historyHeaderPrefix
+	f             compressedBlockPhysicalFile
+	dec           *zstd.Decoder
+	blockSize     int
+	recCount      uint64
+	uncSize       uint64
+	dataOff       uint64
+	fileSize      uint64
+	table         []cbBlock
 
 	mu         sync.Mutex
 	cacheLimit int
@@ -583,13 +586,13 @@ func openCompressedBlockFileWithCacheLimitContext(ctx context.Context, f compres
 		cdc.src = f
 		return &compressedBlockReader{f: f, dec: dec, uncSize: cdc.logical, fileSize: fileSize, cdc: cdc}, nil
 	}
-	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockFooterVersion || accountDeltaFooterVersion(hdr) {
+	if binary.BigEndian.Uint32(hdr[8:12]) == compressedBlockFooterVersion || accountDeltaFooterVersion(hdr) || recordColumnFooterVersion(hdr) {
 		layout, err := readCompressedBlockFooterLayoutContext(ctx, contextReaderAt{ctx: ctx, r: f}, fileSize, hdr)
 		if err != nil {
 			_ = f.Close()
 			return nil, err
 		}
-		return &compressedBlockReader{accountDelta: accountDeltaFooterVersion(hdr), f: f, dec: dec, blockSize: layout.blockSize,
+		return &compressedBlockReader{accountDelta: accountDeltaFooterVersion(hdr), recordColumns: recordColumnFooterVersion(hdr), f: f, dec: dec, blockSize: layout.blockSize,
 			recCount: layout.recCount, uncSize: layout.uncSize, dataOff: compressedBlockHeaderSize,
 			fileSize: fileSize, table: layout.table, cacheLimit: accountDeltaDecodedCacheLimit(hdr, layout, cacheLimit)}, nil
 	}
@@ -848,7 +851,9 @@ func (r *compressedBlockReader) decodeBlock(i int, comp []byte, expectedLen uint
 	}
 	var dst []byte
 	var err error
-	if r.accountDelta {
+	if r.recordColumns {
+		dst, r.columnScratch, err = decodeRecordColumnStoredPage(comp, expectedLen, decoded, r.columnScratch)
+	} else if r.accountDelta {
 		dst, err = decodeAccountDeltaStoredPage(comp, expectedLen, decoded)
 	} else {
 		dst, err = r.dec.DecodeAll(comp, decoded)
@@ -1034,13 +1039,16 @@ func decompressBlockBlob(data []byte) ([]byte, error) {
 	if version == compressedBlockCDCVersion {
 		return decompressCDCBlob(data)
 	}
-	if version == compressedBlockFooterVersion || version == compressedBlockAccountDeltaVersion {
+	if version == compressedBlockFooterVersion || version == compressedBlockAccountDeltaVersion || version == compressedBlockRecordColumnsVersion {
 		layout, err := readCompressedBlockFooterLayout(bytes.NewReader(data), uint64(len(data)), data[:compressedBlockHeaderSize])
 		if err != nil {
 			return nil, err
 		}
 		if version == compressedBlockAccountDeltaVersion {
 			return decompressAccountDeltaBlob(data, layout)
+		}
+		if version == compressedBlockRecordColumnsVersion {
+			return decompressRecordColumnBlob(data, layout)
 		}
 		return decodeCompressedBlockBlob(data, dec, layout.table, layout.uncSize, compressedBlockHeaderSize)
 	}
@@ -1383,6 +1391,7 @@ func (p *orderedCompressionPipeline) releaseAvailableBuffers() {
 // pipeline above. No complete uncompressed segment is written to disk.
 type compressedBlockStreamWriter struct {
 	accountDeltas *accountDeltaStreamNotes
+	recordHeaders *recordColumnStreamNotes
 	dir           string
 	chunkSize     int
 	prefixSize    int
@@ -1501,6 +1510,18 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 		w.body.uncTotal = uint64(len(w.first))
 		w.bodyStart = true
 	}
+	if w.recordHeaders != nil {
+		starts := w.recordHeadersForPage(w.body.uncTotal, len(w.chunk))
+		stored, err := encodeRecordColumnStoredPage(w.chunk, starts, w.body.enc)
+		if err != nil {
+			return err
+		}
+		if err = w.body.appendEncodedBlock(len(w.chunk), stored); err != nil {
+			return err
+		}
+		w.chunk = w.chunk[:0]
+		return nil
+	}
 	if w.accountDeltas != nil {
 		notes := w.accountNotesForPage(w.body.uncTotal, len(w.chunk))
 		stored, _, err := encodeAccountDeltaStoredPage(w.chunk, notes, w.accountDeltas.depth, w.body.enc, nil)
@@ -1599,7 +1620,14 @@ func (w *compressedBlockStreamWriter) Reset() error {
 		return errors.New("snapshots: compressed stream writer is closed")
 	}
 	w.abortBody()
-	body, err := newCompressedBlockStreamBodyFormat(w.dir, w.footer, w.accountDeltas != nil)
+	version := compressedBlockFooterVersion
+	if w.accountDeltas != nil {
+		version = compressedBlockAccountDeltaVersion
+	}
+	if w.recordHeaders != nil {
+		version = compressedBlockRecordColumnsVersion
+	}
+	body, err := newCompressedBlockStreamBodyVersion(w.dir, w.footer, version)
 	if err != nil {
 		w.closed = true
 		return err
@@ -1614,6 +1642,9 @@ func (w *compressedBlockStreamWriter) Reset() error {
 	w.bodyStart = false
 	if w.accountDeltas != nil {
 		w.accountDeltas.values = w.accountDeltas.values[:0]
+	}
+	if w.recordHeaders != nil {
+		*w.recordHeaders = recordColumnStreamNotes{offsets: w.recordHeaders.offsets[:0]}
 	}
 	return nil
 }

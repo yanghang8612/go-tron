@@ -7,7 +7,7 @@ import (
 	"math"
 )
 
-// Experimental page transform, deliberately not emitted by production writers.
+// Experimental page transform emitted only by explicit physical container 5.
 // Every canonical byte is reconstructed within one existing 128 KiB read unit.
 const historyRecordColumnHeader = 36
 const historyRecordColumnPageMax = 128 << 10

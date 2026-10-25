@@ -253,7 +253,11 @@ func historyUsesCurrentCompression(path string) (bool, error) {
 		if reader.cdc != nil {
 			return true, nil
 		}
-		if version != compressedBlockFooterVersion && version != compressedBlockAccountDeltaVersion {
+		if version != compressedBlockFooterVersion && version != compressedBlockAccountDeltaVersion && version != compressedBlockRecordColumnsVersion {
+			return false, nil
+		}
+	case "5":
+		if version != compressedBlockRecordColumnsVersion {
 			return false, nil
 		}
 	case "4":

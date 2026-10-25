@@ -34,10 +34,10 @@ func historyCompressionFooterEnabled() (bool, error) {
 	switch value := os.Getenv("GTRON_HISTORY_COMPRESSION_FORMAT"); value {
 	case "", "1":
 		return false, nil
-	case "2", "3", "4", "auto":
+	case "2", "3", "4", "5", "auto":
 		return true, nil
 	default:
-		return false, fmt.Errorf("snapshots: invalid GTRON_HISTORY_COMPRESSION_FORMAT %q (want auto, 1, 2, 3 or 4)", value)
+		return false, fmt.Errorf("snapshots: invalid GTRON_HISTORY_COMPRESSION_FORMAT %q (want auto, 1, 2, 3, 4 or 5)", value)
 	}
 }
 
@@ -45,6 +45,17 @@ func newCompressedBlockStreamBody(dir string, footer bool) (*compressedBlockWrit
 	return newCompressedBlockStreamBodyFormat(dir, footer, false)
 }
 func newCompressedBlockStreamBodyFormat(dir string, footer, delta bool) (*compressedBlockWriter, error) {
+	version := compressedBlockFooterVersion
+	if delta {
+		version = compressedBlockAccountDeltaVersion
+	}
+	return newCompressedBlockStreamBodyVersion(dir, footer, version)
+}
+
+func newCompressedBlockStreamBodyVersion(dir string, footer bool, version uint32) (*compressedBlockWriter, error) {
+	if version != compressedBlockFooterVersion && version != compressedBlockAccountDeltaVersion && version != compressedBlockRecordColumnsVersion {
+		return nil, errors.New("snapshots: unsupported footer writer version")
+	}
 	w, err := newCompressedBlockWriter(dir, 1)
 	if err != nil || !footer {
 		return w, err
@@ -53,11 +64,8 @@ func newCompressedBlockStreamBodyFormat(dir string, footer, delta bool) (*compre
 	w.tmpWriter.Reset(w.footerMetadata)
 	var header [compressedBlockHeaderSize]byte
 	copy(header[:8], compressedBlockMagic)
-	version := compressedBlockFooterVersion
-	if delta {
-		version = compressedBlockAccountDeltaVersion
-		w.accountDelta = true
-	}
+	w.accountDelta = version == compressedBlockAccountDeltaVersion
+	w.recordColumns = version == compressedBlockRecordColumnsVersion
 	binary.BigEndian.PutUint32(header[8:12], version)
 	binary.BigEndian.PutUint32(header[12:16], uint32(w.blockSize))
 	if _, err := w.tmpWriter.Write(header[:]); err != nil {
@@ -102,7 +110,7 @@ func (w *compressedBlockWriter) finishWithFooterContext(ctx context.Context, pat
 		}
 		w.encoded = w.enc.EncodeAll(prefix, w.encoded[:0])
 		prefixComp = w.encoded
-		if w.accountDelta {
+		if w.accountDelta || w.recordColumns {
 			prefixComp = append([]byte{0}, prefixComp...)
 		}
 		recCount++
@@ -154,6 +162,9 @@ func (w *compressedBlockWriter) finishWithFooterContext(ctx context.Context, pat
 	magic := compressedBlockFooterMagic
 	if w.accountDelta {
 		magic = compressedBlockAccountDeltaEndMagic
+	}
+	if w.recordColumns {
+		magic = compressedBlockRecordColumnsEndMagic
 	}
 	copy(trailer[:8], magic)
 	binary.BigEndian.PutUint64(trailer[8:16], recCount)
@@ -207,7 +218,7 @@ func readCompressedBlockFooterInfo(src io.ReaderAt, size uint64, header []byte) 
 	if size < compressedBlockHeaderSize+compressedBlockTrailerSize || size > uint64(1<<63-1) || len(header) != compressedBlockHeaderSize {
 		return info, errors.New("snapshots: invalid footer file size")
 	}
-	if string(header[:8]) != compressedBlockMagic || (binary.BigEndian.Uint32(header[8:12]) != compressedBlockFooterVersion && !accountDeltaFooterVersion(header)) {
+	if string(header[:8]) != compressedBlockMagic || (binary.BigEndian.Uint32(header[8:12]) != compressedBlockFooterVersion && !accountDeltaFooterVersion(header) && !recordColumnFooterVersion(header)) {
 		return info, errors.New("snapshots: invalid footer header")
 	}
 	for _, b := range header[16:] {
@@ -226,6 +237,9 @@ func readCompressedBlockFooterInfo(src io.ReaderAt, size uint64, header []byte) 
 	magic := compressedBlockFooterMagic
 	if accountDeltaFooterVersion(header) {
 		magic = compressedBlockAccountDeltaEndMagic
+	}
+	if recordColumnFooterVersion(header) {
+		magic = compressedBlockRecordColumnsEndMagic
 	}
 	if string(trailer[:8]) != magic {
 		return info, errors.New("snapshots: missing compressed-block footer trailer")
@@ -283,6 +297,11 @@ func readCompressedBlockFooterLayoutContext(ctx context.Context, src io.ReaderAt
 	}
 	if accountDeltaFooterVersion(header) {
 		if err := validateAccountDeltaBlocks(layout.table, info.uncSize); err != nil {
+			return layout, err
+		}
+	}
+	if recordColumnFooterVersion(header) {
+		if err := validateRecordColumnBlocks(layout.table, info.uncSize); err != nil {
 			return layout, err
 		}
 	}

@@ -1,0 +1,36 @@
+{
+  "checks": {
+    "capture-harness-compile.log": {
+      "sha256": "a333b033cce24c79ef852577ebd49dc58cea03fa0892ad16cf74e9f9e3c3d2fe",
+      "tail": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t1.660s\n"
+    },
+    "final-record-race.log": {
+      "sha256": "059739b9f2b6fdc87102491248e44db141a9c9723e53d97cbff393d6ea14aaf0",
+      "tail": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t11.183s\n"
+    },
+    "final-snapshots.log": {
+      "sha256": "48b0e2a787c72b1f9e8b101e16f57b90111a7d8d466663b82a77d6f8d00b8647",
+      "tail": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t136.604s\n"
+    },
+    "fuzz-stored.log": {
+      "sha256": "e6a4cebf68be86be7616224e44859021090c44c6eaa100215a0f0d905025aed5",
+      "tail": "fuzz: elapsed: 0s, gathering baseline coverage: 0/2 completed\nfuzz: elapsed: 0s, gathering baseline coverage: 2/2 completed, now fuzzing with 2 workers\nfuzz: elapsed: 3s, execs: 19140 (6378/sec), new interesting: 2 (total: 4)\nfuzz: elapsed: 6s, execs: 37202 (6021/sec), new interesting: 4 (total: 6)\nfuzz: elapsed: 9s, execs: 68008 (10272/sec), new interesting: 7 (total: 9)\nfuzz: elapsed: 11s, execs: 68028 (10/sec), new interesting: 8 (total: 10)\nPASS\nok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t11.704s\n"
+    },
+    "packages.log": {
+      "sha256": "895f000a31999d7bc64dd2f93b092370bdc173aac29274de1eceecbe91b6583e",
+      "tail": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t36.511s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t3.237s\nok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t149.097s\nok  \tgithub.com/tronprotocol/go-tron/core\t341.449s\nok  \tgithub.com/tronprotocol/go-tron/cmd/gtron\t149.588s\n"
+    },
+    "sapling-build.log": {
+      "sha256": "2f23ae0cfd47e7cb75b46e7ac435de56fc590508f6d54a9baf0a43212e47a437",
+      "tail": "CGO_ENABLED=1 go build -tags='sapling'  -o /Users/asuka/.codex/worktrees/cold-throughput-followup/go-tron/build/bin/gtron ./cmd/gtron\nDone building gtron with Sapling support.\n"
+    },
+    "vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    }
+  },
+  "fixed_copy_acceptance_complete": false,
+  "payload_sha256": "97113b4a75e3aea9f47f60ffb85c09843a68d50cef12b55968d2ee0253a8fb30",
+  "source_files": 2145,
+  "source_inventory_sha256": "19af9eb441a5920a6dffd8d7567df9e886abba2b200c8c5b9fd4d4b05686508b"
+}

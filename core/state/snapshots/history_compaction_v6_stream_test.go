@@ -58,7 +58,7 @@ func compressV6StreamFixture(t testing.TB, dir string, refs []SegmentRef, chunkS
 
 func TestHistoryV6StreamMatchesPlainMerge(t *testing.T) {
 	t.Setenv("GTRON_HISTORY_COMPACTION_SOURCE_WORKERS", "2")
-	for _, format := range []string{"1", "2"} {
+	for _, format := range []string{"1", "2", "5"} {
 		t.Run("format"+format, func(t *testing.T) {
 			t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", format)
 			first, second := v6StreamChanges(1, 513, 3, 80), v6StreamChanges(514, 513, 3, 80)

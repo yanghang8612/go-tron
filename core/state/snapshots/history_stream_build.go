@@ -591,6 +591,7 @@ type stateDomainChangeHistoryRecordWriter struct {
 	expected       uint64
 	count          uint64
 	segmentOff     uint64
+	noteV6Header   func(uint64) error
 	indexWritten   uint64
 	currentIndex   stateDomainChangeBinaryTxOffset
 	indexScratch   [stateDomainChangeBinaryIndexEntrySize]byte
@@ -606,12 +607,13 @@ const stateDomainChangeHistoryWriteBufferSize = 256 << 10
 
 func newStateDomainChangeHistoryRecordWriter(segment io.Writer, index *os.File, accessors *stateDomainChangeBinaryAccessorV4Collectors, ref SegmentRef, expected, segmentOff uint64) *stateDomainChangeHistoryRecordWriter {
 	return &stateDomainChangeHistoryRecordWriter{
-		segment:    acquireStateDomainChangeHistoryWriter(segment),
-		index:      acquireStateDomainChangeHistoryWriter(index),
-		accessors:  accessors,
-		ref:        ref,
-		expected:   expected,
-		segmentOff: segmentOff,
+		segment:      acquireStateDomainChangeHistoryWriter(segment),
+		index:        acquireStateDomainChangeHistoryWriter(index),
+		accessors:    accessors,
+		ref:          ref,
+		expected:     expected,
+		segmentOff:   segmentOff,
+		noteV6Header: recordHeaderObserver(segment),
 	}
 }
 
@@ -748,6 +750,11 @@ func (w *stateDomainChangeHistoryRecordWriter) WriteStreamedV6Change(ctx context
 		w.currentIndex = stateDomainChangeBinaryTxOffset{txNum: change.TxNum, offset: w.segmentOff, recordIndex: w.count, count: 1}
 		w.haveIndex = true
 	}
+	if w.noteV6Header != nil {
+		if err := w.noteV6Header(w.segmentOff); err != nil {
+			return err
+		}
+	}
 	var header [21]byte
 	binary.BigEndian.PutUint32(header[:4], uint32(17+prevLen))
 	binary.BigEndian.PutUint32(header[4:8], targetKeyID)
@@ -876,6 +883,11 @@ func (w *stateDomainChangeHistoryRecordWriter) writeChangeWithV6KeyID(change *ra
 		return err
 	}
 	w.recordScratch = frame
+	if w.v6 != nil && w.noteV6Header != nil {
+		if err := w.noteV6Header(w.segmentOff); err != nil {
+			return err
+		}
+	}
 	if w.v6 != nil && change.FlatDomain == rawdb.StateFlatDomainAccountLatest && change.PrevExists {
 		if err := noteHistoryAccountValue(w.segment, v6KeyID, w.segmentOff+21, uint64(len(change.Prev))); err != nil {
 			return err
@@ -930,6 +942,7 @@ func (w *stateDomainChangeHistoryRecordWriter) Release() {
 	if w == nil {
 		return
 	}
+	w.noteV6Header = nil
 	releaseStateDomainChangeHistoryWriter(&w.segment)
 	releaseStateDomainChangeHistoryWriter(&w.index)
 }

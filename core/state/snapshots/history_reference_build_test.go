@@ -229,7 +229,7 @@ func referenceBuildAssertQueries(t *testing.T, dir string, refs []SegmentRef, wa
 }
 
 func TestHistoryReferenceBuildIntegrationOracle(t *testing.T) {
-	for _, tc := range []struct{ source, format string }{{"legacy", "2"}, {"pack", "3"}, {"shared", "auto"}, {"repair", "auto"}} {
+	for _, tc := range []struct{ source, format string }{{"legacy", "2"}, {"pack", "3"}, {"shared", "auto"}, {"repair", "auto"}, {"legacy", "5"}, {"pack", "5"}, {"shared", "5"}, {"repair", "5"}} {
 		t.Run(tc.source+"-"+tc.format, func(t *testing.T) {
 			db, sourceDir, closeDB := referenceBuildSource(t, tc.source)
 			before := referenceBuildKVDigest(t, db)

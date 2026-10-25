@@ -688,7 +688,7 @@ func inspectHistorySpaceHeaders(dir string, trio historySpaceTrio) (historySpace
 		out.historyCompressed = true
 		out.historyBlocks = binary.BigEndian.Uint64(compressedHeader[24:32])
 		out.historyLogical = binary.BigEndian.Uint64(compressedHeader[32:40])
-		if binary.BigEndian.Uint32(compressedHeader[8:12]) == compressedBlockFooterVersion || accountDeltaFooterVersion(compressedHeader[:]) {
+		if binary.BigEndian.Uint32(compressedHeader[8:12]) == compressedBlockFooterVersion || accountDeltaFooterVersion(compressedHeader[:]) || recordColumnFooterVersion(compressedHeader[:]) {
 			stat, err := history.Stat()
 			if err != nil {
 				return out, err

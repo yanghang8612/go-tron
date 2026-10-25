@@ -116,7 +116,7 @@ func businessSampleFixture(t *testing.T) (string, SegmentRef, SegmentRef, Segmen
 }
 
 func TestBusinessSampleMatchesFullLogicalOracleBothContainers(t *testing.T) {
-	for _, format := range []string{"1", "2"} {
+	for _, format := range []string{"1", "2", "5"} {
 		t.Run(format, func(t *testing.T) {
 			t.Setenv("GTRON_HISTORY_COMPRESSION_FORMAT", format)
 			dir, h, i, a, want := businessSampleFixture(t)

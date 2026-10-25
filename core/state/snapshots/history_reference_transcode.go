@@ -483,7 +483,7 @@ func historyReferenceTranscodePreflight(ctx context.Context, path string, size u
 	switch binary.BigEndian.Uint32(header[8:12]) {
 	case compressedBlockVersion:
 		count, tableOff, logical = binary.BigEndian.Uint64(header[24:32]), compressedBlockHeaderSize, binary.BigEndian.Uint64(header[32:40])
-	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion:
+	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion, compressedBlockRecordColumnsVersion:
 		layout, e := readCompressedBlockFooterInfo(contextReaderAt{ctx: ctx, r: f}, size, header[:])
 		if e != nil {
 			return e

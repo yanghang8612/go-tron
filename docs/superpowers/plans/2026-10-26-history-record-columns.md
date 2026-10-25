@@ -17,7 +17,11 @@ This plan is not a completion claim; unchecked items require new evidence.
 - Validate HRC2 page CRC32C plus unchanged whole-file/canonical-stream SHA256;
   do not remove the existing authenticated manifest/companion protocol.
 
-## B. Candidate physical container (pending)
+## B. Candidate physical container (implemented; native acceptance pending)
+
+Local implementation and five-package/race/vet/Sapling checks are recorded in
+`docs/dev/history-record-columns-container-20261026.md`. Physical version 5 is
+explicit-only. Whole fixed-capture and HTTP acceptance below remain pending.
 
 - Allocate a new explicit physical version/footer (proposed 5 / gtcend05);
   recognize it in all reader, import, inspect and format validation paths.

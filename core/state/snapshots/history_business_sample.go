@@ -531,7 +531,7 @@ func openBusinessSampleFile(dir string, ref SegmentRef, budget *businessSampleBu
 		if binary.BigEndian.Uint64(h[40:48]) != dataOff || dataOff > uint64(stat.Size()) {
 			return nil, errors.New("snapshots: invalid sample compressed table bounds")
 		}
-	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion:
+	case compressedBlockFooterVersion, compressedBlockAccountDeltaVersion, compressedBlockRecordColumnsVersion:
 		info, err = readCompressedBlockFooterInfo(out, uint64(stat.Size()), h[:])
 		if err != nil {
 			return nil, err
@@ -568,13 +568,18 @@ func openBusinessSampleFile(dir string, ref SegmentRef, budget *businessSampleBu
 			return nil, errors.New("snapshots: sample decoded chunk cap exceeded")
 		}
 	}
+	if recordColumnFooterVersion(h[:]) {
+		if err := validateRecordColumnBlocks(table, info.uncSize); err != nil {
+			return nil, err
+		}
+	}
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecodeAllCapLimit(true), zstd.WithDecoderMaxMemory(o.MaxChunkBytes))
 	if err != nil {
 		return nil, err
 	}
 	out.decoder = dec
 	out.logical = info.uncSize
-	out.compressed = &compressedBlockReader{f: file, dec: dec, blockSize: info.blockSize, recCount: info.recCount, uncSize: info.uncSize, dataOff: dataOff, fileSize: uint64(stat.Size()), table: table, cacheLimit: 2}
+	out.compressed = &compressedBlockReader{accountDelta: accountDeltaFooterVersion(h[:]), recordColumns: recordColumnFooterVersion(h[:]), f: file, dec: dec, blockSize: info.blockSize, recCount: info.recCount, uncSize: info.uncSize, dataOff: dataOff, fileSize: uint64(stat.Size()), table: table, cacheLimit: 2}
 	ok = true
 	return out, nil
 }
