@@ -1512,7 +1512,7 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 	}
 	if w.recordHeaders != nil {
 		starts := w.recordHeadersForPage(w.body.uncTotal, len(w.chunk))
-		stored, err := encodeRecordColumnStoredPage(w.chunk, starts, w.body.enc)
+		stored, err := w.recordHeaders.encoder.encode(w.chunk, starts, w.body.enc)
 		if err != nil {
 			return err
 		}
@@ -1644,7 +1644,10 @@ func (w *compressedBlockStreamWriter) Reset() error {
 		w.accountDeltas.values = w.accountDeltas.values[:0]
 	}
 	if w.recordHeaders != nil {
-		*w.recordHeaders = recordColumnStreamNotes{offsets: w.recordHeaders.offsets[:0]}
+		s := w.recordHeaders
+		s.offsets = s.offsets[:0]
+		s.starts = s.starts[:0]
+		s.last, s.haveLast = 0, false
 	}
 	return nil
 }

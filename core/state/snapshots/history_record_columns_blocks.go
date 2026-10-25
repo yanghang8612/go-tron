@@ -128,6 +128,8 @@ func decompressRecordColumnBlob(data []byte, layout compressedBlockFooterLayout)
 
 type recordColumnStreamNotes struct {
 	offsets  []uint64
+	starts   []uint32
+	encoder  recordColumnPageEncoder
 	last     uint64
 	haveLast bool
 }
@@ -163,8 +165,8 @@ func (w *compressedBlockStreamWriter) NoteRecordHeader(offset uint64) error {
 }
 
 func (w *compressedBlockStreamWriter) recordHeadersForPage(start uint64, size int) []uint32 {
-	var starts []uint32
 	s := w.recordHeaders
+	starts := s.starts[:0]
 	end := start + uint64(size)
 	consumed := 0
 	for _, offset := range s.offsets {
@@ -178,6 +180,7 @@ func (w *compressedBlockStreamWriter) recordHeadersForPage(start uint64, size in
 	}
 	copy(s.offsets, s.offsets[consumed:])
 	s.offsets = s.offsets[:len(s.offsets)-consumed]
+	s.starts = starts
 	return starts
 }
 
