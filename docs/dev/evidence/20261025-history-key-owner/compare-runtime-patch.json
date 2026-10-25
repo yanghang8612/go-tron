@@ -1,0 +1,8 @@
+{
+  "path": "compare.py",
+  "before_sha256": "402e92669ecf99e38d3f8f5d932d055b271db068993724cf93ff5fb7349ce1e5",
+  "after_sha256": "3b5fb0b5a306d45613a351fd0166786802ca15052e5495a089afc38d24bb5781",
+  "before": "stdout=out,stderr=subprocess.STDOUT,check=True,timeout=120)",
+  "after": "stdout=out,stderr=subprocess.STDOUT,check=True,timeout=120,env=dict(os.environ,GOCACHE='/root/.cache/go-build',GOPATH='/root/go',GOTOOLCHAIN='local'))",
+  "reason": "Explicit Go tool cache for pprof under older systemd; no production code or timing method change."
+}

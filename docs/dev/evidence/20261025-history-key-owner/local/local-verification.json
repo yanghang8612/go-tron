@@ -1,0 +1,73 @@
+{
+  "complete": true,
+  "utc": "2026-10-24T16:51:48.391736+00:00",
+  "commit": "f42f53ae10d5b51e743118fbc8660c39f590250d",
+  "production_mutations": false,
+  "checks": {
+    "v10-tests-4.log": {
+      "sha256": "89273fc7a4b3181f6a1aeb8f7910b85a759c2296a1d844068d084784c69ad99b",
+      "bytes": 65,
+      "successful": true
+    },
+    "local-real-tests.log": {
+      "sha256": "dcffecdf4d6622bf2169fc0b36498fa9a43a145c5b933e17d38b0d56ce7db7c6",
+      "bytes": 256,
+      "successful": true
+    },
+    "packages.log": {
+      "sha256": "fdcc07be2588c2bae27d47eb55b8e153f566f977bc6dc784bce9d4498dde6547",
+      "bytes": 285,
+      "successful": true
+    },
+    "race.log": {
+      "sha256": "ab71037a2cc5ce7ba6883164c4353a218cdb9ac29430fe38ee46bf4a036b6aec",
+      "bytes": 66,
+      "successful": true
+    },
+    "vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "successful": true
+    },
+    "build.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "successful": true
+    }
+  },
+  "initial_evidence": {
+    "file": "/Users/asuka/Downloads/=_gtron-history-key-owner-initial-20261025-01.zip_",
+    "bytes": 46122187,
+    "sha256": "c169e2a20d072a370a562448e546655589c43bbd1d9d75edd7dff1b94193add9",
+    "members_checked": 7
+  },
+  "v2_local_checks": {
+    "five_packages": "packages-v2.log",
+    "race": "race-v2.log",
+    "vet": "vet-v2.log",
+    "build": "build-v2.log",
+    "commit": "6a96f60c"
+  },
+  "v2_final_checks": {
+    "packages-v2.log": {
+      "sha256": "153388cd930a15c17d3ad7706e033ee6a85d74c3750d5a727af35ad98688ed92",
+      "successful": true
+    },
+    "race-v2.log": {
+      "sha256": "6022b2ca0d9f1be13c36cb5374a37a86cb891633ba73ddc3a50459f6eab28b0d",
+      "successful": true
+    },
+    "vet-v2.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "successful": true
+    },
+    "build-v2.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "successful": true
+    },
+    "local-real-tests-v2.log": {
+      "sha256": "614db8ea11758fdb76a6f54796862548663af6d3c6a83496936350d81e3d050a",
+      "successful": true
+    }
+  }
+}

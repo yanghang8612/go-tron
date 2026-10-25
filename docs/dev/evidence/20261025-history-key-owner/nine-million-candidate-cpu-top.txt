@@ -1,0 +1,44 @@
+File: candidate.test
+Build ID: 6b10e07c1abad7419f3636b8101074a3f5d990f6
+Type: cpu
+Time: 2026-10-24 17:55:43 UTC
+Duration: 10.16s, Total samples = 10.09s (99.29%)
+Showing nodes accounting for 8.80s, 87.22% of 10.09s total
+Dropped 302 nodes (cum <= 0.05s)
+Showing top 35 nodes out of 195
+      flat  flat%   sum%        cum   cum%
+     1.95s 19.33% 19.33%      2.03s 20.12%  github.com/golang/snappy.decode
+     1.38s 13.68% 33.00%      1.38s 13.68%  crypto/internal/fips140/sha256.blockAVX2
+     1.21s 11.99% 45.00%      1.21s 11.99%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     0.90s  8.92% 53.91%      0.90s  8.92%  runtime.duffcopy
+     0.35s  3.47% 57.38%      4.57s 45.29%  github.com/tronprotocol/go-tron/core/rawdb.iterateHistoryOwnerSpans
+     0.35s  3.47% 60.85%      1.16s 11.50%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).latestSegmentRef
+     0.34s  3.37% 64.22%      0.34s  3.37%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.29s  2.87% 67.10%      0.29s  2.87%  runtime.memmove
+     0.20s  1.98% 69.08%      0.74s  7.33%  github.com/tronprotocol/go-tron/core/rawdb.decodeHistoryOwnerSpansInto
+     0.20s  1.98% 71.06%      0.20s  1.98%  runtime.memclrNoHeapPointers
+     0.17s  1.68% 72.75%      0.17s  1.68%  encoding/binary.Uvarint (inline)
+     0.15s  1.49% 74.23%      3.13s 31.02%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.13s  1.29% 75.52%      0.35s  3.47%  runtime.mapaccess1_faststr
+     0.12s  1.19% 76.71%      0.12s  1.19%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.11s  1.09% 77.80%      0.11s  1.09%  cmpbody
+     0.11s  1.09% 78.89%      0.11s  1.09%  memeqbody
+     0.10s  0.99% 79.88%      0.10s  0.99%  internal/runtime/syscall.Syscall6
+     0.09s  0.89% 80.77%      0.16s  1.59%  context.(*cancelCtx).Err
+     0.08s  0.79% 81.57%      0.08s  0.79%  aeshashbody
+     0.07s  0.69% 82.26%      0.07s  0.69%  sync/atomic.(*Value).Load (inline)
+     0.06s  0.59% 82.85%      0.07s  0.69%  github.com/cockroachdb/pebble/internal/arenaskl.(*Skiplist).findSpliceForLevel
+     0.05s   0.5% 83.35%      1.09s 10.80%  github.com/tronprotocol/go-tron/core/state/snapshots.loadSystemHistoryRouting
+     0.05s   0.5% 83.85%      0.11s  1.09%  runtime.scanobject
+     0.04s   0.4% 84.24%      1.45s 14.37%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.04s   0.4% 84.64%      0.07s  0.69%  github.com/cockroachdb/pebble/sstable.(*blockIter).SeekGE
+     0.04s   0.4% 85.03%      0.23s  2.28%  runtime.growslice
+     0.04s   0.4% 85.43%      0.18s  1.78%  runtime.mallocgcSmallNoscan
+     0.04s   0.4% 85.83%      0.11s  1.09%  runtime.mapaccess1
+     0.03s   0.3% 86.12%      0.48s  4.76%  runtime.mallocgc
+     0.02s   0.2% 86.32%      0.11s  1.09%  github.com/cockroachdb/pebble.(*levelIter).loadFile
+     0.02s   0.2% 86.52%      0.11s  1.09%  github.com/tronprotocol/go-tron/core/rawdb.(*stateHistoryQueryTailView).iteratePlannedOwnersLocked.func2
+     0.02s   0.2% 86.72%      0.07s  0.69%  github.com/tronprotocol/go-tron/core/rawdb.decodeBorrowedStateDomainChangeRow
+     0.02s   0.2% 86.92%      0.10s  0.99%  runtime.mallocgcSmallScanNoHeader
+     0.02s   0.2% 87.12%      0.06s  0.59%  sort.Search (inline)
+     0.01s 0.099% 87.22%      0.07s  0.69%  crypto/internal/fips140/sha256.(*Digest).checkSum

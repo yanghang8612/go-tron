@@ -1,0 +1,67 @@
+{
+  "scope": "same frozen V9 cohort and complete 11,818,192 capture; no live deployment",
+  "corpus": {
+    "files": 19949,
+    "smaller": 19718,
+    "unchanged": 231,
+    "larger": 0,
+    "formats": {
+      "9": 231,
+      "10": 19718
+    },
+    "bytes": {
+      "Keys": 2443423104,
+      "Records": 14302423656,
+      "Owners": 841341445,
+      "CompactPages": 18972190,
+      "PlainPages": 126980,
+      "SourceBytes": 126009832509,
+      "CandidateBytes": 119501234404,
+      "SourceKeyBytes": 63533097536,
+      "CandidateKeyBytes": 40575020326,
+      "OwnerDataBytes": 16330929279,
+      "OwnerDirectoryBytes": 117287874,
+      "OwnerFooterBytes": 1261952,
+      "PostingBytes": 44616979985,
+      "OffsetBytes": 16287163453,
+      "DirectoryBytes": 1570197655,
+      "AccountKeys": 668192575,
+      "AssetKeys": 510539678,
+      "CrossFlatOwners": 416435921
+    },
+    "net_saved_bytes": 6508598105,
+    "saved_percent": 5.165150984971857
+  },
+  "complete-input": {
+    "files": 4609,
+    "smaller": 4533,
+    "unchanged": 76,
+    "larger": 0,
+    "formats": {
+      "9": 76,
+      "10": 4533
+    },
+    "bytes": {
+      "Keys": 292521921,
+      "Records": 3565941110,
+      "Owners": 69059705,
+      "CompactPages": 2237646,
+      "PlainPages": 49943,
+      "SourceBytes": 21690213219,
+      "CandidateBytes": 21252586827,
+      "SourceKeyBytes": 6600645697,
+      "CandidateKeyBytes": 4844841515,
+      "OwnerDataBytes": 1308594116,
+      "OwnerDirectoryBytes": 9293562,
+      "OwnerFooterBytes": 290112,
+      "PostingBytes": 10835020085,
+      "OffsetBytes": 4052652664,
+      "DirectoryBytes": 201341693,
+      "AccountKeys": 55735634,
+      "AssetKeys": 32881926,
+      "CrossFlatOwners": 28023857
+    },
+    "net_saved_bytes": 437626392,
+    "saved_percent": 2.017621438671022
+  }
+}

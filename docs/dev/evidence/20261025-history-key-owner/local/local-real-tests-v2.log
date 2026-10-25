@@ -1,0 +1,6 @@
+=== RUN   TestOfflineOwnerLocalFixtures
+--- PASS: TestOfflineOwnerLocalFixtures (1.96s)
+=== RUN   TestOfflineOwnerPageBoundaryReview
+--- PASS: TestOfflineOwnerPageBoundaryReview (0.00s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	3.603s
