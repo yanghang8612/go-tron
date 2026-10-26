@@ -46,3 +46,9 @@ policy/inspection paths and repeat actual file, publication, MuHash, complete
 HTTP and recovery gates. Preserve CDC for large opaque values, bounded buffers,
 canonical indexes, transaction ranges and commitment semantics. No push,
 deployment, production service operation, deletion/reset or budget change.
+
+Completed evidence: all 1,817 raw page rows and all 37 native evidence members
+are retrieved and independently verified. See
+[the completed report](../../dev/history-columns-shared-payload-20261026.md).
+The format remains unregistered. Continue with the separate bounded scratch
+decoder study before choosing physical integration.

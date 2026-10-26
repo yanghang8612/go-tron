@@ -16,3 +16,8 @@
 6. A promising prototype still requires actual file/space accounting, full
    compactor performance, query/memory checks and final-binary correctness
    gates before recommending use. The broader compression goal remains active.
+
+Steps 1–5 are complete: 1,817/1,817 canonical page checks passed, 555,250 page
+bytes saved, resident encode −39.09% and decode +10.12%. Complete raw evidence
+is locally verified. Step 6 is still pending; the immediate follow-up is the
+bounded scratch decoder study, with no product format or deployment change.
