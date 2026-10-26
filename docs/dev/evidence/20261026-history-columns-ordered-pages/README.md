@@ -57,3 +57,37 @@ recompute 12 summary groups and three effects. This now requires the full
 native log archive. The verifier explicitly reports that the unmeasured full
 candidate enumeration was not retrieved and final fixed-copy acceptance is
 incomplete. Earlier checkpoint ZIPs retain their historical observation scope.
+
+Final fixed-copy acceptance (completed original unit, no rerun):
+
+- `final-acceptance-core.tar.xz`: 467,028 B, SHA256
+  `80f824b2c934e80861630356bc97829230c079b7dcec5e5fcfc1f063cfe00f3d`.
+  All 704 exact original members are present, including census, actual restore,
+  both full fingerprints, 286 client/server request rows, 56 mincore proofs,
+  122 ready/env/resource/log groups, raw CPU profiles and harness source.
+  `verify-final-acceptance.py` reconstructs the original ZIP framing in memory
+  and proves the exact 1,242,954 B ZIP SHA256
+  `26641ef303359d752ee8ce4399828a9f91ec211d025b6133a5aacfc95e7890dd`.
+  This is lossless transfer of all original bytes, not a filtered summary.
+- Both producer seal JSONs and their fresh UI transport receipts are retained
+  alongside the archive. The final unit exited inactive/PID 0/status 0.
+- `final-transfer-receipts.zip`: 53,582 B, 108 members, SHA256
+  `f73ee450c8b5de0bb8fd38485c2d6a4ca563f047d93e40174a2ab3436125e1ff`.
+  `verify-final-transfer.py` verifies all 92 direct packets and unique nonces,
+  terminal task state, helpers and original ZIP reconstruction. Failed large
+  packets were discarded; unstable SFTP search was not used as evidence.
+- `final-profile-reproduction.zip`: 19,207 B, 8 members, SHA256
+  `a5f741fe3ee9e82b022b2884d0db293685361bad58ecd6412fa6bbd89fcbcb0c`.
+  `verify-final-profiles.py --pprof` exactly recreates all six reports from raw
+  profiles, including the two native top35 reports. Local parser Go is 1.27.3;
+  native program/checks remain frozen Go 1.25.5. Warm cumulative CPU items are
+  nested and must not be added or used as OS-cold I/O-time measurements.
+
+Run the three final verifiers. They prove full MuHash, actual 60-block/22,496-row
+history restore, all 286 responses/handler metrics, exact 42-group summaries,
+56 pre-startup cold proofs, 122 host identities and unchanged fingerprint
+records for 803 files per input. Shared inodes are not counted as 1,606 unique
+physical files. Full 11.8M snapshot export/import was not performed; 18 raw
+trace bodies remain on the server, with exact SHA/size in the core manifest.
+Earlier checkpoint archives preserve their historical pending observations.
+No push, deployment, production service operation or production data deletion.

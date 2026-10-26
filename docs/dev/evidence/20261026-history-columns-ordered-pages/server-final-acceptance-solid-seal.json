@@ -1,0 +1,14 @@
+{
+  "all_members_exactly_preserved": true,
+  "archive": "final-acceptance-core.tar.xz",
+  "bytes": 467028,
+  "complete": true,
+  "device": "66304",
+  "inode": "98046760",
+  "members": 704,
+  "mtime_ns": "1792981203230637688",
+  "original_zip_bytes": 1242954,
+  "original_zip_sha256": "26641ef303359d752ee8ce4399828a9f91ec211d025b6133a5aacfc95e7890dd",
+  "production_mutations": false,
+  "sha256": "80f824b2c934e80861630356bc97829230c079b7dcec5e5fcfc1f063cfe00f3d"
+}

@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "seals": [
+    {
+      "bytes": 1242954,
+      "members": 704,
+      "name": "final-acceptance-core.zip",
+      "sha256": "26641ef303359d752ee8ce4399828a9f91ec211d025b6133a5aacfc95e7890dd"
+    }
+  ]
+}
