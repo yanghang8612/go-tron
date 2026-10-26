@@ -20,3 +20,15 @@ eight samples; publication completion and new full acceptance are separate.
 The first bulk terminal upload lacked completion acknowledgements. The final
 transfer uses bounded commands and an individual SHA receipt per part; only
 that verified 234,428-byte payload was dispatched. No production action.
+
+`publication-complete.zip`: 100,613 bytes, SHA256
+`221ec43bd415177631a1649f5b3cedb138cdb80166245b5508fbb4d1c6ae002b`,
+32 members. `python3 verify-publication.py` verifies all ten inbound ZIP parts,
+all 45 raw samples (36 timed), exact output hashes against the frozen original
+samples, nine independently recomputed summaries and final source/library/binary
+identities. Both old and new V5 produce exactly the same bytes in every pair.
+
+Allocation falls by 1.25–1.32 GB per pair, but actual publication is only
+8.25–8.71% faster than old V5 and remains 53.52–68.17% slower than V2. This
+does not pass the adoption gate. CPU-only diagnosis is a separate private unit;
+new full MuHash/HTTP/restore acceptance has not been substituted by old results.
