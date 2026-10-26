@@ -34,7 +34,7 @@ assert b'--- PASS: TestOfflineColumnsOrderedLargeFixture' in files['publication-
 assert b'--- FAIL: TestRecordColumnParallelCopiesAnnotations' in files['exploratory-new-tests-01.log']
 assert b'--- PASS: TestRecordColumnParallelCopiesAnnotations' in files['exploratory-new-tests-02.log']
 assert b'private worker scratch 575079 B; four-worker compression buffer bound 5992408 B' in files['focused.log']
-assert b'PASS' in files['race.log']
+assert any(row.split()[:2] == [b'ok', b'github.com/tronprotocol/go-tron/core/state/snapshots'] for row in files['race.log'].splitlines())
 print(json.dumps(dict(local_checks=6, source_files=2149, changed_go_files=5,
                       max_compression_buffer_capacity_bytes=5992408,
                       native_acceptance_complete=False, production_mutations=False), indent=2))
