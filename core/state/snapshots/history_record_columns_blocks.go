@@ -135,6 +135,10 @@ type recordColumnStreamNotes struct {
 }
 
 func newRecordColumnStreamWriter(dir string, prefixSize int) (*compressedBlockStreamWriter, error) {
+	return newRecordColumnStreamWriterWorkers(dir, prefixSize, 1)
+}
+
+func newRecordColumnStreamWriterWorkers(dir string, prefixSize, workers int) (*compressedBlockStreamWriter, error) {
 	if prefixSize <= 0 || prefixSize > historyRecordColumnPageMax {
 		return nil, errHistoryRecordColumns
 	}
@@ -143,7 +147,7 @@ func newRecordColumnStreamWriter(dir string, prefixSize int) (*compressedBlockSt
 		return nil, e
 	}
 	body.encoded = acquireStateDomainChangeHistoryEncodedChunk(body.enc, historyRecordColumnPageMax)
-	return &compressedBlockStreamWriter{dir: dir, chunkSize: historyRecordColumnPageMax, prefixSize: prefixSize, workers: 1, body: body, footer: true, first: acquireStateDomainChangeHistoryCompressionChunk(historyRecordColumnPageMax), recordHeaders: &recordColumnStreamNotes{}}, nil
+	return &compressedBlockStreamWriter{dir: dir, chunkSize: historyRecordColumnPageMax, prefixSize: prefixSize, workers: historyCompressionConcurrency(workers), body: body, footer: true, first: acquireStateDomainChangeHistoryCompressionChunk(historyRecordColumnPageMax), recordHeaders: &recordColumnStreamNotes{}}, nil
 }
 
 func (w *compressedBlockStreamWriter) NoteRecordHeader(offset uint64) error {

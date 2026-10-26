@@ -1185,14 +1185,16 @@ func historyCompressionConcurrency(procs int) int {
 }
 
 type compressedFileJob struct {
-	seq  uint64
-	data []byte
+	seq    uint64
+	data   []byte
+	starts []uint32
 }
 
 type compressedFileResult struct {
 	seq          uint64
 	uncompressed []byte
 	compressed   []byte
+	starts       []uint32
 }
 
 // orderedCompressionPipeline accepts owned, fixed-size logical chunks from one
@@ -1209,11 +1211,13 @@ type orderedCompressionPipeline struct {
 	results   chan compressedFileResult
 	pool      chan []byte
 	encoded   chan []byte
-	done      chan struct{}
-	cancel    sync.Once
-	closeJobs sync.Once
-	workers   sync.WaitGroup
-	reducer   sync.WaitGroup
+	// Non-nil only for V5. Each in-flight job owns one annotation buffer.
+	annotations chan []uint32
+	done        chan struct{}
+	cancel      sync.Once
+	closeJobs   sync.Once
+	workers     sync.WaitGroup
+	reducer     sync.WaitGroup
 
 	errMu sync.Mutex
 	err   error
@@ -1221,6 +1225,14 @@ type orderedCompressionPipeline struct {
 }
 
 func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, workers int) *orderedCompressionPipeline {
+	return newOrderedCompressionPipelineMode(out, chunkSize, workers, false)
+}
+
+func newOrderedRecordColumnPipeline(out *compressedBlockWriter, workers int) *orderedCompressionPipeline {
+	return newOrderedCompressionPipelineMode(out, historyRecordColumnPageMax, workers, true)
+}
+
+func newOrderedCompressionPipelineMode(out *compressedBlockWriter, chunkSize, workers int, columns bool) *orderedCompressionPipeline {
 	inFlight := workers * 2
 	p := &orderedCompressionPipeline{
 		out:       out,
@@ -1238,11 +1250,18 @@ func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, worker
 	for range inFlight {
 		p.encoded <- acquireStateDomainChangeHistoryEncodedChunk(out.enc, chunkSize)
 	}
+	if columns {
+		p.annotations = make(chan []uint32, inFlight)
+		for range inFlight {
+			p.annotations <- nil
+		}
+	}
 
 	p.workers.Add(workers)
 	for range workers {
 		go func() {
 			defer p.workers.Done()
+			var columnEncoder recordColumnPageEncoder
 			for {
 				select {
 				case job, ok := <-p.jobs:
@@ -1258,7 +1277,17 @@ func newOrderedCompressionPipeline(out *compressedBlockWriter, chunkSize, worker
 					result := compressedFileResult{
 						seq:          job.seq,
 						uncompressed: job.data,
-						compressed:   p.out.enc.EncodeAll(job.data, encoded[:0]),
+						starts:       job.starts,
+					}
+					if columns {
+						var err error
+						result.compressed, err = columnEncoder.encodeOwned(job.data, job.starts, p.out.enc, encoded)
+						if err != nil {
+							p.setError(err)
+							return
+						}
+					} else {
+						result.compressed = p.out.enc.EncodeAll(job.data, encoded[:0])
 					}
 					select {
 					case p.results <- result:
@@ -1307,6 +1336,12 @@ func (p *orderedCompressionPipeline) reduce() {
 			case p.encoded <- ready.compressed[:0]:
 			case <-p.done:
 			}
+			if p.annotations != nil {
+				select {
+				case p.annotations <- ready.starts[:0]:
+				case <-p.done:
+				}
+			}
 			next++
 		}
 	}
@@ -1334,10 +1369,34 @@ func (p *orderedCompressionPipeline) Err() error {
 }
 
 func (p *orderedCompressionPipeline) Submit(data []byte) error {
+	if p.annotations != nil {
+		return p.SubmitRecords(data, nil)
+	}
+	return p.submit(compressedFileJob{data: data})
+}
+
+func (p *orderedCompressionPipeline) SubmitRecords(data []byte, starts []uint32) error {
+	if p.annotations == nil || len(data) == 0 || len(data) > historyRecordColumnPageMax || len(starts) > len(data)/21 {
+		return errHistoryRecordColumns
+	}
 	if err := p.Err(); err != nil {
 		return err
 	}
-	job := compressedFileJob{seq: p.seq, data: data}
+	var owned []uint32
+	select {
+	case owned = <-p.annotations:
+	case <-p.done:
+		return p.Err()
+	}
+	owned = append(owned[:0], starts...)
+	return p.submit(compressedFileJob{data: data, starts: owned})
+}
+
+func (p *orderedCompressionPipeline) submit(job compressedFileJob) error {
+	if err := p.Err(); err != nil {
+		return err
+	}
+	job.seq = p.seq
 	select {
 	case p.jobs <- job:
 		p.seq++
@@ -1382,6 +1441,9 @@ func (p *orderedCompressionPipeline) releaseAvailableBuffers() {
 	for len(p.encoded) != 0 {
 		buffer := <-p.encoded
 		releaseStateDomainChangeHistoryEncodedChunk(&buffer, p.chunkSize)
+	}
+	for len(p.annotations) != 0 {
+		<-p.annotations
 	}
 }
 
@@ -1511,16 +1573,28 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 		w.bodyStart = true
 	}
 	if w.recordHeaders != nil {
-		starts := w.recordHeadersForPage(w.body.uncTotal, len(w.chunk))
-		stored, err := w.recordHeaders.encoder.encode(w.chunk, starts, w.body.enc)
-		if err != nil {
+		// The reducer owns body.uncTotal after queuing begins. Logical is owned
+		// solely by this writer and already includes the current page.
+		starts := w.recordHeadersForPage(w.logical-uint64(len(w.chunk)), len(w.chunk))
+		if w.parallel == nil && w.workers > 1 && w.logical >= minParallelHistoryCompressionBytes {
+			w.parallel = newOrderedRecordColumnPipeline(w.body, w.workers)
+			w.recordHeaders.encoder = recordColumnPageEncoder{}
+		}
+		if w.parallel == nil {
+			stored, err := w.recordHeaders.encoder.encode(w.chunk, starts, w.body.enc)
+			if err != nil {
+				return err
+			}
+			if err = w.body.appendEncodedBlock(len(w.chunk), stored); err != nil {
+				return err
+			}
+			w.chunk = w.chunk[:0]
+			return nil
+		}
+		if err := w.parallel.SubmitRecords(w.chunk, starts); err != nil {
 			return err
 		}
-		if err = w.body.appendEncodedBlock(len(w.chunk), stored); err != nil {
-			return err
-		}
-		w.chunk = w.chunk[:0]
-		return nil
+		return w.acquireNextChunk(final)
 	}
 	if w.accountDeltas != nil {
 		notes := w.accountNotesForPage(w.body.uncTotal, len(w.chunk))
@@ -1549,6 +1623,10 @@ func (w *compressedBlockStreamWriter) flushChunk(final bool) error {
 	if err := w.parallel.Submit(w.chunk); err != nil {
 		return err
 	}
+	return w.acquireNextChunk(final)
+}
+
+func (w *compressedBlockStreamWriter) acquireNextChunk(final bool) error {
 	w.chunk = nil
 	if !final {
 		chunk, err := w.parallel.Acquire()

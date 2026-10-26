@@ -58,7 +58,7 @@ func newHistoryCompressedStreamFormat(ctx context.Context, dir string, chunkSize
 	prefixSize := min(historyHeaderPrefixBytes, chunkSize)
 	switch format {
 	case "5":
-		return newRecordColumnStreamWriter(dir, prefixSize)
+		return newRecordColumnStreamWriterWorkers(dir, prefixSize, workers)
 	case "4":
 		return newAccountDeltaStreamWriter(dir, accountDeltaPageMax, prefixSize, 4)
 	case "3":

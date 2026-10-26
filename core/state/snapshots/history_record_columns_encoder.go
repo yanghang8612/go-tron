@@ -8,7 +8,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// recordColumnPageEncoder belongs to one serial stream writer. Only key bytes
+// recordColumnPageEncoder belongs to one serial writer or pipeline worker. Only key bytes
 // differ between HRC2 modes; the remaining columns and literals are built once.
 // Its returned bytes are borrowed until the next encode call.
 type recordColumnPageEncoder struct {
@@ -137,4 +137,14 @@ func (e *recordColumnPageEncoder) encode(raw []byte, starts []uint32, enc *zstd.
 		}
 	}
 	return e.best, nil
+}
+
+// encodeOwned moves the winner to the caller. A queued result may outlive this
+// worker's next encode, so only the other candidate remains in worker scratch.
+// dst must be exclusively owned by the caller; it may become that candidate.
+func (e *recordColumnPageEncoder) encodeOwned(raw []byte, starts []uint32, enc *zstd.Encoder, dst []byte) ([]byte, error) {
+	e.best = dst
+	stored, err := e.encode(raw, starts, enc)
+	e.best = nil
+	return stored, err
 }
