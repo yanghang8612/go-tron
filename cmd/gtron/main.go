@@ -684,6 +684,10 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	historyReadersOnly, err := runtimeHistoryReadersOnly()
+	if err != nil {
+		return err
+	}
 	rawdb.SetStateHistoryBlockDedup(ctx.Bool(historyBlockDedupFlag.Name))
 	rawdb.SetStateHistoryCrossBlockDedup(ctx.Bool(historyCrossBlockDedupFlag.Name))
 	log.Info("Hot history cross-block dedup configured", "enabled", ctx.Bool(historyCrossBlockDedupFlag.Name), "bucketBlocks", rawdb.StateHistoryChunkBucketBlocks)
@@ -1292,6 +1296,7 @@ func gtron(ctx *cli.Context) error {
 		// controlled by postingPrune below.
 		var fullIndexPrune statepruning.StateChangeIndexPruneFunc
 		domainLifecycle = statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
+			ReadersOnly: historyReadersOnly,
 			Snapshot: statesnapshots.Config{
 				Dir:                         stateSnapshotDir,
 				Enabled:                     coldStateSnapshotsEnabled,
@@ -1397,6 +1402,7 @@ func gtron(ctx *cli.Context) error {
 		balanceTracePruneLifecycleWired = balanceTracePrune != nil
 		retiredPruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
+			"readerFirstHold", historyReadersOnly,
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", coldStateSnapshotsEnabled,
 			"chainFreezerBuild", chainFreezerSnapshotBuild != nil,

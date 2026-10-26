@@ -22,6 +22,10 @@ var errStateChangeIndexPruneDeferredForCatchup = errors.New("pruning: state-chan
 // build and publish cold history files, prune verified covered hot data, then
 // perform optional merges and dependent maintenance.
 type SnapshotLifecycleConfig struct {
+	// ReadersOnly holds publication and every dependent maintenance stage during
+	// a reader-first format rollout. Hot capture and immutable readers are wired
+	// independently. Keep this false for ordinary operation.
+	ReadersOnly       bool
 	Snapshot          snapshots.Config
 	Pruner            PrunerConfig
 	ChainFreezerBuild ChainFreezerBuildFunc
@@ -71,6 +75,7 @@ type SnapshotLifecyclePass struct {
 // under one node.Lifecycle, so their progress advances in one ordered pass
 // instead of via independent background loops.
 type SnapshotLifecycle struct {
+	readersOnly           bool
 	builder               *snapshots.Runner
 	pruner                *Pruner
 	chainFreezerBuild     ChainFreezerBuildFunc
@@ -118,6 +123,7 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		builder = snapshots.NewRunner(snapshotChainSource{chain: chain}, cfg.Snapshot)
 	}
 	return &SnapshotLifecycle{
+		readersOnly:           cfg.ReadersOnly,
 		builder:               builder,
 		pruner:                NewPruner(chain, cfg.Pruner),
 		chainFreezerBuild:     cfg.ChainFreezerBuild,
@@ -139,6 +145,11 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 
 func (l *SnapshotLifecycle) Start() error {
 	if l == nil {
+		return nil
+	}
+	if l.readersOnly {
+		close(l.done)
+		lifecycleLog.Info("Reader-first rollout holds cold publication and pruning")
 		return nil
 	}
 	if l.pruner == nil || l.pruner.chain == nil || l.pruner.chain.DB() == nil {
@@ -242,6 +253,9 @@ func (l *SnapshotLifecycle) notifyPassComplete() {
 func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error) {
 	if l == nil {
 		return SnapshotLifecyclePass{}, nil
+	}
+	if l.readersOnly {
+		return SnapshotLifecyclePass{PruneDeferred: true}, nil
 	}
 	if l.builder != nil {
 		// Preflight may fail before the runner is entered. A fresh full pass
