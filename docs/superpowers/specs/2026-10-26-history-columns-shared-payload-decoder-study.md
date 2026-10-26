@@ -1,5 +1,15 @@
 # Bounded HSP1 scratch study before physical format registration
 
+Completed 2026-10-26: all 1,817 native pages, six arms and the independent raw
+verification pass. Scratch HSP1 remains 7.6895% slower than V5 with matched
+buffer reuse. A second six-window CPU study reproduces an 8.5303% CPU/pass
+increase and attributes key-frame Huffman work through exact callsites.
+Do not register this representation on the strength of its 1.1090% estimated
+three-file saving. Preserve V5 and use a separate experiment if pursuing a
+lighter key codec; it must prove both net size and read cost before integration.
+The complete evidence and recomputable tables are linked from
+`docs/dev/history-columns-shared-payload-20261026.md`.
+
 The complete 37-member HSP1 page evidence is pinned at SHA256
 1f1148ee9885c9efcc793ac3058826b5029fe77f7b9941b83c5f456864bd03c5.
 All 1,817 rows are locally verified. The prototype saves 555,250 page bytes on

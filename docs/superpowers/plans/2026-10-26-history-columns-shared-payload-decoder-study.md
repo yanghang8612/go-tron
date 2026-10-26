@@ -1,5 +1,13 @@
 # Follow-up to complete shared payload page evidence
 
+Completed: steps 1–5 below, plus a six-window CPU/callsite diagnosis. Both
+complete raw archives and independently recomputed records are checked in.
+The gate decision is to keep HSP1 unregistered: matched reused-buffer read time
+is +7.6895% versus V5; the CPU control is +8.5303%. No product Go, production
+service, database, format policy or budget changed. A first native cold-build
+timeout is retained; the retry reused its cache with longer build deadlines
+and the same 2 CPU/4 GiB resource cap. No row or slower result was discarded.
+
 1. Keep all three native attempts and the successful 37-member core immutable.
    Reuse the worktree; do not modify frozen product Go or previous helpers.
 2. Preserve the local bounded scratch decoder and successful boundary/concurrent
