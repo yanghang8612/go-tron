@@ -187,6 +187,12 @@ type accountKVLatestBatch struct {
 	// served by this pending overlay from reads that reach blockbuffer/Pebble,
 	// without an atomic increment on every SLOAD.
 	storagePendingResolved *int64
+	// Stable readers may share a writer through StateDB.Copy. This mutex only
+	// protects lazy index publication; pending writes remain execution-confined.
+	// Keep this metadata last so existing hot fields retain their layout.
+	pendingPrefixMu    sync.Mutex
+	pendingPrefixScans uint8
+	pendingPrefixes    map[tcommon.AccountID][]accountKVPendingPrefixKey
 }
 
 type accountKVLatestPending struct {
@@ -209,6 +215,25 @@ type accountKVLatestPendingMapKey struct {
 	generation uint64
 	domain     kvdomains.KVDomain
 	logicalKey string
+}
+
+type accountKVLatestPendingGroup struct {
+	owner      tcommon.AccountID
+	generation uint64
+	domain     kvdomains.KVDomain
+}
+
+// Owner is supplied by the bucket; each member retains the rest of its full
+// pending identity. Logical keys reference immutable strings already owned by
+// pending, while values, tombstones and commit numbers remain authoritative there.
+type accountKVPendingPrefixKey struct {
+	generation uint64
+	domain     kvdomains.KVDomain
+	logicalKey string
+}
+
+func (k accountKVLatestPendingMapKey) prefixKey() accountKVPendingPrefixKey {
+	return accountKVPendingPrefixKey{generation: k.generation, domain: k.domain, logicalKey: k.logicalKey}
 }
 
 type accountLatestPending struct {
@@ -705,13 +730,19 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 	if w == nil {
 		return
 	}
+	prunedKV := false
 	for k, e := range w.pending {
 		if e.number > cutoff {
 			continue
 		}
 		if !w.deepAsync || w.kvPendingDurable(k, e) {
 			delete(w.pending, k)
+			prunedKV = true
 		}
+	}
+	if prunedKV {
+		w.pendingPrefixes = nil
+		w.pendingPrefixScans = 0
 	}
 	for k, e := range w.accountPending {
 		if e.number > cutoff {
@@ -815,6 +846,8 @@ func (w *accountKVLatestBatch) clearPending() {
 		return
 	}
 	w.pending = nil
+	w.pendingPrefixes = nil
+	w.pendingPrefixScans = 0
 	w.accountPending = nil
 	w.generationPending = nil
 }
@@ -1048,16 +1081,35 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 	}
 	ownerID := owner.AccountID()
 	logicalPrefix := string(prefix)
-	for key, pending := range w.pending {
-		if key.owner != ownerID || key.generation != generation || key.domain != domain || !strings.HasPrefix(key.logicalKey, logicalPrefix) {
-			continue
+	group := accountKVLatestPendingGroup{owner: ownerID, generation: generation, domain: domain}
+	if keys, indexed := w.pendingPrefixKeys(group); indexed {
+		for _, row := range keys {
+			if row.generation != generation || row.domain != domain || !strings.HasPrefix(row.logicalKey, logicalPrefix) {
+				continue
+			}
+			key := row.logicalKey
+			pending, present := w.pending[accountKVLatestPendingMapKey{owner: ownerID, generation: generation, domain: domain, logicalKey: key}]
+			if !present {
+				continue
+			}
+			if pending.deleted {
+				delete(entries, key)
+				continue
+			}
+			entries[key] = append([]byte(nil), pending.value...)
 		}
-		mapKey := key.logicalKey
-		if pending.deleted {
-			delete(entries, mapKey)
-			continue
+	} else {
+		for key, pending := range w.pending {
+			if key.owner != ownerID || key.generation != generation || key.domain != domain || !strings.HasPrefix(key.logicalKey, logicalPrefix) {
+				continue
+			}
+			mapKey := key.logicalKey
+			if pending.deleted {
+				delete(entries, mapKey)
+				continue
+			}
+			entries[mapKey] = append([]byte(nil), pending.value...)
 		}
-		entries[mapKey] = append([]byte(nil), pending.value...)
 	}
 	keys := make([]string, 0, len(entries))
 	for key := range entries {
@@ -1074,6 +1126,58 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 		}
 	}
 	return nil
+}
+
+// pendingPrefixKeys amortizes a full overlay walk across repeated prefix
+// requests. Small overlays and the first four requests per prune interval keep
+// the original scan, avoiding index construction for sparse prefix workloads.
+// Keys reference immutable, owned pending strings.
+func (w *accountKVLatestBatch) pendingPrefixKeys(group accountKVLatestPendingGroup) ([]accountKVPendingPrefixKey, bool) {
+	w.pendingPrefixMu.Lock()
+	defer w.pendingPrefixMu.Unlock()
+	if len(w.pending) == 0 {
+		return nil, true
+	}
+	if len(w.pending) <= 256 {
+		return nil, false
+	}
+	if w.pendingPrefixes == nil {
+		if w.pendingPrefixScans < 4 {
+			w.pendingPrefixScans++
+			return nil, false
+		}
+		counts := make(map[tcommon.AccountID]int)
+		for key := range w.pending {
+			counts[key.owner]++
+		}
+		// Pack owner buckets in one arena. Full member identity keeps equal
+		// logical keys from different generations/domains independent. Exact
+		// capacities ensure later appends cannot overwrite an adjacent bucket.
+		arena := make([]accountKVPendingPrefixKey, len(w.pending))
+		index := make(map[tcommon.AccountID][]accountKVPendingPrefixKey, len(counts))
+		offset := 0
+		for group, size := range counts {
+			index[group] = arena[offset : offset : offset+size]
+			offset += size
+		}
+		for key := range w.pending {
+			index[key.owner] = append(index[key.owner], key.prefixKey())
+		}
+		w.pendingPrefixes = index
+	}
+	keys := w.pendingPrefixes[group.owner]
+	if len(keys) > len(w.pending)/2 {
+		return nil, false
+	}
+	return keys, true
+}
+
+func (w *accountKVLatestBatch) indexPendingKey(key accountKVLatestPendingMapKey) {
+	if w.pendingPrefixes != nil {
+		if _, exists := w.pending[key]; !exists {
+			w.pendingPrefixes[key.owner] = append(w.pendingPrefixes[key.owner], key.prefixKey())
+		}
+	}
 }
 
 func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) {
@@ -1094,6 +1198,7 @@ func (w *accountKVLatestBatch) rememberPutWithKey(mapKey accountKVLatestPendingM
 	if w.pending == nil {
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
+	w.indexPendingKey(mapKey)
 	w.pending[mapKey] = accountKVLatestPending{
 		value:  value,
 		number: w.commitBlock,
@@ -1155,6 +1260,7 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
 	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
+	w.indexPendingKey(mapKey)
 	w.pending[mapKey] = accountKVLatestPending{
 		deleted: true,
 		number:  w.commitBlock,
@@ -1169,6 +1275,7 @@ func (w *accountKVLatestBatch) rememberDeleteOwned(owner tcommon.Address, genera
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
 	mapKey := accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey)
+	w.indexPendingKey(mapKey)
 	w.pending[mapKey] = accountKVLatestPending{
 		deleted: true,
 		number:  w.commitBlock,
@@ -1423,6 +1530,9 @@ func (s *StateDB) readAccountKVLatestForDecoding(owner tcommon.Address, generati
 	s.recordAccountKVRead(owner, domain, key)
 	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
 		return value, exists, nil
+	}
+	if s != nil && s.storageReadScope != nil {
+		return s.readCanonicalAccountKVLatest(owner, generation, domain, key)
 	}
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {

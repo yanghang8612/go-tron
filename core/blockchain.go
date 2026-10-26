@@ -1798,6 +1798,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
 	processorOptions := processBlockOptions{
+		canonicalStorageReadScope:      true,
 		parallelTransfers:              bc.parallelTransfers && !bc.speculativeSafetyDisabled.Load(),
 		parallelVM:                     bc.parallelVM && !bc.speculativeSafetyDisabled.Load(),
 		captureBalanceTrace:            balanceTraceEnabled,

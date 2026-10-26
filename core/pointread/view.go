@@ -109,6 +109,15 @@ type KeyValueSnapshotter interface {
 	NewKeyValueSnapshot() (KeyValueSnapshot, error)
 }
 
+// KeyValueCursorSnapshot opens an independently owned point cursor on exactly
+// the same MVCC cut as its key/value snapshot. Close cursors before the snapshot.
+// Implementations may omit this optional capability without changing reads.
+type KeyValueCursorSnapshot interface {
+	NewPointReadCursor() (Cursor, error)
+}
+
+var ErrPointReadCursorUnsupported = errors.New("pointread: pinned point cursor unsupported")
+
 // PrefixSeeker returns the first visible key/value pair in the ordered prefix
 // range beginning at prefix+start. Implementations copy key and value before
 // returning them. It is an optional fast path for point-in-history lookups

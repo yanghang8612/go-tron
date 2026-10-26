@@ -1,0 +1,16 @@
+{
+  "utc": "2026-10-22T10:05:03.853340Z",
+  "eval_files": [
+    "FAILED.json",
+    "preflight.json"
+  ],
+  "eval_directories": [
+    "tmp"
+  ],
+  "clone_exists": false,
+  "node_pid": 14163,
+  "exe": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron",
+  "fd9": "/data/gtron/start.lock",
+  "timer_raw_repr": "b'inactive\\n'",
+  "timer_exit": 3
+}

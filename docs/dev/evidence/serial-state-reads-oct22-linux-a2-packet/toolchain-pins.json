@@ -1,0 +1,26 @@
+{
+  "go": {
+    "path": "/data/go/bin/go",
+    "version": "go1.25.5 linux/amd64",
+    "sha256": "d29b19f04e57fa2f35d4725a8743b663289ac29832128a235c4a3f76f885b150"
+  },
+  "sapling": {
+    "path": "/data/gtron/go-tron/third_party/librustzcash/target/release/librustzcash.a",
+    "hex_groups": [
+      "b6c99f8f",
+      "abac36d5",
+      "a836c644",
+      "bb790594",
+      "49c89740",
+      "bf33670d",
+      "66088d09",
+      "4447e7ea"
+    ],
+    "sha256": "b6c99f8fabac36d5a836c644bb79059449c89740bf33670d66088d094447e7ea",
+    "supersedes_uncertain_wrapped_transcription": true
+  },
+  "header": {
+    "path": "/data/gtron/go-tron/core/zksnark/zksnark_capi.h",
+    "sha256": "c3a37e6ac989583c4ce7ef9754f2e0c52c821f286d6ae0b487f11f7530f5f7ca"
+  }
+}

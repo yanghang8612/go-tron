@@ -306,6 +306,11 @@ type StateDB struct {
 	codeColdTxNum   uint64
 
 	cycleRewardSink CycleRewardSink
+
+	// This execution-confined scope is deliberately omitted from Copy. Shared
+	// commit readers must never recover it through their original StateDB.
+	storageReadScope       *blockbuffer.StorageReadScope
+	storageReadScopeReader *commitScopeLatestReader
 }
 
 // SetTransactionAccessRecorder installs a transaction-scoped observe-only

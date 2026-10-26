@@ -1,0 +1,135 @@
+{
+  "prepare_sha256": "d39bf8572e5f7a6cf9933b040cc5656adb2d349d6fbe022b1352496fb91ea818",
+  "tests": [
+    {
+      "name": "inactive_exit3",
+      "actual_exit": 3,
+      "raw_output_repr": "b'inactive\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 3,
+        "stdout": "inactive"
+      },
+      "admitted": true,
+      "expected": true
+    },
+    {
+      "name": "active_success",
+      "actual_exit": 0,
+      "raw_output_repr": "b'active\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 0,
+        "stdout": "active"
+      },
+      "admitted": false,
+      "expected": false
+    },
+    {
+      "name": "unknown_exit3",
+      "actual_exit": 3,
+      "raw_output_repr": "b'unknown\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 3,
+        "stdout": "unknown"
+      },
+      "admitted": false,
+      "expected": false
+    },
+    {
+      "name": "failed_exit3",
+      "actual_exit": 3,
+      "raw_output_repr": "b'failed\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 3,
+        "stdout": "failed"
+      },
+      "admitted": false,
+      "expected": false
+    },
+    {
+      "name": "system_error_exit1",
+      "actual_exit": 1,
+      "raw_output_repr": "b'Failed to connect to bus: No such file or directory\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 1,
+        "stdout": "Failed to connect to bus: No such file or directory"
+      },
+      "admitted": false,
+      "expected": false
+    },
+    {
+      "name": "activating_success",
+      "actual_exit": 0,
+      "raw_output_repr": "b'activating\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 0,
+        "stdout": "activating"
+      },
+      "admitted": false,
+      "expected": false
+    },
+    {
+      "name": "deactivating_success",
+      "actual_exit": 0,
+      "raw_output_repr": "b'deactivating\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 0,
+        "stdout": "deactivating"
+      },
+      "admitted": false,
+      "expected": false
+    },
+    {
+      "name": "not_found_exit4",
+      "actual_exit": 4,
+      "raw_output_repr": "b'not-found\\n'",
+      "diagnostic": {
+        "command": [
+          "systemctl",
+          "is-active",
+          "gtron-deploy.timer"
+        ],
+        "exit": 4,
+        "stdout": "not-found"
+      },
+      "admitted": false,
+      "expected": false
+    }
+  ],
+  "all_pass": true,
+  "real_subprocess_or_server_calls": false
+}

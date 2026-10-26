@@ -1,0 +1,20 @@
+{
+  "archive_sha256": "5b8dc14cf42e046cd2eddd4fd23bb8e431a2d9320b159fbd51713881de5173d7",
+  "functional_exit": 0,
+  "no_counts_or_formal_started": true,
+  "only_recovery": "race-controller-recovery then 8 previously unstarted builds",
+  "original_raw_sha256": {
+    "commands.jsonl": "745e5447535b204036967b8b7d42f78d708a8f292d072645a9264d472bbeebad",
+    "functional.log": "3d1a73c2a600fd9b82d30ea3e40fd355dcdf2b6f04d14362e9e9e80beaae4d09",
+    "preflight.json": "358b24f6f26d793d477281bcd1985e5a84611a592bdac0f89e1737b3fafe78d4",
+    "prepare-actions.jsonl": "7e6b2ed91e40523444eaba660e09ad7b887390424cbe3424d548155ad92f5b32",
+    "prevalidation-sources.json": "d591ff52f6108cb96f0b3e7094b5c8568291a65a621087797d547957359549e2",
+    "pty-interruption/cleanup.json": "1c6654f46c62122e16c9b8d30c820ae241f3120250a2e181f7eb5400da89b46e",
+    "pty-interruption/functional.log.before-cleanup": "3d1a73c2a600fd9b82d30ea3e40fd355dcdf2b6f04d14362e9e9e80beaae4d09",
+    "pty-interruption/race.log.before-cleanup": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "race.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "resources.jsonl": "2dd50e54876c83d4d322577af36cb5c1a92cbf0cfbdd38ecb7e80f6748279e35",
+    "transport-identity.json": "d32c7f0a55e663a9e7aa92fc91522022229b9b174f9bd2c916a99d9731553d7a"
+  },
+  "unknown_race": "PTY SIGHUP interrupted parent; owned orphan group terminated, not a candidate result"
+}

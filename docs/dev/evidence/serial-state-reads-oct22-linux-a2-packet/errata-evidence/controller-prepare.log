@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/data/gtron/go-tron/docs/dev/evidence/serial-state-reads-oct22-linux-a2-packet/prepare.py", line 43, in <module>
+    assert diagnostic(['systemctl','is-active','gtron-deploy.timer'])['stdout']=='inactive','auto timer must already be paused'
+AssertionError: auto timer must already be paused

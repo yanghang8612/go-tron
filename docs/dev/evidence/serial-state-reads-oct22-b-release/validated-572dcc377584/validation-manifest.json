@@ -1,0 +1,100 @@
+{
+  "commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
+  "parent": "9030ce7a31016491ece014ac76e5656ec149417e",
+  "tree": "98d06df1dd1799d1ed59a9e60344ec4e7e7fd96a",
+  "started_utc": "2026-10-22T09:17:54.175318+00:00",
+  "inputs_before": {
+    "go_sha256": "60fa7fbaac037e24462915e8c19a1c73b02f548df0098b323823d6fbcdd0c764",
+    "go_version": "go version go1.27.3 darwin/arm64",
+    "native_sha256": "deb1c6b067b8ba52d3aca010bfbb083c2b6cf5df75b90bf502b38fec17340012",
+    "native_bytes": 2407640,
+    "native_architecture": "arm64",
+    "native_gitlink": "45f80494b0760e9993e178b06fd0781caca70c69",
+    "header_sha256": "c3a37e6ac989583c4ce7ef9754f2e0c52c821f286d6ae0b487f11f7530f5f7ca"
+  },
+  "checks": [
+    {
+      "name": "sapling-full",
+      "command": [
+        "/opt/homebrew/bin/go",
+        "test",
+        "-tags=sapling",
+        "./...",
+        "-count=1",
+        "-timeout=900s"
+      ],
+      "cwd": "/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-release/572dcc377584be867542d0a56e0faf164cb1aa41/source",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOFLAGS": "",
+        "GOTOOLCHAIN": "local"
+      },
+      "started_utc": "2026-10-22T09:17:55.187649+00:00",
+      "exit": 0,
+      "finished_utc": "2026-10-22T09:25:21.586163+00:00"
+    },
+    {
+      "name": "blockbuffer-race",
+      "command": [
+        "/opt/homebrew/bin/go",
+        "test",
+        "-race",
+        "-tags=sapling",
+        "./core/blockbuffer",
+        "-count=1",
+        "-timeout=900s"
+      ],
+      "cwd": "/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-release/572dcc377584be867542d0a56e0faf164cb1aa41/source",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOFLAGS": "",
+        "GOTOOLCHAIN": "local"
+      },
+      "started_utc": "2026-10-22T09:25:21.586962+00:00",
+      "exit": 0,
+      "finished_utc": "2026-10-22T09:25:40.326632+00:00"
+    },
+    {
+      "name": "sapling-build",
+      "command": [
+        "/opt/homebrew/bin/go",
+        "build",
+        "-buildvcs=true",
+        "-tags=sapling",
+        "-o",
+        "/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-release/572dcc377584be867542d0a56e0faf164cb1aa41/gtron",
+        "./cmd/gtron"
+      ],
+      "cwd": "/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-release/572dcc377584be867542d0a56e0faf164cb1aa41/source",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOFLAGS": "",
+        "GOTOOLCHAIN": "local"
+      },
+      "started_utc": "2026-10-22T09:25:40.327104+00:00",
+      "exit": 0,
+      "finished_utc": "2026-10-22T09:25:47.702830+00:00"
+    }
+  ],
+  "success": true,
+  "frozen_B_files": {
+    "core/blockbuffer/buffer.go": "f2be9e42eacda87f81341dac75fab93a7238b573f05c2f5968e512cdc098a832",
+    "core/blockbuffer/layer_view.go": "8f835b3712b67acca69f43a25460677eb545b194c4572e0bc942c0a4543b2af2",
+    "core/blockbuffer/predecessor.go": "5bf199cead74281a521b0e2dfc83ecc424f6cc3e03192dea45c8fd6a803e344d",
+    "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898",
+    "core/blockbuffer/predecessor_candidates_bench_test.go": "fbd9f51cb8e8844be34365d16ac265fc31ec08cb56c88dc76888ec889f2ac383",
+    "core/blockbuffer/predecessor_candidates_v2_test.go": "d3b01b9a0c1a8f590119d3dc624bff49f53ead15dc3dc7e3549222016ca0bea6"
+  },
+  "binary_sha256": "5c7eb73137a51a265d17ef9c5e8c02338f78918f52c4ba0b74da7a3100bde647",
+  "inputs_after": {
+    "go_sha256": "60fa7fbaac037e24462915e8c19a1c73b02f548df0098b323823d6fbcdd0c764",
+    "go_version": "go version go1.27.3 darwin/arm64",
+    "native_sha256": "deb1c6b067b8ba52d3aca010bfbb083c2b6cf5df75b90bf502b38fec17340012",
+    "native_bytes": 2407640,
+    "native_architecture": "arm64",
+    "native_gitlink": "45f80494b0760e9993e178b06fd0781caca70c69",
+    "header_sha256": "c3a37e6ac989583c4ce7ef9754f2e0c52c821f286d6ae0b487f11f7530f5f7ca"
+  },
+  "source_status_after": "clean",
+  "finished_utc": "2026-10-22T09:25:47.850837+00:00"
+}

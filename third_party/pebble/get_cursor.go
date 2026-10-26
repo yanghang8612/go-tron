@@ -12,13 +12,17 @@ import (
 	"github.com/cockroachdb/pebble/internal/manifest"
 )
 
-const getCursorTableLimit = 4
+const (
+	getCursorTableLimit    = 4
+	getCursorMaxTableLimit = 32
+)
 
 // GetCursorStats counts cursor-local table iterator construction and reuse.
 // TableOpens counts successful newIters calls, not physical file opens or IO.
 type GetCursorStats struct {
 	TableRequests, TableOpens, TableReuses, TableFallbacks, TableEvictions uint64
 	MaxRetained                                                            uint64
+	TableFallbackIncompatible, TableFallbackAllLeased                      uint64
 }
 
 // GetCursor performs snapshot-scoped, lazy point lookups. It is owned by one
@@ -28,7 +32,8 @@ type GetCursorStats struct {
 //
 // Close every cursor before closing its Snapshot or DB. Like an Iterator, a
 // cursor pins a readState (including memtables and obsolete SSTs) for its short
-// lifetime. At most four point/range-deletion iterator pairs are retained; this
+// lifetime. By default at most four point/range-deletion iterator pairs are retained.
+// An explicit immutable option can retain at most 32 pairs. This
 // bounds table handles, not their variable-size blocks or zombie bytes.
 // An operation error poisons subsequent Get calls. The failing operation
 // cleans up all table resources and joins their errors with the operation error.
@@ -37,18 +42,23 @@ type GetCursorStats struct {
 // and Close do not re-report an error already delivered by an earlier operation;
 // Close reports fresh cleanup failures and releases every resource.
 type GetCursor struct {
-	db           *DB
-	seqNum       uint64
-	readState    *readState
-	tableIters   tableNewIters
-	iter         *Iterator
-	active       bool
-	closed       bool
-	err          error
-	clock        uint64
-	tables       [getCursorTableLimit]getCursorTable
-	stats        GetCursorStats
-	useL6Filters bool
+	db         *DB
+	seqNum     uint64
+	readState  *readState
+	tableIters tableNewIters
+	iter       *Iterator
+	active     bool
+	closed     bool
+	err        error
+	clock      uint64
+	tables     [getCursorTableLimit]getCursorTable
+	// extendedTables holds only overflow slots. It is allocated once when a
+	// compatible miss needs a fifth retained table. Inline slots never move,
+	// and overflow is never resized: wrappers and filters borrow both arrays.
+	extendedTables []getCursorTable
+	tableLimit     int
+	stats          GetCursorStats
+	useL6Filters   bool
 }
 
 type getCursorTable struct {
@@ -83,6 +93,11 @@ type GetCursorOptions struct {
 	// UseL6Filters checks existing L6 point-key Bloom filters. Missing filters
 	// fall back to ordinary lookup. Range deletions remain independently read.
 	UseL6Filters bool
+	// MaxRetainedTables bounds retained point/range-deletion pairs. Zero uses
+	// the default four inline slots. Supported explicit bounds are 4, 8, 16, 32.
+	// Overflow storage is allocated only when all four inline slots are occupied
+	// and a compatible lookup needs another retained table, never at scope creation.
+	MaxRetainedTables int
 }
 
 // NewGetCursor opens a cursor with the default Get read policy, without SST IO.
@@ -100,7 +115,16 @@ func (s *Snapshot) NewGetCursorWithOptions(opts GetCursorOptions) (*GetCursor, e
 	if err := s.db.closed.Load(); err != nil {
 		return nil, ErrClosed
 	}
-	c := &GetCursor{db: s.db, seqNum: s.seqNum, readState: s.db.loadReadState(), useL6Filters: opts.UseL6Filters}
+	limit := opts.MaxRetainedTables
+	if limit == 0 {
+		limit = getCursorTableLimit
+	}
+	switch limit {
+	case getCursorTableLimit, 8, 16, getCursorMaxTableLimit:
+	default:
+		return nil, errors.New("pebble: GetCursor MaxRetainedTables must be 0, 4, 8, 16 or 32")
+	}
+	c := &GetCursor{db: s.db, seqNum: s.seqNum, readState: s.db.loadReadState(), useL6Filters: opts.UseL6Filters, tableLimit: limit}
 	c.tableIters = c.newIters
 	return c, nil
 }
@@ -169,6 +193,9 @@ func (c *GetCursor) ReleaseValue() error {
 	for i := range c.tables {
 		c.tables[i].leased = false
 	}
+	for i := range c.extendedTables {
+		c.extendedTables[i].leased = false
+	}
 	if err != nil {
 		// Do all cleanup in the failing operation, so a speculative read error
 		// cannot reappear later as an unrelated session-close error.
@@ -197,7 +224,37 @@ func (c *GetCursor) Close() error {
 	c.tableIters = nil
 	c.iter = nil
 	c.closed = true
+	c.extendedTables = nil
 	return err
+}
+
+// reusableGetCursorTable and availableGetCursorTable never allocate or move a
+// slot. The ordinary four-slot path never scans unallocated overflow capacity.
+func reusableGetCursorTable(slots []getCursorTable, file *manifest.FileMetadata, level manifest.Level) *getCursorTable {
+	for i := range slots {
+		t := &slots[i]
+		if t.file == file && t.level == level && !t.leased {
+			return t
+		}
+	}
+	return nil
+}
+
+func availableGetCursorTable(slots []getCursorTable) *getCursorTable {
+	var slot *getCursorTable
+	for i := range slots {
+		t := &slots[i]
+		if t.leased {
+			continue
+		}
+		if t.file == nil {
+			return t
+		}
+		if slot == nil || t.lastUsed < slot.lastUsed {
+			slot = t
+		}
+	}
+	return slot
 }
 
 func (c *GetCursor) closeTable(t *getCursorTable) error {
@@ -216,6 +273,9 @@ func (c *GetCursor) closeTables() error {
 	for i := range c.tables {
 		err = errors.Join(err, c.closeTable(&c.tables[i]))
 	}
+	for i := range c.extendedTables {
+		err = errors.Join(err, c.closeTable(&c.extendedTables[i]))
+	}
 	return err
 }
 
@@ -231,39 +291,45 @@ func (c *GetCursor) newIters(ctx context.Context, file *manifest.FileMetadata,
 		opts.KeyTypes == IterKeyTypePointsOnly && !opts.OnlyReadGuaranteedDurable && !opts.disableLazyCombinedIteration &&
 		internalOpts.bytesIterated == nil && internalOpts.bufferPool == nil && internalOpts.stats == nil && internalOpts.boundLimitedFilter == nil
 	if compatible {
-		for i := range c.tables {
-			t := &c.tables[i]
-			if t.file == file && t.level == opts.level && !t.leased {
-				c.clock++
-				t.lastUsed = c.clock
-				t.leased = true
-				c.stats.TableReuses++
-				var rd keyspan.FragmentIterator
-				if t.rangeDel.FragmentIterator != nil {
-					rd = &t.rangeDel
-				}
-				return &t.point, rd, nil
+		t := reusableGetCursorTable(c.tables[:], file, opts.level)
+		if t == nil && c.extendedTables != nil {
+			t = reusableGetCursorTable(c.extendedTables, file, opts.level)
+		}
+		if t != nil {
+			c.clock++
+			t.lastUsed = c.clock
+			t.leased = true
+			c.stats.TableReuses++
+			var rd keyspan.FragmentIterator
+			if t.rangeDel.FragmentIterator != nil {
+				rd = &t.rangeDel
 			}
+			return &t.point, rd, nil
 		}
 	}
 	var slot *getCursorTable
 	if compatible {
-		for i := range c.tables {
-			t := &c.tables[i]
-			if t.leased {
-				continue
+		slot = availableGetCursorTable(c.tables[:])
+		if slot == nil || slot.file != nil {
+			// All inline slots contain tables. Allocate only the remaining
+			// capacity before lending its first address, without moving any
+			// inline wrapper, filter backing or whole-Get lease.
+			if c.extendedTables == nil && c.tableLimit > getCursorTableLimit {
+				c.extendedTables = make([]getCursorTable, c.tableLimit-getCursorTableLimit)
 			}
-			if t.file == nil {
-				slot = t
-				break
-			}
-			if slot == nil || t.lastUsed < slot.lastUsed {
-				slot = t
+			if extra := availableGetCursorTable(c.extendedTables); extra != nil &&
+				(extra.file == nil || slot == nil || extra.lastUsed < slot.lastUsed) {
+				slot = extra
 			}
 		}
 	}
 	if slot == nil {
 		c.stats.TableFallbacks++
+		if compatible {
+			c.stats.TableFallbackAllLeased++
+		} else {
+			c.stats.TableFallbackIncompatible++
+		}
 		point, rd, err := c.db.newIters(ctx, file, opts, internalOpts)
 		if err == nil {
 			c.stats.TableOpens++
@@ -292,6 +358,11 @@ func (c *GetCursor) newIters(ctx context.Context, file *manifest.FileMetadata,
 	var retained uint64
 	for i := range c.tables {
 		if c.tables[i].file != nil {
+			retained++
+		}
+	}
+	for i := range c.extendedTables {
+		if c.extendedTables[i].file != nil {
 			retained++
 		}
 	}

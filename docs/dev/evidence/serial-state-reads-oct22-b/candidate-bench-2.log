@@ -1,0 +1,20 @@
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$', '-test.benchtime=16x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/cold         	      16	    390636 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	    7560 B/op	      65 allocs/op
+BenchmarkPredecessorCandidates/8MiB/churn        	      16	     21442 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	   31282 B/op	     218 allocs/op
+BenchmarkPredecessorCandidates/8MiB/hotstable    	      16	      2776 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     648 B/op	      17 allocs/op
+BenchmarkPredecessorCandidates/8MiB/smallprefix  	      16	      2974 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     648 B/op	      17 allocs/op
+BenchmarkPredecessorCandidates/8MiB/tombstones   	      16	   1557635 ns/op	         0 baseGets/op	        97.00 baseIters/op	        97.00 baseSeeks/op	         0 fullsorts/op	 1304584 B/op	   19804 allocs/op
+BenchmarkPredecessorCandidates/8MiB/generic      	      16	      2688 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     264 B/op	      10 allocs/op
+BenchmarkPredecessorCandidates/128MiB/cold       	      16	  12329776 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	   81032 B/op	     137 allocs/op
+BenchmarkPredecessorCandidates/128MiB/churn      	      16	     36247 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	   28580 B/op	     215 allocs/op
+BenchmarkPredecessorCandidates/128MiB/hotstable  	      16	     16133 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     651 B/op	      17 allocs/op
+BenchmarkPredecessorCandidates/128MiB/smallprefix         	      16	      2102 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     648 B/op	      17 allocs/op
+BenchmarkPredecessorCandidates/128MiB/tombstones          	      16	   1567062 ns/op	         0 baseGets/op	        97.00 baseIters/op	        97.00 baseSeeks/op	         0 fullsorts/op	 1304589 B/op	   19804 allocs/op
+BenchmarkPredecessorCandidates/128MiB/generic             	      16	      6792 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     264 B/op	      10 allocs/op
+PASS
+
+exit=0 elapsed=2.740s

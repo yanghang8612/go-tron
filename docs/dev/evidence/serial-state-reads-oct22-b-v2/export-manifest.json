@@ -1,0 +1,34 @@
+{
+  "parent": "9030ce7a31016491ece014ac76e5656ec149417e",
+  "exports": "/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2",
+  "common_tests": [
+    "core/blockbuffer/predecessor_candidates_test.go",
+    "core/blockbuffer/predecessor_candidates_bench_test.go"
+  ],
+  "production": [
+    "core/blockbuffer/buffer.go",
+    "core/blockbuffer/layer_view.go",
+    "core/blockbuffer/predecessor.go"
+  ],
+  "candidate_only_tests": [
+    "core/blockbuffer/predecessor_candidates_v2_test.go"
+  ],
+  "source_hashes": {
+    "parent": {
+      "core/blockbuffer/buffer.go": "dd2d268d6b4c51f0b83500c69fd68b06d31a652fccacdc7f152b3a5e73b07591",
+      "core/blockbuffer/layer_view.go": "a10abd1a551d186f1b2ed3fc0c476096577e00992ae6844a99c48a4bf87c3b08",
+      "core/blockbuffer/predecessor.go": "4ebe06554c4fc70d4f4efe5848570b330c4909169fdb9e0c9c2fe50c31087382",
+      "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898",
+      "core/blockbuffer/predecessor_candidates_bench_test.go": "fbd9f51cb8e8844be34365d16ac265fc31ec08cb56c88dc76888ec889f2ac383"
+    },
+    "candidate": {
+      "core/blockbuffer/buffer.go": "f2be9e42eacda87f81341dac75fab93a7238b573f05c2f5968e512cdc098a832",
+      "core/blockbuffer/layer_view.go": "8f835b3712b67acca69f43a25460677eb545b194c4572e0bc942c0a4543b2af2",
+      "core/blockbuffer/predecessor.go": "5bf199cead74281a521b0e2dfc83ecc424f6cc3e03192dea45c8fd6a803e344d",
+      "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898",
+      "core/blockbuffer/predecessor_candidates_bench_test.go": "fbd9f51cb8e8844be34365d16ac265fc31ec08cb56c88dc76888ec889f2ac383",
+      "core/blockbuffer/predecessor_candidates_v2_test.go": "d3b01b9a0c1a8f590119d3dc624bff49f53ead15dc3dc7e3549222016ca0bea6"
+    }
+  },
+  "spec_hash": "6f3564c322c77f59c0e4a26b1619dccdc29172900e0b3c7ae18fc746967af03f"
+}

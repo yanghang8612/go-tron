@@ -1,0 +1,22 @@
+{
+  "parent": "9030ce7a31016491ece014ac76e5656ec149417e",
+  "order": "ABBAABBAAB",
+  "samples": 5,
+  "benchtime": "16x",
+  "cpu": 1,
+  "lock": "/Users/asuka/Projects/asuka/go/go-tron/build/benchmarks/20261018-tvm-event-replay/local-benchmark.lock",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "go": "go version go1.27.3 darwin/arm64",
+  "source_hashes": {
+    "parent": {
+      "core/blockbuffer/predecessor.go": "4ebe06554c4fc70d4f4efe5848570b330c4909169fdb9e0c9c2fe50c31087382",
+      "core/blockbuffer/predecessor_candidates_bench_test.go": "42712c8faeaa5551f4cc7d778713ca063c88d2bbb9fcc91a2538330fa84d5820",
+      "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898"
+    },
+    "candidate": {
+      "core/blockbuffer/predecessor.go": "1ebc4ba9480a7abf90ab13fdf7f51041c5830faec13af24d489785abf37133f9",
+      "core/blockbuffer/predecessor_candidates_bench_test.go": "42712c8faeaa5551f4cc7d778713ca063c88d2bbb9fcc91a2538330fa84d5820",
+      "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898"
+    }
+  }
+}

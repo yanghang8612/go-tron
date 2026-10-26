@@ -1,0 +1,6 @@
+{
+  "core/blockbuffer/predecessor.go": "1ebc4ba9480a7abf90ab13fdf7f51041c5830faec13af24d489785abf37133f9",
+  "core/blockbuffer/predecessor_candidates_bench_test.go": "42712c8faeaa5551f4cc7d778713ca063c88d2bbb9fcc91a2538330fa84d5820",
+  "core/blockbuffer/predecessor_candidates_test.go": "3eb7638fe0822c7aff4d6688f781f457cc9db836e8012f886e9764c3e72ef898",
+  "docs/superpowers/specs/2026-10-22-prefix-predecessor-candidates.md": "7cf0b2abf95fe6e7c42a4012a67578fa9ee2d8471b10275f29f1a5f7fa3c2d8b"
+}

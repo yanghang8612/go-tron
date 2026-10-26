@@ -1,0 +1,126 @@
+package core
+
+import (
+	"reflect"
+	"testing"
+	"unsafe"
+
+	"github.com/ethereum/go-ethereum/metrics"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
+	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+)
+
+// This common harness compiles on the exact parent too. Only the explicit new
+// canonical option is enabled when that field exists; there is no VM parallelism.
+func BenchmarkCanonicalStorageBlock(b *testing.B) {
+	for _, shape := range []string{"storage128", "empty"} {
+		b.Run(shape, func(b *testing.B) {
+			disk, err := rawdb.NewPebbleDB(b.TempDir(), 64, 64)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer disk.Close()
+			history, err := rawdb.NewPebbleDB(b.TempDir(), 64, 64)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer history.Close()
+			db := rawdb.NewDirectHistoryStore(disk, history)
+			database := state.NewDatabase(rawdb.WrapKeyValueStore(db))
+			seed, err := state.New(tcommon.Hash{}, database)
+			if err != nil {
+				b.Fatal(err)
+			}
+			owner, contract := testProcessorAddr(1), testProcessorAddr(0xed)
+			seed.DynamicProperties().SetAllowCreationOfContracts(true)
+			seed.DynamicProperties().SetAllowAdaptiveEnergy(true)
+			seed.DynamicProperties().SetAllowBlackHoleOptimization(true)
+			seed.DynamicProperties().SetLatestBlockHeaderTimestamp(30_000)
+			seed.CreateAccount(owner, corepb.AccountType_Normal)
+			seed.AddBalance(owner, 100_000_000_000)
+			seed.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+			seed.CreateAccount(contract, corepb.AccountType_Contract)
+			seed.SetContract(contract, &contractpb.SmartContract{OriginAddress: owner.Bytes(), ContractAddress: contract.Bytes()})
+			var code []byte
+			for i := 0; i < 128; i++ {
+				code = append(code, 0x60, byte(i), 0x54, 0x61, byte(i*32>>8), byte(i*32), 0x52)
+				if i%4 != 0 {
+					seed.SetState(contract, tcommon.Hash{31: byte(i)}, tcommon.Hash{31: byte(i + 1)})
+				}
+			}
+			code = append(code, 0x61, 0x10, 0x00, 0x60, 0x00, 0xa0, 0x61, 0x10, 0x00, 0x60, 0x00, 0xf3)
+			seed.SetCode(contract, code)
+			root, err := seed.Commit()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := disk.Compact(nil, nil); err != nil {
+				b.Fatal(err)
+			}
+			dp := seed.DynamicProperties().Copy()
+			tx := makeTestTriggerTx(1, contract, nil)
+			tx.Proto().RawData.FeeLimit = 100_000_000
+			tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+			blockPB := &corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 33_000}}}
+			if shape != "empty" {
+				blockPB.Transactions = []*corepb.Transaction{tx.Proto()}
+			}
+			block := types.NewBlockFromPB(blockPB)
+			options := processBlockOptions{}
+			enabled := false
+			if f := reflect.ValueOf(&options).Elem().FieldByName("canonicalStorageReadScope"); f.IsValid() {
+				// Test-only reflection permits byte-identical harness source to
+				// compile on the parent, where this option does not exist.
+				enabled = true
+				reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().SetBool(true)
+			}
+			buffer := blockbuffer.New(db)
+			buffer.SetBaseReadCacheSize(128 << 20)
+			scopes := metrics.GetOrRegisterCounter("blockbuffer/storage_read/scopes", nil)
+			durable := metrics.GetOrRegisterCounter("blockbuffer/storage_read/durable_calls", nil)
+			opens := metrics.GetOrRegisterCounter("blockbuffer/storage_read/pebble/get_cursor/table_iterator_opens", nil)
+			var totalScopes, totalDurable, totalOpens int64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for op := 0; op < b.N; op++ {
+				b.StopTimer()
+				buffer.SetBaseReadCacheSize(128 << 20)
+				buffer.BeginBlock(tcommon.Hash{1}, 1)
+				s, err := state.New(root, database)
+				if err != nil {
+					b.Fatal(err)
+				}
+				s.SetDynamicProperties(dp.Copy())
+				s.SetAccountKVIndexStore(buffer)
+				commits := s.NewCommitScope()
+				beforeScopes, beforeDurable, beforeOpens := scopes.Snapshot().Count(), durable.Snapshot().Count(), opens.Snapshot().Count()
+				b.StartTimer()
+				infos, _, err := processBlockWithOptions(s, s.DynamicProperties(), block, buffer, nil, 0, params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil, nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil, options)
+				if err != nil || (shape != "empty" && (len(infos) != 1 || len(infos[0].GetContractResult()) != 1 || len(infos[0].GetContractResult()[0]) != 4096)) {
+					b.Fatalf("canonical output %v/%v", infos, err)
+				}
+				b.StopTimer()
+				scopeDelta, durableDelta, opensDelta := scopes.Snapshot().Count()-beforeScopes, durable.Snapshot().Count()-beforeDurable, opens.Snapshot().Count()-beforeOpens
+				if enabled && (scopeDelta != 1 || (shape == "storage128" && (durableDelta != 128 || opensDelta == 0))) {
+					b.Fatalf("inactive canonical: scopes=%d durable=%d opens=%d", scopeDelta, durableDelta, opensDelta)
+				}
+				totalScopes += scopeDelta
+				totalDurable += durableDelta
+				totalOpens += opensDelta
+				commits.Discard()
+				buffer.DiscardActive()
+				b.StartTimer()
+			}
+			b.ReportMetric(float64(totalScopes)/float64(b.N), "scopes/op")
+			b.ReportMetric(float64(totalDurable)/float64(b.N), "cursor_calls/op")
+			b.ReportMetric(float64(totalOpens)/float64(b.N), "cursor_SSTiters/op")
+		})
+	}
+}

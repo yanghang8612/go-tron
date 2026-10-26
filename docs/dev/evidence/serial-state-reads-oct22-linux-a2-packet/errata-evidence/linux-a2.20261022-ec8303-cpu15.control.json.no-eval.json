@@ -1,0 +1,8 @@
+{
+  "utc": "2026-10-22T09:55:47.150132Z",
+  "eval_path": "/data/gtron/go-tron/build/linux-a2.20261022-ec8303-cpu15",
+  "eval_exists": false,
+  "live_pid": 14163,
+  "live_exe": "/data/gtron/releases/auto-9030ce7a3101-5848de48f2f24a12/gtron",
+  "fd9_path": "/data/gtron/start.lock"
+}

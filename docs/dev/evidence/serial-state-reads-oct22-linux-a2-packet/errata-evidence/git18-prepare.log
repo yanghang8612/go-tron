@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/data/gtron/go-tron/docs/dev/evidence/serial-state-reads-oct22-linux-a2-packet/prepare.py", line 56, in <module>
+    checked(['git','apply','--check',str(PACKET/'a2-production.patch')],cwd=dest)
+  File "/data/gtron/go-tron/docs/dev/evidence/serial-state-reads-oct22-linux-a2-packet/prepare.py", line 36, in checked
+    if r.returncode:raise RuntimeError('preparation command failed: '+str(cmd))
+RuntimeError: preparation command failed: ['git', 'apply', '--check', '/data/gtron/go-tron/docs/dev/evidence/serial-state-reads-oct22-linux-a2-packet/a2-production.patch']

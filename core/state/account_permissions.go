@@ -140,7 +140,7 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (_ *corep
 		return obj.accountPermissionPoint, nil
 	}
 
-	value, exists, err := s.getAccountKVForDecoding(addr, kvdomains.AccountPermissionAux, key)
+	value, exists, err := s.getAccountKVForDecodingFromObject(obj, addr, kvdomains.AccountPermissionAux, key)
 	if err != nil {
 		return nil, err
 	}

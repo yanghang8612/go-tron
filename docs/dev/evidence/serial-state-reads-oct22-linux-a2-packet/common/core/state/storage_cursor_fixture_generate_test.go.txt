@@ -1,0 +1,51 @@
+package state
+
+import (
+ "bytes"
+ "crypto/sha256"
+ "encoding/binary"
+ "encoding/hex"
+ "encoding/json"
+ "fmt"
+ "hash"
+ "os"
+ "testing"
+
+ "github.com/tronprotocol/go-tron/core/rawdb"
+ "github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
+ "github.com/tronprotocol/go-tron/core/state/domains"
+ "github.com/tronprotocol/go-tron/core/state/kvdomains"
+)
+
+func storageFixtureFrame(h hash.Hash,k,v []byte) { var n [8]byte;binary.BigEndian.PutUint64(n[:],uint64(len(k)));h.Write(n[:]);h.Write(k);binary.BigEndian.PutUint64(n[:],uint64(len(v)));h.Write(n[:]);h.Write(v) }
+func TestPrepareStorageCursorFixture(t *testing.T) {
+ path:=os.Getenv("STORAGE_CURSOR_FIXTURE_HEAD_OUT");if path=="" { t.Skip("offline immutable fixture generation only") }
+ db,err:=pebbledb.New(t.TempDir(),64,64,"fixture/",false,pebbledb.Options{DisableAutomaticCompactions:true,MemTableSizeBytes:32<<20});if err!=nil { t.Fatal(err) };defer db.Close()
+ batch:=db.NewBatch();logical:=sha256.New();slots:=map[string]int{}
+ for slot:=0;slot<1024;slot++ { key:=storageBenchKey(uint64(slot));slots[string(key[:])]=slot }
+ for owner:=0;owner<1024;owner++ { for slot:=0;slot<1024;slot++ {
+  key,value:=storageBenchKey(uint64(slot)),storageBenchValue(owner,slot);addr:=storageBenchOwner(owner)
+  storageFixtureFrame(logical,rawdb.StateKVLatestCommitmentKey(addr,0,kvdomains.ContractStorage,key[:]),rawdb.EncodeStateKVLatestValue(value[:]))
+  if err:=rawdb.WriteStateKVLatest(batch,addr,0,kvdomains.ContractStorage,key[:],value[:]);err!=nil { t.Fatal(err) }
+  if batch.ValueSize()>=4<<20 { if err:=batch.Write();err!=nil { t.Fatal(err) };batch.Reset() }
+ } }
+ if err:=batch.Write();err!=nil { t.Fatal(err) }
+ physical:=sha256.New();rows:=0
+ if err:=rawdb.IterateLatestDomainCommitmentSources(db,func(k,v []byte)(bool,error){
+  owner,generation,domain,key,ok:=rawdb.DecodeStateKVLatestKey(k);if !ok || generation!=0 || domain!=kvdomains.ContractStorage { return false,fmt.Errorf("unexpected source %x",k) }
+  slot,ok:=slots[string(key)];if !ok { return false,fmt.Errorf("unexpected slot %x",key) }
+  ownerID:=int(binary.BigEndian.Uint32(owner[17:]));if owner!=storageBenchOwner(ownerID) || ownerID<0 || ownerID>=1024 { return false,fmt.Errorf("unexpected owner %x",owner) }
+  value:=storageBenchValue(ownerID,slot);expected:=rawdb.EncodeStateKVLatestValue(value[:]);if !bytes.Equal(v,expected) { return false,fmt.Errorf("row mismatch") }
+  storageFixtureFrame(physical,k,v);rows++;return true,nil
+ });err!=nil { t.Fatal(err) }
+ if rows!=1048576 { t.Fatal(rows) }
+ t.Logf("physical enumeration verified rows=%d; computing real MuHash",rows)
+ root,err:=domains.RebuildMuHashCommitment(db);if err!=nil { t.Fatal(err) }
+ head,present,err:=rawdb.ReadStateCommitmentHead(db);if err!=nil || !present || root!=head.Root { t.Fatalf("HEAD %v/%v/%v",head,present,err) }
+ if err:=rawdb.ValidateStateCommitmentHead(head);err!=nil { t.Fatal(err) }
+ encoded,err:=rawdb.EncodeStateCommitmentHead(head);if err!=nil { t.Fatal(err) }
+ result:=struct { Rows int;LogicalSHA256,PhysicalSHA256,HeadBytesHex,Root string;Head rawdb.StateCommitmentHead }{rows,hex.EncodeToString(logical.Sum(nil)),hex.EncodeToString(physical.Sum(nil)),hex.EncodeToString(encoded),root.Hex(),head}
+ data,err:=json.MarshalIndent(result,"","  ");if err!=nil { t.Fatal(err) }
+ if err:=os.WriteFile(path,append(data,'\n'),0644);err!=nil { t.Fatal(err) }
+ t.Logf("real fixture root=%s inputSHA=%x physicalSHA=%x",root.Hex(),logical.Sum(nil),physical.Sum(nil))
+}

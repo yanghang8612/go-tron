@@ -45,9 +45,7 @@ func directV2Transform(ctx context.Context, start uint64, hashes []tcommon.Hash,
 			if err != nil {
 				return nil, err
 			}
-			if err := validateFreezerTransactionInfosRaw(number, block, data); err != nil {
-				return nil, err
-			}
+			return rawdb.PrepareAncientV2TransactionInfos(number, block.Transactions(), data, body, externalize)
 		case rawdbAncientStateRoots:
 			if err := validateFreezerStateRootRaw(number, data); err != nil {
 				return nil, err

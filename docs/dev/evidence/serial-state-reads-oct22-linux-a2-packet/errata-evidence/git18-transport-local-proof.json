@@ -1,0 +1,26 @@
+{
+  "baseline_commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
+  "local_git_version": "git version 2.56.0",
+  "original_patch_sha256": "0a84708737ac494267f79a64e0fe0225e5e8ef4e6da593a1f7c17cf279f9c681",
+  "compatible_patch_sha256": "97b842c627c02d39f200f54f832a48c5c3cc734d24cc6d63e181c6e77a59806f",
+  "only_four_inserted_new_file_mode_headers": true,
+  "remove_four_headers_byte_equal_original": true,
+  "all12_result_sha256": {
+    "core/blockbuffer/base_read_cache.go": "b2477eba4a07be8fb5abae1e988e63474be8d09971eb5d26b7a02413884235d8",
+    "core/blockbuffer/storage_read_scope.go": "6e288d874431587a0737f85ff4661d9b77f24e5ef5cd48a75d1ffe9439a19e3c",
+    "core/pointread/view.go": "8d8f77fd15df4f51f6cf33166660c81929095ea50e3b1b14ebb060749ac7e788",
+    "core/rawdb/direct_history_cursor.go": "fff2dcf149e3023a8bbe80983cdcf490145eec0826f1fde888a7980f3dea546e",
+    "core/rawdb/pebbledb/storage_cursor.go": "42000131753c741a8855401ed4afcb3a6969ee199a32c5e662cff64d156479ca",
+    "core/rawdb/pebbledb/physical_read_caller_metrics.go": "527f0337f05df6989ce6fa067d585781f447770d6e5a0b3af51041c7875e5b66",
+    "core/state/statedb.go": "543ec45c3eba307a040ce790bec77a39908143dc78e37dec9209e8ea36ae02d9",
+    "core/state/storage_read_scope.go": "4d3e6448bd29bb563eaa8643a3a40a1d8a673a5c44719564f9337d8e5453fe8c",
+    "core/state/account_kv.go": "9a9ec5b446e044b81333231668d5fb4069d7536c1643c5df11e618b1f14be074",
+    "core/state_processor.go": "aaee2f17f7240c7d83fd76d443e9df17a61b6dd86313c516f872184e39d929ca",
+    "core/blockchain.go": "50a3f2fc24d885cd1a4ab1ee60a6bfa95c3a99cbc2cb15e26f6b9e57cf6de9a0",
+    "core/blockbuffer/buffer.go": "85f30d651091caf80edbe83bede8419fd2258007a469060028330fd7d03c3939"
+  },
+  "all_nonpatch_inputs_unchanged": true,
+  "local_apply_check_and_apply_exit": 0,
+  "no_build_correctness_counts_or_timing": true,
+  "server_Git18_not_executed_on_compatible_patch_yet": true
+}

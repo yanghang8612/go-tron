@@ -1,0 +1,9 @@
+{
+  "status": "NO-GO: original performance gate failed; no resampling",
+  "binaries": {
+    "parent": "d7d7128c6222cd40591f739e8b75bdfbd34e34f8586127f239ba3b5602450438",
+    "candidate": "7e7e6d5232fdd04a3c934041e890fbb83977873e3c0739d98f116e2fbba04dda"
+  },
+  "exports_preserved": "/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b",
+  "astra_readonly_verified": true
+}

@@ -1,0 +1,5 @@
+{
+  "error": "preparation command failed: ['git', 'apply', '--check', '/data/gtron/go-tron/docs/dev/evidence/serial-state-reads-oct22-linux-a2-packet/a2-production.patch']",
+  "one_attempt_only": true,
+  "phase": "prepare"
+}

@@ -1,0 +1,230 @@
+{
+  "packet_version": 6,
+  "inactive": true,
+  "no_active_Go_files": true,
+  "baseline_commit": "572dcc377584be867542d0a56e0faf164cb1aa41",
+  "count": 44,
+  "bytes": 751144,
+  "files": [
+    {
+      "path": "ERRATA.md",
+      "bytes": 9677,
+      "sha256": "1f5cce7448ae33fcf2c208a2667c4ea3f249408b9fa97b55228f5ec67e975e44"
+    },
+    {
+      "path": "PLAN.md",
+      "bytes": 8509,
+      "sha256": "a059c5c2cace2303be25292b72ce730365a6bcade0adc45cb8f6fa970e16f1e3"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1752,
+      "sha256": "e843dcc2a757c543c0e65f20910982c597bcb5b4f1d36b2d84f74cee4de62868"
+    },
+    {
+      "path": "a2-linux-git18.patch",
+      "bytes": 21965,
+      "sha256": "97b842c627c02d39f200f54f832a48c5c3cc734d24cc6d63e181c6e77a59806f"
+    },
+    {
+      "path": "a2-production.patch",
+      "bytes": 21881,
+      "sha256": "0a84708737ac494267f79a64e0fe0225e5e8ef4e6da593a1f7c17cf279f9c681"
+    },
+    {
+      "path": "analyze.py",
+      "bytes": 8393,
+      "sha256": "595655825bc32b47b0869c805bc143b23b3c3da6e88a58153083370d4ccf4b68"
+    },
+    {
+      "path": "archive-evidence.py",
+      "bytes": 906,
+      "sha256": "f6a7148637516cca8985c938de4ea0996d6f75d14c3eb4f2e4aaa681bdebd7aa"
+    },
+    {
+      "path": "common/core/state/storage_cursor_bench_test.go.txt",
+      "bytes": 12000,
+      "sha256": "33aacaa4be7e7d96a42b547d4a412a78f725cc128a12c3de2135c1b0d6d1be2d"
+    },
+    {
+      "path": "common/core/state/storage_cursor_fixture_generate_test.go.txt",
+      "bytes": 3466,
+      "sha256": "d437526bc4a0b48bbc7787b5d81c1de6cd85ee55f3accc6eaefcd1db4deed71f"
+    },
+    {
+      "path": "common/core/state/testdata/storage_cursor_fixture.json.txt",
+      "bytes": 6991,
+      "sha256": "75314979d9521b8ef2d2b7e37f0b661c559f0afc854fec5f89f5626d66b8fc52"
+    },
+    {
+      "path": "common/core/state_processor_storage_cursor_bench_test.go.txt",
+      "bytes": 5554,
+      "sha256": "fb3f640b64037a616d56d7f96dd217f6e9383206003475d140502a531c636ee4"
+    },
+    {
+      "path": "common/vm/serial_call_lifecycle_test.go.txt",
+      "bytes": 15364,
+      "sha256": "847b355959a5914c6117060c514cca5026cfd416cc0fb49aae5aaa1683c0689d"
+    },
+    {
+      "path": "correctness/core/blockbuffer/storage_read_scope_interleaving_test.go.txt",
+      "bytes": 6243,
+      "sha256": "1b5e48e8d0fdbff597390aaf8d54083d2bd679645b84c120fd717cf02d697eab"
+    },
+    {
+      "path": "correctness/core/blockbuffer/storage_read_scope_partial_test.go.txt",
+      "bytes": 9531,
+      "sha256": "1dcfef57ea52648e1373240d1947b7442d1422ccef152dd3276ee746cda86d1e"
+    },
+    {
+      "path": "correctness/core/blockbuffer/storage_read_scope_test.go.txt",
+      "bytes": 5342,
+      "sha256": "e27069f12b635ff29b85179d890d5850362be291d993e950a5bb493471754ab5"
+    },
+    {
+      "path": "correctness/core/rawdb/pebbledb/storage_cursor_test.go.txt",
+      "bytes": 2813,
+      "sha256": "46d61cf7d19bd1fb2d8b14469d94f67f9aca28fcfaa83dc335af76ebb466c9ae"
+    },
+    {
+      "path": "correctness/core/state/storage_read_scope_test.go.txt",
+      "bytes": 5052,
+      "sha256": "ec7cee8bcf503b36fd385ac87e393ba05d35c710a29742e5f507d2fb2c07a939"
+    },
+    {
+      "path": "correctness/core/state_processor_storage_scope_test.go.txt",
+      "bytes": 6354,
+      "sha256": "52546d763829e68ab797b7ea31344dc93361a46c49fd27d9fdce1d858bb21a2e"
+    },
+    {
+      "path": "counts-hook.go.txt",
+      "bytes": 166,
+      "sha256": "ffd92a41be96681ecd91a0b21fd55e7b06e08db833aa463a9a3a01277c604fe9"
+    },
+    {
+      "path": "counts-hook.patch",
+      "bytes": 658,
+      "sha256": "50e7da7783f0b931faf53865996e49ffd5da2098f179120c863705ffd0dd1f44"
+    },
+    {
+      "path": "dryrun-failclosed.py",
+      "bytes": 5102,
+      "sha256": "a9fca9059a3c1a42a589727fb5752751536207722c9e0b9c383ab88a0cf30a96"
+    },
+    {
+      "path": "dryrun-proof.json",
+      "bytes": 1039,
+      "sha256": "7901547a3080344dd111d1fb29e328a2c477de0b7090c727800af19997d5540a"
+    },
+    {
+      "path": "errata-evidence/20261019-native-machine-status.json",
+      "bytes": 10731,
+      "sha256": "abfa0efbcc3e5e6b84bcb9918f2c0d2bd773b7d1836db399c24fe8f464764e05"
+    },
+    {
+      "path": "errata-evidence/controller-FAILED.json",
+      "bytes": 75,
+      "sha256": "02f7b0c7adc17ccb4a23e60ea21594eac150563fb9c848e8fca786fa080a5d4a"
+    },
+    {
+      "path": "errata-evidence/controller-final.json",
+      "bytes": 357,
+      "sha256": "90b8f04afe4f35cb350bbe0f6849095d99a7d2957617d08ff3bc7721008fd2e6"
+    },
+    {
+      "path": "errata-evidence/controller-preflight.json",
+      "bytes": 8587,
+      "sha256": "4d065d1476480bfce08f817a9778e13769b33285527239bdaecbbb40c1a10ed4"
+    },
+    {
+      "path": "errata-evidence/controller-prepare.log",
+      "bytes": 334,
+      "sha256": "614cbb0f29c211819e03de126d876a62dc07adffacb575b738b1373219944cd6"
+    },
+    {
+      "path": "errata-evidence/diagnostic-mock-proof.json",
+      "bytes": 3064,
+      "sha256": "214197624331f5dbef3458f0e27dff9a4751d5a326a38b0349fee80dc459ec13"
+    },
+    {
+      "path": "errata-evidence/git18-FAILED.json",
+      "bytes": 225,
+      "sha256": "7b8b23fb7f4908fed7b0ba0b94572f2fa04b0357df6c320eb54ea9a88e489226"
+    },
+    {
+      "path": "errata-evidence/git18-prepare-actions.jsonl",
+      "bytes": 2884,
+      "sha256": "0d250347795ba058f5d4954ed61913b75a39497d39da853e458149ccd4b55d14"
+    },
+    {
+      "path": "errata-evidence/git18-prepare.log",
+      "bytes": 610,
+      "sha256": "c729f998b5a8b40f3cbb25ce78e7ab1b5a2ae8dc3048e1ff545448231f36887e"
+    },
+    {
+      "path": "errata-evidence/git18-transport-local-proof.json",
+      "bytes": 1905,
+      "sha256": "87e1918653827a2ff01f52da3068b1eab53624c01008bf09b574931b71d50024"
+    },
+    {
+      "path": "errata-evidence/linux-a2.20261022-ec8303-cpu15.control.json.entry-failure.json",
+      "bytes": 1479,
+      "sha256": "6a5ef106daace021fd969da18f04047fce35aaf204bf4d16fc3d65a512f1be4d"
+    },
+    {
+      "path": "errata-evidence/linux-a2.20261022-ec8303-cpu15.control.json.no-eval.json",
+      "bytes": 282,
+      "sha256": "18ad85f955d95f9f4aeaa36cda83bfe271c297059499ecdf768278850d78e9cc"
+    },
+    {
+      "path": "errata-evidence/test-diagnostic.py.txt",
+      "bytes": 1403,
+      "sha256": "4e0fec7eb9278c57cf8dc35809cca8ce7439781c9a12fa521774bd1fe4170709"
+    },
+    {
+      "path": "input-manifest.json",
+      "bytes": 4069,
+      "sha256": "6572f94273cf9974b5375333e70c1cdf4cc270713df10ecd61c574db2ebeb3c8"
+    },
+    {
+      "path": "prepare.py",
+      "bytes": 10170,
+      "sha256": "ad934afa3c7a0ac9e6b59b26bbd06fa04fe3b4f8f85d98d93d6266844dce2026"
+    },
+    {
+      "path": "pty-recovery-reference.json",
+      "bytes": 1459,
+      "sha256": "2157db51792b9d09b689db077bd44b659c7fcf981aa00225c67276e6ba01a07c"
+    },
+    {
+      "path": "readonly-preflight.json",
+      "bytes": 1167,
+      "sha256": "8fb77aa3ae57f1a579e960db0fc9d9e15bfe3ea3d3e328b4a46a402284e2933c"
+    },
+    {
+      "path": "resume-pty-preparation.py",
+      "bytes": 7618,
+      "sha256": "cc9a38446daa10582e694314a0d356416b3ba5e7e4d1dbbb2a0f445f0df1c2ce"
+    },
+    {
+      "path": "run.py",
+      "bytes": 5241,
+      "sha256": "198371eb2ded3542360e85705dc6480bef01e496060f51d7de864b9dabc7a4c0"
+    },
+    {
+      "path": "source-identity.json",
+      "bytes": 523488,
+      "sha256": "3e07f772de856cbc29e2df1f8511e1f7a22290d71f842f44758614939b0f76ff"
+    },
+    {
+      "path": "support.py",
+      "bytes": 6489,
+      "sha256": "79044a6c9506fddf05e5182a1e5d39e03805f5c9af033a8988405a0271b21885"
+    },
+    {
+      "path": "toolchain-pins.json",
+      "bytes": 749,
+      "sha256": "9250f6e4940e209dbb040da64d66571ec9d5e13f69c136136b7d755980e139d0"
+    }
+  ]
+}

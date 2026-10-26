@@ -30,11 +30,12 @@ const (
 	callerUnknown
 	callerTruncated
 	callerAmbiguous
+	callerCanonicalStorage
 	callerRoleCount
 )
 
 var physicalReadCallerNames = [callerRoleCount]string{
-	"commitment_demand", "commitment_prefetch", "state_prefetch", "pooled_flat_stack", "cold_builder_stack", "pebble_compaction_path", "unknown", "unknown_truncated", "unknown_ambiguous",
+	"commitment_demand", "commitment_prefetch", "state_prefetch", "pooled_flat_stack", "cold_builder_stack", "pebble_compaction_path", "unknown", "unknown_truncated", "unknown_ambiguous", "canonical_storage_cursor",
 }
 
 type physicalReadCallerCounter struct{ samples, bytes, nanos, errors, short *metrics.Counter }
@@ -114,6 +115,8 @@ func (c *physicalReadCallerClassifier) add(name string) {
 		c.roles |= 1 << callerCommitmentPrefetch
 	case bb + "(*Buffer).PrefetchBatch":
 		c.roles |= 1 << callerStatePrefetch
+	case bb + "(*StorageReadScope).get":
+		c.roles |= 1 << callerCanonicalStorage
 	case bb + "readBaseIntoCachePooledKey":
 		c.pooled = true
 	case bb + "(*Buffer).GetNoCopyCachedStateKVLatest", bb + "(*LayerView).GetNoCopyCachedStateKVLatest", bb + "(*Buffer).GetNoCopyCachedStateAccountLatest", bb + "(*LayerView).GetNoCopyCachedStateAccountLatest":

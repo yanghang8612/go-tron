@@ -1,0 +1,108 @@
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^8MiB$/^cold$', '-test.benchtime=32x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/cold         	      32	    450999 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	    7992 B/op	      76 allocs/op
+PASS
+
+exit=0 elapsed=3.511s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^8MiB$/^churn$', '-test.benchtime=256x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/churn         	     256	     87950 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	  160288 B/op	    1062 allocs/op
+PASS
+
+exit=0 elapsed=0.291s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^8MiB$/^hotstable$', '-test.benchtime=32768x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/hotstable         	   32768	      2006 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     504 B/op	      12 allocs/op
+PASS
+
+exit=0 elapsed=1.981s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^8MiB$/^smallprefix$', '-test.benchtime=32768x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/smallprefix         	   32768	      1992 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     504 B/op	      12 allocs/op
+PASS
+
+exit=0 elapsed=1.928s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^8MiB$/^tombstones$', '-test.benchtime=128x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/tombstones         	     128	   1522681 ns/op	         0 baseGets/op	        97.00 baseIters/op	        97.00 baseSeeks/op	         0 fullsorts/op	 1380472 B/op	   19799 allocs/op
+PASS
+
+exit=0 elapsed=0.243s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^8MiB$/^generic$', '-test.benchtime=32768x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/8MiB/generic         	   32768	      2506 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     280 B/op	      10 allocs/op
+PASS
+
+exit=0 elapsed=2.017s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^128MiB$/^cold$', '-test.benchtime=32x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/128MiB/cold         	      32	  12162969 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	   82040 B/op	     164 allocs/op
+PASS
+
+exit=0 elapsed=0.842s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^128MiB$/^churn$', '-test.benchtime=256x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/128MiB/churn         	     256	    139236 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	  157373 B/op	    1052 allocs/op
+PASS
+
+exit=0 elapsed=4.023s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^128MiB$/^hotstable$', '-test.benchtime=32768x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/128MiB/hotstable         	   32768	      2160 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     504 B/op	      12 allocs/op
+PASS
+
+exit=0 elapsed=2.400s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^128MiB$/^smallprefix$', '-test.benchtime=32768x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/128MiB/smallprefix         	   32768	      2024 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     504 B/op	      12 allocs/op
+PASS
+
+exit=0 elapsed=1.926s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^128MiB$/^tombstones$', '-test.benchtime=128x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/128MiB/tombstones         	     128	   1614619 ns/op	         0 baseGets/op	        97.00 baseIters/op	        97.00 baseSeeks/op	         0 fullsorts/op	 1380473 B/op	   19799 allocs/op
+PASS
+
+exit=0 elapsed=0.696s
+command: ['/Users/asuka/.codex/worktrees/serial-state-reads-oct22/go-tron/build/benchmarks/serial-state-reads-oct22-b-v2/candidate.test', '-test.run=^$', '-test.bench=^BenchmarkPredecessorCandidates$/^128MiB$/^generic$', '-test.benchtime=32768x', '-test.cpu=1', '-test.count=1', '-test.timeout=30m']
+goos: darwin
+goarch: arm64
+pkg: github.com/tronprotocol/go-tron/core/blockbuffer
+cpu: Apple M1 Max
+BenchmarkPredecessorCandidates/128MiB/generic         	   32768	      3848 ns/op	         0 baseGets/op	         1.000 baseIters/op	         1.000 baseSeeks/op	         0 fullsorts/op	     280 B/op	      10 allocs/op
+PASS
+
+exit=0 elapsed=2.627s
