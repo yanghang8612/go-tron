@@ -19,3 +19,11 @@ is still in native-focused checks. Payload source commit is `6bb9b95e` (the Go
 implementation is `b44cec7b`; the later commit corrects the evidence verifier).
 The private unit has two CPUs, 4 GiB MemoryLimit and Nice=15. Production identity
 was unchanged, inactive with MainPID=0; no production service operation occurred.
+
+`native-checkpoint.zip`: 23,150 bytes, SHA256
+`f4670750c6cb57d31e58f97785c6768f6679e2dfe58ab4efbd608a1d30a00bcf`,
+20 members. Run `python3 verify-checkpoint.py`. Includes the fresh completed
+10-check native status, the 8/60 publication checkpoint, and exact staged
+follow-up scripts/receipts. Full native logs and completed publication raw rows
+are not yet retrieved. Acceptance scripts are staged, unexecuted; no final
+HTTP/MuHash/history recovery claim is made. Source Go remains frozen.
