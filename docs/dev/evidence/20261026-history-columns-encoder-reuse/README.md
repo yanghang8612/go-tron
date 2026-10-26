@@ -32,3 +32,17 @@ Allocation falls by 1.25–1.32 GB per pair, but actual publication is only
 8.25–8.71% faster than old V5 and remains 53.52–68.17% slower than V2. This
 does not pass the adoption gate. CPU-only diagnosis is a separate private unit;
 new full MuHash/HTTP/restore acceptance has not been substituted by old results.
+
+`cpu-profiles.zip`: 342,821 bytes, SHA256
+`8faae4c2d065d638369b974f9a9035e5199c7d7115ede2485988f8f879aae8e2`,
+91 members. All six original pprof files, diagnostic overlay sources, runner,
+source/binary identity, resource dispatch and 36 transport receipts are retained.
+Run `python3 verify-cpu.py --pprof` with Go 1.25 to independently recreate both
+cumulative reports from the raw profiles; no server binary is required. UTC
+normalization makes the local reports byte-identical to the server originals.
+
+The three-pair sampled CPU total is 11.91 s for V2 and 16.40 s for reused V5.
+Zstd EncodeAll cumulative CPU is 1.91→6.21 s; ETL load is 3.52 s in both.
+Do not add overlapping cumulative functions or count diagnostic rows as formal
+timing samples. The remaining cost is chiefly encoding; ordered parallel pages
+are the next experiment, with the original four candidates and exact bytes.
