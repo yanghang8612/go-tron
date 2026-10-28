@@ -1,0 +1,7 @@
+--- FAIL: TestStorageRoutingRuntimeBroadSkipCannotRetireRetainedPage (0.34s)
+    history_storage_routing_policy_test.go:155: broad skip retired an unchanged storage proof 2 false <nil>
+--- FAIL: TestHistoryRoutingMaintenanceErrorCannotStarveOtherFamiliesAndMerge (3.39s)
+    history_storage_routing_policy_test.go:410: reported error pinned the failing family snapshots: system history routing checksum mismatch 0 0
+FAIL
+FAIL	github.com/tronprotocol/go-tron/core/state/snapshots	4.313s
+FAIL

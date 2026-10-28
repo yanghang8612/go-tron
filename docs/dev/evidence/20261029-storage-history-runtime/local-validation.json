@@ -1,0 +1,23 @@
+{
+  "product_source": "69d74ae09d953a40a65b98b0a43eb22d115e7f70",
+  "previous_source": "e0c2fe1b0053720304067a22396d78b77a454e68",
+  "previous_snapshots_package_seconds": 242.689,
+  "final_related_suite_seconds": 108.184,
+  "final_race_seconds": 21.699,
+  "final_vet_passed": true,
+  "signed_and_manifest_restore_muhash_regression_passed": true,
+  "small_restore_seconds_before_final_two_fixes": 2.611,
+  "negative_control_overlay": {
+    "source": "e0c2fe1b0053720304067a22396d78b77a454e68",
+    "expected_failure": true,
+    "seconds": 4.313,
+    "observed": [
+      "unchanged storage proof 2 false",
+      "error family cursor/work remained 0/0"
+    ]
+  },
+  "astra_read_only_review": "Two actual defects were identified, corrected and re-reviewed; no server or file changes by the reviewer.",
+  "full_production_muhash_repeated": false,
+  "full_production_restore_repeated": false,
+  "production_deployment": false
+}

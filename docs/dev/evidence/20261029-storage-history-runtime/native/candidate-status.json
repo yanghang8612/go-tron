@@ -1,0 +1,22 @@
+{
+  "complete": true,
+  "stage": "runtime page repair and HTTP matrix complete",
+  "source": "69d74ae09d953a40a65b98b0a43eb22d115e7f70",
+  "production_mutations": false,
+  "cache": "fresh HTTP processes; shared canonical/OS caches uncontrolled; no eviction",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T16:47:41.221525Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "requests": 32,
+  "all_returns_match": true
+}
