@@ -3,11 +3,21 @@ import pathlib,sys,json,os,time,ctypes,mmap,traceback
 W=pathlib.Path('/data/gtron/maintenance/tail-read-ahead-20261028-01')
 code=(W/'cold.py').read_text();prefix=code.split('\ntry:\n until=',1)[0];assert len(prefix)<len(code)
 exec(compile(prefix,'cold-host-definitions','exec'))
+from urllib import request as tail_http_request
+urllib.request=tail_http_request
 R=W/'random';R.mkdir(exist_ok=True);s={'complete':False,'stage':'build random-I/O variant','source':SOURCE,'base':'80293e10cbc9ff983fe112dad2b9dafa08a29ed0','production_mutations':False};requests=[]
 try:
- s['production_before']=identity();save();src=archive_source('source-candidate',SOURCE)
- command(['/data/go/bin/go','test','-tags=sapling','./core/state/snapshots','-run','Test(HistoryOrderedReads|HistoryPhysicalPages|HistoryMixedBatch|HistoryAccessorPages|ManagerBatchesFirst)','-count=1','-timeout=120s'],src,R/'focused.log',180)
- command(['/data/go/bin/go','test','-tags=sapling','-c','./core','-o',str(R/'candidate-http.test')],src,R/'build.log')
+ s['production_before']=identity();save()
+ previous=W/'random-failed-no-http'
+ if (previous/'candidate-http.test').is_file():
+  prior=json.loads((previous/'candidate-status.json').read_text());assert prior['source']==SOURCE
+  os.link(str(previous/'candidate-http.test'),str(R/'candidate-http.test'))
+  for name in ['focused.log','build.log']:(R/name).write_bytes((previous/name).read_bytes())
+  s['native_build_reused_from']=str(previous);save()
+ else:
+  src=archive_source('source-candidate',SOURCE)
+  command(['/data/go/bin/go','test','-tags=sapling','./core/state/snapshots','-run','Test(HistoryOrderedReads|HistoryPhysicalPages|HistoryMixedBatch|HistoryAccessorPages|ManagerBatchesFirst)','-count=1','-timeout=120s'],src,R/'focused.log',180)
+  command(['/data/go/bin/go','test','-tags=sapling','-c','./core','-o',str(R/'candidate-http.test')],src,R/'build.log')
  until=time.monotonic()+1800;s['stage']='wait for original controlled-cold matrix';save()
  while True:
   prior=json.loads((W/'cold/candidate-status.json').read_text())
