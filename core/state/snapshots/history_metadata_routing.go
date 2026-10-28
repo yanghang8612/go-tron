@@ -181,9 +181,8 @@ func (r *metadataHistoryRoutingReader) source(ctx context.Context, dir string, h
 	return f, found, nil
 }
 
-// BuildMetadataHistoryRoutingContext completes one independent, bounded page.
-// Existing pages are not rewritten. If a canonical merge replaces sources,
-// rebuilding that range retires the old page; uncovered neighbors fall back.
+// BuildMetadataHistoryRoutingContext completes one bounded page. Repairing an
+// overlapping page carries forward its still-current proofs before retiring it.
 func BuildMetadataHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int) (SegmentRef, bool, error) {
 	return buildMetadataHistoryRoutingContext(ctx, dir, manifest, maxNew, 0, nil)
 }
