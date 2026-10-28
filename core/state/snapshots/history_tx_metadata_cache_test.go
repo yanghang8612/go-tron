@@ -124,12 +124,12 @@ func TestHistoryTxDirectoryReuseReauthenticatesAndBindsBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &historyTxMetadataCache[historyTxDirectoryKey, historyTxPage]{maxBytes: historyTxMetadataBytes, maxEntries: 2, rowBytes: 32}
-	r1 := &boundedReadCounter{R: bytes.NewReader(data)}
+	r1 := &historyMetadataReadCounter{R: bytes.NewReader(data)}
 	a, err := decodeHistoryTxFooterWithCache(r1, uint64(len(data)), h, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2 := &boundedReadCounter{R: bytes.NewReader(data)}
+	r2 := &historyMetadataReadCounter{R: bytes.NewReader(data)}
 	b, err := decodeHistoryTxFooterWithCache(r2, uint64(len(data)), h, c)
 	if err != nil || a.r == b.r || len(c.values) != 1 || &a.pages[0] != &b.pages[0] {
 		t.Fatal("metadata not independently attached", err)
@@ -273,4 +273,17 @@ func TestHistoryTxMetadataWarmOpenRejectsRestoredMtimeCorruption(t *testing.T) {
 	if _, err = decodeHistoryTxFooter(bytes.NewReader(data[:len(data)-1]), uint64(len(data)), h); !errors.Is(err, io.EOF) {
 		t.Fatal("warm truncated", err)
 	}
+}
+
+// Keep the shipped unit test independent of offline diagnostic harnesses.
+type historyMetadataReadCounter struct {
+	R            io.ReaderAt
+	Calls, Bytes uint64
+}
+
+func (r *historyMetadataReadCounter) ReadAt(p []byte, off int64) (int, error) {
+	n, err := r.R.ReadAt(p, off)
+	r.Calls++
+	r.Bytes += uint64(n)
+	return n, err
 }
