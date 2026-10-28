@@ -505,7 +505,9 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			broadLoaded = true
 			lookups := make([][]byte, 0, len(entries))
 			for _, candidate := range entries {
-				if systemHistoryRoutingQuery(candidate.query) && !smallSystemHistoryRoutingQuery(candidate.query) {
+				// Select the whole batch on first load. Metadata/storage can
+				// trigger this before an uncovered small-system source does.
+				if systemHistoryRoutingQuery(candidate.query) {
 					lookups = append(lookups, candidate.lookup)
 				}
 			}
@@ -588,10 +590,12 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		var metadataFilter metadataSourceFilter
 		metadataCovered := false
 		var pairID [32]byte
+		pairFound := false
 		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || !broadLoaded {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
 				id := systemHistoryRoutingPairID(ref, accessor)
 				pairID = id
+				pairFound = true
 				for _, entry := range entries {
 					if entry.first == nil && entry.query.FlatDomain == rawdb.StateFlatDomainKVLatest && entry.query.Domain == kvdomains.ContractMetadata {
 						metadataFilter, metadataCovered, err = metadataRouting.source(ctx, m.dir, ref, id)
@@ -624,7 +628,7 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 					if err := loadBroad(); err != nil {
 						return nil, err
 					}
-					if routing != nil {
+					if routing != nil && pairFound {
 						column, covered = routing.columns[pairID]
 					}
 				}
@@ -632,10 +636,28 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			if accountCovered && accountRoutingQuery(entry.query) && (!entry.accountBoundFound || fromTxNum > entry.accountBound || ref.FromTxNum > entry.accountBound) {
 				continue
 			}
-			if smallCovered && smallSystemHistoryRoutingQuery(entry.query) && !smallRouting.mayContain(smallColumn, entry.lookup) {
-				continue
+			if smallSystemHistoryRoutingQuery(entry.query) {
+				if smallCovered {
+					if !smallRouting.mayContain(smallColumn, entry.lookup) {
+						continue
+					}
+					// A complete lightweight proof needs no broad object.
+					lookupKeys = append(lookupKeys, entry.lookup)
+					continue
+				}
+				// Bootstrap must retain the old exact-pair negative proofs
+				// until the new lightweight route has caught up. Otherwise
+				// deployment turns formerly indexed sources into raw scans.
+				if pairFound {
+					if err := loadBroad(); err != nil {
+						return nil, err
+					}
+					if routing != nil {
+						column, covered = routing.columns[pairID]
+					}
+				}
 			}
-			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !smallSystemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
+			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
 				lookupKeys = append(lookupKeys, entry.lookup)
 			}
 		}

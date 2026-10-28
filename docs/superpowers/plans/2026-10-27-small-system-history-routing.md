@@ -23,3 +23,8 @@ See docs/dev/cold-query-small-system-routing-20261027.md for the complete
 results, reproduction scripts and remaining hot-tail/contract-route work.
 Production PID, binary and process start identity stayed unchanged; no
 push, deployment, service restart or canonical database mutation occurred.
+
+Production bootstrap follow-up: preserve authenticated selected broad negatives
+for exact pairs not yet covered by the lightweight route; full lightweight
+coverage keeps the broad-free path. Validate missing/partial/full routes, mixed
+selection order, V1/V2, positive members, uncovered tails and physical failures.

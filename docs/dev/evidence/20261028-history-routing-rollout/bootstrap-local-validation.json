@@ -1,0 +1,39 @@
+{
+  "base_commit": "7669b2de4b392873e1aac01588f35a2993aff7ad",
+  "product_files_changed": [
+    "core/state/snapshots/history_segment.go"
+  ],
+  "focused_packages": "go test ./core/state/snapshots -run Test(SmallSystemHistoryRouting|SystemHistoryRoutingSelected|MetadataHistoryRouting) -count=1 -timeout 180s",
+  "focused_seconds": 23.204,
+  "race_seconds": 5.621,
+  "positive_partial_broad_test": "TestSystemHistoryRoutingPartialAndCompleteMatchFullHistory",
+  "positive_partial_broad_seconds": 1.964,
+  "vet_passed": true,
+  "astra_actual_diff_review_passed": true,
+  "full_database_rescan_required": false,
+  "native_related_tests_passed": true,
+  "native_fixed_cut_http": {
+    "height": 45836827,
+    "tx": 4240407293,
+    "requests": 6,
+    "all_returns": 207,
+    "patched_no_new_routes_seconds": [
+      75.2304,
+      8.9631
+    ],
+    "patched_fully_indexed_seconds": [
+      3.5758,
+      1.8998
+    ],
+    "previous_fully_indexed_seconds": [
+      2.0937,
+      1.9318
+    ],
+    "cache_labels": [
+      "fresh-process-os-cache-uncontrolled",
+      "process-warm"
+    ],
+    "single_sample_per_cache_case": true,
+    "production_180s_timeout_is_different_load_not_controlled_AB": true
+  }
+}

@@ -1,0 +1,2429 @@
+{
+  "complete": true,
+  "started_utc": "2026-10-28T04:47:18.036749Z",
+  "finished_utc": "2026-10-28T04:50:47.263869Z",
+  "scope": "Live metadata-only directory census, no payload scan, no database lock or service mutation. Allocation from st_blocks*512; active manifest classification is against the initial manifest. Inode attribution visits production first; shared bytes are not additional physical allocation.",
+  "files": 2667861,
+  "groups": {
+    "production/ancient": {
+      "files": 8390,
+      "logical_bytes": 503532239441,
+      "path_allocated_bytes": 503556599808,
+      "unique_attributed_bytes": 503556599808
+    },
+    "production/chaindata": {
+      "files": 2053,
+      "logical_bytes": 71903584468,
+      "path_allocated_bytes": 72035463168,
+      "unique_attributed_bytes": 72035463168
+    },
+    "production/history": {
+      "files": 6575,
+      "logical_bytes": 96249063709,
+      "path_allocated_bytes": 96312061952,
+      "unique_attributed_bytes": 96312061952
+    },
+    "production/state-snapshots": {
+      "files": 175134,
+      "logical_bytes": 835301974235,
+      "path_allocated_bytes": 835678568448,
+      "unique_attributed_bytes": 835678568448
+    },
+    "start.sh": {
+      "files": 1,
+      "logical_bytes": 11128,
+      "path_allocated_bytes": 12288,
+      "unique_attributed_bytes": 12288
+    },
+    "start.lock": {
+      "files": 1,
+      "logical_bytes": 0,
+      "path_allocated_bytes": 0,
+      "unique_attributed_bytes": 0
+    },
+    "compare.sh": {
+      "files": 1,
+      "logical_bytes": 4856,
+      "path_allocated_bytes": 8192,
+      "unique_attributed_bytes": 8192
+    },
+    "start.log": {
+      "files": 1,
+      "logical_bytes": 173747796,
+      "path_allocated_bytes": 173760512,
+      "unique_attributed_bytes": 173760512
+    },
+    "deployed-master.rev": {
+      "files": 1,
+      "logical_bytes": 41,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "deploy-cache": {
+      "files": 18376,
+      "logical_bytes": 4960359379,
+      "path_allocated_bytes": 5020798976,
+      "unique_attributed_bytes": 5020798976
+    },
+    "go-tron": {
+      "files": 150458,
+      "logical_bytes": 9215851263,
+      "path_allocated_bytes": 9561186304,
+      "unique_attributed_bytes": 9548808192,
+      "shared_with_earlier_group_bytes": 12378112
+    },
+    "history-mainnet-rollout-20261026-01": {
+      "files": 1848,
+      "logical_bytes": 905874060,
+      "path_allocated_bytes": 912248832,
+      "unique_attributed_bytes": 912248832
+    },
+    "history-staging-ops": {
+      "files": 5,
+      "logical_bytes": 941142,
+      "path_allocated_bytes": 970752,
+      "unique_attributed_bytes": 970752
+    },
+    "main/DIRECT_HISTORY_REQUIRED.json": {
+      "files": 1,
+      "logical_bytes": 36,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/HISTORY_STAGING_STORAGE_HANDOFF.json": {
+      "files": 1,
+      "logical_bytes": 624,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/gtron.log": {
+      "files": 1,
+      "logical_bytes": 45204873,
+      "path_allocated_bytes": 45211648,
+      "unique_attributed_bytes": 45211648
+    },
+    "main/HISTORY_STAGING_ACTIVATION_INTENT.json": {
+      "files": 1,
+      "logical_bytes": 6257,
+      "path_allocated_bytes": 8192,
+      "unique_attributed_bytes": 8192
+    },
+    "main/HISTORY_STAGING_MIGRATION_DONE.json": {
+      "files": 1,
+      "logical_bytes": 1210,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/HISTORY_STAGING_RESUME_7aa29559_20261001.log": {
+      "files": 1,
+      "logical_bytes": 9463,
+      "path_allocated_bytes": 12288,
+      "unique_attributed_bytes": 12288
+    },
+    "main/gtron-pre-compact-v3-20261019-659ab078.log": {
+      "files": 1,
+      "logical_bytes": 73501296,
+      "path_allocated_bytes": 73506816,
+      "unique_attributed_bytes": 73506816
+    },
+    "main/HISTORY_STAGING_MIGRATION_60b24279_a73e782f_20261001.log": {
+      "files": 1,
+      "logical_bytes": 4836,
+      "path_allocated_bytes": 8192,
+      "unique_attributed_bytes": 8192
+    },
+    "main/offline-hot-maintenance-20261009-wrapper.log": {
+      "files": 1,
+      "logical_bytes": 141,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json.bak-20260921-cache-recycle": {
+      "files": 1,
+      "logical_bytes": 265,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/HISTORY_STAGING_RESUME_59442e30_20261001.log": {
+      "files": 1,
+      "logical_bytes": 411009,
+      "path_allocated_bytes": 417792,
+      "unique_attributed_bytes": 417792
+    },
+    "main/HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json": {
+      "files": 1,
+      "logical_bytes": 281,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/HISTORY_STAGING_OPERATOR_PRECHECK_20261001.json": {
+      "files": 1,
+      "logical_bytes": 344,
+      "path_allocated_bytes": 4096,
+      "unique_attributed_bytes": 4096
+    },
+    "main/HISTORY_STAGING_RESUME_2e9cc100_20261001.log": {
+      "files": 1,
+      "logical_bytes": 64163,
+      "path_allocated_bytes": 69632,
+      "unique_attributed_bytes": 69632
+    },
+    "main/HISTORY_STAGING_RESUME_67c541c8_20261001.log": {
+      "files": 1,
+      "logical_bytes": 46202,
+      "path_allocated_bytes": 53248,
+      "unique_attributed_bytes": 53248
+    },
+    "main/HISTORY_STAGING_RESUME_bbd4ac2b_20261003.log": {
+      "files": 1,
+      "logical_bytes": 588819,
+      "path_allocated_bytes": 593920,
+      "unique_attributed_bytes": 593920
+    },
+    "main/datadir": {
+      "files": 2,
+      "logical_bytes": 379,
+      "path_allocated_bytes": 8192,
+      "unique_attributed_bytes": 8192
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078": {
+      "files": 27652,
+      "logical_bytes": 220955872783,
+      "path_allocated_bytes": 221206515712,
+      "unique_attributed_bytes": 221206515712
+    },
+    "main/offline-direct-cleanup-20261009": {
+      "files": 4564,
+      "logical_bytes": 570770365,
+      "path_allocated_bytes": 580820992,
+      "unique_attributed_bytes": 580820992
+    },
+    "maintenance/20261015-cold-memory-budget": {
+      "files": 3,
+      "logical_bytes": 3934,
+      "path_allocated_bytes": 12288,
+      "unique_attributed_bytes": 12288
+    },
+    "maintenance/20261015-cold-memory-budget-retry1": {
+      "files": 3,
+      "logical_bytes": 5464,
+      "path_allocated_bytes": 12288,
+      "unique_attributed_bytes": 12288
+    },
+    "maintenance/20261015-pebble12g-postdeploy": {
+      "files": 4,
+      "logical_bytes": 4797,
+      "path_allocated_bytes": 16384,
+      "unique_attributed_bytes": 16384
+    },
+    "maintenance/9m-query-20261027-01": {
+      "files": 938523,
+      "logical_bytes": 4423472430185,
+      "path_allocated_bytes": 4425505202176,
+      "unique_attributed_bytes": 4166385664,
+      "shared_with_production_bytes": 4405866487808,
+      "shared_with_earlier_group_bytes": 15472328704
+    },
+    "maintenance/cleanup-20261026": {
+      "files": 3138,
+      "logical_bytes": 568007260,
+      "path_allocated_bytes": 576483328,
+      "unique_attributed_bytes": 576483328
+    },
+    "maintenance/cleanup-history-tests-20261026": {
+      "files": 5,
+      "logical_bytes": 1947064856,
+      "path_allocated_bytes": 1947086848,
+      "unique_attributed_bytes": 1947086848
+    },
+    "maintenance/full-state-acceptance-20261028-01": {
+      "files": 1331064,
+      "logical_bytes": 10545281828118,
+      "path_allocated_bytes": 10548249214976,
+      "unique_attributed_bytes": 252412858368,
+      "shared_with_production_bytes": 9601854091264,
+      "shared_with_earlier_group_bytes": 693982265344
+    },
+    "maintenance/history-routing-rollout-20261028-01": {
+      "files": 8,
+      "logical_bytes": 12597619,
+      "path_allocated_bytes": 12615680,
+      "unique_attributed_bytes": 12615680
+    },
+    "maintenance/node-start-20261026-1792993432": {
+      "files": 2,
+      "logical_bytes": 1641,
+      "path_allocated_bytes": 8192,
+      "unique_attributed_bytes": 8192
+    },
+    "maintenance/test-cleanup-20261027-01": {
+      "files": 22,
+      "logical_bytes": 259307844,
+      "path_allocated_bytes": 259366912,
+      "unique_attributed_bytes": 259366912
+    },
+    "params": {
+      "files": 2,
+      "logical_bytes": 51661144,
+      "path_allocated_bytes": 51671040,
+      "unique_attributed_bytes": 51671040
+    },
+    "releases": {
+      "files": 9,
+      "logical_bytes": 197893956,
+      "path_allocated_bytes": 197935104,
+      "unique_attributed_bytes": 197935104
+    }
+  },
+  "extensions": {
+    "production/ancient|no-extension": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "production/ancient|.ridx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated_bytes": 4096
+    },
+    "production/ancient|.cidx": {
+      "files": 2,
+      "bytes": 12,
+      "allocated_bytes": 8192
+    },
+    "production/ancient|.cdat": {
+      "files": 2,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "production/ancient|.rdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "production/ancient|.meta": {
+      "files": 3,
+      "bytes": 12,
+      "allocated_bytes": 12288
+    },
+    "production/ancient|.json": {
+      "files": 700,
+      "bytes": 1311898,
+      "allocated_bytes": 3948544
+    },
+    "production/ancient|.gtxi": {
+      "files": 5583,
+      "bytes": 52508761859,
+      "allocated_bytes": 52521885696
+    },
+    "production/ancient|.gtv2": {
+      "files": 2097,
+      "bytes": 451022165654,
+      "allocated_bytes": 451030740992
+    },
+    "production/chaindata|.sst": {
+      "files": 2045,
+      "bytes": 71115554002,
+      "allocated_bytes": 71124635648
+    },
+    "production/chaindata|no-extension": {
+      "files": 5,
+      "bytes": 24956959,
+      "allocated_bytes": 24973312
+    },
+    "production/chaindata|.log": {
+      "files": 3,
+      "bytes": 763073507,
+      "allocated_bytes": 885854208
+    },
+    "production/history|.sst": {
+      "files": 6567,
+      "bytes": 95827336869,
+      "allocated_bytes": 95844974592
+    },
+    "production/history|no-extension": {
+      "files": 5,
+      "bytes": 24143316,
+      "allocated_bytes": 24154112
+    },
+    "production/history|.log": {
+      "files": 3,
+      "bytes": 397583524,
+      "allocated_bytes": 442933248
+    },
+    "production/state-snapshots|.tmp": {
+      "files": 1,
+      "bytes": 48254664,
+      "allocated_bytes": 48254976
+    },
+    "production/state-snapshots|.json": {
+      "files": 3,
+      "bytes": 110671890,
+      "allocated_bytes": 110682112
+    },
+    "production/state-snapshots|.idx": {
+      "files": 71024,
+      "bytes": 42516671675,
+      "allocated_bytes": 42662883328
+    },
+    "production/state-snapshots|.kv": {
+      "files": 33077,
+      "bytes": 261381539418,
+      "allocated_bytes": 261455867904
+    },
+    "production/state-snapshots|.seg": {
+      "files": 71024,
+      "bytes": 522747156223,
+      "allocated_bytes": 522903171072
+    },
+    "production/state-snapshots|.route": {
+      "files": 5,
+      "bytes": 8497680365,
+      "allocated_bytes": 8497709056
+    },
+    "start.sh|.sh": {
+      "files": 1,
+      "bytes": 11128,
+      "allocated_bytes": 12288
+    },
+    "start.lock|.lock": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "compare.sh|.sh": {
+      "files": 1,
+      "bytes": 4856,
+      "allocated_bytes": 8192
+    },
+    "start.log|.log": {
+      "files": 1,
+      "bytes": 173747796,
+      "allocated_bytes": 173760512
+    },
+    "deployed-master.rev|.rev": {
+      "files": 1,
+      "bytes": 41,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|.txt": {
+      "files": 1,
+      "bytes": 10,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|no-extension": {
+      "files": 15840,
+      "bytes": 4179062740,
+      "allocated_bytes": 4234600448
+    },
+    "deploy-cache|.a": {
+      "files": 684,
+      "bytes": 621415560,
+      "allocated_bytes": 622829568
+    },
+    "deploy-cache|.cfg": {
+      "files": 726,
+      "bytes": 2751064,
+      "allocated_bytes": 4354048
+    },
+    "deploy-cache|.out": {
+      "files": 726,
+      "bytes": 180078,
+      "allocated_bytes": 1089536
+    },
+    "deploy-cache|.o": {
+      "files": 162,
+      "bytes": 19896736,
+      "allocated_bytes": 20234240
+    },
+    "deploy-cache|.h": {
+      "files": 64,
+      "bytes": 660278,
+      "allocated_bytes": 856064
+    },
+    "deploy-cache|.c": {
+      "files": 25,
+      "bytes": 62540,
+      "allocated_bytes": 122880
+    },
+    "deploy-cache|.go": {
+      "files": 126,
+      "bytes": 1348795,
+      "allocated_bytes": 1667072
+    },
+    "deploy-cache|.link": {
+      "files": 4,
+      "bytes": 275847,
+      "allocated_bytes": 282624
+    },
+    "deploy-cache|.test": {
+      "files": 4,
+      "bytes": 134701168,
+      "allocated_bytes": 134717440
+    },
+    "deploy-cache|.json": {
+      "files": 1,
+      "bytes": 1042,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|.seg": {
+      "files": 1,
+      "bytes": 2444,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|.idx": {
+      "files": 1,
+      "bytes": 201,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|.kv": {
+      "files": 1,
+      "bytes": 846,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|.ridx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated_bytes": 4096
+    },
+    "deploy-cache|.cidx": {
+      "files": 2,
+      "bytes": 12,
+      "allocated_bytes": 8192
+    },
+    "deploy-cache|.cdat": {
+      "files": 2,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "deploy-cache|.rdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "deploy-cache|.meta": {
+      "files": 3,
+      "bytes": 12,
+      "allocated_bytes": 12288
+    },
+    "deploy-cache|.tmp": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "go-tron|no-extension": {
+      "files": 1968,
+      "bytes": 1228350347,
+      "allocated_bytes": 1234640896
+    },
+    "go-tron|.md": {
+      "files": 15205,
+      "bytes": 208747769,
+      "allocated_bytes": 239517696
+    },
+    "go-tron|.sum": {
+      "files": 80,
+      "bytes": 2300520,
+      "allocated_bytes": 2457600
+    },
+    "go-tron|.sh": {
+      "files": 926,
+      "bytes": 23999423,
+      "allocated_bytes": 26415104
+    },
+    "go-tron|.mod": {
+      "files": 81,
+      "bytes": 234319,
+      "allocated_bytes": 331776
+    },
+    "go-tron|.sample": {
+      "files": 414,
+      "bytes": 680248,
+      "allocated_bytes": 1884160
+    },
+    "go-tron|.idx": {
+      "files": 50,
+      "bytes": 1372764,
+      "allocated_bytes": 1482752
+    },
+    "go-tron|.pack": {
+      "files": 50,
+      "bytes": 194174836,
+      "allocated_bytes": 194306048
+    },
+    "go-tron|.go": {
+      "files": 84381,
+      "bytes": 1060290344,
+      "allocated_bytes": 1237680128
+    },
+    "go-tron|.json": {
+      "files": 13664,
+      "bytes": 702339568,
+      "allocated_bytes": 740077568
+    },
+    "go-tron|.log": {
+      "files": 6524,
+      "bytes": 30186328,
+      "allocated_bytes": 54943744
+    },
+    "go-tron|.gz": {
+      "files": 342,
+      "bytes": 126470959,
+      "allocated_bytes": 127111168
+    },
+    "go-tron|.py": {
+      "files": 7917,
+      "bytes": 138828998,
+      "allocated_bytes": 154247168
+    },
+    "go-tron|.bundle": {
+      "files": 12,
+      "bytes": 132247,
+      "allocated_bytes": 155648
+    },
+    "go-tron|.txt": {
+      "files": 3890,
+      "bytes": 233800623,
+      "allocated_bytes": 243572736
+    },
+    "go-tron|.patch": {
+      "files": 308,
+      "bytes": 3126894,
+      "allocated_bytes": 3850240
+    },
+    "go-tron|.stdout": {
+      "files": 27,
+      "bytes": 4394,
+      "allocated_bytes": 65536
+    },
+    "go-tron|.stderr": {
+      "files": 107,
+      "bytes": 282,
+      "allocated_bytes": 12288
+    },
+    "go-tron|.h": {
+      "files": 45,
+      "bytes": 242315,
+      "allocated_bytes": 389120
+    },
+    "go-tron|.conf": {
+      "files": 240,
+      "bytes": 1054160,
+      "allocated_bytes": 1802240
+    },
+    "go-tron|.yml": {
+      "files": 165,
+      "bytes": 88100,
+      "allocated_bytes": 675840
+    },
+    "go-tron|.service": {
+      "files": 40,
+      "bytes": 97800,
+      "allocated_bytes": 163840
+    },
+    "go-tron|.jsonl": {
+      "files": 1314,
+      "bytes": 204327848,
+      "allocated_bytes": 208003072
+    },
+    "go-tron|.jpg": {
+      "files": 40,
+      "bytes": 3873840,
+      "allocated_bytes": 3932160
+    },
+    "go-tron|.diff": {
+      "files": 40,
+      "bytes": 51560,
+      "allocated_bytes": 163840
+    },
+    "go-tron|.pprof": {
+      "files": 88,
+      "bytes": 15396273,
+      "allocated_bytes": 15564800
+    },
+    "go-tron|.java": {
+      "files": 80,
+      "bytes": 355400,
+      "allocated_bytes": 491520
+    },
+    "go-tron|.js": {
+      "files": 681,
+      "bytes": 9539381,
+      "allocated_bytes": 12001280
+    },
+    "go-tron|.proto": {
+      "files": 840,
+      "bytes": 3884400,
+      "allocated_bytes": 6225920
+    },
+    "go-tron|.pyc": {
+      "files": 22,
+      "bytes": 848610,
+      "allocated_bytes": 905216
+    },
+    "go-tron|.ndjson": {
+      "files": 40,
+      "bytes": 919600,
+      "allocated_bytes": 983040
+    },
+    "go-tron|.bin": {
+      "files": 40,
+      "bytes": 13040,
+      "allocated_bytes": 163840
+    },
+    "go-tron|.a": {
+      "files": 40,
+      "bytes": 340738512,
+      "allocated_bytes": 340893696
+    },
+    "go-tron|.hex": {
+      "files": 360,
+      "bytes": 3761760,
+      "allocated_bytes": 4751360
+    },
+    "go-tron|.test": {
+      "files": 57,
+      "bytes": 2526001184,
+      "allocated_bytes": 2526322688
+    },
+    "go-tron|.body": {
+      "files": 10,
+      "bytes": 1012095,
+      "allocated_bytes": 1040384
+    },
+    "go-tron|.out": {
+      "files": 1,
+      "bytes": 40,
+      "allocated_bytes": 4096
+    },
+    "go-tron|.toml": {
+      "files": 45,
+      "bytes": 18370,
+      "allocated_bytes": 184320
+    },
+    "go-tron|.lock": {
+      "files": 5,
+      "bytes": 165579,
+      "allocated_bytes": 172032
+    },
+    "go-tron|.rs": {
+      "files": 387,
+      "bytes": 5477867,
+      "allocated_bytes": 6328320
+    },
+    "go-tron|.dat": {
+      "files": 30,
+      "bytes": 2214320,
+      "allocated_bytes": 2252800
+    },
+    "go-tron|.sst": {
+      "files": 9688,
+      "bytes": 1955616271,
+      "allocated_bytes": 1979363328
+    },
+    "go-tron|.before-cleanup": {
+      "files": 2,
+      "bytes": 229,
+      "allocated_bytes": 4096
+    },
+    "go-tron|.c": {
+      "files": 3,
+      "bytes": 7238,
+      "allocated_bytes": 12288
+    },
+    "go-tron|.o": {
+      "files": 4,
+      "bytes": 17904,
+      "allocated_bytes": 28672
+    },
+    "go-tron|.b64": {
+      "files": 14,
+      "bytes": 49811,
+      "allocated_bytes": 73728
+    },
+    "go-tron|.sha256": {
+      "files": 1,
+      "bytes": 65,
+      "allocated_bytes": 4096
+    },
+    "go-tron|.png": {
+      "files": 7,
+      "bytes": 616459,
+      "allocated_bytes": 626688
+    },
+    "go-tron|.zlib": {
+      "files": 4,
+      "bytes": 680290,
+      "allocated_bytes": 688128
+    },
+    "go-tron|.zip": {
+      "files": 34,
+      "bytes": 14166745,
+      "allocated_bytes": 14241792
+    },
+    "go-tron|.seg": {
+      "files": 2,
+      "bytes": 1578,
+      "allocated_bytes": 8192
+    },
+    "go-tron|.v1": {
+      "files": 1,
+      "bytes": 11997,
+      "allocated_bytes": 12288
+    },
+    "go-tron|.v2": {
+      "files": 1,
+      "bytes": 42860,
+      "allocated_bytes": 45056
+    },
+    "go-tron|.v3": {
+      "files": 1,
+      "bytes": 40733,
+      "allocated_bytes": 40960
+    },
+    "go-tron|.xz": {
+      "files": 4,
+      "bytes": 2117320,
+      "allocated_bytes": 2125824
+    },
+    "go-tron|.exe": {
+      "files": 1,
+      "bytes": 10322944,
+      "allocated_bytes": 10326016
+    },
+    "go-tron|.tar": {
+      "files": 1,
+      "bytes": 122594816,
+      "allocated_bytes": 122601472
+    },
+    "go-tron|.TAG": {
+      "files": 1,
+      "bytes": 177,
+      "allocated_bytes": 4096
+    },
+    "go-tron|.d": {
+      "files": 35,
+      "bytes": 118718,
+      "allocated_bytes": 212992
+    },
+    "go-tron|.so": {
+      "files": 2,
+      "bytes": 2326432,
+      "allocated_bytes": 2326528
+    },
+    "go-tron|.timestamp": {
+      "files": 38,
+      "bytes": 1824,
+      "allocated_bytes": 155648
+    },
+    "go-tron|.rlib": {
+      "files": 29,
+      "bytes": 16706746,
+      "allocated_bytes": 16764928
+    },
+    "go-tron|.rmeta": {
+      "files": 29,
+      "bytes": 15287189,
+      "allocated_bytes": 15351808
+    },
+    "history-mainnet-rollout-20261026-01|.py": {
+      "files": 32,
+      "bytes": 124874,
+      "allocated_bytes": 200704
+    },
+    "history-mainnet-rollout-20261026-01|.json": {
+      "files": 65,
+      "bytes": 765413988,
+      "allocated_bytes": 765620224
+    },
+    "history-mainnet-rollout-20261026-01|.jsonl": {
+      "files": 6,
+      "bytes": 242969,
+      "allocated_bytes": 262144
+    },
+    "history-mainnet-rollout-20261026-01|.txt": {
+      "files": 7,
+      "bytes": 7051,
+      "allocated_bytes": 32768
+    },
+    "history-mainnet-rollout-20261026-01|.log": {
+      "files": 8,
+      "bytes": 3755913,
+      "allocated_bytes": 3776512
+    },
+    "history-mainnet-rollout-20261026-01|.sh": {
+      "files": 1,
+      "bytes": 11350,
+      "allocated_bytes": 12288
+    },
+    "history-mainnet-rollout-20261026-01|.pprof": {
+      "files": 1,
+      "bytes": 118596,
+      "allocated_bytes": 118784
+    },
+    "history-mainnet-rollout-20261026-01|.xz": {
+      "files": 1,
+      "bytes": 386660,
+      "allocated_bytes": 389120
+    },
+    "history-mainnet-rollout-20261026-01|no-extension": {
+      "files": 1727,
+      "bytes": 135812659,
+      "allocated_bytes": 141836288
+    },
+    "history-staging-ops|.log": {
+      "files": 5,
+      "bytes": 941142,
+      "allocated_bytes": 970752
+    },
+    "main/DIRECT_HISTORY_REQUIRED.json|.json": {
+      "files": 1,
+      "bytes": 36,
+      "allocated_bytes": 4096
+    },
+    "main/HISTORY_STAGING_STORAGE_HANDOFF.json|.json": {
+      "files": 1,
+      "bytes": 624,
+      "allocated_bytes": 4096
+    },
+    "main/gtron.log|.log": {
+      "files": 1,
+      "bytes": 45204873,
+      "allocated_bytes": 45211648
+    },
+    "main/HISTORY_STAGING_ACTIVATION_INTENT.json|.json": {
+      "files": 1,
+      "bytes": 6257,
+      "allocated_bytes": 8192
+    },
+    "main/HISTORY_STAGING_MIGRATION_DONE.json|.json": {
+      "files": 1,
+      "bytes": 1210,
+      "allocated_bytes": 4096
+    },
+    "main/HISTORY_STAGING_RESUME_7aa29559_20261001.log|.log": {
+      "files": 1,
+      "bytes": 9463,
+      "allocated_bytes": 12288
+    },
+    "main/gtron-pre-compact-v3-20261019-659ab078.log|.log": {
+      "files": 1,
+      "bytes": 73501296,
+      "allocated_bytes": 73506816
+    },
+    "main/HISTORY_STAGING_MIGRATION_60b24279_a73e782f_20261001.log|.log": {
+      "files": 1,
+      "bytes": 4836,
+      "allocated_bytes": 8192
+    },
+    "main/offline-hot-maintenance-20261009-wrapper.log|.log": {
+      "files": 1,
+      "bytes": 141,
+      "allocated_bytes": 4096
+    },
+    "main/HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json.bak-20260921-cache-recycle|.bak-20260921-cache-recycle": {
+      "files": 1,
+      "bytes": 265,
+      "allocated_bytes": 4096
+    },
+    "main/HISTORY_STAGING_RESUME_59442e30_20261001.log|.log": {
+      "files": 1,
+      "bytes": 411009,
+      "allocated_bytes": 417792
+    },
+    "main/HISTORY_SHARED_CHUNKS_REQUIRES_READER_V3.json|.json": {
+      "files": 1,
+      "bytes": 281,
+      "allocated_bytes": 4096
+    },
+    "main/HISTORY_STAGING_OPERATOR_PRECHECK_20261001.json|.json": {
+      "files": 1,
+      "bytes": 344,
+      "allocated_bytes": 4096
+    },
+    "main/HISTORY_STAGING_RESUME_2e9cc100_20261001.log|.log": {
+      "files": 1,
+      "bytes": 64163,
+      "allocated_bytes": 69632
+    },
+    "main/HISTORY_STAGING_RESUME_67c541c8_20261001.log|.log": {
+      "files": 1,
+      "bytes": 46202,
+      "allocated_bytes": 53248
+    },
+    "main/HISTORY_STAGING_RESUME_bbd4ac2b_20261003.log|.log": {
+      "files": 1,
+      "bytes": 588819,
+      "allocated_bytes": 593920
+    },
+    "main/datadir|no-extension": {
+      "files": 2,
+      "bytes": 379,
+      "allocated_bytes": 8192
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|no-extension": {
+      "files": 13,
+      "bytes": 4624432,
+      "allocated_bytes": 4661248
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.ridx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated_bytes": 4096
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.cidx": {
+      "files": 2,
+      "bytes": 12,
+      "allocated_bytes": 8192
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.cdat": {
+      "files": 2,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.rdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.meta": {
+      "files": 3,
+      "bytes": 12,
+      "allocated_bytes": 12288
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.json": {
+      "files": 177,
+      "bytes": 15067181,
+      "allocated_bytes": 15724544
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.gtxi": {
+      "files": 1384,
+      "bytes": 8904512064,
+      "allocated_bytes": 8907362304
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.gtv2": {
+      "files": 519,
+      "bytes": 57111021689,
+      "allocated_bytes": 57112739840
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.sst": {
+      "files": 2027,
+      "bytes": 40817479825,
+      "allocated_bytes": 40824750080
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.log": {
+      "files": 7,
+      "bytes": 1289143976,
+      "allocated_bytes": 1476431872
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.kv": {
+      "files": 4576,
+      "bytes": 26947152165,
+      "allocated_bytes": 26956496896
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.seg": {
+      "files": 9470,
+      "bytes": 81888237724,
+      "allocated_bytes": 81908989952
+    },
+    "main/datadir-pre-compact-v3-20261019-659ab078|.idx": {
+      "files": 9470,
+      "bytes": 3978633697,
+      "allocated_bytes": 3999334400
+    },
+    "main/offline-direct-cleanup-20261009|.json": {
+      "files": 1027,
+      "bytes": 138194850,
+      "allocated_bytes": 140894208
+    },
+    "main/offline-direct-cleanup-20261009|.log": {
+      "files": 73,
+      "bytes": 256591,
+      "allocated_bytes": 462848
+    },
+    "main/offline-direct-cleanup-20261009|.stdout": {
+      "files": 290,
+      "bytes": 185887568,
+      "allocated_bytes": 186445824
+    },
+    "main/offline-direct-cleanup-20261009|.lock": {
+      "files": 11,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "main/offline-direct-cleanup-20261009|.jsonl": {
+      "files": 12,
+      "bytes": 151922353,
+      "allocated_bytes": 151969792
+    },
+    "main/offline-direct-cleanup-20261009|.py": {
+      "files": 185,
+      "bytes": 3904879,
+      "allocated_bytes": 4284416
+    },
+    "main/offline-direct-cleanup-20261009|.stderr": {
+      "files": 296,
+      "bytes": 13511,
+      "allocated_bytes": 57344
+    },
+    "main/offline-direct-cleanup-20261009|.txt": {
+      "files": 9,
+      "bytes": 729794,
+      "allocated_bytes": 749568
+    },
+    "main/offline-direct-cleanup-20261009|no-extension": {
+      "files": 10,
+      "bytes": 60881927,
+      "allocated_bytes": 60903424
+    },
+    "main/offline-direct-cleanup-20261009|.go": {
+      "files": 1699,
+      "bytes": 22654161,
+      "allocated_bytes": 26234880
+    },
+    "main/offline-direct-cleanup-20261009|.pyc": {
+      "files": 5,
+      "bytes": 57146,
+      "allocated_bytes": 61440
+    },
+    "main/offline-direct-cleanup-20261009|.sh": {
+      "files": 24,
+      "bytes": 610254,
+      "allocated_bytes": 671744
+    },
+    "main/offline-direct-cleanup-20261009|.patch": {
+      "files": 2,
+      "bytes": 24311,
+      "allocated_bytes": 28672
+    },
+    "main/offline-direct-cleanup-20261009|.md": {
+      "files": 288,
+      "bytes": 4656625,
+      "allocated_bytes": 5238784
+    },
+    "main/offline-direct-cleanup-20261009|.tmp": {
+      "files": 568,
+      "bytes": 680147,
+      "allocated_bytes": 2326528
+    },
+    "main/offline-direct-cleanup-20261009|.sum": {
+      "files": 1,
+      "bytes": 25666,
+      "allocated_bytes": 28672
+    },
+    "main/offline-direct-cleanup-20261009|.mod": {
+      "files": 1,
+      "bytes": 3785,
+      "allocated_bytes": 4096
+    },
+    "main/offline-direct-cleanup-20261009|.h": {
+      "files": 1,
+      "bytes": 4625,
+      "allocated_bytes": 8192
+    },
+    "main/offline-direct-cleanup-20261009|.conf": {
+      "files": 6,
+      "bytes": 26354,
+      "allocated_bytes": 45056
+    },
+    "main/offline-direct-cleanup-20261009|.yml": {
+      "files": 4,
+      "bytes": 2010,
+      "allocated_bytes": 16384
+    },
+    "main/offline-direct-cleanup-20261009|.service": {
+      "files": 1,
+      "bytes": 2342,
+      "allocated_bytes": 4096
+    },
+    "main/offline-direct-cleanup-20261009|.java": {
+      "files": 2,
+      "bytes": 8885,
+      "allocated_bytes": 12288
+    },
+    "main/offline-direct-cleanup-20261009|.js": {
+      "files": 17,
+      "bytes": 8111,
+      "allocated_bytes": 69632
+    },
+    "main/offline-direct-cleanup-20261009|.proto": {
+      "files": 21,
+      "bytes": 97110,
+      "allocated_bytes": 155648
+    },
+    "main/offline-direct-cleanup-20261009|.ndjson": {
+      "files": 1,
+      "bytes": 22990,
+      "allocated_bytes": 24576
+    },
+    "main/offline-direct-cleanup-20261009|.bin": {
+      "files": 1,
+      "bytes": 326,
+      "allocated_bytes": 4096
+    },
+    "main/offline-direct-cleanup-20261009|.hex": {
+      "files": 9,
+      "bytes": 94044,
+      "allocated_bytes": 118784
+    },
+    "maintenance/20261015-cold-memory-budget|.conf": {
+      "files": 2,
+      "bytes": 3421,
+      "allocated_bytes": 8192
+    },
+    "maintenance/20261015-cold-memory-budget|.json": {
+      "files": 1,
+      "bytes": 513,
+      "allocated_bytes": 4096
+    },
+    "maintenance/20261015-cold-memory-budget-retry1|.conf": {
+      "files": 2,
+      "bytes": 3421,
+      "allocated_bytes": 8192
+    },
+    "maintenance/20261015-cold-memory-budget-retry1|.json": {
+      "files": 1,
+      "bytes": 2043,
+      "allocated_bytes": 4096
+    },
+    "maintenance/20261015-pebble12g-postdeploy|.conf": {
+      "files": 2,
+      "bytes": 3423,
+      "allocated_bytes": 8192
+    },
+    "maintenance/20261015-pebble12g-postdeploy|.json": {
+      "files": 2,
+      "bytes": 1374,
+      "allocated_bytes": 8192
+    },
+    "maintenance/9m-query-20261027-01|.json": {
+      "files": 648,
+      "bytes": 295823437,
+      "allocated_bytes": 297897984
+    },
+    "maintenance/9m-query-20261027-01|.part1": {
+      "files": 4,
+      "bytes": 9254,
+      "allocated_bytes": 16384
+    },
+    "maintenance/9m-query-20261027-01|.part7": {
+      "files": 1,
+      "bytes": 3600,
+      "allocated_bytes": 4096
+    },
+    "maintenance/9m-query-20261027-01|.py": {
+      "files": 1056,
+      "bytes": 25982602,
+      "allocated_bytes": 28053504
+    },
+    "maintenance/9m-query-20261027-01|.part0": {
+      "files": 4,
+      "bytes": 12150,
+      "allocated_bytes": 16384
+    },
+    "maintenance/9m-query-20261027-01|.part2": {
+      "files": 2,
+      "bytes": 6900,
+      "allocated_bytes": 8192
+    },
+    "maintenance/9m-query-20261027-01|.zip": {
+      "files": 1,
+      "bytes": 49450207,
+      "allocated_bytes": 49455104
+    },
+    "maintenance/9m-query-20261027-01|.part4": {
+      "files": 2,
+      "bytes": 6900,
+      "allocated_bytes": 8192
+    },
+    "maintenance/9m-query-20261027-01|.part5": {
+      "files": 2,
+      "bytes": 6900,
+      "allocated_bytes": 8192
+    },
+    "maintenance/9m-query-20261027-01|.part9": {
+      "files": 1,
+      "bytes": 259,
+      "allocated_bytes": 4096
+    },
+    "maintenance/9m-query-20261027-01|.zlib": {
+      "files": 5,
+      "bytes": 144696,
+      "allocated_bytes": 155648
+    },
+    "maintenance/9m-query-20261027-01|.part3": {
+      "files": 2,
+      "bytes": 6900,
+      "allocated_bytes": 8192
+    },
+    "maintenance/9m-query-20261027-01|.part6": {
+      "files": 2,
+      "bytes": 4263,
+      "allocated_bytes": 8192
+    },
+    "maintenance/9m-query-20261027-01|.part8": {
+      "files": 1,
+      "bytes": 3600,
+      "allocated_bytes": 4096
+    },
+    "maintenance/9m-query-20261027-01|.idx": {
+      "files": 355314,
+      "bytes": 208956613330,
+      "allocated_bytes": 209689391104
+    },
+    "maintenance/9m-query-20261027-01|.kv": {
+      "files": 177949,
+      "bytes": 1394954104100,
+      "allocated_bytes": 1395358195712
+    },
+    "maintenance/9m-query-20261027-01|.seg": {
+      "files": 384962,
+      "bytes": 2799708510573,
+      "allocated_bytes": 2800560611328
+    },
+    "maintenance/9m-query-20261027-01|.route": {
+      "files": 130,
+      "bytes": 18744959373,
+      "allocated_bytes": 18745286656
+    },
+    "maintenance/9m-query-20261027-01|.log": {
+      "files": 88,
+      "bytes": 52341831,
+      "allocated_bytes": 52547584
+    },
+    "maintenance/9m-query-20261027-01|.test": {
+      "files": 7,
+      "bytes": 354192592,
+      "allocated_bytes": 354238464
+    },
+    "maintenance/9m-query-20261027-01|no-extension": {
+      "files": 56,
+      "bytes": 82848,
+      "allocated_bytes": 229376
+    },
+    "maintenance/9m-query-20261027-01|.md": {
+      "files": 80,
+      "bytes": 951136,
+      "allocated_bytes": 1081344
+    },
+    "maintenance/9m-query-20261027-01|.sum": {
+      "files": 16,
+      "bytes": 460104,
+      "allocated_bytes": 491520
+    },
+    "maintenance/9m-query-20261027-01|.sh": {
+      "files": 184,
+      "bytes": 4795904,
+      "allocated_bytes": 5275648
+    },
+    "maintenance/9m-query-20261027-01|.mod": {
+      "files": 16,
+      "bytes": 46856,
+      "allocated_bytes": 65536
+    },
+    "maintenance/9m-query-20261027-01|.go": {
+      "files": 17392,
+      "bytes": 217319728,
+      "allocated_bytes": 253825024
+    },
+    "maintenance/9m-query-20261027-01|.h": {
+      "files": 8,
+      "bytes": 37000,
+      "allocated_bytes": 65536
+    },
+    "maintenance/9m-query-20261027-01|.conf": {
+      "files": 48,
+      "bytes": 210832,
+      "allocated_bytes": 360448
+    },
+    "maintenance/9m-query-20261027-01|.yml": {
+      "files": 32,
+      "bytes": 16080,
+      "allocated_bytes": 131072
+    },
+    "maintenance/9m-query-20261027-01|.service": {
+      "files": 8,
+      "bytes": 19560,
+      "allocated_bytes": 32768
+    },
+    "maintenance/9m-query-20261027-01|.java": {
+      "files": 16,
+      "bytes": 71080,
+      "allocated_bytes": 98304
+    },
+    "maintenance/9m-query-20261027-01|.txt": {
+      "files": 25,
+      "bytes": 3721685,
+      "allocated_bytes": 3776512
+    },
+    "maintenance/9m-query-20261027-01|.js": {
+      "files": 136,
+      "bytes": 64888,
+      "allocated_bytes": 557056
+    },
+    "maintenance/9m-query-20261027-01|.proto": {
+      "files": 168,
+      "bytes": 776880,
+      "allocated_bytes": 1245184
+    },
+    "maintenance/9m-query-20261027-01|.ndjson": {
+      "files": 8,
+      "bytes": 183920,
+      "allocated_bytes": 196608
+    },
+    "maintenance/9m-query-20261027-01|.bin": {
+      "files": 9,
+      "bytes": 821848,
+      "allocated_bytes": 856064
+    },
+    "maintenance/9m-query-20261027-01|.hex": {
+      "files": 72,
+      "bytes": 752352,
+      "allocated_bytes": 950272
+    },
+    "maintenance/9m-query-20261027-01|.jsonl": {
+      "files": 60,
+      "bytes": 133003,
+      "allocated_bytes": 245760
+    },
+    "maintenance/9m-query-20261027-01|.gz": {
+      "files": 6,
+      "bytes": 65512126,
+      "allocated_bytes": 65523712
+    },
+    "maintenance/9m-query-20261027-01|.tar": {
+      "files": 1,
+      "bytes": 34242560,
+      "allocated_bytes": 34246656
+    },
+    "maintenance/9m-query-20261027-01|.pprof": {
+      "files": 1,
+      "bytes": 26328,
+      "allocated_bytes": 28672
+    },
+    "maintenance/cleanup-20261026|.json": {
+      "files": 1228,
+      "bytes": 430641212,
+      "allocated_bytes": 434634752
+    },
+    "maintenance/cleanup-20261026|.log": {
+      "files": 771,
+      "bytes": 28584405,
+      "allocated_bytes": 30781440
+    },
+    "maintenance/cleanup-20261026|.py": {
+      "files": 846,
+      "bytes": 16471322,
+      "allocated_bytes": 18145280
+    },
+    "maintenance/cleanup-20261026|.txt": {
+      "files": 74,
+      "bytes": 8226427,
+      "allocated_bytes": 8372224
+    },
+    "maintenance/cleanup-20261026|.md": {
+      "files": 78,
+      "bytes": 1851438,
+      "allocated_bytes": 1957888
+    },
+    "maintenance/cleanup-20261026|.sh": {
+      "files": 130,
+      "bytes": 2909839,
+      "allocated_bytes": 3223552
+    },
+    "maintenance/cleanup-20261026|.rev": {
+      "files": 1,
+      "bytes": 41,
+      "allocated_bytes": 4096
+    },
+    "maintenance/cleanup-20261026|.exit": {
+      "files": 7,
+      "bytes": 11,
+      "allocated_bytes": 28672
+    },
+    "maintenance/cleanup-20261026|.go": {
+      "files": 1,
+      "bytes": 1670,
+      "allocated_bytes": 4096
+    },
+    "maintenance/cleanup-20261026|.test": {
+      "files": 1,
+      "bytes": 45027135,
+      "allocated_bytes": 45031424
+    },
+    "maintenance/cleanup-20261026|.tar": {
+      "files": 1,
+      "bytes": 34293760,
+      "allocated_bytes": 34299904
+    },
+    "maintenance/cleanup-history-tests-20261026|.json": {
+      "files": 4,
+      "bytes": 233363271,
+      "allocated_bytes": 233377792
+    },
+    "maintenance/cleanup-history-tests-20261026|.gz": {
+      "files": 1,
+      "bytes": 1713701585,
+      "allocated_bytes": 1713709056
+    },
+    "maintenance/full-state-acceptance-20261028-01|.zip": {
+      "files": 38,
+      "bytes": 44799463,
+      "allocated_bytes": 44888064
+    },
+    "maintenance/full-state-acceptance-20261028-01|.json": {
+      "files": 6890,
+      "bytes": 829390850,
+      "allocated_bytes": 854487040
+    },
+    "maintenance/full-state-acceptance-20261028-01|.test": {
+      "files": 7,
+      "bytes": 442319304,
+      "allocated_bytes": 442363904
+    },
+    "maintenance/full-state-acceptance-20261028-01|.log": {
+      "files": 1230,
+      "bytes": 11767870335,
+      "allocated_bytes": 11771658240
+    },
+    "maintenance/full-state-acceptance-20261028-01|.py": {
+      "files": 545,
+      "bytes": 7896745,
+      "allocated_bytes": 8978432
+    },
+    "maintenance/full-state-acceptance-20261028-01|.gz": {
+      "files": 253,
+      "bytes": 119953131,
+      "allocated_bytes": 120487936
+    },
+    "maintenance/full-state-acceptance-20261028-01|no-extension": {
+      "files": 4399,
+      "bytes": 57325291358,
+      "allocated_bytes": 57334697984
+    },
+    "maintenance/full-state-acceptance-20261028-01|.b64": {
+      "files": 6,
+      "bytes": 67600,
+      "allocated_bytes": 81920
+    },
+    "maintenance/full-state-acceptance-20261028-01|.patch": {
+      "files": 13,
+      "bytes": 143247,
+      "allocated_bytes": 176128
+    },
+    "maintenance/full-state-acceptance-20261028-01|.jsonl": {
+      "files": 757,
+      "bytes": 8244744,
+      "allocated_bytes": 10362880
+    },
+    "maintenance/full-state-acceptance-20261028-01|.txt": {
+      "files": 282,
+      "bytes": 7791682,
+      "allocated_bytes": 8421376
+    },
+    "maintenance/full-state-acceptance-20261028-01|.ridx": {
+      "files": 7,
+      "bytes": 42,
+      "allocated_bytes": 28672
+    },
+    "maintenance/full-state-acceptance-20261028-01|.cidx": {
+      "files": 14,
+      "bytes": 84,
+      "allocated_bytes": 57344
+    },
+    "maintenance/full-state-acceptance-20261028-01|.cdat": {
+      "files": 14,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "maintenance/full-state-acceptance-20261028-01|.rdat": {
+      "files": 7,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "maintenance/full-state-acceptance-20261028-01|.meta": {
+      "files": 21,
+      "bytes": 84,
+      "allocated_bytes": 86016
+    },
+    "maintenance/full-state-acceptance-20261028-01|.gtxi": {
+      "files": 38395,
+      "bytes": 351919738821,
+      "allocated_bytes": 352010072064
+    },
+    "maintenance/full-state-acceptance-20261028-01|.gtv2": {
+      "files": 14427,
+      "bytes": 3024462673162,
+      "allocated_bytes": 3024521457664
+    },
+    "maintenance/full-state-acceptance-20261028-01|.sst": {
+      "files": 67020,
+      "bytes": 1360739357230,
+      "allocated_bytes": 1360941936640
+    },
+    "maintenance/full-state-acceptance-20261028-01|.idx": {
+      "files": 482811,
+      "bytes": 284414325531,
+      "allocated_bytes": 285408169984
+    },
+    "maintenance/full-state-acceptance-20261028-01|.kv": {
+      "files": 224469,
+      "bytes": 1767001525625,
+      "allocated_bytes": 1767506063360
+    },
+    "maintenance/full-state-acceptance-20261028-01|.seg": {
+      "files": 482846,
+      "bytes": 3627674316444,
+      "allocated_bytes": 3628735389696
+    },
+    "maintenance/full-state-acceptance-20261028-01|.route": {
+      "files": 1544,
+      "bytes": 57803751967,
+      "allocated_bytes": 57806204928
+    },
+    "maintenance/full-state-acceptance-20261028-01|.go": {
+      "files": 4364,
+      "bytes": 54459463,
+      "allocated_bytes": 63623168
+    },
+    "maintenance/full-state-acceptance-20261028-01|.pprof": {
+      "files": 14,
+      "bytes": 885059,
+      "allocated_bytes": 905216
+    },
+    "maintenance/full-state-acceptance-20261028-01|.bt": {
+      "files": 33,
+      "bytes": 627934171,
+      "allocated_bytes": 628039680
+    },
+    "maintenance/full-state-acceptance-20261028-01|.md": {
+      "files": 454,
+      "bytes": 5708630,
+      "allocated_bytes": 6635520
+    },
+    "maintenance/full-state-acceptance-20261028-01|.sum": {
+      "files": 4,
+      "bytes": 115026,
+      "allocated_bytes": 122880
+    },
+    "maintenance/full-state-acceptance-20261028-01|.sh": {
+      "files": 46,
+      "bytes": 1198976,
+      "allocated_bytes": 1318912
+    },
+    "maintenance/full-state-acceptance-20261028-01|.mod": {
+      "files": 4,
+      "bytes": 11714,
+      "allocated_bytes": 16384
+    },
+    "maintenance/full-state-acceptance-20261028-01|.h": {
+      "files": 2,
+      "bytes": 9250,
+      "allocated_bytes": 16384
+    },
+    "maintenance/full-state-acceptance-20261028-01|.conf": {
+      "files": 12,
+      "bytes": 52708,
+      "allocated_bytes": 90112
+    },
+    "maintenance/full-state-acceptance-20261028-01|.yml": {
+      "files": 8,
+      "bytes": 4020,
+      "allocated_bytes": 32768
+    },
+    "maintenance/full-state-acceptance-20261028-01|.service": {
+      "files": 2,
+      "bytes": 4890,
+      "allocated_bytes": 8192
+    },
+    "maintenance/full-state-acceptance-20261028-01|.jpg": {
+      "files": 1,
+      "bytes": 96846,
+      "allocated_bytes": 98304
+    },
+    "maintenance/full-state-acceptance-20261028-01|.diff": {
+      "files": 1,
+      "bytes": 1289,
+      "allocated_bytes": 4096
+    },
+    "maintenance/full-state-acceptance-20261028-01|.stderr": {
+      "files": 2,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "maintenance/full-state-acceptance-20261028-01|.png": {
+      "files": 7,
+      "bytes": 616459,
+      "allocated_bytes": 626688
+    },
+    "maintenance/full-state-acceptance-20261028-01|.zlib": {
+      "files": 4,
+      "bytes": 680290,
+      "allocated_bytes": 688128
+    },
+    "maintenance/full-state-acceptance-20261028-01|.v1": {
+      "files": 1,
+      "bytes": 11997,
+      "allocated_bytes": 12288
+    },
+    "maintenance/full-state-acceptance-20261028-01|.v2": {
+      "files": 1,
+      "bytes": 42860,
+      "allocated_bytes": 45056
+    },
+    "maintenance/full-state-acceptance-20261028-01|.v3": {
+      "files": 1,
+      "bytes": 40733,
+      "allocated_bytes": 40960
+    },
+    "maintenance/full-state-acceptance-20261028-01|.xz": {
+      "files": 4,
+      "bytes": 2117320,
+      "allocated_bytes": 2125824
+    },
+    "maintenance/full-state-acceptance-20261028-01|.java": {
+      "files": 4,
+      "bytes": 17770,
+      "allocated_bytes": 24576
+    },
+    "maintenance/full-state-acceptance-20261028-01|.js": {
+      "files": 34,
+      "bytes": 16222,
+      "allocated_bytes": 139264
+    },
+    "maintenance/full-state-acceptance-20261028-01|.proto": {
+      "files": 42,
+      "bytes": 194220,
+      "allocated_bytes": 311296
+    },
+    "maintenance/full-state-acceptance-20261028-01|.ndjson": {
+      "files": 2,
+      "bytes": 45980,
+      "allocated_bytes": 49152
+    },
+    "maintenance/full-state-acceptance-20261028-01|.bin": {
+      "files": 2,
+      "bytes": 652,
+      "allocated_bytes": 8192
+    },
+    "maintenance/full-state-acceptance-20261028-01|.a": {
+      "files": 2,
+      "bytes": 17916036,
+      "allocated_bytes": 17924096
+    },
+    "maintenance/full-state-acceptance-20261028-01|.hex": {
+      "files": 18,
+      "bytes": 188088,
+      "allocated_bytes": 237568
+    },
+    "maintenance/history-routing-rollout-20261028-01|.py": {
+      "files": 2,
+      "bytes": 7596,
+      "allocated_bytes": 12288
+    },
+    "maintenance/history-routing-rollout-20261028-01|.json": {
+      "files": 4,
+      "bytes": 363318,
+      "allocated_bytes": 368640
+    },
+    "maintenance/history-routing-rollout-20261028-01|.jsonl": {
+      "files": 1,
+      "bytes": 151626,
+      "allocated_bytes": 155648
+    },
+    "maintenance/history-routing-rollout-20261028-01|.gz": {
+      "files": 1,
+      "bytes": 12075079,
+      "allocated_bytes": 12079104
+    },
+    "maintenance/node-start-20261026-1792993432|.hold": {
+      "files": 1,
+      "bytes": 309,
+      "allocated_bytes": 4096
+    },
+    "maintenance/node-start-20261026-1792993432|.json": {
+      "files": 1,
+      "bytes": 1332,
+      "allocated_bytes": 4096
+    },
+    "maintenance/test-cleanup-20261027-01|.json": {
+      "files": 10,
+      "bytes": 16784121,
+      "allocated_bytes": 16814080
+    },
+    "maintenance/test-cleanup-20261027-01|.log": {
+      "files": 2,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    "maintenance/test-cleanup-20261027-01|.py": {
+      "files": 4,
+      "bytes": 17930,
+      "allocated_bytes": 28672
+    },
+    "maintenance/test-cleanup-20261027-01|.gz": {
+      "files": 2,
+      "bytes": 242479427,
+      "allocated_bytes": 242487296
+    },
+    "maintenance/test-cleanup-20261027-01|.b64": {
+      "files": 2,
+      "bytes": 11543,
+      "allocated_bytes": 16384
+    },
+    "maintenance/test-cleanup-20261027-01|.pyc": {
+      "files": 2,
+      "bytes": 14823,
+      "allocated_bytes": 20480
+    },
+    "params|.params": {
+      "files": 2,
+      "bytes": 51661144,
+      "allocated_bytes": 51671040
+    },
+    "releases|no-extension": {
+      "files": 3,
+      "bytes": 197892352,
+      "allocated_bytes": 197910528
+    },
+    "releases|.json": {
+      "files": 6,
+      "bytes": 1604,
+      "allocated_bytes": 24576
+    }
+  },
+  "cold": {
+    "not-in-initial-manifest|.manifest-618716439.tmp|.tmp": {
+      "files": 1,
+      "bytes": 48254664,
+      "allocated_bytes": 48254976
+    },
+    "not-in-initial-manifest|.chain-freezer-verification-v1.json|.json": {
+      "files": 1,
+      "bytes": 22402581,
+      "allocated_bytes": 22405120
+    },
+    "not-in-initial-manifest|manifest.json|.json": {
+      "files": 1,
+      "bytes": 48253273,
+      "allocated_bytes": 48259072
+    },
+    "not-in-initial-manifest|.state-domain-history-verification-v1.json|.json": {
+      "files": 1,
+      "bytes": 40016036,
+      "allocated_bytes": 40017920
+    },
+    "active-in-initial-manifest|state-domain-change|inverted": {
+      "files": 33045,
+      "bytes": 11773551311,
+      "allocated_bytes": 11841261568
+    },
+    "active-in-initial-manifest|state-domain-change|accessor": {
+      "files": 33045,
+      "bytes": 261315431474,
+      "allocated_bytes": 261389701120
+    },
+    "active-in-initial-manifest|state-domain-change|history": {
+      "files": 33045,
+      "bytes": 364566122846,
+      "allocated_bytes": 364642406400
+    },
+    "retired-in-initial-manifest|state-domain-change|accessor": {
+      "files": 31,
+      "bytes": 57286172,
+      "allocated_bytes": 57344000
+    },
+    "retired-in-initial-manifest|state-domain-change|history": {
+      "files": 31,
+      "bytes": 77828631,
+      "allocated_bytes": 77901824
+    },
+    "retired-in-initial-manifest|state-domain-change|inverted": {
+      "files": 31,
+      "bytes": 2208148,
+      "allocated_bytes": 2273280
+    },
+    "not-in-initial-manifest|history|.idx": {
+      "files": 1,
+      "bytes": 395568,
+      "allocated_bytes": 397312
+    },
+    "active-in-initial-manifest|state-domain-change|account-history-routing": {
+      "files": 1,
+      "bytes": 3520103465,
+      "allocated_bytes": 3520110592
+    },
+    "not-in-initial-manifest|history|.route": {
+      "files": 2,
+      "bytes": 1395158915,
+      "allocated_bytes": 1395167232
+    },
+    "not-in-initial-manifest|history|.kv": {
+      "files": 1,
+      "bytes": 8821772,
+      "allocated_bytes": 8822784
+    },
+    "retired-in-initial-manifest|state-domain-change|account-history-routing": {
+      "files": 1,
+      "bytes": 3515469219,
+      "allocated_bytes": 3515478016
+    },
+    "not-in-initial-manifest|history|.seg": {
+      "files": 1,
+      "bytes": 11460911,
+      "allocated_bytes": 11464704
+    },
+    "active-in-initial-manifest|state-domain-change|system-history-routing": {
+      "files": 1,
+      "bytes": 66948766,
+      "allocated_bytes": 66953216
+    },
+    "active-in-initial-manifest|event-log|event-log-index": {
+      "files": 37946,
+      "bytes": 30738100181,
+      "allocated_bytes": 30816534528
+    },
+    "active-in-initial-manifest|event-log|event-log": {
+      "files": 37946,
+      "bytes": 158084662706,
+      "allocated_bytes": 158164316160
+    },
+    "not-in-initial-manifest|log|.idx": {
+      "files": 1,
+      "bytes": 2416467,
+      "allocated_bytes": 2416640
+    },
+    "not-in-initial-manifest|log|.seg": {
+      "files": 1,
+      "bytes": 7081129,
+      "allocated_bytes": 7081984
+    }
+  },
+  "ancient": {
+    ".|no-extension": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    ".|.ridx": {
+      "files": 1,
+      "bytes": 6,
+      "allocated_bytes": 4096
+    },
+    ".|.cidx": {
+      "files": 2,
+      "bytes": 12,
+      "allocated_bytes": 8192
+    },
+    ".|.cdat": {
+      "files": 2,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    ".|.rdat": {
+      "files": 1,
+      "bytes": 0,
+      "allocated_bytes": 0
+    },
+    ".|.meta": {
+      "files": 3,
+      "bytes": 12,
+      "allocated_bytes": 12288
+    },
+    "tx-index|.json": {
+      "files": 1,
+      "bytes": 1081403,
+      "allocated_bytes": 1085440
+    },
+    "tx-index/runs|.gtxi": {
+      "files": 5583,
+      "bytes": 52508761859,
+      "allocated_bytes": 52521885696
+    },
+    "v2/bodies|.gtv2": {
+      "files": 699,
+      "bytes": 429598485850,
+      "allocated_bytes": 429602873344
+    },
+    "v2/manifests|.json": {
+      "files": 699,
+      "bytes": 230495,
+      "allocated_bytes": 2863104
+    },
+    "v2/state_roots|.gtv2": {
+      "files": 699,
+      "bytes": 1556141728,
+      "allocated_bytes": 1557528576
+    },
+    "v2/tx_infos|.gtv2": {
+      "files": 699,
+      "bytes": 19867538076,
+      "allocated_bytes": 19870339072
+    }
+  },
+  "largest_files": [
+    {
+      "bytes": 31452134001,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/snapshot-v4/export/latest/kv-latest-0100-0-4240407293-b92489058dd718e8.seg",
+      "allocated_bytes": 31452192768
+    },
+    {
+      "bytes": 21069167245,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/snapshot-v4/export/latest/kv-latest-0201-0-4240407293-0c78a8525f1da61b.seg",
+      "allocated_bytes": 21069209600
+    },
+    {
+      "bytes": 13833804503,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/snapshot-v4/export/latest/kv-latest-0203-0-4240407293-8e7e19bf48abe50f.seg",
+      "allocated_bytes": 13833834496
+    },
+    {
+      "bytes": 7552735783,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/snapshot-v4/export/latest/account-latest-0-4240407293-ad549cbc6d016aa6.seg",
+      "allocated_bytes": 7552753664
+    },
+    {
+      "bytes": 5519040414,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/snapshot-v4/export/latest/kv-latest-000a-0-4240407293-efcd4eadaf909063.seg",
+      "allocated_bytes": 5519048704
+    },
+    {
+      "bytes": 4320021512,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/snapshot-v4/export/latest/kv-latest-020c-0-4240407293-08613c36dc9ccf28.seg",
+      "allocated_bytes": 4320030720
+    },
+    {
+      "bytes": 3520103465,
+      "path": "/data/gtron/main/datadir/gtron/state-snapshots/history/account-routing-1-4230447505-bfa70d7b07d99687af266aa0d4e62ccfe56dc2ae03343f858742225453599756.route",
+      "allocated_bytes": 3520110592
+    },
+    {
+      "bytes": 3515469219,
+      "path": "/data/gtron/main/datadir/gtron/state-snapshots/history/account-routing-1-4224583518-cf40c27e8fbaa4b79aa4d864890ac71746b5081b35efb4431bb2d66f95da42d7.route",
+      "allocated_bytes": 3515478016
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-readiness/candidate-input/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-readiness/baseline-input/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-performance-priority/candidate-input/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-performance-priority/baseline-input/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-filepage-cold-9m/private-pool/0000272",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-filepage-cold-9m/baseline-private-input/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/captured/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3399129767,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/candidate/state-snapshots/history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+      "allocated_bytes": 3399135232
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-readiness/candidate-input/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-readiness/baseline-input/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-performance-priority/candidate-input/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-performance-priority/baseline-input/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/http-filepage-cold-9m/baseline-private-input/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/captured/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3394982870,
+      "path": "/data/gtron/maintenance/full-state-acceptance-20261028-01/candidate/state-snapshots/history/account-routing-1-4052618684-6051cd5b6e77413f6b8b0c8e65017483fecefd62be88bf9ac9c558038d801e66.route",
+      "allocated_bytes": 3394990080
+    },
+    {
+      "bytes": 3067664566,
+      "path": "/data/gtron/maintenance/9m-query-20261027-01/metadata-v3/catalog/history/account-routing-1-3632558781-013fb92f4a6c2a5465782a4e18d755d19a35ed518fd8165fad6e47a84f04bb3b.route",
+      "allocated_bytes": 3067674624
+    },
+    {
+      "bytes": 3067664566,
+      "path": "/data/gtron/maintenance/9m-query-20261027-01/full-route/catalog/history/account-routing-1-3632558781-013fb92f4a6c2a5465782a4e18d755d19a35ed518fd8165fad6e47a84f04bb3b.route",
+      "allocated_bytes": 3067674624
+    }
+  ],
+  "errors": [
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-2050-2050-a64df693bc78310e.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-857-864-97ab7df30f68a7d5.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-697-704-b2ea91c836a39c21.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1497-1504-30110cf9a36ec4e0.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1321-1328-562bd39dc82cee13.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-209-216-9c289a47ec8d44ef.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1609-1616-ee54566353931dbf.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-2009-2016-a4d8139f02389724.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-297-304-e9f143745b293669.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-937-944-35f42db48e5be7c3.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-2050-2050-a64df693bc78310e.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-121-128-60da9080b7f47e65.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-305-312-3a7b3442535dc11c.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-209-216-9c289a47ec8d44ef.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-313-320-2f109591b20abc41.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1161-1168-984a25a361aa63b1.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-905-912-caa7d070463eca8d.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-273-280-cd9c5ceb7f3fce1e.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1753-1760-d9bb9aefceb2e663.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-993-1000-5d602a9314615026.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-265-272-2e3e5ded71eb22ee.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-529-536-abcd8d341d782fa6.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-713-720-0772175e5a925b22.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1321-1328-562bd39dc82cee13.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-113-120-e5542c58a43cebc4.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1257-1264-7c96a3125597447d.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1937-1944-e91510d8a7c21500.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-353-360-ddcca4259dff7b42.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1657-1664-a2de3f9ea1a72b8c.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1521-1528-03357b6e43626cb9.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1097-1104-7d7da1c24bca3f59.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-729-736-8867e13c4e7b84f0.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1921-1928-7acbd349570b6e41.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-985-992-74414dace5ae928d.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1121-1128-7e9d9e8e427da56b.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-649-656-325b08c7008e8b9a.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-377-384-11f244523c7f738a.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-513-520-8fe873ba7e56c1b3.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1617-1624-b221df19778bce13.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1881-1888-71e788e7c0692292.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1777-1784-2b215365000b225e.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-617-624-e630aa5cc5dcb1e7.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-409-416-c09af5458c69dc4e.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1457-1464-5c903fe19cc0df3a.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-241-248-7dc91d9a0d5d5f8f.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1145-1152-87276a64eaf7a6db.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-33-40-87b8054aaed77d15.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-73-80-229db3e17a0660c9.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-225-232-574b0b0ef3457899.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1169-1176-7ac2c962154ebf63.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-641-648-07705d67e9caa594.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-649-656-325b08c7008e8b9a.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-417-424-a73cab638dec1b32.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1225-1232-7b447348a11b2351.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1489-1496-9ff22e120af1f340.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-953-960-c3458abcedf14bb2.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-65-72-c95783a07779a22a.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1177-1184-f310ae83ab354d33.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-25-32-18c6cb54d9bd68aa.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1433-1440-63739c1ebc134b19.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-505-512-bafd8f3273633a3d.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1721-1728-8cda63af05ea1ce3.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-2009-2016-a4d8139f02389724.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-281-288-09ecd1dd22f0019e.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-601-608-25c1cf8f94c5726f.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1593-1600-64793bf42a8828e8.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1809-1816-e96ad730c54ae0ad.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-881-888-231ba96b813f816e.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-825-832-e6c6766c53b4206e.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-849-856-f30509ea30d275bc.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-2051-2051-613c7637e20a0c8b.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1689-1696-ba98dd2ac4a9925a.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1849-1856-d698abc12069bd2d.seg",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1601-1608-6e4cf4c633b22887.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1817-1824-54d0defde706944a.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-945-952-2fad445613d6f18b.kv",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    },
+    {
+      "path": "/data/gtron/deploy-cache/tmp/TestHistoryCostCacheAcrossRealCompressedPasses1543510479/001/history/state-domain-change-1769-1776-8f392343311b71f9.idx",
+      "error": "FileNotFoundError(2, 'No such file or directory')"
+    }
+  ],
+  "manifest_before": {
+    "generation": 41896,
+    "progress": {
+      "historyBuildTxNum": 4240615209,
+      "accessorBuildTxNum": 4240615209,
+      "hotPruneTxNum": 4240615209,
+      "hotPruneBlockNum": 45837602
+    },
+    "visibleTxEnd": 4240615209,
+    "sha256": "cb1091960747d4e412f77f5edff6673024efb23bd7cf34b3cf15659fa2a0a8ec",
+    "active_refs": 175029,
+    "retired_refs": 94
+  },
+  "manifest_after": {
+    "generation": 41907,
+    "progress": {
+      "historyBuildTxNum": 4242188243,
+      "accessorBuildTxNum": 4242188243,
+      "hotPruneTxNum": 4242188243,
+      "hotPruneBlockNum": 45845823
+    },
+    "visibleTxEnd": 4242188243,
+    "sha256": "7f86b56f80f0d16065756b9d8360c0bc56c18d74d478b7ac021b24a06cf348a8"
+  },
+  "shared_inode_count": 197597,
+  "shared_unique_allocated_bytes": 1545946918912,
+  "maintenance_only_shared_inodes_bytes": 167296040960,
+  "file_system_races_detected": 77
+}

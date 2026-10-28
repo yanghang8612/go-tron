@@ -13,3 +13,14 @@ The existing broad route remains available to storage and metadata queries. The 
 The 64 MiB builder charge bounds accumulated working structures, not peak RSS. Maintenance retains a process-local, single-directory attempt-order cursor so unsupported leading sources cannot permanently starve later supported ones. This hint never proves coverage, and reset/rotation only affects performance. Busy maintenance still admits bounded batches; uncovered tail pairs use authoritative fallback.
 
 Measurements distinguish complete HTTP from an isolated cold-manager batch. Private OS-cold means verified independent inodes, page-cache eviction and mincore below 1% before a fresh diagnostic process. Whole-process syscall traces include startup; per-request I/O counters are the basis for request-volume claims. CPU cumulative categories may be nested and must not be added together.
+
+## Bootstrap amendment (2026-10-28)
+
+The first production rollout exposed a transition regression: a partial new
+route replaced useful broad-route negatives with raw accessor scans. Until the
+small route covers an exact current pair, retain the authenticated selected
+broad fallback for that pair. Select all system-family batch keys at the first
+broad load, including when metadata triggered it first. A complete small proof
+still never needs the broad object. Neither route can prove absence for an
+uncovered pair. This supersedes the original unconditional bypass rule for
+incomplete or missing small routes. Canonical rows and formats do not change.

@@ -1,0 +1,131 @@
+{
+  "census_start": "2026-10-28T04:47:18.036749Z",
+  "census_end": "2026-10-28T04:50:47.263869Z",
+  "file_entries": 2667861,
+  "live_scan_not_atomic": true,
+  "only_file_payload_allocation_not_directory_metadata": true,
+  "race_errors_recorded": 77,
+  "race_errors_all_deploy_test_temp": true,
+  "production": {
+    "ancient": {
+      "files": 8390,
+      "logical_bytes": 503532239441,
+      "path_allocated_bytes": 503556599808,
+      "unique_attributed_bytes": 503556599808
+    },
+    "chaindata": {
+      "files": 2053,
+      "logical_bytes": 71903584468,
+      "path_allocated_bytes": 72035463168,
+      "unique_attributed_bytes": 72035463168
+    },
+    "history": {
+      "files": 6575,
+      "logical_bytes": 96249063709,
+      "path_allocated_bytes": 96312061952,
+      "unique_attributed_bytes": 96312061952
+    },
+    "state-snapshots": {
+      "files": 175134,
+      "logical_bytes": 835301974235,
+      "path_allocated_bytes": 835678568448,
+      "unique_attributed_bytes": 835678568448
+    }
+  },
+  "production_allocated_bytes": 1507582693376,
+  "production_logical_bytes": 1506986861853,
+  "logical_growth_vs_H45836827": {
+    "chaindata": -19553665550,
+    "history": -8427518377,
+    "state-snapshots": 27992886288,
+    "ancient": 21190606014
+  },
+  "cold_active_logical_by_kind": {
+    "event-log|event-log": 158084662706,
+    "event-log|event-log-index": 30738100181,
+    "state-domain-change|accessor": 261315431474,
+    "state-domain-change|account-history-routing": 3520103465,
+    "state-domain-change|history": 364566122846,
+    "state-domain-change|inverted": 11773551311,
+    "state-domain-change|system-history-routing": 66948766
+  },
+  "gtron_regular_file_inode_deduplicated_allocated_bytes": 2004771012608,
+  "experiment_attribution_production_first": {
+    "maintenance/9m-query-20261027-01": {
+      "files": 938523,
+      "logical_bytes": 4423472430185,
+      "path_allocated_bytes": 4425505202176,
+      "unique_attributed_bytes": 4166385664,
+      "shared_with_production_bytes": 4405866487808,
+      "shared_with_earlier_group_bytes": 15472328704
+    },
+    "maintenance/cleanup-history-tests-20261026": {
+      "files": 5,
+      "logical_bytes": 1947064856,
+      "path_allocated_bytes": 1947086848,
+      "unique_attributed_bytes": 1947086848
+    },
+    "maintenance/full-state-acceptance-20261028-01": {
+      "files": 1331064,
+      "logical_bytes": 10545281828118,
+      "path_allocated_bytes": 10548249214976,
+      "unique_attributed_bytes": 252412858368,
+      "shared_with_production_bytes": 9601854091264,
+      "shared_with_earlier_group_bytes": 693982265344
+    }
+  },
+  "old_db_allocated_bytes": 221206515712,
+  "frontier_window": {
+    "seconds": 209.14499,
+    "head_before": 46256457,
+    "head_after": 46260987,
+    "cold_before": 45837602,
+    "cold_after": 45844796,
+    "backlog_before": 418855,
+    "backlog_after": 416191,
+    "head_blocks_per_second": 21.659615178924437,
+    "cold_blocks_per_second": 34.397190198053515,
+    "freezer_before": 45809664,
+    "freezer_after": 45809664
+  },
+  "keyspace_estimates_before": {
+    "history/storage/keyspace/account_kv_latest/sst_bytes": 1210,
+    "history/storage/keyspace/account_latest/sst_bytes": 9356,
+    "history/storage/keyspace/block_body/sst_bytes": 0,
+    "history/storage/keyspace/commitment/sst_bytes": 124168,
+    "history/storage/keyspace/kv_generation/sst_bytes": 3067,
+    "history/storage/keyspace/staged_body/sst_bytes": 0,
+    "history/storage/keyspace/state_change_index/sst_bytes": 75500197408,
+    "history/storage/keyspace/state_changeset/sst_bytes": 17559092063,
+    "history/storage/keyspace/state_code/sst_bytes": 98934,
+    "history/storage/keyspace/state_tx_range/sst_bytes": 2759654696,
+    "history/storage/keyspace/transaction_index/sst_bytes": 0,
+    "history/storage/keyspace/transaction_receipts/sst_bytes": 0,
+    "storage/keyspace/account_kv_latest/sst_bytes": 28297700900,
+    "storage/keyspace/account_latest/sst_bytes": 7252283351,
+    "storage/keyspace/block_body/sst_bytes": 22586754526,
+    "storage/keyspace/commitment/sst_bytes": 14660,
+    "storage/keyspace/kv_generation/sst_bytes": 10223048,
+    "storage/keyspace/staged_body/sst_bytes": 844641936,
+    "storage/keyspace/state_change_index/sst_bytes": 31381,
+    "storage/keyspace/state_changeset/sst_bytes": 31381,
+    "storage/keyspace/state_code/sst_bytes": 246808293,
+    "storage/keyspace/state_tx_range/sst_bytes": 12450,
+    "storage/keyspace/transaction_index/sst_bytes": 5483530598,
+    "storage/keyspace/transaction_receipts/sst_bytes": 3457175541
+  },
+  "error_counters_before": {
+    "state/prune/errors": 0,
+    "state/prune/posting/errors": 0,
+    "state/snapshot/cold/errors": 0,
+    "chain/freezer/v2/errors": 0
+  },
+  "posting_before": {
+    "state/prune/posting/completed/block": 0,
+    "state/prune/posting/deleted/bytes": 2148608902,
+    "state/prune/posting/deleted/rows": 31653540,
+    "state/prune/posting/scanned/rows": 39854998,
+    "state/prune/posting/target/block": 45047014
+  },
+  "scope": "Exact file metadata at individual observation times; keyspace SST estimates are neither exact logical census nor safe reclaim bytes. Unique attribution depends on production-first traversal, not independent directory reclaimability."
+}

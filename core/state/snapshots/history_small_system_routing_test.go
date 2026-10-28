@@ -366,7 +366,7 @@ func TestSmallSystemHistoryRoutingDoesNotReadAnUnrelatedIndex(t *testing.T) {
 	}
 }
 
-func TestSmallSystemHistoryRoutingNeverLoadsBroadRoute(t *testing.T) {
+func TestSmallSystemHistoryRoutingCompleteDoesNotLoadBroadRoute(t *testing.T) {
 	dir, m, queries := routingFixture(t)
 	m = addRoutingFixture(t, dir, m, 64)
 	broad := mustRoutingRef(t, m)
@@ -388,11 +388,104 @@ func TestSmallSystemHistoryRoutingNeverLoadsBroadRoute(t *testing.T) {
 			}
 		}
 		got, err := reader.FirstStateDomainChangesContext(context.Background(), 1, 3, pure)
-		if err != nil || got[0] == nil {
-			t.Fatalf("small=%v broad route opened or result lost: %v", install, err)
+		if !install {
+			if err == nil {
+				t.Fatal("bootstrap fallback ignored missing broad route")
+			}
+		} else if err != nil || got[0] == nil {
+			t.Fatalf("complete small route opened broad route or result lost: %v", err)
 		}
 		if _, err := reader.FirstStateDomainChangesContext(context.Background(), 1, 3, queries); err == nil {
 			t.Fatal("mixed metadata batch failed to authenticate broad route")
+		}
+	}
+}
+
+func TestSmallSystemHistoryRoutingBootstrapNegativeAndMixedSelection(t *testing.T) {
+	for _, version := range []uint32{1, 2} {
+		for _, smallSources := range []int{0, 1, 64} {
+			t.Run(fmt.Sprintf("broad-v%d/small-%d", version, smallSources), func(t *testing.T) {
+				dir, m, queries := routingFixture(t)
+				m = addRoutingFixture(t, dir, m, 64)
+				if version == 1 {
+					ref := mustRoutingRef(t, m)
+					data, err := os.ReadFile(filepath.Join(dir, ref.Path))
+					if err != nil {
+						t.Fatal(err)
+					}
+					// This fixture has no storage-owner-only V2 rows.
+					binary.BigEndian.PutUint32(data[8:12], 1)
+					sum := sha256.Sum256(data)
+					ref.Checksum = fmt.Sprintf("sha256:%x", sum)
+					ref.Path = fmt.Sprintf("history/bootstrap-legacy-%x.route", sum)
+					if err := os.WriteFile(filepath.Join(dir, ref.Path), data, 0600); err != nil {
+						t.Fatal(err)
+					}
+					m, err = NewAggregator(dir).Integrate(1, 3, []SegmentRef{ref})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if smallSources != 0 {
+					m = addSmallRoutingFixture(t, dir, m, smallSources)
+				}
+				missingSystem := queries[0]
+				missingSystem.Key = []byte("bootstrap-missing-system")
+				missingMetadata := queries[7]
+				missingMetadata.Key = []byte("bootstrap-missing-metadata")
+				// Every query is absent from the authenticated routes. Removing
+				// accessors proves that uncovered small keys used the broad proof,
+				// including when metadata loaded the selected view first.
+				for _, ref := range m.Segments {
+					if ref.Kind == SegmentAccessor {
+						if err := os.Rename(filepath.Join(dir, ref.Path), filepath.Join(dir, ref.Path+".missing")); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				for _, batch := range [][]StateHistoryQuery{{missingSystem}, {missingMetadata, missingSystem}, {missingSystem, missingMetadata}} {
+					reader, err := OpenPinnedManager(dir, m)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, err := reader.FirstStateDomainChangesContext(context.Background(), 1, 3, batch)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, row := range got {
+						if row != nil {
+							t.Fatal("negative proof returned a row")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSmallSystemHistoryRoutingBootstrapDoesNotHideUncoveredTail(t *testing.T) {
+	dir, original, queries := routingFixture(t)
+	oracle, err := OpenPinnedManager(dir, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := addRoutingFixture(t, dir, original, 1)
+	m = addSmallRoutingFixture(t, dir, m, 1)
+	reader, err := OpenPinnedManager(dir, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for from := uint64(1); from <= 3; from++ {
+		got, err := reader.FirstStateDomainChangesContext(context.Background(), from, 3, queries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, q := range queries {
+			var want *rawdb.StateDomainChange
+			err := oracle.IterateStateDomainChangesByKey(from, 3, q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key, func(row *rawdb.StateDomainChange) (bool, error) { want = row; return false, nil })
+			if err != nil || !reflect.DeepEqual(got[i], want) {
+				t.Fatalf("from=%d query=%d got=%+v want=%+v err=%v", from, i, got[i], want, err)
+			}
 		}
 	}
 }

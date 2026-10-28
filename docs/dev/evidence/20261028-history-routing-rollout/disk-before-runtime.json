@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-28T04:47:18.037087Z",
+  "service": "MainPID=30916\nExecStart={ path=/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron ; argv[]=/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron --history.reference-container=false --history.shared-read-workers=0 --history.shared-chunk-cache=true --history.cross-block-dedup=true --datadir /data/gtron/main/datadir --prune.mode snap --history.enabled=true --history.block-dedup=true --history.compression-format=auto --history.catchup-mode=throughput --sync.async-commit --sync.import-batch 64 --p2p.port 18890 --discover.port 18890 --external.ip 3.12.206.71 --http.port 8090 --jsonrpc.port 8545 --grpc.port 50051 --pprof.port 6062 --pprof.addr 127.0.0.1 --metrics --metrics.addr 127.0.0.1 --metrics.port 6071 --maxpeers 30 --db.cache 12288 --db.handles 8192 --state.trie.cache 128 --log.file /data/gtron/main/gtron.log --log.file.format terminal --state.latest.cache 128 ; ignore_errors=no ; start_time=[Tue 2026-10-27 23:02:12 UTC] ; stop_time=[n/a] ; pid=30916 ; code=(null) ; status=0/0 }\nMemoryCurrent=31443488768\nEnvironment=TZ=Asia/Shanghai ZCASH_PARAMS_DIR=/data/gtron/params GTRON_ASYNC_COMMIT_DEPTH=4 MALLOC_ARENA_MAX=4 GTRON_HISTORY_ROLLOUT_READERS_ONLY=0 GOMEMLIMIT=20GiB GOGC=100 GTRON_SNAPSHOT_MANIFEST_CACHE_BUDGET_BYTES=536870912 GTRON_HISTORY_COMPRESSION_FORMAT=auto GTRON_PEBBLE_BOUNDED_POINT_READ=get GTRON_HISTORY_COMPACTION_SOURCE_WORKERS=2 GTRON_ZKSNARK_PARAMS=/data/gtron/params GTRON_BASE_CACHE_REUSE_OBSERVER=1 GTRON_DB_SPACE_OBSERVER=1 GTRON_POSTING_PRUNE=1 GTRON_HISTORY_RANGE_PRUNE=1 GTRON_HISTORY_RANGE_QUEUE=1\nActiveState=active\n",
+  "filesystem": "Filesystem         1B-blocks          Used     Available Use% Mounted on\n/dev/nvme1n1   7609457909760 5315319545856 2293711986688  70% /data\n/dev/nvme0n1p1   85887791104   59152711680   26735079424  69% /\n",
+  "block": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x2c1d150"
+  }
+}
