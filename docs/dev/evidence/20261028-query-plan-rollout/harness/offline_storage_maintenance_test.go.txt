@@ -1,0 +1,42 @@
+package snapshots
+
+import (
+ "bytes"
+ "context"
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "reflect"
+ "testing"
+ "time"
+)
+
+func TestOfflineStorageRuntimeRepair(t *testing.T) {
+ dir,out:=os.Getenv("GTRON_STORAGE_MAINTENANCE_INPUT"),os.Getenv("GTRON_STORAGE_MAINTENANCE_OUTPUT")
+ if dir=="" {t.Skip("offline only")}
+ original,e:=os.ReadFile(filepath.Join(dir,ManifestFile));if e!=nil {t.Fatal(e)}
+ var m Manifest;if e=json.Unmarshal(original,&m);e!=nil {t.Fatal(e)}
+ canonical:=func(m *Manifest) []byte {var refs []SegmentRef;for _,r:=range m.Segments {if r.Kind!=SegmentStorageHistoryRouting {refs=append(refs,r)}};b,_:=json.Marshal(refs);return b}
+ beforeCanonical:=canonical(&m);beforeProgress:=m.Progress
+ var pages []SegmentRef;for _,r:=range m.Segments {if r.Kind==SegmentStorageHistoryRouting {pages=append(pages,r)}}
+ if len(pages)<8 {t.Fatal("expected completed measured storage pages")}
+ removed:=make(map[string]bool);missing:=make(map[[32]byte]bool)
+ for i:=0;i<8;i++ {r:=pages[i*(len(pages)-1)/7];removed[r.Path]=true;rows,e:=readStorageHistoryRouting(context.Background(),dir,r);if e!=nil {t.Fatal(e)};for id:=range rows {missing[id]=true}}
+ var active []SegmentRef;for _,r:=range m.Segments {if !removed[r.Path] {active=append(active,r)}};m.Segments=active
+ if e=PublishManifest(dir,&m);e!=nil {t.Fatal(e)}
+ coverage:=func() int {m,e:=LoadProductionManifest(dir);if e!=nil {t.Fatal(e)};m=manifestLookupView(m);sources:=manifestHistorySources(m);r:=newStorageHistoryRoutingReader(m);n:=0;for _,s:=range sources.sources {h:=m.Segments[s.row];if _,ok,e:=r.source(context.Background(),dir,h,s.id);e!=nil {t.Fatal(e)} else if ok {n++}};return n}
+ beforeCoverage:=coverage();state:=storageRoutingRefreshState{};state.initMetrics("offline/storage-maintenance")
+ var passes []map[string]any;start:=time.Now();totalReads,totalBroad:=0,0
+ for pass:=0;pass<32;pass++ {
+  beforeIO,_:=os.ReadFile("/proc/self/io");began:=time.Now();built,e:=refreshStorageHistoryRoutingContext(context.Background(),dir,&state,time.Now());buildSeconds:=time.Since(began).Seconds();afterIO,_:=os.ReadFile("/proc/self/io");if e!=nil {t.Fatal(e)}
+  totalReads+=state.last.sourceReads;totalBroad+=state.last.broadReads
+  current,e:=LoadProductionManifest(dir);if e!=nil {t.Fatal(e)};if !bytes.Equal(beforeCanonical,canonical(current))||!reflect.DeepEqual(current.Progress,beforeProgress) {t.Fatal("runtime auxiliary repair changed canonical refs/frontiers")}
+  covered:=coverage();row:=map[string]any{"pass":pass,"built":built,"seconds_build_publish":buildSeconds,"seconds_with_coverage_check":time.Since(began).Seconds(),"source_reads":state.last.sourceReads,"broad_reads":state.last.broadReads,"declared_input_bytes":state.last.inputBytes,"unsupported":state.last.unsupported,"next_cursor":state.nextTx,"covered":covered,"io_before":string(beforeIO),"io_after":string(afterIO)};passes=append(passes,row)
+  b,_:=json.MarshalIndent(map[string]any{"complete":false,"passes":passes},"","  ");if e=os.WriteFile(filepath.Join(out,"runtime-progress.json"),b,0644);e!=nil {t.Fatal(e)}
+  if !built {if state.last.sourceReads!=0||state.last.broadReads!=0||state.notBefore.IsZero() {t.Fatal("unexpected idle work",row)};break}
+ }
+ if totalReads!=len(missing)||coverage()!=beforeCoverage+len(missing) {t.Fatal("repair rescan/lost exact proofs",totalReads,len(missing),coverage(),beforeCoverage)}
+ if built,e:=refreshStorageHistoryRoutingContext(context.Background(),dir,&state,time.Now());e!=nil||built||state.last.sourceReads!=0||state.last.broadReads!=0 {t.Fatal("idle retry reread source",built,state.last,e)}
+ result:=map[string]any{"complete":true,"removed_pages":len(removed),"removed_proofs":len(missing),"covered_before":beforeCoverage,"covered_after":coverage(),"source_reads":totalReads,"broad_reads":totalBroad,"seconds_trial_including_coverage_checks":time.Since(start).Seconds(),"passes":passes,"canonical_refs_unchanged":true,"frontiers_unchanged":true,"idle_source_reads":0}
+ b,_:=json.MarshalIndent(result,"","  ");if e=os.WriteFile(filepath.Join(out,"runtime-result.json"),b,0644);e!=nil {t.Fatal(e)}
+}

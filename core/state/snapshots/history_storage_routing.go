@@ -254,6 +254,26 @@ func BuildStorageHistoryRoutingContext(ctx context.Context, dir string, m *Manif
 // A soft work budget is checked between complete sources. One authenticated
 // source may overrun it; no partial source is ever published to meet a deadline.
 func buildStorageHistoryRoutingContext(ctx context.Context, dir string, m *Manifest, maxNew int, startTx uint64, nextTx *uint64, work smallSystemRoutingWorkLimit) (SegmentRef, bool, error) {
+	return buildStorageHistoryRoutingWithPolicy(ctx, dir, m, maxNew, startTx, nextTx, storageRoutingBuildPolicy{work: work})
+}
+
+type storageRoutingBuildStats struct {
+	sourceReads, unsupported int
+	broadReads               int
+	inputBytes               uint64
+	repairDeferred           bool
+}
+
+// Broad coverage is an admission hint only. It suppresses redundant builds,
+// never writes a proof or answers a query from this process-local ID cache.
+type storageRoutingBuildPolicy struct {
+	work               smallSystemRoutingWorkLimit
+	broadFrom, broadTo uint64
+	broadCovered       map[[32]byte]struct{}
+	stats              *storageRoutingBuildStats
+}
+
+func buildStorageHistoryRoutingWithPolicy(ctx context.Context, dir string, m *Manifest, maxNew int, startTx uint64, nextTx *uint64, policy storageRoutingBuildPolicy) (SegmentRef, bool, error) {
 	if nextTx != nil {
 		*nextTx = 0
 	}
@@ -266,6 +286,7 @@ func buildStorageHistoryRoutingContext(ctx context.Context, dir string, m *Manif
 	rows := make(map[[32]byte]storageSourceFilter)
 	from, to, readBytes := uint64(0), uint64(0), uint64(0)
 	started, attempts := time.Now(), 0
+	work := policy.work
 	for _, h := range m.Segments {
 		if err := contextError(ctx); err != nil {
 			return SegmentRef{}, false, err
@@ -278,6 +299,9 @@ func buildStorageHistoryRoutingContext(ctx context.Context, dir string, m *Manif
 			return SegmentRef{}, false, errors.New("snapshots: storage source missing accessor")
 		}
 		id := systemHistoryRoutingPairID(h, a)
+		if _, covered := policy.broadCovered[id]; covered && h.FromTxNum >= policy.broadFrom && h.ToTxNum <= policy.broadTo {
+			continue
+		}
 		_, covered, err := reader.source(ctx, dir, h, id)
 		if err != nil {
 			return SegmentRef{}, false, err
@@ -302,6 +326,13 @@ func buildStorageHistoryRoutingContext(ctx context.Context, dir string, m *Manif
 		f, err := storageHistorySourceFilter(ctx, dir, h, a)
 		attempts++
 		readBytes += a.Size
+		if policy.stats != nil {
+			policy.stats.sourceReads++
+			policy.stats.inputBytes += a.Size
+			if errors.Is(err, errSystemHistoryRoutingBudget) {
+				policy.stats.unsupported++
+			}
+		}
 		if nextTx != nil && h.ToTxNum != ^uint64(0) {
 			*nextTx = h.ToTxNum + 1
 		}
@@ -310,7 +341,11 @@ func buildStorageHistoryRoutingContext(ctx context.Context, dir string, m *Manif
 		}
 		if err == nil {
 			if last > first {
-				return repairStorageHistoryRoutingPage(ctx, dir, m, reader.refs[first:last], h, id, f)
+				ref, built, repairErr := repairStorageHistoryRoutingPage(ctx, dir, m, reader.refs[first:last], h, id, f)
+				if policy.stats != nil && !built && repairErr == nil {
+					policy.stats.repairDeferred = true
+				}
+				return ref, built, repairErr
 			}
 			if storageRoutingSize(rows)+40+len(f.bits) > storageRoutingPageBytes {
 				if nextTx != nil {

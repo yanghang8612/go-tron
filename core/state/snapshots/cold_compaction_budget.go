@@ -18,14 +18,16 @@ const (
 // Protected by Runner.passMu. A merge recovery belongs to optional compaction,
 // independently of the deadline for publishing and pruning new cold history.
 type historyCompactionBudgetState struct {
-	notBefore            time.Time
-	pending              bool
-	pendingAt            time.Time
-	inputCosts           *historyCompactionCostCache
-	outerMetrics         *historyCompactionOuterMetrics
-	routingRetiredCursor retiredMetadataSweepCursor
-	systemRouting        systemRoutingRefreshState
-	preferMetadata       bool
+	notBefore             time.Time
+	pending               bool
+	pendingAt             time.Time
+	inputCosts            *historyCompactionCostCache
+	outerMetrics          *historyCompactionOuterMetrics
+	routingRetiredCursor  retiredMetadataSweepCursor
+	systemRouting         systemRoutingRefreshState
+	storageRouting        storageRoutingRefreshState
+	nextLightweightRoute  uint8
+	routingWorkSinceMerge uint8
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -169,6 +171,12 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		return HistoryCompactionResult{Deferred: true, DeferReason: "heavy-work-gate", RetryAfter: retry, RetryDeadline: deadline}, nil
 	}
 	defer release()
+	// Consume a reserved merge only after winning admission. Load/gate rejects
+	// cannot let another auxiliary family steal this canonical opportunity.
+	reservedMerge := r.compactionBudget.routingWorkSinceMerge >= 3
+	if reservedMerge {
+		r.compactionBudget.routingWorkSinceMerge = 0
+	}
 	started := time.Now()
 	defer func() {
 		if busy && (total.Merged || total.RoutingBuilt || err != nil || total.Deferred) {
@@ -186,7 +194,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 	}()
 	// The small singleton routing index removes cross-segment negative reads
 	// without rewriting canonical rows or enlarging streaming merge budgets.
-	if r.cfg.HistoryDataset == SegmentDatasetStateDomainChange {
+	if r.cfg.HistoryDataset == SegmentDatasetStateDomainChange && !reservedMerge {
 		if !r.cfg.RetainObsoleteSegments {
 			pruned, pruneErr := pruneRetiredHistoryRoutingContext(ctx, r.cfg.Dir, r.compactionBudget.routingRetiredCursor)
 			if pruneErr != nil {
@@ -194,23 +202,33 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			}
 			r.compactionBudget.routingRetiredCursor = pruned.Next
 		}
-		// Alternate the two lightweight families. Returning after every
-		// successful small batch used to starve metadata until all sources
-		// were covered, leaving expensive query fallback for hours.
+		// Give each bounded family a turn; the old multi-GB account rebuild
+		// is deliberately outside this rotation.
 		small := func() (bool, error) { return refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
 		metadata := func() (bool, error) { return refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
-		families := []func() (bool, error){small, metadata}
-		if r.compactionBudget.preferMetadata {
-			families[0], families[1] = families[1], families[0]
+		r.compactionBudget.storageRouting.initMetrics(r.cfg.MetricsNamespace)
+		storage := func() (bool, error) {
+			return refreshStorageHistoryRoutingContext(ctx, r.cfg.Dir, &r.compactionBudget.storageRouting, time.Now())
 		}
-		for _, refresh := range families {
+		families := []func() (bool, error){small, metadata, storage}
+		for offset := range families {
+			i := (int(r.compactionBudget.nextLightweightRoute) + offset) % len(families)
+			refresh := families[i]
 			built, routeErr := refresh()
 			if routeErr != nil {
 				return total, routeErr
 			}
 			if built {
-				r.compactionBudget.preferMetadata = !r.compactionBudget.preferMetadata
+				r.compactionBudget.nextLightweightRoute = uint8((i + 1) % len(families))
+				r.compactionBudget.routingWorkSinceMerge++
 				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+			}
+			if i == 2 && (r.compactionBudget.storageRouting.last.sourceReads > 0 || r.compactionBudget.storageRouting.last.broadReads > 0) {
+				// No output does not mean no work. Do not stack an exhausted
+				// storage budget with a broad or multi-GB account rebuild.
+				r.compactionBudget.nextLightweightRoute = uint8((i + 1) % len(families))
+				r.compactionBudget.routingWorkSinceMerge++
+				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, Deferred: true, DeferReason: "storage-routing-work"}, nil
 			}
 		}
 		r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
@@ -221,6 +239,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			return total, routeErr
 		}
 		if built {
+			r.compactionBudget.routingWorkSinceMerge++
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
 		built, routeErr = refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy)
@@ -228,6 +247,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			return total, routeErr
 		}
 		if built {
+			r.compactionBudget.routingWorkSinceMerge++
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
 	}
@@ -236,7 +256,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 	}
 	cfg := CompactionConfig{outerMetrics: r.compactionBudget.outerMetrics, ReferenceContainer: r.cfg.HistoryReferenceContainer, MaxSteps: r.cfg.CompactMaxSteps, DeleteObsolete: !r.cfg.RetainObsoleteSegments}
 	drain := !catchingUp
-	if busy {
+	if busy || reservedMerge {
 		cfg.BusyLeafOnly = true
 		cfg.MaxInputBytes = busyHistoryCompactionInputBytes
 		cfg.MaxInputLogicalBytes = busyHistoryCompactionLogicalBytes
