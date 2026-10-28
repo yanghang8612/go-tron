@@ -24,5 +24,16 @@ for r in refs:
   else:
    b=f.read();assert len(b)==r['size'] and 'sha256:'+hashlib.sha256(b).hexdigest()==r['checksum'];n=int.from_bytes(b[12:16],'big');start=40
  ids=set(b[i:i+32] for i in range(start,start+32*n,32));assert len(ids)==n;routes[r['kind']]=ids;hits=[h for h,a,id_ in sources if id_ in ids];missing=[{'history':h['path'],'accessor':a['path'],'from':h['fromTxNum'],'to':h['toTxNum'],'pairID':id_.hex()} for h,a,id_ in sources if id_ not in ids];(out/(r['kind']+'-uncovered.json')).write_text(json.dumps(missing,indent=2));summary.append({'kind':r['kind'],'path':r['path'],'advertised_sources':n,'exact_current_pairs':len(hits),'uncovered_current_pairs':len(missing),'authenticated_source_table':True,'covered_tx_min':min((h['fromTxNum'] for h in hits),default=None),'covered_tx_max':max((h['toTxNum'] for h in hits),default=None)})
+meta_ids=set();meta_objects=meta_nonempty=meta_dense=0
+for r in refs:
+ if r['kind']!='metadata-history-routing':continue
+ b=(root/r['path']).read_bytes();assert len(b)==r['size'] and 'sha256:'+hashlib.sha256(b).hexdigest()==r['checksum'];assert b[:8]==b'GTMETR01';n=int.from_bytes(b[12:16],'big');assert n==r['rows'];pos=32;meta_objects+=1
+ for i in range(n):
+  id_=b[pos:pos+32];count=int.from_bytes(b[pos+32:pos+40],'big');assert len(id_)==32;pos+=40;meta_ids.add(id_)
+  if count:
+   bits=b[pos:pos+1024];assert len(bits)==1024;pos+=1024;meta_nonempty+=1;meta_dense+=sum(bin(v).count('1') for v in bits)>=4096
+ assert pos==len(b)
+if meta_objects:
+ hits=[h for h,a,id_ in sources if id_ in meta_ids];missing=[{'history':h['path'],'accessor':a['path'],'from':h['fromTxNum'],'to':h['toTxNum'],'pairID':id_.hex()} for h,a,id_ in sources if id_ not in meta_ids];(out/'metadata-history-routing-uncovered.json').write_text(json.dumps(missing,indent=2));summary.append({'kind':'metadata-history-routing','objects':meta_objects,'advertised_sources':len(meta_ids),'exact_current_pairs':len(hits),'uncovered_current_pairs':len(missing),'authenticated_source_table':True,'nonempty_filter_rows':meta_nonempty,'filter_rows_with_at_least_half_bits_set':meta_dense})
 result={'utc':datetime.datetime.utcnow().isoformat()+'Z','root':str(root),'manifest_sha256':hashlib.sha256(raw).hexdigest(),'manifest_generation':m.get('generation'),'history_sources':len(sources),'routes':summary,'scan_is_read_only':True}
 (out/'summary.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
