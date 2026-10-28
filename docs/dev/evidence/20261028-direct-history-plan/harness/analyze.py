@@ -1,14 +1,14 @@
 import pathlib,json,statistics,hashlib,sys
-D=pathlib.Path(sys.argv[1])
-status=json.loads((D/'final/candidate-status.json').read_text());assert status['complete']
+D=pathlib.Path(sys.argv[1]);phase=sys.argv[2] if len(sys.argv)>2 else 'final'
+status=json.loads((D/phase/'candidate-status.json').read_text());assert status['complete']
 assert status['production_before']==status['production_after']
 build=json.loads((D/'final/index-build.json').read_text());assert build['result']['FromBlock']==build['index_before']['BlockNum']+1
 assert build['result']['ToBlock']==45836827 and build['canonical_head_unchanged']
 def io(v):return {k:int(n) for k,n in (line.split(':') for line in v.strip().splitlines())}
 def usage(v):return sum(v[k]['Sec']+v[k]['Usec']/1e6 for k in ['Utime','Stime'])
-requests=json.loads((D/'final/requests.json').read_text());rows=[];expected={}
+requests=json.loads((D/phase/'requests.json').read_text());rows=[];expected={}
 for q in requests:
- case=D/'final'/q['case'];ready=json.loads((case/'ready.json').read_text())
+ case=D/phase/q['case'];ready=json.loads((case/'ready.json').read_text())
  assert ready['head']==45836827 and ready['head_tx']==4240407293 and ready['root']=='4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627'
  logs=[json.loads(x) for x in (case/'server-requests.jsonl').read_text().splitlines()]
  matched=[x for x in logs if x['id']==q['response']['id']];assert len(matched)==1
@@ -17,7 +17,7 @@ for q in requests:
  a,b=io(s['io_before']),io(s['io_after'])
  row=dict(q,height=height,server_elapsed_ns=s['elapsed_ns'],cpu_seconds=usage(s['usage_after'])-usage(s['usage_before']),alloc_bytes=s['alloc_bytes'],read_bytes=b['read_bytes']-a['read_bytes'],rchar=b['rchar']-a['rchar'],read_syscalls=b['syscr']-a['syscr'],maxrss_kib=s['usage_after']['Maxrss'])
  row['admitted']=q['cache']!='discovery-excluded';rows.append(row)
-for case in sorted((D/'final').glob('cold-*')):
+for case in sorted((D/phase).glob('cold-*')):
  proof=json.loads((case/'dispatch-residency.json').read_text());assert all(x['resident_pages']==0 for x in proof)
  cover=json.loads((case/'actual-read-coverage.json').read_text());assert not cover['missing'] and not cover['overflow']
  for row in rows:
@@ -36,5 +36,5 @@ for family in ['before-indexed','final-indexed','final-original-full','old-parti
   if 'actual_cold_files' in rs[0]:g['files']=[r['actual_cold_files'] for r in rs]
   groups.append(g)
 output={'final_source':status['source'],'requests':rows,'formal_requests':sum(r['admitted'] for r in rows),'all_returns_match':True,'groups':groups,'index_build':build,'production_before':status['production_before'],'production_after':status['production_after']}
-(D.parent/'summary.json').write_text(json.dumps(output,indent=2))
+(D.parent/('summary-'+phase+'.json')).write_text(json.dumps(output,indent=2))
 print(json.dumps({'formal_requests':output['formal_requests'],'groups':groups},indent=2))

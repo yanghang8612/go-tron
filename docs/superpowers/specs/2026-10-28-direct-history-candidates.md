@@ -28,3 +28,8 @@ retry stale/colliding candidates and retain the independent unindexed tail.
 The preliminary block-aligned index ablation is not admitted: 256 is a count of
 key occurrences per frame, not a block-alignment rule. Final data appends from
 the exact previous frontier plus one, with no overlapping rebuild.
+
+Allow execution prefetch for a hot-only span when its pinned posting frontier
+covers the entire hot bound. This preserves batching near HEAD after catch-up;
+unindexed hot-only spans retain the existing cheap path. Stage progress remains
+a cost hint, and all prefetched values require ordinary authoritative reads.

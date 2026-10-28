@@ -1,6 +1,6 @@
 import pathlib,json,hashlib,zipfile,os,subprocess,datetime
 P=pathlib.Path('/data/gtron/maintenance/direct-history-plan-20261028-01')
-status=json.loads((P/'final/candidate-status.json').read_text());assert status['complete'],status
+status=json.loads((P/'hot-prefetch-fixed/candidate-status.json').read_text());assert status['complete'],status
 assert status['production_before']==status['production_after']
 excluded={'history','chaindata','ancient','source','source-candidate','source-current','indexed-input','private-indexed-input'}
 allowed={'.json','.jsonl','.log','.txt','.py','.pprof'}
