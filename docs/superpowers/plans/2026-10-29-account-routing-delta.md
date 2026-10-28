@@ -96,3 +96,19 @@ deployment, production cache eviction or restart is authorized in this phase.
 The live 10M first sample is still 23.65 s. A successful account experiment does
 not close the unindexed hot-tail bottleneck or prove live latency. Keep the
 overall goal active until those paths and actual production behavior are known.
+
+## Prototype checkpoint
+
+Reader, bounded builder and explicit publication prototype: `78c48bd0`.
+Completed 105 real tables and 41 bounded pair consolidations, keeping the same
+1,521 exact IDs; the result is 64 tables / 2,905,247,508 bytes. The interleaved
+representation, private account-index cold pages and compiled candidate A/B
+experiments total 116 correct full HTTP calls. Evidence and limitations are in
+`docs/dev/account-routing-delta-20261029.md`.
+
+Steps 9 and sustained step 10 remain incomplete. The current 128-object query
+cap and 256 MiB/8M-row physical output cap must not become permanent coverage
+holes. Resolve scalable logical runs/key shards, proof-cohort preservation and
+bounded resumable consolidation before claiming production maintenance. Remove
+normal old-base refresh only with the complete fair Runner integration. The hot
+unindexed tail and actual live first query are still separate acceptance work.

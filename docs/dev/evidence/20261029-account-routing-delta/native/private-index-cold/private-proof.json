@@ -1,0 +1,514 @@
+[
+  {
+    "path": "state-snapshots/history/account-routing-delta-3792723933-3803485988-ea5ff93e657e1caebaa1467a7d902a65e28f1a8e412f31d546d0ce5d82f2178d.route",
+    "bytes": 78498318,
+    "source_dev": 66304,
+    "source_ino": 100010998,
+    "private_dev": 66304,
+    "private_ino": 100011077
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3803485989-3814103623-17d86889b3883d9ff3d7786924d831531c2dd25a7cf4ebabdf6890c9083322f0.route",
+    "bytes": 77171098,
+    "source_dev": 66304,
+    "source_ino": 100011007,
+    "private_dev": 66304,
+    "private_ino": 100011078
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3814103624-3825291097-49bc4ee545533db9e8088e9434f8bcb1f2abf09dce3feb3d8c0ef7f1b6967f68.route",
+    "bytes": 80383212,
+    "source_dev": 66304,
+    "source_ino": 100011010,
+    "private_dev": 66304,
+    "private_ino": 100011079
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3825291098-3835891161-d3e2164454106a400ee11d942afddc69b1b6c1307cc78db82aea2710f5a01169.route",
+    "bytes": 78264697,
+    "source_dev": 66304,
+    "source_ino": 100011013,
+    "private_dev": 66304,
+    "private_ino": 100011080
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3835891162-3846703749-0c446bbce7471727e677d30ea685a059aa447a73d0560fa17930bcc226acd3e9.route",
+    "bytes": 80452588,
+    "source_dev": 66304,
+    "source_ino": 100011016,
+    "private_dev": 66304,
+    "private_ino": 100011081
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3846703750-3857786058-a13724d38921ad3738118f2db722ade5af52ae5c499021f1331827df369df71b.route",
+    "bytes": 79047320,
+    "source_dev": 66304,
+    "source_ino": 100011019,
+    "private_dev": 66304,
+    "private_ino": 100011082
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3857786059-3868572956-e4047e45ca49954da8f04ef06201fea93cdfee65ef8983552b2c29f553d068bd.route",
+    "bytes": 81455979,
+    "source_dev": 66304,
+    "source_ino": 100011022,
+    "private_dev": 66304,
+    "private_ino": 100011083
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3868572957-3879430492-ed62d5840fd595fdad4536388ca0b447c9dd17ac10f063c393b9a97077298bd8.route",
+    "bytes": 86404923,
+    "source_dev": 66304,
+    "source_ino": 100011025,
+    "private_dev": 66304,
+    "private_ino": 100011084
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3879430493-3890450293-17a1599ae3f3384ac150a98aa9a2e5d0788f75efa587c2f0f2b0b3baa5122a41.route",
+    "bytes": 75503953,
+    "source_dev": 66304,
+    "source_ino": 100011027,
+    "private_dev": 66304,
+    "private_ino": 100011085
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3890450294-3900719794-ba17b140675856800063b158d8eb2f82401b18428a46edf66377b48f3e721409.route",
+    "bytes": 78326510,
+    "source_dev": 66304,
+    "source_ino": 100010995,
+    "private_dev": 66304,
+    "private_ino": 100011086
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3900719795-3911037776-d5c97d219c6ecd626100f42def8b61023b818b6a2e1d73ff5d3387f74045d8fe.route",
+    "bytes": 66675749,
+    "source_dev": 66304,
+    "source_ino": 100011033,
+    "private_dev": 66304,
+    "private_ino": 100011087
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3911037777-3921358148-6d4d99ab6387d00364ef048fb37f2bade61d94290e3bbf3a854da1bb89eebef3.route",
+    "bytes": 69322157,
+    "source_dev": 66304,
+    "source_ino": 100011036,
+    "private_dev": 66304,
+    "private_ino": 100011088
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3921358149-3932024164-9e70ae9752708b5757bf218726d402c2314114b668d8cc4e75c0d447f787a06b.route",
+    "bytes": 82431114,
+    "source_dev": 66304,
+    "source_ino": 100011040,
+    "private_dev": 66304,
+    "private_ino": 100011089
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3932024165-3937123094-1ad9da429d12a8ce73db31c2338ee21b0a9cf21c40f8e3e5cb5a0ecec0add82c.route",
+    "bytes": 59050445,
+    "source_dev": 66304,
+    "source_ino": 100011038,
+    "private_dev": 66304,
+    "private_ino": 100011090
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3937123095-3942336279-885cecca2893d2cf26f4ccb685cece8cd6285cf7fabc512417dfbcc57be6c7d2.route",
+    "bytes": 58308803,
+    "source_dev": 66304,
+    "source_ino": 100011039,
+    "private_dev": 66304,
+    "private_ino": 100011091
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3942336280-3944805350-8450b4aef1dfa0d8ab8860bb43e6ad65418030f87aeab838285cc359844322b7.route",
+    "bytes": 41286794,
+    "source_dev": 66304,
+    "source_ino": 100010931,
+    "private_dev": 66304,
+    "private_ino": 100011092
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3944805351-3947146419-d22defc50338189f8f903e0e51ea58bb18277ed785eff47814eb8791506f3bd1.route",
+    "bytes": 38083320,
+    "source_dev": 66304,
+    "source_ino": 100010933,
+    "private_dev": 66304,
+    "private_ino": 100011093
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3947146420-3949616851-5246300b5f69a3c187b5e22bf422345d37773b549cd400426cc14eb63c730f36.route",
+    "bytes": 43785906,
+    "source_dev": 66304,
+    "source_ino": 100010875,
+    "private_dev": 66304,
+    "private_ino": 100011094
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3949616852-3952303369-5a6ef1d9061d6beef7441787786cccf81883e9b2957291450d87695a300d48f4.route",
+    "bytes": 39635873,
+    "source_dev": 66304,
+    "source_ino": 100010935,
+    "private_dev": 66304,
+    "private_ino": 100011095
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3952303370-3954965412-bbbc5752f4665dd0e2c30a9137e872cc8bc5049e14cd663ce3936173312928dc.route",
+    "bytes": 45317990,
+    "source_dev": 66304,
+    "source_ino": 100010937,
+    "private_dev": 66304,
+    "private_ino": 100011096
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3954965413-3957382750-7cc040bb6f403b755e6a6602a1525e94b90dc23af639289bf689d775ff8b74c7.route",
+    "bytes": 37517998,
+    "source_dev": 66304,
+    "source_ino": 100010861,
+    "private_dev": 66304,
+    "private_ino": 100011097
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3957382751-3959991628-94286f4adb7d92de3c4238c68d828f3b358f07833d43cf5a35ef60f558747c46.route",
+    "bytes": 45760496,
+    "source_dev": 66304,
+    "source_ino": 100010938,
+    "private_dev": 66304,
+    "private_ino": 100011098
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3959991629-3962444369-72fd9a5630a550b7a22348500fbddf84ef33d89c3d39d1f73854de64f516db70.route",
+    "bytes": 40991925,
+    "source_dev": 66304,
+    "source_ino": 100010939,
+    "private_dev": 66304,
+    "private_ino": 100011099
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3962444370-3964981798-f15fc0e4d7bc99325ba7ab965a61c51083a0209073407f53b317e5e95bf9214c.route",
+    "bytes": 39422892,
+    "source_dev": 66304,
+    "source_ino": 100010942,
+    "private_dev": 66304,
+    "private_ino": 100011100
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3964981799-3967586659-de01e7cdc5d96f97463481b69f580593210063ce4ed8c5f0d376aca7eae73294.route",
+    "bytes": 48517624,
+    "source_dev": 66304,
+    "source_ino": 100010940,
+    "private_dev": 66304,
+    "private_ino": 100011101
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3967586660-3969627903-4efd3c8cf3e16b5e57389670b5594febf51ad8641245952d65646fc040a26920.route",
+    "bytes": 43515453,
+    "source_dev": 66304,
+    "source_ino": 100010941,
+    "private_dev": 66304,
+    "private_ino": 100011102
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3969627904-3971989843-9a341fec6ba62741067fef04daa9a24e5636a3645ddb81962d1460ca64665f33.route",
+    "bytes": 38706018,
+    "source_dev": 66304,
+    "source_ino": 100010943,
+    "private_dev": 66304,
+    "private_ino": 100011103
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3971989844-3974494935-d0361e60f36d131fb01fb2f69525b791c585d7fa49615beb0dd866c784277f46.route",
+    "bytes": 49103330,
+    "source_dev": 66304,
+    "source_ino": 100010945,
+    "private_dev": 66304,
+    "private_ino": 100011104
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3974494936-3976838355-29f8f11d468c53ff5d2b6f07a51df7f9ad3e41d3480c7b58a14c858eb229c4e2.route",
+    "bytes": 38873890,
+    "source_dev": 66304,
+    "source_ino": 100010944,
+    "private_dev": 66304,
+    "private_ino": 100011105
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3976838356-3979587019-a8a3b18e0837d85fd5eb9c4e59e9e08818beb9accb23c9b2962dcfefd52a740f.route",
+    "bytes": 41204981,
+    "source_dev": 66304,
+    "source_ino": 100010946,
+    "private_dev": 66304,
+    "private_ino": 100011106
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3979587020-3982270508-688e2f1208978b321540dcfe2a414cd7dc142d76e90efaa2b8e55d11c4550362.route",
+    "bytes": 35219707,
+    "source_dev": 66304,
+    "source_ino": 100010949,
+    "private_dev": 66304,
+    "private_ino": 100011107
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3982270509-3984829066-700afc7a629531ad1656f15aad890cf8359e3c63a151ce5296ad2f0dcb69a301.route",
+    "bytes": 34867526,
+    "source_dev": 66304,
+    "source_ino": 100010947,
+    "private_dev": 66304,
+    "private_ino": 100011108
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3984829067-3987440850-613c4c0379971d5ef272e079f2a6673ecd67df50aa5e39bd8b47a5a62a853cb5.route",
+    "bytes": 36854372,
+    "source_dev": 66304,
+    "source_ino": 100010948,
+    "private_dev": 66304,
+    "private_ino": 100011109
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3987440851-3989755914-f060264529f5d3d1cb1fa27a3e03b9a77e582d936f56ca6a7405d78b15cd1104.route",
+    "bytes": 32224969,
+    "source_dev": 66304,
+    "source_ino": 100010950,
+    "private_dev": 66304,
+    "private_ino": 100011110
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3989755915-3992413118-8c96e879a53239c59d2ac1b8d9f68093723d99c17eb64a046c61daee52dd1351.route",
+    "bytes": 34211900,
+    "source_dev": 66304,
+    "source_ino": 100010951,
+    "private_dev": 66304,
+    "private_ino": 100011111
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3992413119-3995057124-d389dc8a80b653dc20e32515034db1d9bc130bbdcb90051628d7d72d017be54b.route",
+    "bytes": 32429918,
+    "source_dev": 66304,
+    "source_ino": 100010952,
+    "private_dev": 66304,
+    "private_ino": 100011112
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3995057125-3997816326-9c2e49f7e004676346794250ed2a8e648b4d9658c195f533ddf932ce9a0cf44c.route",
+    "bytes": 43802290,
+    "source_dev": 66304,
+    "source_ino": 100010953,
+    "private_dev": 66304,
+    "private_ino": 100011113
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-3997816327-4000274873-d40ae4de8b5f10b05583cd9cd4a8aa4d532aa5e638ce8fa028a727a491983051.route",
+    "bytes": 37362233,
+    "source_dev": 66304,
+    "source_ino": 100010954,
+    "private_dev": 66304,
+    "private_ino": 100011114
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4000274874-4002648585-fa792998c3bc25a6e88d6eb18987be82ebb234aed200558ea5b8e938b26cf707.route",
+    "bytes": 28234957,
+    "source_dev": 66304,
+    "source_ino": 100010956,
+    "private_dev": 66304,
+    "private_ino": 100011115
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4002648586-4005134354-430e2d4f77d884e2c0d0c57b8165d70d98b6aca16707da49ef07b213c9abaefb.route",
+    "bytes": 32577342,
+    "source_dev": 66304,
+    "source_ino": 100010955,
+    "private_dev": 66304,
+    "private_ino": 100011116
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4005134355-4007865551-0914a0310268b1355f50346bd41cc851f683377f4e5ff18ec231e8f685e5cdab.route",
+    "bytes": 33171304,
+    "source_dev": 66304,
+    "source_ino": 100010959,
+    "private_dev": 66304,
+    "private_ino": 100011117
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4007865552-4010280965-88a56bd20d46b5ddc1d7ac7183a271e44d853a19120495b2d3307a9a821f2495.route",
+    "bytes": 29984118,
+    "source_dev": 66304,
+    "source_ino": 100010957,
+    "private_dev": 66304,
+    "private_ino": 100011118
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4010280966-4012561208-352f9cf6d51ba7fdca356a7c6ac47999b19487742ae2fe08a77f34ca0ba9314d.route",
+    "bytes": 31217258,
+    "source_dev": 66304,
+    "source_ino": 100010958,
+    "private_dev": 66304,
+    "private_ino": 100011119
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4012561209-4015014868-4a4bfe370b3ee4d50c13228abc684f9b9abfe7f6cc9c1fa1070324969349b5f8.route",
+    "bytes": 33417213,
+    "source_dev": 66304,
+    "source_ino": 100010960,
+    "private_dev": 66304,
+    "private_ino": 100011120
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4015014869-4017816513-799fb33eeb5af6fd1cdeb64fcb7d0deb975836b9cd9d97d7044f9f13778c15dd.route",
+    "bytes": 35182875,
+    "source_dev": 66304,
+    "source_ino": 100010963,
+    "private_dev": 66304,
+    "private_ino": 100011121
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4017816514-4020293814-47995884eede9711bbc0c0d1c02b46a4c29e8e85df1592a8fd0bb6edfabcb248.route",
+    "bytes": 35899781,
+    "source_dev": 66304,
+    "source_ino": 100010961,
+    "private_dev": 66304,
+    "private_ino": 100011122
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4020293815-4022953075-752e2b98c155d80a50cda4e98cc44af634f6500be8f9f45a495b3fe66faad29f.route",
+    "bytes": 35309723,
+    "source_dev": 66304,
+    "source_ino": 100010962,
+    "private_dev": 66304,
+    "private_ino": 100011123
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4022953076-4025621662-b9079de96dbb24500d1114a054f148b0e09c2187b6af029c456f24a1ae761633.route",
+    "bytes": 35440891,
+    "source_dev": 66304,
+    "source_ino": 100010964,
+    "private_dev": 66304,
+    "private_ino": 100011124
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4025621663-4027963409-b401213723f2ec1ec2a29f45e6f38ec574dfcd46c54f6c4a929578d3cad79978.route",
+    "bytes": 33597458,
+    "source_dev": 66304,
+    "source_ino": 100010965,
+    "private_dev": 66304,
+    "private_ino": 100011125
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4027963410-4030506452-aead9ed0780de5cefc7d18c3edb07b40204375b5fc738ae6995ef4911ca35570.route",
+    "bytes": 35539280,
+    "source_dev": 66304,
+    "source_ino": 100010966,
+    "private_dev": 66304,
+    "private_ino": 100011126
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4030506453-4032859674-7d4e42ee933ad1781e871b2ec5ae1639f7dbba47ae7f02c5353a995debf735b8.route",
+    "bytes": 34060231,
+    "source_dev": 66304,
+    "source_ino": 100010967,
+    "private_dev": 66304,
+    "private_ino": 100011127
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4032859675-4035429007-c4a125dc08658ca6afe5bc115b7f1092a03a378d50c6279e0909bb3598fda5c4.route",
+    "bytes": 34654417,
+    "source_dev": 66304,
+    "source_ino": 100010968,
+    "private_dev": 66304,
+    "private_ino": 100011128
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4035429008-4037884155-7389f7884fea1037e41a0a7b41cd4695bc2d15d4cfb98c0ea3a35a90079847f6.route",
+    "bytes": 31208970,
+    "source_dev": 66304,
+    "source_ino": 100010969,
+    "private_dev": 66304,
+    "private_ino": 100011129
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4037884156-4040454493-ad17c609585e82dc297cff7d1b988d00f2af632ced6ed46708598dd0365d68a3.route",
+    "bytes": 34150663,
+    "source_dev": 66304,
+    "source_ino": 100010972,
+    "private_dev": 66304,
+    "private_ino": 100011130
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4040454494-4043083643-7e0cd7754ca50e45c736817bdd4eba211d28b1efa1e9da99902362267bce502e.route",
+    "bytes": 31962825,
+    "source_dev": 66304,
+    "source_ino": 100010970,
+    "private_dev": 66304,
+    "private_ino": 100011131
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4043083644-4045739352-fa57c8063f7b5750ec9d523df3c73670bb1ead34bd62f385d740ce8553d76343.route",
+    "bytes": 33961959,
+    "source_dev": 66304,
+    "source_ino": 100010971,
+    "private_dev": 66304,
+    "private_ino": 100011132
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4045739353-4048116838-651068afb38d5eeefe5492f2f1c05dc1795668460acfa3e1e06036f32be6a709.route",
+    "bytes": 33253373,
+    "source_dev": 66304,
+    "source_ino": 100010973,
+    "private_dev": 66304,
+    "private_ino": 100011133
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4048116839-4050556899-1c15d1c5ad78962040efc4ae2d32c3b094d24cc189abc2d31c0737589bb5cd88.route",
+    "bytes": 31790836,
+    "source_dev": 66304,
+    "source_ino": 100010876,
+    "private_dev": 66304,
+    "private_ino": 100011134
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4050556900-4053131390-5001d7a84458e3e479c9b6245b507f9c841015289caf244cf2b2235776cd55b7.route",
+    "bytes": 36731375,
+    "source_dev": 66304,
+    "source_ino": 100010975,
+    "private_dev": 66304,
+    "private_ino": 100011135
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4053131391-4055623092-941f8af32abb36b066c4d6d6b7c36dda22ccab4892743d4fdc56b44f3ccda875.route",
+    "bytes": 32958312,
+    "source_dev": 66304,
+    "source_ino": 100010976,
+    "private_dev": 66304,
+    "private_ino": 100011136
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4055623093-4058233392-4411acbd38cc6a791c230cf3600163bac9c7f4075906ae727d01560f3248a77c.route",
+    "bytes": 38505197,
+    "source_dev": 66304,
+    "source_ino": 100010934,
+    "private_dev": 66304,
+    "private_ino": 100011137
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4058233393-4060520393-651cf87ecad9a3b928b789b0cfa8756591aad96da92f34b7cade2f3447ec5dea.route",
+    "bytes": 31880948,
+    "source_dev": 66304,
+    "source_ino": 100010978,
+    "private_dev": 66304,
+    "private_ino": 100011138
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4060520394-4063202637-2df4d327e746e367b040b11c1b33e2b6815c4fc350ea05071d12bfe3a094bac6.route",
+    "bytes": 47124708,
+    "source_dev": 66304,
+    "source_ino": 100010979,
+    "private_dev": 66304,
+    "private_ino": 100011139
+  },
+  {
+    "path": "state-snapshots/history/account-routing-delta-4063202638-4063356397-35d871e9adfcb4dcc550798c8201ac438479ef33f95edd09d3c66f4b323af20b.route",
+    "bytes": 3437223,
+    "source_dev": 66304,
+    "source_ino": 100010936,
+    "private_dev": 66304,
+    "private_ino": 100011140
+  }
+]

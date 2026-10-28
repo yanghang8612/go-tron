@@ -1,0 +1,802 @@
+[
+  {
+    "case": "before-1",
+    "height": 9000000,
+    "repeat": 0,
+    "seconds_loopback_http": 5.423878617584705,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 215365216,
+      "wchar": 0,
+      "syscr": 26100,
+      "syscw": 0,
+      "read_bytes": 320802816,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 9000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.708586685359478,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 207776039,
+      "wchar": 0,
+      "syscr": 24151,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 10000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.8709585964679718,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 206191356,
+      "wchar": 0,
+      "syscr": 24110,
+      "syscw": 0,
+      "read_bytes": 16785408,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 10000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.8589411377906799,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 207703216,
+      "wchar": 0,
+      "syscr": 24122,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 11000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.7606091275811195,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 204313211,
+      "wchar": 0,
+      "syscr": 23970,
+      "syscw": 0,
+      "read_bytes": 11804672,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 11000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.74550761282444,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 205269642,
+      "wchar": 0,
+      "syscr": 23967,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 15000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.8589223176240921,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 205814180,
+      "wchar": 0,
+      "syscr": 24185,
+      "syscw": 0,
+      "read_bytes": 30113792,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 15000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.778371773660183,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 208852304,
+      "wchar": 0,
+      "syscr": 24123,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 20000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.1948256865143776,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 211728142,
+      "wchar": 0,
+      "syscr": 24177,
+      "syscw": 0,
+      "read_bytes": 27230208,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-1",
+    "height": 20000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7155535966157913,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 212922608,
+      "wchar": 0,
+      "syscr": 24158,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 9000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.3021573275327682,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 95865177,
+      "wchar": 0,
+      "syscr": 3876,
+      "syscw": 0,
+      "read_bytes": 9945088,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 9000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6228192672133446,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 88276000,
+      "wchar": 0,
+      "syscr": 1927,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 10000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.6623794957995415,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 86691317,
+      "wchar": 0,
+      "syscr": 1886,
+      "syscw": 0,
+      "read_bytes": 167936,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 10000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7452568858861923,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 88203177,
+      "wchar": 0,
+      "syscr": 1898,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 237568,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 11000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.7505880370736122,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 84813171,
+      "wchar": 0,
+      "syscr": 1746,
+      "syscw": 0,
+      "read_bytes": 102400,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 11000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6257228776812553,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 85769602,
+      "wchar": 0,
+      "syscr": 1743,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 15000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.6197518110275269,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 86314140,
+      "wchar": 0,
+      "syscr": 1961,
+      "syscw": 0,
+      "read_bytes": 311296,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 15000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6050923466682434,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 18,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 89352264,
+      "wchar": 0,
+      "syscr": 1900,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 20000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.7946776300668716,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 19,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 92228102,
+      "wchar": 0,
+      "syscr": 1953,
+      "syscw": 0,
+      "read_bytes": 1433600,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-1",
+    "height": 20000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7487859651446342,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 93422568,
+      "wchar": 0,
+      "syscr": 1934,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 9000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.8047532364726067,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 21,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 95865165,
+      "wchar": 0,
+      "syscr": 3876,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 9000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6215578839182854,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 22,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 88275990,
+      "wchar": 0,
+      "syscr": 1927,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 10000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.6706179976463318,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 23,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 86691307,
+      "wchar": 0,
+      "syscr": 1886,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 10000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7134078368544579,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 24,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 88203167,
+      "wchar": 0,
+      "syscr": 1898,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 11000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.622805193066597,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 25,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 84813161,
+      "wchar": 0,
+      "syscr": 1747,
+      "syscw": 0,
+      "read_bytes": 675840,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 11000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.5915110483765602,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 26,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 85769597,
+      "wchar": 0,
+      "syscr": 1743,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 15000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.5992690101265907,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 27,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 86314135,
+      "wchar": 0,
+      "syscr": 1961,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 15000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.5978505983948708,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 28,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 89352259,
+      "wchar": 0,
+      "syscr": 1899,
+      "syscw": 0,
+      "read_bytes": 6393856,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 20000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.7173338681459427,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 29,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 92228098,
+      "wchar": 0,
+      "syscr": 1953,
+      "syscw": 0,
+      "read_bytes": 2387968,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "candidate-2",
+    "height": 20000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6691394820809364,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 30,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 93422564,
+      "wchar": 0,
+      "syscr": 1934,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 9000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.5062352195382118,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 31,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 215365212,
+      "wchar": 0,
+      "syscr": 26100,
+      "syscw": 0,
+      "read_bytes": 4222976,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 9000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.8443055003881454,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 32,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "io_delta": {
+      "rchar": 207776037,
+      "wchar": 0,
+      "syscr": 24151,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 10000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.9285456836223602,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 33,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 206191354,
+      "wchar": 0,
+      "syscr": 24110,
+      "syscw": 0,
+      "read_bytes": 69632,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 10000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7396938130259514,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 34,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    },
+    "io_delta": {
+      "rchar": 207703214,
+      "wchar": 0,
+      "syscr": 24122,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 11000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.8059158325195312,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 35,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 204313209,
+      "wchar": 0,
+      "syscr": 23970,
+      "syscw": 0,
+      "read_bytes": 36864,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 11000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7847532704472542,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 36,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000dc"
+    },
+    "io_delta": {
+      "rchar": 205269640,
+      "wchar": 0,
+      "syscr": 23967,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 15000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.773809939622879,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 37,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 205814178,
+      "wchar": 0,
+      "syscr": 24185,
+      "syscw": 0,
+      "read_bytes": 98304,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 15000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7063688486814499,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 38,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    },
+    "io_delta": {
+      "rchar": 208852302,
+      "wchar": 0,
+      "syscr": 24123,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 20000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.8765432462096214,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 39,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 211728140,
+      "wchar": 0,
+      "syscr": 24177,
+      "syscw": 0,
+      "read_bytes": 540672,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  },
+  {
+    "case": "before-2",
+    "height": 20000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7631608918309212,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 40,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    },
+    "io_delta": {
+      "rchar": 212922606,
+      "wchar": 0,
+      "syscr": 24158,
+      "syscw": 0,
+      "read_bytes": 0,
+      "write_bytes": 0,
+      "cancelled_write_bytes": 0
+    }
+  }
+]

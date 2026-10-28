@@ -1,0 +1,22 @@
+{
+  "complete": true,
+  "stage": "new auxiliary cold-page HTTP complete",
+  "source": "878b965cc03cc03d26de724e85a26bf559d1fc8b",
+  "production_mutations": false,
+  "cache": "new account delta files are private inodes, zero resident at dispatch; canonical and older routing caches uncontrolled",
+  "binary_source": "78c48bd020c11dbde226cb47245ae6d3f97aaf6e",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T18:25:06.066029Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true
+}

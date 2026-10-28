@@ -1,0 +1,24 @@
+{
+  "complete": true,
+  "stage": "account delta prototype build and HTTP complete",
+  "source": "78c48bd020c11dbde226cb47245ae6d3f97aaf6e",
+  "production_mutations": false,
+  "canonical_data_mutations": false,
+  "runner_admission_tested": false,
+  "cache": "fresh HTTP processes, shared canonical/OS caches uncontrolled; no eviction",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T18:20:14.428993Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "requests": 60,
+  "all_returns_match": true
+}

@@ -1,0 +1,2633 @@
+{
+  "canonical_refs_and_progress_unchanged": true,
+  "variants": {
+    "gaps": {
+      "canonical_and_other_auxiliary_refs_sha256": "8fb1b94cb4ea54b17a2c1442bead961c125757cb0330ec0f36789f40904c7cf5",
+      "base_ref": {
+        "rows": 115456774,
+        "dataset": "state-domain-change",
+        "kind": "account-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 4060208141,
+        "path": "history/account-gap-ablation.route",
+        "size": 3399082087,
+        "checksum": "sha256:cfb023331e4e1d2afeda76a4afdb35dd42f87872d34fb187ecd68e1e829b2b8c",
+        "lookupRoot": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+      },
+      "objects": [],
+      "progress": {
+        "historyBuildTxNum": 4063356397,
+        "accessorBuildTxNum": 4063356397,
+        "hotPruneTxNum": 4063356397,
+        "hotPruneBlockNum": 45046617
+      },
+      "visible": [
+        1,
+        4063356397
+      ]
+    },
+    "delta": {
+      "canonical_and_other_auxiliary_refs_sha256": "8fb1b94cb4ea54b17a2c1442bead961c125757cb0330ec0f36789f40904c7cf5",
+      "base_ref": {
+        "rows": 115456774,
+        "dataset": "state-domain-change",
+        "kind": "account-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 4060208141,
+        "path": "history/account-gap-ablation.route",
+        "size": 3399082087,
+        "checksum": "sha256:cfb023331e4e1d2afeda76a4afdb35dd42f87872d34fb187ecd68e1e829b2b8c",
+        "lookupRoot": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+      },
+      "objects": [
+        {
+          "ref": {
+            "rows": 1214682,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3792723933,
+            "toTxNum": 3795448009,
+            "path": "history/account-routing-delta-3792723933-3795448009-a9d4bf9d3b2907ec4f0377257bd238cc3a9179a61155a1ea0c2457cdb59d0588.route",
+            "size": 35752272,
+            "checksum": "sha256:a9d4bf9d3b2907ec4f0377257bd238cc3a9179a61155a1ea0c2457cdb59d0588",
+            "lookupRoot": "sha256:8a7ce6b54dc6b389452af02e17c075e6746f1e3926112aaacc28017bfde8024b"
+          },
+          "metadata": "metadata/8a7ce6b54dc6b389452af02e17c075e6746f1e3926112aaacc28017bfde8024b.bin",
+          "allocated_bytes": 35758080
+        },
+        {
+          "ref": {
+            "rows": 1240142,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3795448010,
+            "toTxNum": 3798340090,
+            "path": "history/account-routing-delta-3795448010-3798340090-d3e1d85d6a8077322ca191cc5b2222e4238e7f1ffcfe42ccb074b9986d099a9a.route",
+            "size": 36506031,
+            "checksum": "sha256:d3e1d85d6a8077322ca191cc5b2222e4238e7f1ffcfe42ccb074b9986d099a9a",
+            "lookupRoot": "sha256:c17161620aecfbdee0a4348afbbc0513089f427540892e7eda67174ed34b5c08"
+          },
+          "metadata": "metadata/c17161620aecfbdee0a4348afbbc0513089f427540892e7eda67174ed34b5c08.bin",
+          "allocated_bytes": 36511744
+        },
+        {
+          "ref": {
+            "rows": 1251492,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3798340091,
+            "toTxNum": 3801125819,
+            "path": "history/account-routing-delta-3798340091-3801125819-a2e86bcbd86205a07c652009205f25b3fe3b7730f41b0d9d11fb81e417df9688.route",
+            "size": 36837956,
+            "checksum": "sha256:a2e86bcbd86205a07c652009205f25b3fe3b7730f41b0d9d11fb81e417df9688",
+            "lookupRoot": "sha256:410bceae09ad1bc6fed902ec328fd13ea6484b71ac435400acc5d69abfb92875"
+          },
+          "metadata": "metadata/410bceae09ad1bc6fed902ec328fd13ea6484b71ac435400acc5d69abfb92875.bin",
+          "allocated_bytes": 36843520
+        },
+        {
+          "ref": {
+            "rows": 1152837,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3801125820,
+            "toTxNum": 3803485988,
+            "path": "history/account-routing-delta-3801125820-3803485988-1198401c6fd3f3493f1685eb80b073688defbde3f952b2e31975d42e595e35c8.route",
+            "size": 33937351,
+            "checksum": "sha256:1198401c6fd3f3493f1685eb80b073688defbde3f952b2e31975d42e595e35c8",
+            "lookupRoot": "sha256:7b378287da071666f4d46c0a0df51801b732f41ab8b5bb3a5ab27994453cf017"
+          },
+          "metadata": "metadata/7b378287da071666f4d46c0a0df51801b732f41ab8b5bb3a5ab27994453cf017.bin",
+          "allocated_bytes": 33943552
+        },
+        {
+          "ref": {
+            "rows": 1188259,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3803485989,
+            "toTxNum": 3806191015,
+            "path": "history/account-routing-delta-3803485989-3806191015-c6a01b1e8665761f782769516a0fd763d263bc60078a9d80a378d76c79d53c7f.route",
+            "size": 34977926,
+            "checksum": "sha256:c6a01b1e8665761f782769516a0fd763d263bc60078a9d80a378d76c79d53c7f",
+            "lookupRoot": "sha256:2806b423285fcdb04781d523a4aaacc0a76b4c46bb38f42df13aea90f00a4eee"
+          },
+          "metadata": "metadata/2806b423285fcdb04781d523a4aaacc0a76b4c46bb38f42df13aea90f00a4eee.bin",
+          "allocated_bytes": 34983936
+        },
+        {
+          "ref": {
+            "rows": 1150068,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3806191016,
+            "toTxNum": 3808671943,
+            "path": "history/account-routing-delta-3806191016-3808671943-f210600afc22964299c7bc4bebd3e26bd91964434c52a19ca219c8eca3cdd59b.route",
+            "size": 33851378,
+            "checksum": "sha256:f210600afc22964299c7bc4bebd3e26bd91964434c52a19ca219c8eca3cdd59b",
+            "lookupRoot": "sha256:dae42fba6ef346477f859fdb717134bb78933923582d534a11996f42c1319f74"
+          },
+          "metadata": "metadata/dae42fba6ef346477f859fdb717134bb78933923582d534a11996f42c1319f74.bin",
+          "allocated_bytes": 33857536
+        },
+        {
+          "ref": {
+            "rows": 1224736,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3808671944,
+            "toTxNum": 3811448638,
+            "path": "history/account-routing-delta-3808671944-3811448638-82e388d2eb444da2b90a56b8485fbd347efe5028df422cb4d8412809752dee21.route",
+            "size": 36051397,
+            "checksum": "sha256:82e388d2eb444da2b90a56b8485fbd347efe5028df422cb4d8412809752dee21",
+            "lookupRoot": "sha256:d0617c7fb671e1f2e76e5b75883199c3b670bcbc7403b0af8bbe83416bbec7f6"
+          },
+          "metadata": "metadata/d0617c7fb671e1f2e76e5b75883199c3b670bcbc7403b0af8bbe83416bbec7f6.bin",
+          "allocated_bytes": 36057088
+        },
+        {
+          "ref": {
+            "rows": 1204973,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3811448639,
+            "toTxNum": 3814103623,
+            "path": "history/account-routing-delta-3811448639-3814103623-c81838343502f1af7c5165d37baf570b4ee7c8f11a5132348346b0909e79ef71.route",
+            "size": 35465499,
+            "checksum": "sha256:c81838343502f1af7c5165d37baf570b4ee7c8f11a5132348346b0909e79ef71",
+            "lookupRoot": "sha256:e123eed4808b7fedeba78f5a508b75c7b7e20e89844123b374f133c699a06bec"
+          },
+          "metadata": "metadata/e123eed4808b7fedeba78f5a508b75c7b7e20e89844123b374f133c699a06bec.bin",
+          "allocated_bytes": 35471360
+        },
+        {
+          "ref": {
+            "rows": 1253782,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3814103624,
+            "toTxNum": 3817030614,
+            "path": "history/account-routing-delta-3814103624-3817030614-df99ef92d9998315b4a59625b78f1c169bc1ce20dd94467453bc76e009eabfa3.route",
+            "size": 36907556,
+            "checksum": "sha256:df99ef92d9998315b4a59625b78f1c169bc1ce20dd94467453bc76e009eabfa3",
+            "lookupRoot": "sha256:95efb96e3e30897bde2c98e97cf41137fe64438a710f8627ad796272298a3e9d"
+          },
+          "metadata": "metadata/95efb96e3e30897bde2c98e97cf41137fe64438a710f8627ad796272298a3e9d.bin",
+          "allocated_bytes": 36913152
+        },
+        {
+          "ref": {
+            "rows": 1134985,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3817030615,
+            "toTxNum": 3819692744,
+            "path": "history/account-routing-delta-3817030615-3819692744-72c6b47a576e8f8ae70cf7737857097fc301ad21a43344246730ca1d32a659c9.route",
+            "size": 33409053,
+            "checksum": "sha256:72c6b47a576e8f8ae70cf7737857097fc301ad21a43344246730ca1d32a659c9",
+            "lookupRoot": "sha256:aca0d162e7375251b5b3d8bcf6a0952a0ae02a79691434aeed9841d5390679df"
+          },
+          "metadata": "metadata/aca0d162e7375251b5b3d8bcf6a0952a0ae02a79691434aeed9841d5390679df.bin",
+          "allocated_bytes": 33411072
+        },
+        {
+          "ref": {
+            "rows": 1246417,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3819692745,
+            "toTxNum": 3822495327,
+            "path": "history/account-routing-delta-3819692745-3822495327-7cf17c726b96d978eec586b93e09d6132187ec08201e342caae54dab07ade4db.route",
+            "size": 36686287,
+            "checksum": "sha256:7cf17c726b96d978eec586b93e09d6132187ec08201e342caae54dab07ade4db",
+            "lookupRoot": "sha256:6e8468dd589fb3ae9146f4773535a199d4fe6793265354da36dd12b6c62d4c91"
+          },
+          "metadata": "metadata/6e8468dd589fb3ae9146f4773535a199d4fe6793265354da36dd12b6c62d4c91.bin",
+          "allocated_bytes": 36691968
+        },
+        {
+          "ref": {
+            "rows": 1270862,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3822495328,
+            "toTxNum": 3825291097,
+            "path": "history/account-routing-delta-3822495328-3825291097-6613e67e1e7edf8ea6143f5ea478950272829dde2b528675063f4e9dddbd7a7e.route",
+            "size": 37411694,
+            "checksum": "sha256:6613e67e1e7edf8ea6143f5ea478950272829dde2b528675063f4e9dddbd7a7e",
+            "lookupRoot": "sha256:43d83f24ecda42f2897a35a2333b22b779e6ef7783f6d5ab4d0797481f3d14a0"
+          },
+          "metadata": "metadata/43d83f24ecda42f2897a35a2333b22b779e6ef7783f6d5ab4d0797481f3d14a0.bin",
+          "allocated_bytes": 37416960
+        },
+        {
+          "ref": {
+            "rows": 1114597,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3825291098,
+            "toTxNum": 3827716203,
+            "path": "history/account-routing-delta-3825291098-3827716203-e124545e608303a44ccca0ef863a245454805cdeb6ad028f577ed282ea186b81.route",
+            "size": 32806579,
+            "checksum": "sha256:e124545e608303a44ccca0ef863a245454805cdeb6ad028f577ed282ea186b81",
+            "lookupRoot": "sha256:1225f22336262f052fcbb8311b819d68f940e55aa71bab163ca4a21d97b2f4d2"
+          },
+          "metadata": "metadata/1225f22336262f052fcbb8311b819d68f940e55aa71bab163ca4a21d97b2f4d2.bin",
+          "allocated_bytes": 32808960
+        },
+        {
+          "ref": {
+            "rows": 1312770,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3827716204,
+            "toTxNum": 3830631066,
+            "path": "history/account-routing-delta-3827716204-3830631066-12485fa0105596810a799dbd8fc0f53541026a80e2406f930e05dc8f9b28cf4b.route",
+            "size": 38640333,
+            "checksum": "sha256:12485fa0105596810a799dbd8fc0f53541026a80e2406f930e05dc8f9b28cf4b",
+            "lookupRoot": "sha256:ae77e7b0aa2507e4247ecb215e3d265f5f0ab784cad27974f89b0e53f7f4f70e"
+          },
+          "metadata": "metadata/ae77e7b0aa2507e4247ecb215e3d265f5f0ab784cad27974f89b0e53f7f4f70e.bin",
+          "allocated_bytes": 38645760
+        },
+        {
+          "ref": {
+            "rows": 1134071,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3830631067,
+            "toTxNum": 3833144427,
+            "path": "history/account-routing-delta-3830631067-3833144427-03a8d3637b558da647f3caf3d0bbff8e96fda98c5045c8e380228bba7ce355d3.route",
+            "size": 33384477,
+            "checksum": "sha256:03a8d3637b558da647f3caf3d0bbff8e96fda98c5045c8e380228bba7ce355d3",
+            "lookupRoot": "sha256:092f6434dd30a3cd86a37580339c8848bd7a49c23de121be41b89491e068329d"
+          },
+          "metadata": "metadata/092f6434dd30a3cd86a37580339c8848bd7a49c23de121be41b89491e068329d.bin",
+          "allocated_bytes": 33386496
+        },
+        {
+          "ref": {
+            "rows": 1266700,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3833144428,
+            "toTxNum": 3835891161,
+            "path": "history/account-routing-delta-3833144428-3835891161-ca9048d7762fac9e00c40af5a6e90835e3ad7472154b7b6a1c428f21ec3dbd99.route",
+            "size": 37284409,
+            "checksum": "sha256:ca9048d7762fac9e00c40af5a6e90835e3ad7472154b7b6a1c428f21ec3dbd99",
+            "lookupRoot": "sha256:4358eed8540aeb29ad0562f65ae09b6fce2fd7bdae1c1fc47a5049eeccb80838"
+          },
+          "metadata": "metadata/4358eed8540aeb29ad0562f65ae09b6fce2fd7bdae1c1fc47a5049eeccb80838.bin",
+          "allocated_bytes": 37289984
+        },
+        {
+          "ref": {
+            "rows": 1184672,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3835891162,
+            "toTxNum": 3838587880,
+            "path": "history/account-routing-delta-3835891162-3838587880-df73b0a98880ccdca22ea09363f7197123396776b01cc8fb6f8c20f3446cb5d0.route",
+            "size": 34871430,
+            "checksum": "sha256:df73b0a98880ccdca22ea09363f7197123396776b01cc8fb6f8c20f3446cb5d0",
+            "lookupRoot": "sha256:fb9a04852f4a5a2a1d23da2f5d545000a2383e59eb71669601e91a19d2d5dc6a"
+          },
+          "metadata": "metadata/fb9a04852f4a5a2a1d23da2f5d545000a2383e59eb71669601e91a19d2d5dc6a.bin",
+          "allocated_bytes": 34877440
+        },
+        {
+          "ref": {
+            "rows": 1261721,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3838587881,
+            "toTxNum": 3841264895,
+            "path": "history/account-routing-delta-3838587881-3841264895-0fb814c3c0a2355ed6a7f8102fec55dbc25bcc87b8081f8b186b357ec8f13cbf.route",
+            "size": 37141081,
+            "checksum": "sha256:0fb814c3c0a2355ed6a7f8102fec55dbc25bcc87b8081f8b186b357ec8f13cbf",
+            "lookupRoot": "sha256:1225d26dc9134cf3e4bc69eb4885c294846943a7fad05e0c257d2392d5d83b20"
+          },
+          "metadata": "metadata/1225d26dc9134cf3e4bc69eb4885c294846943a7fad05e0c257d2392d5d83b20.bin",
+          "allocated_bytes": 37146624
+        },
+        {
+          "ref": {
+            "rows": 1206443,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3841264896,
+            "toTxNum": 3843864372,
+            "path": "history/account-routing-delta-3841264896-3843864372-f962cd3755882222fb47ca92d1e6fac214dd284f62dce516eac6edcbbd5ce935.route",
+            "size": 35514640,
+            "checksum": "sha256:f962cd3755882222fb47ca92d1e6fac214dd284f62dce516eac6edcbbd5ce935",
+            "lookupRoot": "sha256:c57d23c4aa8d91a4ac92153346d08f0a77ab1db219975044706a4a99f2fc9c00"
+          },
+          "metadata": "metadata/c57d23c4aa8d91a4ac92153346d08f0a77ab1db219975044706a4a99f2fc9c00.bin",
+          "allocated_bytes": 35520512
+        },
+        {
+          "ref": {
+            "rows": 1278285,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3843864373,
+            "toTxNum": 3846703749,
+            "path": "history/account-routing-delta-3843864373-3846703749-a250edaadb278de08ea00846ca75924c12c3012b646ccc06f5f19cda98b7f50e.route",
+            "size": 37624622,
+            "checksum": "sha256:a250edaadb278de08ea00846ca75924c12c3012b646ccc06f5f19cda98b7f50e",
+            "lookupRoot": "sha256:e5db0a7c808a1d2e4a11191a4e3494d58468bfd2a42bf83ee82d55428bacba57"
+          },
+          "metadata": "metadata/e5db0a7c808a1d2e4a11191a4e3494d58468bfd2a42bf83ee82d55428bacba57.bin",
+          "allocated_bytes": 37629952
+        },
+        {
+          "ref": {
+            "rows": 1130268,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3846703750,
+            "toTxNum": 3849351902,
+            "path": "history/account-routing-delta-3846703750-3849351902-d31dd50130850dcc17a690565e3e48e41e400ad47ac64ca33e5bdfc35a70cfb0.route",
+            "size": 33273789,
+            "checksum": "sha256:d31dd50130850dcc17a690565e3e48e41e400ad47ac64ca33e5bdfc35a70cfb0",
+            "lookupRoot": "sha256:ea321591e9372ad173c5cb3bc51aa39889fe382ebee306d5477694091ee7326f"
+          },
+          "metadata": "metadata/ea321591e9372ad173c5cb3bc51aa39889fe382ebee306d5477694091ee7326f.bin",
+          "allocated_bytes": 33280000
+        },
+        {
+          "ref": {
+            "rows": 1252478,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3849351903,
+            "toTxNum": 3852189052,
+            "path": "history/account-routing-delta-3849351903-3852189052-5d12c16a2fb4d34932c96cdf0848374b4005ef81fbd467cfb6dd4fd074db410b.route",
+            "size": 36866596,
+            "checksum": "sha256:5d12c16a2fb4d34932c96cdf0848374b4005ef81fbd467cfb6dd4fd074db410b",
+            "lookupRoot": "sha256:f99a7aafc327648e58844e803d2091e67cb361edcfb1e61e2476237304e5d368"
+          },
+          "metadata": "metadata/f99a7aafc327648e58844e803d2091e67cb361edcfb1e61e2476237304e5d368.bin",
+          "allocated_bytes": 36872192
+        },
+        {
+          "ref": {
+            "rows": 1201671,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3852189053,
+            "toTxNum": 3855077411,
+            "path": "history/account-routing-delta-3852189053-3855077411-a6894fad1f88f475fd750aac503c1bc1738feb20f374d931785cb17d2101385e.route",
+            "size": 35371195,
+            "checksum": "sha256:a6894fad1f88f475fd750aac503c1bc1738feb20f374d931785cb17d2101385e",
+            "lookupRoot": "sha256:84568b7f48bfe4798d729c7f4214f8499a1413d2964587a6c647643457c6cd38"
+          },
+          "metadata": "metadata/84568b7f48bfe4798d729c7f4214f8499a1413d2964587a6c647643457c6cd38.bin",
+          "allocated_bytes": 35377152
+        },
+        {
+          "ref": {
+            "rows": 1163627,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3855077412,
+            "toTxNum": 3857786058,
+            "path": "history/account-routing-delta-3855077412-3857786058-3c188f3354d5446ab4caffe97cd62a137d642b89350af433db65f1cb44ccef35.route",
+            "size": 34252924,
+            "checksum": "sha256:3c188f3354d5446ab4caffe97cd62a137d642b89350af433db65f1cb44ccef35",
+            "lookupRoot": "sha256:cef0d10a570f60d9e8236e54e091a83fefc76826e8fdc410025d910d4701d311"
+          },
+          "metadata": "metadata/cef0d10a570f60d9e8236e54e091a83fefc76826e8fdc410025d910d4701d311.bin",
+          "allocated_bytes": 34258944
+        },
+        {
+          "ref": {
+            "rows": 1138179,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3857786059,
+            "toTxNum": 3860521149,
+            "path": "history/account-routing-delta-3857786059-3860521149-974f17368f3e9832a49f05f89f79f3c993f623a55a182eba93f6041fd0ff7d89.route",
+            "size": 33503101,
+            "checksum": "sha256:974f17368f3e9832a49f05f89f79f3c993f623a55a182eba93f6041fd0ff7d89",
+            "lookupRoot": "sha256:42a9bc9e069a311b88f5aae539ae2ec4cdfa9adb6a32ef6fa5ad056f81754701"
+          },
+          "metadata": "metadata/42a9bc9e069a311b88f5aae539ae2ec4cdfa9adb6a32ef6fa5ad056f81754701.bin",
+          "allocated_bytes": 33505280
+        },
+        {
+          "ref": {
+            "rows": 1171426,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3860521150,
+            "toTxNum": 3863181381,
+            "path": "history/account-routing-delta-3860521150-3863181381-c1e70aacd8674b65208217fc0f60e0be650827fad4dee1890f7322a7d37884f4.route",
+            "size": 34478108,
+            "checksum": "sha256:c1e70aacd8674b65208217fc0f60e0be650827fad4dee1890f7322a7d37884f4",
+            "lookupRoot": "sha256:9b551b34b9ba8ae705adb2af56cfe4c351cd2c6d6f852d383e1e0f58948a1e49"
+          },
+          "metadata": "metadata/9b551b34b9ba8ae705adb2af56cfe4c351cd2c6d6f852d383e1e0f58948a1e49.bin",
+          "allocated_bytes": 34484224
+        },
+        {
+          "ref": {
+            "rows": 1250314,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3863181382,
+            "toTxNum": 3865957779,
+            "path": "history/account-routing-delta-3863181382-3865957779-8cd120a8864e0e42a3faa588442be7c3b834cb2a2f6a5cd5e69e05e19c5c3d10.route",
+            "size": 36805156,
+            "checksum": "sha256:8cd120a8864e0e42a3faa588442be7c3b834cb2a2f6a5cd5e69e05e19c5c3d10",
+            "lookupRoot": "sha256:35f4d5ddbcec9dd6b0203fceb499a03faf6dd0081f52f668253b7f53230936d1"
+          },
+          "metadata": "metadata/35f4d5ddbcec9dd6b0203fceb499a03faf6dd0081f52f668253b7f53230936d1.bin",
+          "allocated_bytes": 36810752
+        },
+        {
+          "ref": {
+            "rows": 1223453,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3865957780,
+            "toTxNum": 3868572956,
+            "path": "history/account-routing-delta-3865957780-3868572956-f046c222ddd9065b651f926cbbe867a3b6bee197e807ed580a24ed840089f751.route",
+            "size": 36010277,
+            "checksum": "sha256:f046c222ddd9065b651f926cbbe867a3b6bee197e807ed580a24ed840089f751",
+            "lookupRoot": "sha256:064ff66cc749dbee5dac10d55b880c7768f4b01b4112322ee69e62d72b5c37a8"
+          },
+          "metadata": "metadata/064ff66cc749dbee5dac10d55b880c7768f4b01b4112322ee69e62d72b5c37a8.bin",
+          "allocated_bytes": 36016128
+        },
+        {
+          "ref": {
+            "rows": 1405858,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3868572957,
+            "toTxNum": 3871390891,
+            "path": "history/account-routing-delta-3868572957-3871390891-558be0379e109db08466cf27f33de347f06ac5389facb90d478572565632d7ca.route",
+            "size": 41381162,
+            "checksum": "sha256:558be0379e109db08466cf27f33de347f06ac5389facb90d478572565632d7ca",
+            "lookupRoot": "sha256:21b6c3949ec9a9ddcbf3835279195615394ac4a9a823493702d55bef77f94ba7"
+          },
+          "metadata": "metadata/21b6c3949ec9a9ddcbf3835279195615394ac4a9a823493702d55bef77f94ba7.bin",
+          "allocated_bytes": 41385984
+        },
+        {
+          "ref": {
+            "rows": 1192302,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3871390892,
+            "toTxNum": 3873980549,
+            "path": "history/account-routing-delta-3871390892-3873980549-25e03b5204a319ff1942a10847a26e17479aa11956ede65a9725562d96cd439a.route",
+            "size": 35096678,
+            "checksum": "sha256:25e03b5204a319ff1942a10847a26e17479aa11956ede65a9725562d96cd439a",
+            "lookupRoot": "sha256:8438e64117962048d51fb47147b1fd674f0f22cc2db23b96b7a38a5dfdfd676c"
+          },
+          "metadata": "metadata/8438e64117962048d51fb47147b1fd674f0f22cc2db23b96b7a38a5dfdfd676c.bin",
+          "allocated_bytes": 35102720
+        },
+        {
+          "ref": {
+            "rows": 1230929,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3873980550,
+            "toTxNum": 3876797992,
+            "path": "history/account-routing-delta-3873980550-3876797992-8f8223bbb505841bff9f9aaf2ad1828bd855742cfa7ca0827a5adfb77f01b0cd.route",
+            "size": 36231674,
+            "checksum": "sha256:8f8223bbb505841bff9f9aaf2ad1828bd855742cfa7ca0827a5adfb77f01b0cd",
+            "lookupRoot": "sha256:2d78a80ff3e0c151ddc0893a2248ba38262b4f75e444cff38e10974c0e3fba51"
+          },
+          "metadata": "metadata/2d78a80ff3e0c151ddc0893a2248ba38262b4f75e444cff38e10974c0e3fba51.bin",
+          "allocated_bytes": 36237312
+        },
+        {
+          "ref": {
+            "rows": 1179568,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3876797993,
+            "toTxNum": 3879430492,
+            "path": "history/account-routing-delta-3876797993-3879430492-88a32a7c4518a6c3b30dafe760e5c4cb4cec7db1965d93bbedeba5474262e6d9.route",
+            "size": 34719793,
+            "checksum": "sha256:88a32a7c4518a6c3b30dafe760e5c4cb4cec7db1965d93bbedeba5474262e6d9",
+            "lookupRoot": "sha256:cb76cfbecb38551eaed5cf8064dc8e7e77c42fbf4d06e306bc05e2502a405f03"
+          },
+          "metadata": "metadata/cb76cfbecb38551eaed5cf8064dc8e7e77c42fbf4d06e306bc05e2502a405f03.bin",
+          "allocated_bytes": 34725888
+        },
+        {
+          "ref": {
+            "rows": 1162212,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3879430493,
+            "toTxNum": 3882212536,
+            "path": "history/account-routing-delta-3879430493-3882212536-0cfb77a1c762da2d689f7660dc4e4e4afe71a9b3a5818fc1b713c2fe709f87c1.route",
+            "size": 34211996,
+            "checksum": "sha256:0cfb77a1c762da2d689f7660dc4e4e4afe71a9b3a5818fc1b713c2fe709f87c1",
+            "lookupRoot": "sha256:4493a190116fabf81f5472dbaeddf34093bbbd846e99748f90beeaf5d66f3704"
+          },
+          "metadata": "metadata/4493a190116fabf81f5472dbaeddf34093bbbd846e99748f90beeaf5d66f3704.bin",
+          "allocated_bytes": 34217984
+        },
+        {
+          "ref": {
+            "rows": 1226996,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3882212537,
+            "toTxNum": 3885036234,
+            "path": "history/account-routing-delta-3882212537-3885036234-278dad303f98268af5bfe5b5c8341b693b4ee066085c39f39164565d15d52157.route",
+            "size": 36121082,
+            "checksum": "sha256:278dad303f98268af5bfe5b5c8341b693b4ee066085c39f39164565d15d52157",
+            "lookupRoot": "sha256:fed894266978e3f541764abc6ed6fed119cd16b19a34b228c8ed2ff176ada6f2"
+          },
+          "metadata": "metadata/fed894266978e3f541764abc6ed6fed119cd16b19a34b228c8ed2ff176ada6f2.bin",
+          "allocated_bytes": 36126720
+        },
+        {
+          "ref": {
+            "rows": 1126044,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3885036235,
+            "toTxNum": 3887778256,
+            "path": "history/account-routing-delta-3885036235-3887778256-92663a65dfe1791ef3f295ce90a36a0ab2be9667a745cb9e66891cba4df10a83.route",
+            "size": 33146696,
+            "checksum": "sha256:92663a65dfe1791ef3f295ce90a36a0ab2be9667a745cb9e66891cba4df10a83",
+            "lookupRoot": "sha256:8f7b9dac25c994fc1b8909cd8f33275ea51b97f44f6e3c235d01aba075c0161c"
+          },
+          "metadata": "metadata/8f7b9dac25c994fc1b8909cd8f33275ea51b97f44f6e3c235d01aba075c0161c.bin",
+          "allocated_bytes": 33148928
+        },
+        {
+          "ref": {
+            "rows": 1026879,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3887778257,
+            "toTxNum": 3890450293,
+            "path": "history/account-routing-delta-3887778257-3890450293-9471ae9099446e47bc67c550f629a2cec832c3d5b8ad92a9c62504ed12bf575f.route",
+            "size": 30225995,
+            "checksum": "sha256:9471ae9099446e47bc67c550f629a2cec832c3d5b8ad92a9c62504ed12bf575f",
+            "lookupRoot": "sha256:3b86e71b345ba49614f53b5c1aa5cd94a56d0365615cc2ce48ddac8f439c92a5"
+          },
+          "metadata": "metadata/3b86e71b345ba49614f53b5c1aa5cd94a56d0365615cc2ce48ddac8f439c92a5.bin",
+          "allocated_bytes": 30228480
+        },
+        {
+          "ref": {
+            "rows": 1201828,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3890450294,
+            "toTxNum": 3893082646,
+            "path": "history/account-routing-delta-3890450294-3893082646-149335d7eeaa3b29d5e4b2d6f9eeac5ae8795278d44c8e9bacaa644a81fda010.route",
+            "size": 35375291,
+            "checksum": "sha256:149335d7eeaa3b29d5e4b2d6f9eeac5ae8795278d44c8e9bacaa644a81fda010",
+            "lookupRoot": "sha256:8a5d828368fd5d9261a12507ef2d97256c1ea59b913495faec0474188dd8268c"
+          },
+          "metadata": "metadata/8a5d828368fd5d9261a12507ef2d97256c1ea59b913495faec0474188dd8268c.bin",
+          "allocated_bytes": 35377152
+        },
+        {
+          "ref": {
+            "rows": 1096165,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3893082647,
+            "toTxNum": 3895631629,
+            "path": "history/account-routing-delta-3893082647-3895631629-ca4a7fa4149a20c9633f0f9849386aecb86fb344dc15284ee43ba098ef7156bf.route",
+            "size": 32266089,
+            "checksum": "sha256:ca4a7fa4149a20c9633f0f9849386aecb86fb344dc15284ee43ba098ef7156bf",
+            "lookupRoot": "sha256:338fc96d04de5ac49b98124ad4d28db0a5e2f93f1bb407c14fa49ac95f169fdf"
+          },
+          "metadata": "metadata/338fc96d04de5ac49b98124ad4d28db0a5e2f93f1bb407c14fa49ac95f169fdf.bin",
+          "allocated_bytes": 32268288
+        },
+        {
+          "ref": {
+            "rows": 1119055,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3895631630,
+            "toTxNum": 3898037484,
+            "path": "history/account-routing-delta-3895631630-3898037484-363c544268006885951b1e34a0f497c34843fee365c0f71fd45868812375b212.route",
+            "size": 32941992,
+            "checksum": "sha256:363c544268006885951b1e34a0f497c34843fee365c0f71fd45868812375b212",
+            "lookupRoot": "sha256:217aaca304bf5a32a7d7f3e74f1065174c98c8d5748e9577c8c02ceffa00358b"
+          },
+          "metadata": "metadata/217aaca304bf5a32a7d7f3e74f1065174c98c8d5748e9577c8c02ceffa00358b.bin",
+          "allocated_bytes": 32944128
+        },
+        {
+          "ref": {
+            "rows": 1012757,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3898037485,
+            "toTxNum": 3900719794,
+            "path": "history/account-routing-delta-3898037485-3900719794-76b8acbe38d0c405e9b23102fbd01abf66efc392c3f9ef1f286a0142d114d51e.route",
+            "size": 29812182,
+            "checksum": "sha256:76b8acbe38d0c405e9b23102fbd01abf66efc392c3f9ef1f286a0142d114d51e",
+            "lookupRoot": "sha256:257f41f9231fc9a4ab1d3735ede804dd8147dec2b780cf3ac73eb006a2959f6f"
+          },
+          "metadata": "metadata/257f41f9231fc9a4ab1d3735ede804dd8147dec2b780cf3ac73eb006a2959f6f.bin",
+          "allocated_bytes": 29814784
+        },
+        {
+          "ref": {
+            "rows": 978878,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3900719795,
+            "toTxNum": 3903388981,
+            "path": "history/account-routing-delta-3900719795-3903388981-39ff3cf1ab5d67827bedcc456f31aa2cd6a8273ab2343e2a82a6ad86dd021943.route",
+            "size": 28816759,
+            "checksum": "sha256:39ff3cf1ab5d67827bedcc456f31aa2cd6a8273ab2343e2a82a6ad86dd021943",
+            "lookupRoot": "sha256:0bbd5d417fdcfa9957c9530f24655c268b5849928243b1b1170e99332ce5c961"
+          },
+          "metadata": "metadata/0bbd5d417fdcfa9957c9530f24655c268b5849928243b1b1170e99332ce5c961.bin",
+          "allocated_bytes": 28819456
+        },
+        {
+          "ref": {
+            "rows": 1035583,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3903388982,
+            "toTxNum": 3906047117,
+            "path": "history/account-routing-delta-3903388982-3906047117-a306a06ed7543185f1834e04b4545c56c74a500b4e99493c276c2a90ba66e046.route",
+            "size": 30483872,
+            "checksum": "sha256:a306a06ed7543185f1834e04b4545c56c74a500b4e99493c276c2a90ba66e046",
+            "lookupRoot": "sha256:0951dc579e0f0275fd34e8be138f46ee13a87b8438d6db7c36426efbf755712e"
+          },
+          "metadata": "metadata/0951dc579e0f0275fd34e8be138f46ee13a87b8438d6db7c36426efbf755712e.bin",
+          "allocated_bytes": 30486528
+        },
+        {
+          "ref": {
+            "rows": 949160,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3906047118,
+            "toTxNum": 3908436935,
+            "path": "history/account-routing-delta-3906047118-3908436935-411246223e7b3a2895aaf74953b380521409a06888b9a2a54892eea11f6d189f.route",
+            "size": 27940088,
+            "checksum": "sha256:411246223e7b3a2895aaf74953b380521409a06888b9a2a54892eea11f6d189f",
+            "lookupRoot": "sha256:76de435dd8c1989e36c1ecde038fb9e58ab3ce8763452da13380fe560aa4731c"
+          },
+          "metadata": "metadata/76de435dd8c1989e36c1ecde038fb9e58ab3ce8763452da13380fe560aa4731c.bin",
+          "allocated_bytes": 27942912
+        },
+        {
+          "ref": {
+            "rows": 993339,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3908436936,
+            "toTxNum": 3911037776,
+            "path": "history/account-routing-delta-3908436936-3911037776-3cd5f32be0f7a31d0f968b28eb4e365e37ed218aefbb6fc6539e9be44ed03b8d.route",
+            "size": 29238668,
+            "checksum": "sha256:3cd5f32be0f7a31d0f968b28eb4e365e37ed218aefbb6fc6539e9be44ed03b8d",
+            "lookupRoot": "sha256:695bc848bc643593d6c54de8d640999de4845dc465da8cb59eea01d33ea0194c"
+          },
+          "metadata": "metadata/695bc848bc643593d6c54de8d640999de4845dc465da8cb59eea01d33ea0194c.bin",
+          "allocated_bytes": 29241344
+        },
+        {
+          "ref": {
+            "rows": 894835,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3911037777,
+            "toTxNum": 3913577529,
+            "path": "history/account-routing-delta-3911037777-3913577529-cd55d0224d8ff6d9ce507df40e8e90542084f273cfcd6aeb676e2036403162d6.route",
+            "size": 26342351,
+            "checksum": "sha256:cd55d0224d8ff6d9ce507df40e8e90542084f273cfcd6aeb676e2036403162d6",
+            "lookupRoot": "sha256:aa264b9cec212782fd348441fbb33a6bc2e5655f6fd8a8268d94bfb458c76b4e"
+          },
+          "metadata": "metadata/aa264b9cec212782fd348441fbb33a6bc2e5655f6fd8a8268d94bfb458c76b4e.bin",
+          "allocated_bytes": 26345472
+        },
+        {
+          "ref": {
+            "rows": 984151,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3913577530,
+            "toTxNum": 3916085446,
+            "path": "history/account-routing-delta-3913577530-3916085446-e8a8da18e4e7e41a31784e770e23698d7e43528dae389194ad81d98815c6b5bd.route",
+            "size": 28968343,
+            "checksum": "sha256:e8a8da18e4e7e41a31784e770e23698d7e43528dae389194ad81d98815c6b5bd",
+            "lookupRoot": "sha256:d65624876eb66c7949a1682e2e1c6fbf328ca638df95d36570d1ead33ae81d7b"
+          },
+          "metadata": "metadata/d65624876eb66c7949a1682e2e1c6fbf328ca638df95d36570d1ead33ae81d7b.bin",
+          "allocated_bytes": 28971008
+        },
+        {
+          "ref": {
+            "rows": 1093098,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3916085447,
+            "toTxNum": 3918784369,
+            "path": "history/account-routing-delta-3916085447-3918784369-442029111e12bcad1f66aa4069f69d26cf05481e38bf94642bc651e8c3d5f11c.route",
+            "size": 32175817,
+            "checksum": "sha256:442029111e12bcad1f66aa4069f69d26cf05481e38bf94642bc651e8c3d5f11c",
+            "lookupRoot": "sha256:68d96963b896d5024977c051b1970caf10ded0eb057e6359adf093765d1f842c"
+          },
+          "metadata": "metadata/68d96963b896d5024977c051b1970caf10ded0eb057e6359adf093765d1f842c.bin",
+          "allocated_bytes": 32178176
+        },
+        {
+          "ref": {
+            "rows": 1105159,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3918784370,
+            "toTxNum": 3921358148,
+            "path": "history/account-routing-delta-3918784370-3921358148-506e79f6f00ca9c2d91e0088450c159d592ad14da3e99f28fc30b2bb86dda0b9.route",
+            "size": 32532318,
+            "checksum": "sha256:506e79f6f00ca9c2d91e0088450c159d592ad14da3e99f28fc30b2bb86dda0b9",
+            "lookupRoot": "sha256:2c46ea155bec3515e8fcd3b0e7ed388a412ada6a952e3b68143d660af855758a"
+          },
+          "metadata": "metadata/2c46ea155bec3515e8fcd3b0e7ed388a412ada6a952e3b68143d660af855758a.bin",
+          "allocated_bytes": 32534528
+        },
+        {
+          "ref": {
+            "rows": 1179828,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3921358149,
+            "toTxNum": 3923992525,
+            "path": "history/account-routing-delta-3921358149-3923992525-60b3d98d5347afeab73c3c3ca169b91fcec423b336f2bb649e5e5d64ed38012f.route",
+            "size": 34728113,
+            "checksum": "sha256:60b3d98d5347afeab73c3c3ca169b91fcec423b336f2bb649e5e5d64ed38012f",
+            "lookupRoot": "sha256:7997424bcb672d6233a49f908f180ea72bb4123b8e32b86a4b1f688a0e794b8b"
+          },
+          "metadata": "metadata/7997424bcb672d6233a49f908f180ea72bb4123b8e32b86a4b1f688a0e794b8b.bin",
+          "allocated_bytes": 34734080
+        },
+        {
+          "ref": {
+            "rows": 1111395,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3923992526,
+            "toTxNum": 3926779678,
+            "path": "history/account-routing-delta-3923992526-3926779678-961c8d4a87bac6ac6dd8da2f8a6f0a8acb1ba3c355bee1862924f6fad1f0eab3.route",
+            "size": 32716595,
+            "checksum": "sha256:961c8d4a87bac6ac6dd8da2f8a6f0a8acb1ba3c355bee1862924f6fad1f0eab3",
+            "lookupRoot": "sha256:6b82d27eb1d319203a6af7182a90cec40a1a3ffc799f50e3818a34395e4d7061"
+          },
+          "metadata": "metadata/6b82d27eb1d319203a6af7182a90cec40a1a3ffc799f50e3818a34395e4d7061.bin",
+          "allocated_bytes": 32718848
+        },
+        {
+          "ref": {
+            "rows": 1401491,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3926779679,
+            "toTxNum": 3929288587,
+            "path": "history/account-routing-delta-3926779679-3929288587-8b565da51a4017d47a119cf65dbee912fc04b42c4a95aff29edea3dff6325fe7.route",
+            "size": 41254026,
+            "checksum": "sha256:8b565da51a4017d47a119cf65dbee912fc04b42c4a95aff29edea3dff6325fe7",
+            "lookupRoot": "sha256:ae7023b7bca835cad970bdc11d459a739084344c25c2135b1a4a54a63ee65a4f"
+          },
+          "metadata": "metadata/ae7023b7bca835cad970bdc11d459a739084344c25c2135b1a4a54a63ee65a4f.bin",
+          "allocated_bytes": 41259008
+        },
+        {
+          "ref": {
+            "rows": 1432778,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3929288588,
+            "toTxNum": 3932024164,
+            "path": "history/account-routing-delta-3929288588-3932024164-5bee4a8d4e378c2c8250f24a214b2959ed6f7d018de41c62ee825b8ed3c6b06e.route",
+            "size": 42171796,
+            "checksum": "sha256:5bee4a8d4e378c2c8250f24a214b2959ed6f7d018de41c62ee825b8ed3c6b06e",
+            "lookupRoot": "sha256:9f68b8065aeb61840e63cd8f9c4263d58d25553c27d9a2136127b82e86046793"
+          },
+          "metadata": "metadata/9f68b8065aeb61840e63cd8f9c4263d58d25553c27d9a2136127b82e86046793.bin",
+          "allocated_bytes": 42176512
+        },
+        {
+          "ref": {
+            "rows": 1185055,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3932024165,
+            "toTxNum": 3934481473,
+            "path": "history/account-routing-delta-3932024165-3934481473-7cf7c089da271e523f19fb50ab686656b25016835b15043cc876694aa3152524.route",
+            "size": 34883782,
+            "checksum": "sha256:7cf7c089da271e523f19fb50ab686656b25016835b15043cc876694aa3152524",
+            "lookupRoot": "sha256:d3f452421a08c6dd75923ba905ba5909ab1974590120a917de74fe9c01268223"
+          },
+          "metadata": "metadata/d3f452421a08c6dd75923ba905ba5909ab1974590120a917de74fe9c01268223.bin",
+          "allocated_bytes": 34889728
+        },
+        {
+          "ref": {
+            "rows": 1534180,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3934481474,
+            "toTxNum": 3937123094,
+            "path": "history/account-routing-delta-3934481474-3937123094-ee052e02001580951044effa1e65a7b1197841eef563820e82e4fce01cb038cf.route",
+            "size": 45158182,
+            "checksum": "sha256:ee052e02001580951044effa1e65a7b1197841eef563820e82e4fce01cb038cf",
+            "lookupRoot": "sha256:9040da4cfffe62ca91dbe461848e7841181fa56f20c365f1ae6461224e16ad3d"
+          },
+          "metadata": "metadata/9040da4cfffe62ca91dbe461848e7841181fa56f20c365f1ae6461224e16ad3d.bin",
+          "allocated_bytes": 45158400
+        },
+        {
+          "ref": {
+            "rows": 1188812,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3937123095,
+            "toTxNum": 3939724406,
+            "path": "history/account-routing-delta-3937123095-3939724406-cefd8777ad73b732d6b639fda2ad4bd4b246e92188219d820e83fde11d2b7768.route",
+            "size": 34994246,
+            "checksum": "sha256:cefd8777ad73b732d6b639fda2ad4bd4b246e92188219d820e83fde11d2b7768",
+            "lookupRoot": "sha256:53f7eb15e2bf8756ab37b37c3266c88268a09ed8b7d0aceb0dbf87722b1ef92b"
+          },
+          "metadata": "metadata/53f7eb15e2bf8756ab37b37c3266c88268a09ed8b7d0aceb0dbf87722b1ef92b.bin",
+          "allocated_bytes": 35000320
+        },
+        {
+          "ref": {
+            "rows": 1440330,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3939724407,
+            "toTxNum": 3942336279,
+            "path": "history/account-routing-delta-3939724407-3942336279-42dc776a26277cc9ad994e6b4dc32983d56da8b2918c424ecd31e5bfc8cbdf2e.route",
+            "size": 42396969,
+            "checksum": "sha256:42dc776a26277cc9ad994e6b4dc32983d56da8b2918c424ecd31e5bfc8cbdf2e",
+            "lookupRoot": "sha256:3918611142618e2b54d851ef5adbd888052a50dda50cf8509e294df2935105bf"
+          },
+          "metadata": "metadata/3918611142618e2b54d851ef5adbd888052a50dda50cf8509e294df2935105bf.bin",
+          "allocated_bytes": 42401792
+        },
+        {
+          "ref": {
+            "rows": 1402660,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3942336280,
+            "toTxNum": 3944805350,
+            "path": "history/account-routing-delta-3942336280-3944805350-8450b4aef1dfa0d8ab8860bb43e6ad65418030f87aeab838285cc359844322b7.route",
+            "size": 41286794,
+            "checksum": "sha256:8450b4aef1dfa0d8ab8860bb43e6ad65418030f87aeab838285cc359844322b7",
+            "lookupRoot": "sha256:3836b87709a4ca7284364c3df4a62171e6a89f48424405f03dd0262ca7fb1673"
+          },
+          "metadata": "metadata/3836b87709a4ca7284364c3df4a62171e6a89f48424405f03dd0262ca7fb1673.bin",
+          "allocated_bytes": 41291776
+        },
+        {
+          "ref": {
+            "rows": 1293710,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3944805351,
+            "toTxNum": 3947146419,
+            "path": "history/account-routing-delta-3944805351-3947146419-d22defc50338189f8f903e0e51ea58bb18277ed785eff47814eb8791506f3bd1.route",
+            "size": 38083320,
+            "checksum": "sha256:d22defc50338189f8f903e0e51ea58bb18277ed785eff47814eb8791506f3bd1",
+            "lookupRoot": "sha256:5124d9d1f915525c590de62141de09c30ce00aad99a3ee9858734f87b575c099"
+          },
+          "metadata": "metadata/5124d9d1f915525c590de62141de09c30ce00aad99a3ee9858734f87b575c099.bin",
+          "allocated_bytes": 38084608
+        },
+        {
+          "ref": {
+            "rows": 1487445,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3947146420,
+            "toTxNum": 3949616851,
+            "path": "history/account-routing-delta-3947146420-3949616851-5246300b5f69a3c187b5e22bf422345d37773b549cd400426cc14eb63c730f36.route",
+            "size": 43785906,
+            "checksum": "sha256:5246300b5f69a3c187b5e22bf422345d37773b549cd400426cc14eb63c730f36",
+            "lookupRoot": "sha256:d56070ea62a4c8acc83d1f5e554b7dafb232407f162ec29ef22ff66396eb5933"
+          },
+          "metadata": "metadata/d56070ea62a4c8acc83d1f5e554b7dafb232407f162ec29ef22ff66396eb5933.bin",
+          "allocated_bytes": 43790336
+        },
+        {
+          "ref": {
+            "rows": 1346443,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3949616852,
+            "toTxNum": 3952303369,
+            "path": "history/account-routing-delta-3949616852-3952303369-5a6ef1d9061d6beef7441787786cccf81883e9b2957291450d87695a300d48f4.route",
+            "size": 39635873,
+            "checksum": "sha256:5a6ef1d9061d6beef7441787786cccf81883e9b2957291450d87695a300d48f4",
+            "lookupRoot": "sha256:3d4fa18a3d87ed319b75ac563037283498eb1d72f9d269320adfc02aa09d2de8"
+          },
+          "metadata": "metadata/3d4fa18a3d87ed319b75ac563037283498eb1d72f9d269320adfc02aa09d2de8.bin",
+          "allocated_bytes": 39641088
+        },
+        {
+          "ref": {
+            "rows": 1539632,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3952303370,
+            "toTxNum": 3954965412,
+            "path": "history/account-routing-delta-3952303370-3954965412-bbbc5752f4665dd0e2c30a9137e872cc8bc5049e14cd663ce3936173312928dc.route",
+            "size": 45317990,
+            "checksum": "sha256:bbbc5752f4665dd0e2c30a9137e872cc8bc5049e14cd663ce3936173312928dc",
+            "lookupRoot": "sha256:cf1ba41ab518262570626990f7aef3b9d28977c6098ca2466a04edcf2fe13bbe"
+          },
+          "metadata": "metadata/cf1ba41ab518262570626990f7aef3b9d28977c6098ca2466a04edcf2fe13bbe.bin",
+          "allocated_bytes": 45322240
+        },
+        {
+          "ref": {
+            "rows": 1274543,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3954965413,
+            "toTxNum": 3957382750,
+            "path": "history/account-routing-delta-3954965413-3957382750-7cc040bb6f403b755e6a6602a1525e94b90dc23af639289bf689d775ff8b74c7.route",
+            "size": 37517998,
+            "checksum": "sha256:7cc040bb6f403b755e6a6602a1525e94b90dc23af639289bf689d775ff8b74c7",
+            "lookupRoot": "sha256:dd422cfc7669c1a0538f5746da6819ef4a2b9a2beaecac187e19dfaf63925bf3"
+          },
+          "metadata": "metadata/dd422cfc7669c1a0538f5746da6819ef4a2b9a2beaecac187e19dfaf63925bf3.bin",
+          "allocated_bytes": 37523456
+        },
+        {
+          "ref": {
+            "rows": 1554658,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3957382751,
+            "toTxNum": 3959991628,
+            "path": "history/account-routing-delta-3957382751-3959991628-94286f4adb7d92de3c4238c68d828f3b358f07833d43cf5a35ef60f558747c46.route",
+            "size": 45760496,
+            "checksum": "sha256:94286f4adb7d92de3c4238c68d828f3b358f07833d43cf5a35ef60f558747c46",
+            "lookupRoot": "sha256:d6375d99f3a04f26aa14d8c325ed3aa7f2321befeceb4570e0434484809caeb1"
+          },
+          "metadata": "metadata/d6375d99f3a04f26aa14d8c325ed3aa7f2321befeceb4570e0434484809caeb1.bin",
+          "allocated_bytes": 45764608
+        },
+        {
+          "ref": {
+            "rows": 1392617,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3959991629,
+            "toTxNum": 3962444369,
+            "path": "history/account-routing-delta-3959991629-3962444369-72fd9a5630a550b7a22348500fbddf84ef33d89c3d39d1f73854de64f516db70.route",
+            "size": 40991925,
+            "checksum": "sha256:72fd9a5630a550b7a22348500fbddf84ef33d89c3d39d1f73854de64f516db70",
+            "lookupRoot": "sha256:38a43190284ff32beb5e231d436c6247e9ed80e082e8c5c6786c0a55baccbef6"
+          },
+          "metadata": "metadata/38a43190284ff32beb5e231d436c6247e9ed80e082e8c5c6786c0a55baccbef6.bin",
+          "allocated_bytes": 40996864
+        },
+        {
+          "ref": {
+            "rows": 1339242,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3962444370,
+            "toTxNum": 3964981798,
+            "path": "history/account-routing-delta-3962444370-3964981798-f15fc0e4d7bc99325ba7ab965a61c51083a0209073407f53b317e5e95bf9214c.route",
+            "size": 39422892,
+            "checksum": "sha256:f15fc0e4d7bc99325ba7ab965a61c51083a0209073407f53b317e5e95bf9214c",
+            "lookupRoot": "sha256:2aba33a6d6078d9f4c3179dfe49e5e60874236ae24684b319f3b560da138df47"
+          },
+          "metadata": "metadata/2aba33a6d6078d9f4c3179dfe49e5e60874236ae24684b319f3b560da138df47.bin",
+          "allocated_bytes": 39428096
+        },
+        {
+          "ref": {
+            "rows": 1648364,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3964981799,
+            "toTxNum": 3967586659,
+            "path": "history/account-routing-delta-3964981799-3967586659-de01e7cdc5d96f97463481b69f580593210063ce4ed8c5f0d376aca7eae73294.route",
+            "size": 48517624,
+            "checksum": "sha256:de01e7cdc5d96f97463481b69f580593210063ce4ed8c5f0d376aca7eae73294",
+            "lookupRoot": "sha256:56e349d20d3cab7a3ee08e4e901f72df00ed97236be2fbe4bf5a972466bf10fc"
+          },
+          "metadata": "metadata/56e349d20d3cab7a3ee08e4e901f72df00ed97236be2fbe4bf5a972466bf10fc.bin",
+          "allocated_bytes": 48525312
+        },
+        {
+          "ref": {
+            "rows": 1478337,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3967586660,
+            "toTxNum": 3969627903,
+            "path": "history/account-routing-delta-3967586660-3969627903-4efd3c8cf3e16b5e57389670b5594febf51ad8641245952d65646fc040a26920.route",
+            "size": 43515453,
+            "checksum": "sha256:4efd3c8cf3e16b5e57389670b5594febf51ad8641245952d65646fc040a26920",
+            "lookupRoot": "sha256:b9b94d8ad5702938f4012e98be2144dd1e194a7c751a3cb115e7930a7f30ec86"
+          },
+          "metadata": "metadata/b9b94d8ad5702938f4012e98be2144dd1e194a7c751a3cb115e7930a7f30ec86.bin",
+          "allocated_bytes": 43520000
+        },
+        {
+          "ref": {
+            "rows": 1314952,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3969627904,
+            "toTxNum": 3971989843,
+            "path": "history/account-routing-delta-3969627904-3971989843-9a341fec6ba62741067fef04daa9a24e5636a3645ddb81962d1460ca64665f33.route",
+            "size": 38706018,
+            "checksum": "sha256:9a341fec6ba62741067fef04daa9a24e5636a3645ddb81962d1460ca64665f33",
+            "lookupRoot": "sha256:c300676b14a1cd29c8127f3e5f5f8884e689acd9520ce7d1bf245d66d2b31641"
+          },
+          "metadata": "metadata/c300676b14a1cd29c8127f3e5f5f8884e689acd9520ce7d1bf245d66d2b31641.bin",
+          "allocated_bytes": 38711296
+        },
+        {
+          "ref": {
+            "rows": 1668182,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3971989844,
+            "toTxNum": 3974494935,
+            "path": "history/account-routing-delta-3971989844-3974494935-d0361e60f36d131fb01fb2f69525b791c585d7fa49615beb0dd866c784277f46.route",
+            "size": 49103330,
+            "checksum": "sha256:d0361e60f36d131fb01fb2f69525b791c585d7fa49615beb0dd866c784277f46",
+            "lookupRoot": "sha256:07a092a8d1db121f3bb41044acc662159de822f4552db508c48750bdcbfae706"
+          },
+          "metadata": "metadata/07a092a8d1db121f3bb41044acc662159de822f4552db508c48750bdcbfae706.bin",
+          "allocated_bytes": 49111040
+        },
+        {
+          "ref": {
+            "rows": 1320735,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3974494936,
+            "toTxNum": 3976838355,
+            "path": "history/account-routing-delta-3974494936-3976838355-29f8f11d468c53ff5d2b6f07a51df7f9ad3e41d3480c7b58a14c858eb229c4e2.route",
+            "size": 38873890,
+            "checksum": "sha256:29f8f11d468c53ff5d2b6f07a51df7f9ad3e41d3480c7b58a14c858eb229c4e2",
+            "lookupRoot": "sha256:3e09cb6da728b9d1ddf715812acf92afa28af0338f72879fdb57d03702f053c4"
+          },
+          "metadata": "metadata/3e09cb6da728b9d1ddf715812acf92afa28af0338f72879fdb57d03702f053c4.bin",
+          "allocated_bytes": 38879232
+        },
+        {
+          "ref": {
+            "rows": 1399925,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3976838356,
+            "toTxNum": 3979587019,
+            "path": "history/account-routing-delta-3976838356-3979587019-a8a3b18e0837d85fd5eb9c4e59e9e08818beb9accb23c9b2962dcfefd52a740f.route",
+            "size": 41204981,
+            "checksum": "sha256:a8a3b18e0837d85fd5eb9c4e59e9e08818beb9accb23c9b2962dcfefd52a740f",
+            "lookupRoot": "sha256:ee67f687ac71ca95cc95d4bf82752032646c6fcb444a7ff672dcb2a4d31a25b1"
+          },
+          "metadata": "metadata/ee67f687ac71ca95cc95d4bf82752032646c6fcb444a7ff672dcb2a4d31a25b1.bin",
+          "allocated_bytes": 41209856
+        },
+        {
+          "ref": {
+            "rows": 1196389,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3979587020,
+            "toTxNum": 3982270508,
+            "path": "history/account-routing-delta-3979587020-3982270508-688e2f1208978b321540dcfe2a414cd7dc142d76e90efaa2b8e55d11c4550362.route",
+            "size": 35219707,
+            "checksum": "sha256:688e2f1208978b321540dcfe2a414cd7dc142d76e90efaa2b8e55d11c4550362",
+            "lookupRoot": "sha256:31fa4e4c4ff9136bc769dd8e02b9f69516ada99259ecd3ccbbde52f50f2fbed5"
+          },
+          "metadata": "metadata/31fa4e4c4ff9136bc769dd8e02b9f69516ada99259ecd3ccbbde52f50f2fbed5.bin",
+          "allocated_bytes": 35225600
+        },
+        {
+          "ref": {
+            "rows": 1184536,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3982270509,
+            "toTxNum": 3984829066,
+            "path": "history/account-routing-delta-3982270509-3984829066-700afc7a629531ad1656f15aad890cf8359e3c63a151ce5296ad2f0dcb69a301.route",
+            "size": 34867526,
+            "checksum": "sha256:700afc7a629531ad1656f15aad890cf8359e3c63a151ce5296ad2f0dcb69a301",
+            "lookupRoot": "sha256:a31cb542e6ba5ad75e4dbe39f055b0ee080bfb05a1baa57397ffda617615df62"
+          },
+          "metadata": "metadata/a31cb542e6ba5ad75e4dbe39f055b0ee080bfb05a1baa57397ffda617615df62.bin",
+          "allocated_bytes": 34873344
+        },
+        {
+          "ref": {
+            "rows": 1251944,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3984829067,
+            "toTxNum": 3987440850,
+            "path": "history/account-routing-delta-3984829067-3987440850-613c4c0379971d5ef272e079f2a6673ecd67df50aa5e39bd8b47a5a62a853cb5.route",
+            "size": 36854372,
+            "checksum": "sha256:613c4c0379971d5ef272e079f2a6673ecd67df50aa5e39bd8b47a5a62a853cb5",
+            "lookupRoot": "sha256:6e514df5056e9fefa07feedccb220e7e1d295095168542ac7e9cacdfde30de07"
+          },
+          "metadata": "metadata/6e514df5056e9fefa07feedccb220e7e1d295095168542ac7e9cacdfde30de07.bin",
+          "allocated_bytes": 36859904
+        },
+        {
+          "ref": {
+            "rows": 1094759,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3987440851,
+            "toTxNum": 3989755914,
+            "path": "history/account-routing-delta-3987440851-3989755914-f060264529f5d3d1cb1fa27a3e03b9a77e582d936f56ca6a7405d78b15cd1104.route",
+            "size": 32224969,
+            "checksum": "sha256:f060264529f5d3d1cb1fa27a3e03b9a77e582d936f56ca6a7405d78b15cd1104",
+            "lookupRoot": "sha256:f0af83e818595acfc307f804ae1c631b4d42bf1bb441cb8614404d960f56fc95"
+          },
+          "metadata": "metadata/f0af83e818595acfc307f804ae1c631b4d42bf1bb441cb8614404d960f56fc95.bin",
+          "allocated_bytes": 32227328
+        },
+        {
+          "ref": {
+            "rows": 1162190,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3989755915,
+            "toTxNum": 3992413118,
+            "path": "history/account-routing-delta-3989755915-3992413118-8c96e879a53239c59d2ac1b8d9f68093723d99c17eb64a046c61daee52dd1351.route",
+            "size": 34211900,
+            "checksum": "sha256:8c96e879a53239c59d2ac1b8d9f68093723d99c17eb64a046c61daee52dd1351",
+            "lookupRoot": "sha256:8a9257d51ff8b64dcc1654d106e6ff2d1bd79e96744d6f9c21036042393d8282"
+          },
+          "metadata": "metadata/8a9257d51ff8b64dcc1654d106e6ff2d1bd79e96744d6f9c21036042393d8282.bin",
+          "allocated_bytes": 34217984
+        },
+        {
+          "ref": {
+            "rows": 1101666,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3992413119,
+            "toTxNum": 3995057124,
+            "path": "history/account-routing-delta-3992413119-3995057124-d389dc8a80b653dc20e32515034db1d9bc130bbdcb90051628d7d72d017be54b.route",
+            "size": 32429918,
+            "checksum": "sha256:d389dc8a80b653dc20e32515034db1d9bc130bbdcb90051628d7d72d017be54b",
+            "lookupRoot": "sha256:6f0413da0d16123e12952d7178413749d36259bb4cb3c9cf8981665a5a213884"
+          },
+          "metadata": "metadata/6f0413da0d16123e12952d7178413749d36259bb4cb3c9cf8981665a5a213884.bin",
+          "allocated_bytes": 32432128
+        },
+        {
+          "ref": {
+            "rows": 1488103,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3995057125,
+            "toTxNum": 3997816326,
+            "path": "history/account-routing-delta-3995057125-3997816326-9c2e49f7e004676346794250ed2a8e648b4d9658c195f533ddf932ce9a0cf44c.route",
+            "size": 43802290,
+            "checksum": "sha256:9c2e49f7e004676346794250ed2a8e648b4d9658c195f533ddf932ce9a0cf44c",
+            "lookupRoot": "sha256:a1505e668aaa02df6093c86b8f5b349168f938e3fcc5410ea3fa7f02c557b57c"
+          },
+          "metadata": "metadata/a1505e668aaa02df6093c86b8f5b349168f938e3fcc5410ea3fa7f02c557b57c.bin",
+          "allocated_bytes": 43806720
+        },
+        {
+          "ref": {
+            "rows": 1269387,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3997816327,
+            "toTxNum": 4000274873,
+            "path": "history/account-routing-delta-3997816327-4000274873-d40ae4de8b5f10b05583cd9cd4a8aa4d532aa5e638ce8fa028a727a491983051.route",
+            "size": 37362233,
+            "checksum": "sha256:d40ae4de8b5f10b05583cd9cd4a8aa4d532aa5e638ce8fa028a727a491983051",
+            "lookupRoot": "sha256:004b2cfd38395cf7bdb55ff50b24dd15084001d541a533fb7e0d885ed8b2d753"
+          },
+          "metadata": "metadata/004b2cfd38395cf7bdb55ff50b24dd15084001d541a533fb7e0d885ed8b2d753.bin",
+          "allocated_bytes": 37363712
+        },
+        {
+          "ref": {
+            "rows": 959159,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4000274874,
+            "toTxNum": 4002648585,
+            "path": "history/account-routing-delta-4000274874-4002648585-fa792998c3bc25a6e88d6eb18987be82ebb234aed200558ea5b8e938b26cf707.route",
+            "size": 28234957,
+            "checksum": "sha256:fa792998c3bc25a6e88d6eb18987be82ebb234aed200558ea5b8e938b26cf707",
+            "lookupRoot": "sha256:3de446b0be8f0bf803c1884c328025e40a5a4efb0cef1456a0578aef1d34900d"
+          },
+          "metadata": "metadata/3de446b0be8f0bf803c1884c328025e40a5a4efb0cef1456a0578aef1d34900d.bin",
+          "allocated_bytes": 28237824
+        },
+        {
+          "ref": {
+            "rows": 1106826,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4002648586,
+            "toTxNum": 4005134354,
+            "path": "history/account-routing-delta-4002648586-4005134354-430e2d4f77d884e2c0d0c57b8165d70d98b6aca16707da49ef07b213c9abaefb.route",
+            "size": 32577342,
+            "checksum": "sha256:430e2d4f77d884e2c0d0c57b8165d70d98b6aca16707da49ef07b213c9abaefb",
+            "lookupRoot": "sha256:97f4aecd2f4e7651de5cc1c65347887d9e4d5044564d678a0906eab0374ce0a8"
+          },
+          "metadata": "metadata/97f4aecd2f4e7651de5cc1c65347887d9e4d5044564d678a0906eab0374ce0a8.bin",
+          "allocated_bytes": 32579584
+        },
+        {
+          "ref": {
+            "rows": 1126984,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4005134355,
+            "toTxNum": 4007865551,
+            "path": "history/account-routing-delta-4005134355-4007865551-0914a0310268b1355f50346bd41cc851f683377f4e5ff18ec231e8f685e5cdab.route",
+            "size": 33171304,
+            "checksum": "sha256:0914a0310268b1355f50346bd41cc851f683377f4e5ff18ec231e8f685e5cdab",
+            "lookupRoot": "sha256:16f4309a05353555b2a59d3c007902dcab636272a4128e6e02dd1a1dba1d7810"
+          },
+          "metadata": "metadata/16f4309a05353555b2a59d3c007902dcab636272a4128e6e02dd1a1dba1d7810.bin",
+          "allocated_bytes": 33173504
+        },
+        {
+          "ref": {
+            "rows": 1018638,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4007865552,
+            "toTxNum": 4010280965,
+            "path": "history/account-routing-delta-4007865552-4010280965-88a56bd20d46b5ddc1d7ac7183a271e44d853a19120495b2d3307a9a821f2495.route",
+            "size": 29984118,
+            "checksum": "sha256:88a56bd20d46b5ddc1d7ac7183a271e44d853a19120495b2d3307a9a821f2495",
+            "lookupRoot": "sha256:f42d68d40a33d5557a09bc2e01c9e4fa44710f13d4e6dcebf8a728ac5e8bf33f"
+          },
+          "metadata": "metadata/f42d68d40a33d5557a09bc2e01c9e4fa44710f13d4e6dcebf8a728ac5e8bf33f.bin",
+          "allocated_bytes": 29990912
+        },
+        {
+          "ref": {
+            "rows": 1060537,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4010280966,
+            "toTxNum": 4012561208,
+            "path": "history/account-routing-delta-4010280966-4012561208-352f9cf6d51ba7fdca356a7c6ac47999b19487742ae2fe08a77f34ca0ba9314d.route",
+            "size": 31217258,
+            "checksum": "sha256:352f9cf6d51ba7fdca356a7c6ac47999b19487742ae2fe08a77f34ca0ba9314d",
+            "lookupRoot": "sha256:641e8171496b70bb64aa56df096d353f557c635d292780263e8c39b8d2c7626e"
+          },
+          "metadata": "metadata/641e8171496b70bb64aa56df096d353f557c635d292780263e8c39b8d2c7626e.bin",
+          "allocated_bytes": 31219712
+        },
+        {
+          "ref": {
+            "rows": 1135231,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4012561209,
+            "toTxNum": 4015014868,
+            "path": "history/account-routing-delta-4012561209-4015014868-4a4bfe370b3ee4d50c13228abc684f9b9abfe7f6cc9c1fa1070324969349b5f8.route",
+            "size": 33417213,
+            "checksum": "sha256:4a4bfe370b3ee4d50c13228abc684f9b9abfe7f6cc9c1fa1070324969349b5f8",
+            "lookupRoot": "sha256:45eb5ebd6856981521d0ee88b956b0726bfd6f9308f721fe5a6f0d0bda125eda"
+          },
+          "metadata": "metadata/45eb5ebd6856981521d0ee88b956b0726bfd6f9308f721fe5a6f0d0bda125eda.bin",
+          "allocated_bytes": 33419264
+        },
+        {
+          "ref": {
+            "rows": 1195173,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4015014869,
+            "toTxNum": 4017816513,
+            "path": "history/account-routing-delta-4015014869-4017816513-799fb33eeb5af6fd1cdeb64fcb7d0deb975836b9cd9d97d7044f9f13778c15dd.route",
+            "size": 35182875,
+            "checksum": "sha256:799fb33eeb5af6fd1cdeb64fcb7d0deb975836b9cd9d97d7044f9f13778c15dd",
+            "lookupRoot": "sha256:fe01b1fa3df40ea63f51df46a6d5e142df909a4ba5fc96f6ecb05ac5aa4b2e33"
+          },
+          "metadata": "metadata/fe01b1fa3df40ea63f51df46a6d5e142df909a4ba5fc96f6ecb05ac5aa4b2e33.bin",
+          "allocated_bytes": 35188736
+        },
+        {
+          "ref": {
+            "rows": 1219554,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4017816514,
+            "toTxNum": 4020293814,
+            "path": "history/account-routing-delta-4017816514-4020293814-47995884eede9711bbc0c0d1c02b46a4c29e8e85df1592a8fd0bb6edfabcb248.route",
+            "size": 35899781,
+            "checksum": "sha256:47995884eede9711bbc0c0d1c02b46a4c29e8e85df1592a8fd0bb6edfabcb248",
+            "lookupRoot": "sha256:64eb437e52c34e4d2968fc20713ee842012a27a9a011f37fb48f5ee075ed21a2"
+          },
+          "metadata": "metadata/64eb437e52c34e4d2968fc20713ee842012a27a9a011f37fb48f5ee075ed21a2.bin",
+          "allocated_bytes": 35905536
+        },
+        {
+          "ref": {
+            "rows": 1199599,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4020293815,
+            "toTxNum": 4022953075,
+            "path": "history/account-routing-delta-4020293815-4022953075-752e2b98c155d80a50cda4e98cc44af634f6500be8f9f45a495b3fe66faad29f.route",
+            "size": 35309723,
+            "checksum": "sha256:752e2b98c155d80a50cda4e98cc44af634f6500be8f9f45a495b3fe66faad29f",
+            "lookupRoot": "sha256:1a36032ecdaceef0193877a999510667babaf5fbca6b0598aefa09992a1686c9"
+          },
+          "metadata": "metadata/1a36032ecdaceef0193877a999510667babaf5fbca6b0598aefa09992a1686c9.bin",
+          "allocated_bytes": 35315712
+        },
+        {
+          "ref": {
+            "rows": 1204136,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4022953076,
+            "toTxNum": 4025621662,
+            "path": "history/account-routing-delta-4022953076-4025621662-b9079de96dbb24500d1114a054f148b0e09c2187b6af029c456f24a1ae761633.route",
+            "size": 35440891,
+            "checksum": "sha256:b9079de96dbb24500d1114a054f148b0e09c2187b6af029c456f24a1ae761633",
+            "lookupRoot": "sha256:aa8a768092c5ceb9e72c0dfade41542db66e2f2e0f18ec23fb41019c87f867c7"
+          },
+          "metadata": "metadata/aa8a768092c5ceb9e72c0dfade41542db66e2f2e0f18ec23fb41019c87f867c7.bin",
+          "allocated_bytes": 35446784
+        },
+        {
+          "ref": {
+            "rows": 1141303,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4025621663,
+            "toTxNum": 4027963409,
+            "path": "history/account-routing-delta-4025621663-4027963409-b401213723f2ec1ec2a29f45e6f38ec574dfcd46c54f6c4a929578d3cad79978.route",
+            "size": 33597458,
+            "checksum": "sha256:b401213723f2ec1ec2a29f45e6f38ec574dfcd46c54f6c4a929578d3cad79978",
+            "lookupRoot": "sha256:cae7cd56d36c7c403de24419f9ab3912521baa78a7cd1ae1dd3709fdd0280503"
+          },
+          "metadata": "metadata/cae7cd56d36c7c403de24419f9ab3912521baa78a7cd1ae1dd3709fdd0280503.bin",
+          "allocated_bytes": 33603584
+        },
+        {
+          "ref": {
+            "rows": 1207265,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4027963410,
+            "toTxNum": 4030506452,
+            "path": "history/account-routing-delta-4027963410-4030506452-aead9ed0780de5cefc7d18c3edb07b40204375b5fc738ae6995ef4911ca35570.route",
+            "size": 35539280,
+            "checksum": "sha256:aead9ed0780de5cefc7d18c3edb07b40204375b5fc738ae6995ef4911ca35570",
+            "lookupRoot": "sha256:0fbae1cd5d5a30cd40be7967d0da9af8f6ab0196cf0aa45cc6411eb59232296f"
+          },
+          "metadata": "metadata/0fbae1cd5d5a30cd40be7967d0da9af8f6ab0196cf0aa45cc6411eb59232296f.bin",
+          "allocated_bytes": 35545088
+        },
+        {
+          "ref": {
+            "rows": 1157084,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4030506453,
+            "toTxNum": 4032859674,
+            "path": "history/account-routing-delta-4030506453-4032859674-7d4e42ee933ad1781e871b2ec5ae1639f7dbba47ae7f02c5353a995debf735b8.route",
+            "size": 34060231,
+            "checksum": "sha256:7d4e42ee933ad1781e871b2ec5ae1639f7dbba47ae7f02c5353a995debf735b8",
+            "lookupRoot": "sha256:d9851768f9bfac76e7a1f8df4691f50bf6766fc0b23bb0877492681e6bdb5f61"
+          },
+          "metadata": "metadata/d9851768f9bfac76e7a1f8df4691f50bf6766fc0b23bb0877492681e6bdb5f61.bin",
+          "allocated_bytes": 34066432
+        },
+        {
+          "ref": {
+            "rows": 1177296,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4032859675,
+            "toTxNum": 4035429007,
+            "path": "history/account-routing-delta-4032859675-4035429007-c4a125dc08658ca6afe5bc115b7f1092a03a378d50c6279e0909bb3598fda5c4.route",
+            "size": 34654417,
+            "checksum": "sha256:c4a125dc08658ca6afe5bc115b7f1092a03a378d50c6279e0909bb3598fda5c4",
+            "lookupRoot": "sha256:ffb8d4b51ed72e9d7b1357d7fb99c125331ec788ceed29828311a3ad84bb06c5"
+          },
+          "metadata": "metadata/ffb8d4b51ed72e9d7b1357d7fb99c125331ec788ceed29828311a3ad84bb06c5.bin",
+          "allocated_bytes": 34660352
+        },
+        {
+          "ref": {
+            "rows": 1060263,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4035429008,
+            "toTxNum": 4037884155,
+            "path": "history/account-routing-delta-4035429008-4037884155-7389f7884fea1037e41a0a7b41cd4695bc2d15d4cfb98c0ea3a35a90079847f6.route",
+            "size": 31208970,
+            "checksum": "sha256:7389f7884fea1037e41a0a7b41cd4695bc2d15d4cfb98c0ea3a35a90079847f6",
+            "lookupRoot": "sha256:6239b26abd22592ba4df4c86b35b32476dd4758ae5db2289b146ea4f9396cdf8"
+          },
+          "metadata": "metadata/6239b26abd22592ba4df4c86b35b32476dd4758ae5db2289b146ea4f9396cdf8.bin",
+          "allocated_bytes": 31215616
+        },
+        {
+          "ref": {
+            "rows": 1160202,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4037884156,
+            "toTxNum": 4040454493,
+            "path": "history/account-routing-delta-4037884156-4040454493-ad17c609585e82dc297cff7d1b988d00f2af632ced6ed46708598dd0365d68a3.route",
+            "size": 34150663,
+            "checksum": "sha256:ad17c609585e82dc297cff7d1b988d00f2af632ced6ed46708598dd0365d68a3",
+            "lookupRoot": "sha256:38509404ff16d28a5b5001b1307dbd49ac2cedbab878482360bde839a553ec20"
+          },
+          "metadata": "metadata/38509404ff16d28a5b5001b1307dbd49ac2cedbab878482360bde839a553ec20.bin",
+          "allocated_bytes": 34156544
+        },
+        {
+          "ref": {
+            "rows": 1085706,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4040454494,
+            "toTxNum": 4043083643,
+            "path": "history/account-routing-delta-4040454494-4043083643-7e0cd7754ca50e45c736817bdd4eba211d28b1efa1e9da99902362267bce502e.route",
+            "size": 31962825,
+            "checksum": "sha256:7e0cd7754ca50e45c736817bdd4eba211d28b1efa1e9da99902362267bce502e",
+            "lookupRoot": "sha256:4f2beaf643e128afc61831f013b2a5b1d3d17a2f37875afb242cc992f60c0741"
+          },
+          "metadata": "metadata/4f2beaf643e128afc61831f013b2a5b1d3d17a2f37875afb242cc992f60c0741.bin",
+          "allocated_bytes": 31965184
+        },
+        {
+          "ref": {
+            "rows": 1153772,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4043083644,
+            "toTxNum": 4045739352,
+            "path": "history/account-routing-delta-4043083644-4045739352-fa57c8063f7b5750ec9d523df3c73670bb1ead34bd62f385d740ce8553d76343.route",
+            "size": 33961959,
+            "checksum": "sha256:fa57c8063f7b5750ec9d523df3c73670bb1ead34bd62f385d740ce8553d76343",
+            "lookupRoot": "sha256:ea01f0b752cfc4b0f4571efe66057f7b9301180e07dde41c45b1a72ac0c533ff"
+          },
+          "metadata": "metadata/ea01f0b752cfc4b0f4571efe66057f7b9301180e07dde41c45b1a72ac0c533ff.bin",
+          "allocated_bytes": 33968128
+        },
+        {
+          "ref": {
+            "rows": 1129683,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4045739353,
+            "toTxNum": 4048116838,
+            "path": "history/account-routing-delta-4045739353-4048116838-651068afb38d5eeefe5492f2f1c05dc1795668460acfa3e1e06036f32be6a709.route",
+            "size": 33253373,
+            "checksum": "sha256:651068afb38d5eeefe5492f2f1c05dc1795668460acfa3e1e06036f32be6a709",
+            "lookupRoot": "sha256:4a6fcf3ea57109058167877e500e58422b9d035fa393a7a437751cd6785d277e"
+          },
+          "metadata": "metadata/4a6fcf3ea57109058167877e500e58422b9d035fa393a7a437751cd6785d277e.bin",
+          "allocated_bytes": 33255424
+        },
+        {
+          "ref": {
+            "rows": 1080037,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4048116839,
+            "toTxNum": 4050556899,
+            "path": "history/account-routing-delta-4048116839-4050556899-1c15d1c5ad78962040efc4ae2d32c3b094d24cc189abc2d31c0737589bb5cd88.route",
+            "size": 31790836,
+            "checksum": "sha256:1c15d1c5ad78962040efc4ae2d32c3b094d24cc189abc2d31c0737589bb5cd88",
+            "lookupRoot": "sha256:3420b4189fbf845da87e198663689a6a356fac7303f76a8d137fd07ac738f3f7"
+          },
+          "metadata": "metadata/3420b4189fbf845da87e198663689a6a356fac7303f76a8d137fd07ac738f3f7.bin",
+          "allocated_bytes": 31793152
+        },
+        {
+          "ref": {
+            "rows": 1247866,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4050556900,
+            "toTxNum": 4053131390,
+            "path": "history/account-routing-delta-4050556900-4053131390-5001d7a84458e3e479c9b6245b507f9c841015289caf244cf2b2235776cd55b7.route",
+            "size": 36731375,
+            "checksum": "sha256:5001d7a84458e3e479c9b6245b507f9c841015289caf244cf2b2235776cd55b7",
+            "lookupRoot": "sha256:09bd4b7d37fd631128ff63fe1483f525602124a32607efa75ec4156dd06b3646"
+          },
+          "metadata": "metadata/09bd4b7d37fd631128ff63fe1483f525602124a32607efa75ec4156dd06b3646.bin",
+          "allocated_bytes": 36737024
+        },
+        {
+          "ref": {
+            "rows": 1119637,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4053131391,
+            "toTxNum": 4055623092,
+            "path": "history/account-routing-delta-4053131391-4055623092-941f8af32abb36b066c4d6d6b7c36dda22ccab4892743d4fdc56b44f3ccda875.route",
+            "size": 32958312,
+            "checksum": "sha256:941f8af32abb36b066c4d6d6b7c36dda22ccab4892743d4fdc56b44f3ccda875",
+            "lookupRoot": "sha256:1a532d8664d409a5f94c8ff886a2d773680efeb04040a09685c8ce1400c47e5a"
+          },
+          "metadata": "metadata/1a532d8664d409a5f94c8ff886a2d773680efeb04040a09685c8ce1400c47e5a.bin",
+          "allocated_bytes": 32960512
+        },
+        {
+          "ref": {
+            "rows": 1308187,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4055623093,
+            "toTxNum": 4058233392,
+            "path": "history/account-routing-delta-4055623093-4058233392-4411acbd38cc6a791c230cf3600163bac9c7f4075906ae727d01560f3248a77c.route",
+            "size": 38505197,
+            "checksum": "sha256:4411acbd38cc6a791c230cf3600163bac9c7f4075906ae727d01560f3248a77c",
+            "lookupRoot": "sha256:173fd44ae74f47fde4f76b6ac104d636a4e8e93fc8871874399497e4ede019c9"
+          },
+          "metadata": "metadata/173fd44ae74f47fde4f76b6ac104d636a4e8e93fc8871874399497e4ede019c9.bin",
+          "allocated_bytes": 38510592
+        },
+        {
+          "ref": {
+            "rows": 1083135,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4058233393,
+            "toTxNum": 4060520393,
+            "path": "history/account-routing-delta-4058233393-4060520393-651cf87ecad9a3b928b789b0cfa8756591aad96da92f34b7cade2f3447ec5dea.route",
+            "size": 31880948,
+            "checksum": "sha256:651cf87ecad9a3b928b789b0cfa8756591aad96da92f34b7cade2f3447ec5dea",
+            "lookupRoot": "sha256:66446b564e56e604a9b216ae2d9998eccc7e7853970eb8f698db0f63fa919837"
+          },
+          "metadata": "metadata/66446b564e56e604a9b216ae2d9998eccc7e7853970eb8f698db0f63fa919837.bin",
+          "allocated_bytes": 31883264
+        },
+        {
+          "ref": {
+            "rows": 1600942,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4060520394,
+            "toTxNum": 4063202637,
+            "path": "history/account-routing-delta-4060520394-4063202637-2df4d327e746e367b040b11c1b33e2b6815c4fc350ea05071d12bfe3a094bac6.route",
+            "size": 47124708,
+            "checksum": "sha256:2df4d327e746e367b040b11c1b33e2b6815c4fc350ea05071d12bfe3a094bac6",
+            "lookupRoot": "sha256:706823e028b46691c92ae3718de8ee2fc5386da334e6f55f82570878b4439a18"
+          },
+          "metadata": "metadata/706823e028b46691c92ae3718de8ee2fc5386da334e6f55f82570878b4439a18.bin",
+          "allocated_bytes": 47132672
+        },
+        {
+          "ref": {
+            "rows": 116735,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4063202638,
+            "toTxNum": 4063356397,
+            "path": "history/account-routing-delta-4063202638-4063356397-35d871e9adfcb4dcc550798c8201ac438479ef33f95edd09d3c66f4b323af20b.route",
+            "size": 3437223,
+            "checksum": "sha256:35d871e9adfcb4dcc550798c8201ac438479ef33f95edd09d3c66f4b323af20b",
+            "lookupRoot": "sha256:9f11b90f65cbba01116284f26efd09108688af1710a82e2a9d6e4979feac5cc2"
+          },
+          "metadata": "metadata/9f11b90f65cbba01116284f26efd09108688af1710a82e2a9d6e4979feac5cc2.bin",
+          "allocated_bytes": 3440640
+        }
+      ],
+      "progress": {
+        "historyBuildTxNum": 4063356397,
+        "accessorBuildTxNum": 4063356397,
+        "hotPruneTxNum": 4063356397,
+        "hotPruneBlockNum": 45046617
+      },
+      "visible": [
+        1,
+        4063356397
+      ]
+    },
+    "compact": {
+      "canonical_and_other_auxiliary_refs_sha256": "8fb1b94cb4ea54b17a2c1442bead961c125757cb0330ec0f36789f40904c7cf5",
+      "base_ref": {
+        "rows": 115456774,
+        "dataset": "state-domain-change",
+        "kind": "account-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 4060208141,
+        "path": "history/account-gap-ablation.route",
+        "size": 3399082087,
+        "checksum": "sha256:cfb023331e4e1d2afeda76a4afdb35dd42f87872d34fb187ecd68e1e829b2b8c",
+        "lookupRoot": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+      },
+      "objects": [
+        {
+          "ref": {
+            "rows": 2666965,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3792723933,
+            "toTxNum": 3803485988,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3792723933-3803485988-ea5ff93e657e1caebaa1467a7d902a65e28f1a8e412f31d546d0ce5d82f2178d.route",
+            "size": 78498318,
+            "checksum": "sha256:ea5ff93e657e1caebaa1467a7d902a65e28f1a8e412f31d546d0ce5d82f2178d",
+            "lookupRoot": "sha256:91f3ec4228fad832b2bc2be33718afc30e680b0217e14dc241f3448586094c1a"
+          },
+          "metadata": "metadata/91f3ec4228fad832b2bc2be33718afc30e680b0217e14dc241f3448586094c1a.bin",
+          "allocated_bytes": 78503936
+        },
+        {
+          "ref": {
+            "rows": 2621781,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3803485989,
+            "toTxNum": 3814103623,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3803485989-3814103623-17d86889b3883d9ff3d7786924d831531c2dd25a7cf4ebabdf6890c9083322f0.route",
+            "size": 77171098,
+            "checksum": "sha256:17d86889b3883d9ff3d7786924d831531c2dd25a7cf4ebabdf6890c9083322f0",
+            "lookupRoot": "sha256:7839ce6b5852c1efe6e66fef41770870940cb7cdd1482e18011b45666183e358"
+          },
+          "metadata": "metadata/7839ce6b5852c1efe6e66fef41770870940cb7cdd1482e18011b45666183e358.bin",
+          "allocated_bytes": 77176832
+        },
+        {
+          "ref": {
+            "rows": 2730935,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3814103624,
+            "toTxNum": 3825291097,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3814103624-3825291097-49bc4ee545533db9e8088e9434f8bcb1f2abf09dce3feb3d8c0ef7f1b6967f68.route",
+            "size": 80383212,
+            "checksum": "sha256:49bc4ee545533db9e8088e9434f8bcb1f2abf09dce3feb3d8c0ef7f1b6967f68",
+            "lookupRoot": "sha256:23133a4e7495f7741333dd1dec8c2f042c94e6e422826b3552236a9878db8415"
+          },
+          "metadata": "metadata/23133a4e7495f7741333dd1dec8c2f042c94e6e422826b3552236a9878db8415.bin",
+          "allocated_bytes": 80388096
+        },
+        {
+          "ref": {
+            "rows": 2658980,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3825291098,
+            "toTxNum": 3835891161,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3825291098-3835891161-d3e2164454106a400ee11d942afddc69b1b6c1307cc78db82aea2710f5a01169.route",
+            "size": 78264697,
+            "checksum": "sha256:d3e2164454106a400ee11d942afddc69b1b6c1307cc78db82aea2710f5a01169",
+            "lookupRoot": "sha256:b21b433e96a0f2e0f429ea97e5c567439a8b36e6cde2406ec4fa1f5035379fb6"
+          },
+          "metadata": "metadata/b21b433e96a0f2e0f429ea97e5c567439a8b36e6cde2406ec4fa1f5035379fb6.bin",
+          "allocated_bytes": 78270464
+        },
+        {
+          "ref": {
+            "rows": 2733293,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3835891162,
+            "toTxNum": 3846703749,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3835891162-3846703749-0c446bbce7471727e677d30ea685a059aa447a73d0560fa17930bcc226acd3e9.route",
+            "size": 80452588,
+            "checksum": "sha256:0c446bbce7471727e677d30ea685a059aa447a73d0560fa17930bcc226acd3e9",
+            "lookupRoot": "sha256:4566a0917960d31f6d194b9970d3500ccee4e6bfd5ea8586aacfaa2f1c400269"
+          },
+          "metadata": "metadata/4566a0917960d31f6d194b9970d3500ccee4e6bfd5ea8586aacfaa2f1c400269.bin",
+          "allocated_bytes": 80457728
+        },
+        {
+          "ref": {
+            "rows": 2685618,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3846703750,
+            "toTxNum": 3857786058,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3846703750-3857786058-a13724d38921ad3738118f2db722ade5af52ae5c499021f1331827df369df71b.route",
+            "size": 79047320,
+            "checksum": "sha256:a13724d38921ad3738118f2db722ade5af52ae5c499021f1331827df369df71b",
+            "lookupRoot": "sha256:0631b52f02edacab19ab6803045a5e98fb9da0e50c45953e7c501957b4f92c55"
+          },
+          "metadata": "metadata/0631b52f02edacab19ab6803045a5e98fb9da0e50c45953e7c501957b4f92c55.bin",
+          "allocated_bytes": 79052800
+        },
+        {
+          "ref": {
+            "rows": 2767525,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3857786059,
+            "toTxNum": 3868572956,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3857786059-3868572956-e4047e45ca49954da8f04ef06201fea93cdfee65ef8983552b2c29f553d068bd.route",
+            "size": 81455979,
+            "checksum": "sha256:e4047e45ca49954da8f04ef06201fea93cdfee65ef8983552b2c29f553d068bd",
+            "lookupRoot": "sha256:79ca5cd54ca3810b2f72738fcb8256fceac174ec5d301c467a0636eb7895cd8f"
+          },
+          "metadata": "metadata/79ca5cd54ca3810b2f72738fcb8256fceac174ec5d301c467a0636eb7895cd8f.bin",
+          "allocated_bytes": 81461248
+        },
+        {
+          "ref": {
+            "rows": 2935557,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3868572957,
+            "toTxNum": 3879430492,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3868572957-3879430492-ed62d5840fd595fdad4536388ca0b447c9dd17ac10f063c393b9a97077298bd8.route",
+            "size": 86404923,
+            "checksum": "sha256:ed62d5840fd595fdad4536388ca0b447c9dd17ac10f063c393b9a97077298bd8",
+            "lookupRoot": "sha256:94ef885973ad255c8f5bad8f3daab206144d664ff6b165c7b9b9769b6f5d2c14"
+          },
+          "metadata": "metadata/94ef885973ad255c8f5bad8f3daab206144d664ff6b165c7b9b9769b6f5d2c14.bin",
+          "allocated_bytes": 86409216
+        },
+        {
+          "ref": {
+            "rows": 2565113,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3879430493,
+            "toTxNum": 3890450293,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3879430493-3890450293-17a1599ae3f3384ac150a98aa9a2e5d0788f75efa587c2f0f2b0b3baa5122a41.route",
+            "size": 75503953,
+            "checksum": "sha256:17a1599ae3f3384ac150a98aa9a2e5d0788f75efa587c2f0f2b0b3baa5122a41",
+            "lookupRoot": "sha256:283067db7a0fcb9bbeb6f9a2032d9531f50052ce2875ee1d6cdaddc3561796c5"
+          },
+          "metadata": "metadata/283067db7a0fcb9bbeb6f9a2032d9531f50052ce2875ee1d6cdaddc3561796c5.bin",
+          "allocated_bytes": 75509760
+        },
+        {
+          "ref": {
+            "rows": 2661088,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3890450294,
+            "toTxNum": 3900719794,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3890450294-3900719794-ba17b140675856800063b158d8eb2f82401b18428a46edf66377b48f3e721409.route",
+            "size": 78326510,
+            "checksum": "sha256:ba17b140675856800063b158d8eb2f82401b18428a46edf66377b48f3e721409",
+            "lookupRoot": "sha256:80f747ea44710f5db2251f62106fb051487583cf1ecd6c8597ce7339e0866517"
+          },
+          "metadata": "metadata/80f747ea44710f5db2251f62106fb051487583cf1ecd6c8597ce7339e0866517.bin",
+          "allocated_bytes": 78331904
+        },
+        {
+          "ref": {
+            "rows": 2265170,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3900719795,
+            "toTxNum": 3911037776,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3900719795-3911037776-d5c97d219c6ecd626100f42def8b61023b818b6a2e1d73ff5d3387f74045d8fe.route",
+            "size": 66675749,
+            "checksum": "sha256:d5c97d219c6ecd626100f42def8b61023b818b6a2e1d73ff5d3387f74045d8fe",
+            "lookupRoot": "sha256:3d67aba812b7c7e62b2db6a546405dd75323076606418b2514bc4d01677abe1f"
+          },
+          "metadata": "metadata/3d67aba812b7c7e62b2db6a546405dd75323076606418b2514bc4d01677abe1f.bin",
+          "allocated_bytes": 66682880
+        },
+        {
+          "ref": {
+            "rows": 2355229,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3911037777,
+            "toTxNum": 3921358148,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3911037777-3921358148-6d4d99ab6387d00364ef048fb37f2bade61d94290e3bbf3a854da1bb89eebef3.route",
+            "size": 69322157,
+            "checksum": "sha256:6d4d99ab6387d00364ef048fb37f2bade61d94290e3bbf3a854da1bb89eebef3",
+            "lookupRoot": "sha256:f31caa1e0be7ad43112e4d9ceac4bd969c9ec28d5d7f7d60783f5ffc17d16746"
+          },
+          "metadata": "metadata/f31caa1e0be7ad43112e4d9ceac4bd969c9ec28d5d7f7d60783f5ffc17d16746.bin",
+          "allocated_bytes": 69328896
+        },
+        {
+          "ref": {
+            "rows": 2800611,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3921358149,
+            "toTxNum": 3932024164,
+            "aggregationSteps": 4,
+            "path": "history/account-routing-delta-3921358149-3932024164-9e70ae9752708b5757bf218726d402c2314114b668d8cc4e75c0d447f787a06b.route",
+            "size": 82431114,
+            "checksum": "sha256:9e70ae9752708b5757bf218726d402c2314114b668d8cc4e75c0d447f787a06b",
+            "lookupRoot": "sha256:c5f82c7dd663a5803d295b885c5f277b436b4eba380ea6d0565ac9948637bb68"
+          },
+          "metadata": "metadata/c5f82c7dd663a5803d295b885c5f277b436b4eba380ea6d0565ac9948637bb68.bin",
+          "allocated_bytes": 82436096
+        },
+        {
+          "ref": {
+            "rows": 2006257,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3932024165,
+            "toTxNum": 3937123094,
+            "aggregationSteps": 2,
+            "path": "history/account-routing-delta-3932024165-3937123094-1ad9da429d12a8ce73db31c2338ee21b0a9cf21c40f8e3e5cb5a0ecec0add82c.route",
+            "size": 59050445,
+            "checksum": "sha256:1ad9da429d12a8ce73db31c2338ee21b0a9cf21c40f8e3e5cb5a0ecec0add82c",
+            "lookupRoot": "sha256:0f06ed88feae64b97d2d0647011b5a11f258d74e8b4222f7d6e859e164beeb78"
+          },
+          "metadata": "metadata/0f06ed88feae64b97d2d0647011b5a11f258d74e8b4222f7d6e859e164beeb78.bin",
+          "allocated_bytes": 59056128
+        },
+        {
+          "ref": {
+            "rows": 1980990,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3937123095,
+            "toTxNum": 3942336279,
+            "aggregationSteps": 2,
+            "path": "history/account-routing-delta-3937123095-3942336279-885cecca2893d2cf26f4ccb685cece8cd6285cf7fabc512417dfbcc57be6c7d2.route",
+            "size": 58308803,
+            "checksum": "sha256:885cecca2893d2cf26f4ccb685cece8cd6285cf7fabc512417dfbcc57be6c7d2",
+            "lookupRoot": "sha256:1b6335a92c35c34e77c7410784528eee012766c033f1b11217985e24e82e9461"
+          },
+          "metadata": "metadata/1b6335a92c35c34e77c7410784528eee012766c033f1b11217985e24e82e9461.bin",
+          "allocated_bytes": 58314752
+        },
+        {
+          "ref": {
+            "rows": 1402660,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3942336280,
+            "toTxNum": 3944805350,
+            "path": "history/account-routing-delta-3942336280-3944805350-8450b4aef1dfa0d8ab8860bb43e6ad65418030f87aeab838285cc359844322b7.route",
+            "size": 41286794,
+            "checksum": "sha256:8450b4aef1dfa0d8ab8860bb43e6ad65418030f87aeab838285cc359844322b7",
+            "lookupRoot": "sha256:3836b87709a4ca7284364c3df4a62171e6a89f48424405f03dd0262ca7fb1673"
+          },
+          "metadata": "metadata/3836b87709a4ca7284364c3df4a62171e6a89f48424405f03dd0262ca7fb1673.bin",
+          "allocated_bytes": 41291776
+        },
+        {
+          "ref": {
+            "rows": 1293710,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3944805351,
+            "toTxNum": 3947146419,
+            "path": "history/account-routing-delta-3944805351-3947146419-d22defc50338189f8f903e0e51ea58bb18277ed785eff47814eb8791506f3bd1.route",
+            "size": 38083320,
+            "checksum": "sha256:d22defc50338189f8f903e0e51ea58bb18277ed785eff47814eb8791506f3bd1",
+            "lookupRoot": "sha256:5124d9d1f915525c590de62141de09c30ce00aad99a3ee9858734f87b575c099"
+          },
+          "metadata": "metadata/5124d9d1f915525c590de62141de09c30ce00aad99a3ee9858734f87b575c099.bin",
+          "allocated_bytes": 38084608
+        },
+        {
+          "ref": {
+            "rows": 1487445,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3947146420,
+            "toTxNum": 3949616851,
+            "path": "history/account-routing-delta-3947146420-3949616851-5246300b5f69a3c187b5e22bf422345d37773b549cd400426cc14eb63c730f36.route",
+            "size": 43785906,
+            "checksum": "sha256:5246300b5f69a3c187b5e22bf422345d37773b549cd400426cc14eb63c730f36",
+            "lookupRoot": "sha256:d56070ea62a4c8acc83d1f5e554b7dafb232407f162ec29ef22ff66396eb5933"
+          },
+          "metadata": "metadata/d56070ea62a4c8acc83d1f5e554b7dafb232407f162ec29ef22ff66396eb5933.bin",
+          "allocated_bytes": 43790336
+        },
+        {
+          "ref": {
+            "rows": 1346443,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3949616852,
+            "toTxNum": 3952303369,
+            "path": "history/account-routing-delta-3949616852-3952303369-5a6ef1d9061d6beef7441787786cccf81883e9b2957291450d87695a300d48f4.route",
+            "size": 39635873,
+            "checksum": "sha256:5a6ef1d9061d6beef7441787786cccf81883e9b2957291450d87695a300d48f4",
+            "lookupRoot": "sha256:3d4fa18a3d87ed319b75ac563037283498eb1d72f9d269320adfc02aa09d2de8"
+          },
+          "metadata": "metadata/3d4fa18a3d87ed319b75ac563037283498eb1d72f9d269320adfc02aa09d2de8.bin",
+          "allocated_bytes": 39641088
+        },
+        {
+          "ref": {
+            "rows": 1539632,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3952303370,
+            "toTxNum": 3954965412,
+            "path": "history/account-routing-delta-3952303370-3954965412-bbbc5752f4665dd0e2c30a9137e872cc8bc5049e14cd663ce3936173312928dc.route",
+            "size": 45317990,
+            "checksum": "sha256:bbbc5752f4665dd0e2c30a9137e872cc8bc5049e14cd663ce3936173312928dc",
+            "lookupRoot": "sha256:cf1ba41ab518262570626990f7aef3b9d28977c6098ca2466a04edcf2fe13bbe"
+          },
+          "metadata": "metadata/cf1ba41ab518262570626990f7aef3b9d28977c6098ca2466a04edcf2fe13bbe.bin",
+          "allocated_bytes": 45322240
+        },
+        {
+          "ref": {
+            "rows": 1274543,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3954965413,
+            "toTxNum": 3957382750,
+            "path": "history/account-routing-delta-3954965413-3957382750-7cc040bb6f403b755e6a6602a1525e94b90dc23af639289bf689d775ff8b74c7.route",
+            "size": 37517998,
+            "checksum": "sha256:7cc040bb6f403b755e6a6602a1525e94b90dc23af639289bf689d775ff8b74c7",
+            "lookupRoot": "sha256:dd422cfc7669c1a0538f5746da6819ef4a2b9a2beaecac187e19dfaf63925bf3"
+          },
+          "metadata": "metadata/dd422cfc7669c1a0538f5746da6819ef4a2b9a2beaecac187e19dfaf63925bf3.bin",
+          "allocated_bytes": 37523456
+        },
+        {
+          "ref": {
+            "rows": 1554658,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3957382751,
+            "toTxNum": 3959991628,
+            "path": "history/account-routing-delta-3957382751-3959991628-94286f4adb7d92de3c4238c68d828f3b358f07833d43cf5a35ef60f558747c46.route",
+            "size": 45760496,
+            "checksum": "sha256:94286f4adb7d92de3c4238c68d828f3b358f07833d43cf5a35ef60f558747c46",
+            "lookupRoot": "sha256:d6375d99f3a04f26aa14d8c325ed3aa7f2321befeceb4570e0434484809caeb1"
+          },
+          "metadata": "metadata/d6375d99f3a04f26aa14d8c325ed3aa7f2321befeceb4570e0434484809caeb1.bin",
+          "allocated_bytes": 45764608
+        },
+        {
+          "ref": {
+            "rows": 1392617,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3959991629,
+            "toTxNum": 3962444369,
+            "path": "history/account-routing-delta-3959991629-3962444369-72fd9a5630a550b7a22348500fbddf84ef33d89c3d39d1f73854de64f516db70.route",
+            "size": 40991925,
+            "checksum": "sha256:72fd9a5630a550b7a22348500fbddf84ef33d89c3d39d1f73854de64f516db70",
+            "lookupRoot": "sha256:38a43190284ff32beb5e231d436c6247e9ed80e082e8c5c6786c0a55baccbef6"
+          },
+          "metadata": "metadata/38a43190284ff32beb5e231d436c6247e9ed80e082e8c5c6786c0a55baccbef6.bin",
+          "allocated_bytes": 40996864
+        },
+        {
+          "ref": {
+            "rows": 1339242,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3962444370,
+            "toTxNum": 3964981798,
+            "path": "history/account-routing-delta-3962444370-3964981798-f15fc0e4d7bc99325ba7ab965a61c51083a0209073407f53b317e5e95bf9214c.route",
+            "size": 39422892,
+            "checksum": "sha256:f15fc0e4d7bc99325ba7ab965a61c51083a0209073407f53b317e5e95bf9214c",
+            "lookupRoot": "sha256:2aba33a6d6078d9f4c3179dfe49e5e60874236ae24684b319f3b560da138df47"
+          },
+          "metadata": "metadata/2aba33a6d6078d9f4c3179dfe49e5e60874236ae24684b319f3b560da138df47.bin",
+          "allocated_bytes": 39428096
+        },
+        {
+          "ref": {
+            "rows": 1648364,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3964981799,
+            "toTxNum": 3967586659,
+            "path": "history/account-routing-delta-3964981799-3967586659-de01e7cdc5d96f97463481b69f580593210063ce4ed8c5f0d376aca7eae73294.route",
+            "size": 48517624,
+            "checksum": "sha256:de01e7cdc5d96f97463481b69f580593210063ce4ed8c5f0d376aca7eae73294",
+            "lookupRoot": "sha256:56e349d20d3cab7a3ee08e4e901f72df00ed97236be2fbe4bf5a972466bf10fc"
+          },
+          "metadata": "metadata/56e349d20d3cab7a3ee08e4e901f72df00ed97236be2fbe4bf5a972466bf10fc.bin",
+          "allocated_bytes": 48525312
+        },
+        {
+          "ref": {
+            "rows": 1478337,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3967586660,
+            "toTxNum": 3969627903,
+            "path": "history/account-routing-delta-3967586660-3969627903-4efd3c8cf3e16b5e57389670b5594febf51ad8641245952d65646fc040a26920.route",
+            "size": 43515453,
+            "checksum": "sha256:4efd3c8cf3e16b5e57389670b5594febf51ad8641245952d65646fc040a26920",
+            "lookupRoot": "sha256:b9b94d8ad5702938f4012e98be2144dd1e194a7c751a3cb115e7930a7f30ec86"
+          },
+          "metadata": "metadata/b9b94d8ad5702938f4012e98be2144dd1e194a7c751a3cb115e7930a7f30ec86.bin",
+          "allocated_bytes": 43520000
+        },
+        {
+          "ref": {
+            "rows": 1314952,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3969627904,
+            "toTxNum": 3971989843,
+            "path": "history/account-routing-delta-3969627904-3971989843-9a341fec6ba62741067fef04daa9a24e5636a3645ddb81962d1460ca64665f33.route",
+            "size": 38706018,
+            "checksum": "sha256:9a341fec6ba62741067fef04daa9a24e5636a3645ddb81962d1460ca64665f33",
+            "lookupRoot": "sha256:c300676b14a1cd29c8127f3e5f5f8884e689acd9520ce7d1bf245d66d2b31641"
+          },
+          "metadata": "metadata/c300676b14a1cd29c8127f3e5f5f8884e689acd9520ce7d1bf245d66d2b31641.bin",
+          "allocated_bytes": 38711296
+        },
+        {
+          "ref": {
+            "rows": 1668182,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3971989844,
+            "toTxNum": 3974494935,
+            "path": "history/account-routing-delta-3971989844-3974494935-d0361e60f36d131fb01fb2f69525b791c585d7fa49615beb0dd866c784277f46.route",
+            "size": 49103330,
+            "checksum": "sha256:d0361e60f36d131fb01fb2f69525b791c585d7fa49615beb0dd866c784277f46",
+            "lookupRoot": "sha256:07a092a8d1db121f3bb41044acc662159de822f4552db508c48750bdcbfae706"
+          },
+          "metadata": "metadata/07a092a8d1db121f3bb41044acc662159de822f4552db508c48750bdcbfae706.bin",
+          "allocated_bytes": 49111040
+        },
+        {
+          "ref": {
+            "rows": 1320735,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3974494936,
+            "toTxNum": 3976838355,
+            "path": "history/account-routing-delta-3974494936-3976838355-29f8f11d468c53ff5d2b6f07a51df7f9ad3e41d3480c7b58a14c858eb229c4e2.route",
+            "size": 38873890,
+            "checksum": "sha256:29f8f11d468c53ff5d2b6f07a51df7f9ad3e41d3480c7b58a14c858eb229c4e2",
+            "lookupRoot": "sha256:3e09cb6da728b9d1ddf715812acf92afa28af0338f72879fdb57d03702f053c4"
+          },
+          "metadata": "metadata/3e09cb6da728b9d1ddf715812acf92afa28af0338f72879fdb57d03702f053c4.bin",
+          "allocated_bytes": 38879232
+        },
+        {
+          "ref": {
+            "rows": 1399925,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3976838356,
+            "toTxNum": 3979587019,
+            "path": "history/account-routing-delta-3976838356-3979587019-a8a3b18e0837d85fd5eb9c4e59e9e08818beb9accb23c9b2962dcfefd52a740f.route",
+            "size": 41204981,
+            "checksum": "sha256:a8a3b18e0837d85fd5eb9c4e59e9e08818beb9accb23c9b2962dcfefd52a740f",
+            "lookupRoot": "sha256:ee67f687ac71ca95cc95d4bf82752032646c6fcb444a7ff672dcb2a4d31a25b1"
+          },
+          "metadata": "metadata/ee67f687ac71ca95cc95d4bf82752032646c6fcb444a7ff672dcb2a4d31a25b1.bin",
+          "allocated_bytes": 41209856
+        },
+        {
+          "ref": {
+            "rows": 1196389,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3979587020,
+            "toTxNum": 3982270508,
+            "path": "history/account-routing-delta-3979587020-3982270508-688e2f1208978b321540dcfe2a414cd7dc142d76e90efaa2b8e55d11c4550362.route",
+            "size": 35219707,
+            "checksum": "sha256:688e2f1208978b321540dcfe2a414cd7dc142d76e90efaa2b8e55d11c4550362",
+            "lookupRoot": "sha256:31fa4e4c4ff9136bc769dd8e02b9f69516ada99259ecd3ccbbde52f50f2fbed5"
+          },
+          "metadata": "metadata/31fa4e4c4ff9136bc769dd8e02b9f69516ada99259ecd3ccbbde52f50f2fbed5.bin",
+          "allocated_bytes": 35225600
+        },
+        {
+          "ref": {
+            "rows": 1184536,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3982270509,
+            "toTxNum": 3984829066,
+            "path": "history/account-routing-delta-3982270509-3984829066-700afc7a629531ad1656f15aad890cf8359e3c63a151ce5296ad2f0dcb69a301.route",
+            "size": 34867526,
+            "checksum": "sha256:700afc7a629531ad1656f15aad890cf8359e3c63a151ce5296ad2f0dcb69a301",
+            "lookupRoot": "sha256:a31cb542e6ba5ad75e4dbe39f055b0ee080bfb05a1baa57397ffda617615df62"
+          },
+          "metadata": "metadata/a31cb542e6ba5ad75e4dbe39f055b0ee080bfb05a1baa57397ffda617615df62.bin",
+          "allocated_bytes": 34873344
+        },
+        {
+          "ref": {
+            "rows": 1251944,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3984829067,
+            "toTxNum": 3987440850,
+            "path": "history/account-routing-delta-3984829067-3987440850-613c4c0379971d5ef272e079f2a6673ecd67df50aa5e39bd8b47a5a62a853cb5.route",
+            "size": 36854372,
+            "checksum": "sha256:613c4c0379971d5ef272e079f2a6673ecd67df50aa5e39bd8b47a5a62a853cb5",
+            "lookupRoot": "sha256:6e514df5056e9fefa07feedccb220e7e1d295095168542ac7e9cacdfde30de07"
+          },
+          "metadata": "metadata/6e514df5056e9fefa07feedccb220e7e1d295095168542ac7e9cacdfde30de07.bin",
+          "allocated_bytes": 36859904
+        },
+        {
+          "ref": {
+            "rows": 1094759,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3987440851,
+            "toTxNum": 3989755914,
+            "path": "history/account-routing-delta-3987440851-3989755914-f060264529f5d3d1cb1fa27a3e03b9a77e582d936f56ca6a7405d78b15cd1104.route",
+            "size": 32224969,
+            "checksum": "sha256:f060264529f5d3d1cb1fa27a3e03b9a77e582d936f56ca6a7405d78b15cd1104",
+            "lookupRoot": "sha256:f0af83e818595acfc307f804ae1c631b4d42bf1bb441cb8614404d960f56fc95"
+          },
+          "metadata": "metadata/f0af83e818595acfc307f804ae1c631b4d42bf1bb441cb8614404d960f56fc95.bin",
+          "allocated_bytes": 32227328
+        },
+        {
+          "ref": {
+            "rows": 1162190,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3989755915,
+            "toTxNum": 3992413118,
+            "path": "history/account-routing-delta-3989755915-3992413118-8c96e879a53239c59d2ac1b8d9f68093723d99c17eb64a046c61daee52dd1351.route",
+            "size": 34211900,
+            "checksum": "sha256:8c96e879a53239c59d2ac1b8d9f68093723d99c17eb64a046c61daee52dd1351",
+            "lookupRoot": "sha256:8a9257d51ff8b64dcc1654d106e6ff2d1bd79e96744d6f9c21036042393d8282"
+          },
+          "metadata": "metadata/8a9257d51ff8b64dcc1654d106e6ff2d1bd79e96744d6f9c21036042393d8282.bin",
+          "allocated_bytes": 34217984
+        },
+        {
+          "ref": {
+            "rows": 1101666,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3992413119,
+            "toTxNum": 3995057124,
+            "path": "history/account-routing-delta-3992413119-3995057124-d389dc8a80b653dc20e32515034db1d9bc130bbdcb90051628d7d72d017be54b.route",
+            "size": 32429918,
+            "checksum": "sha256:d389dc8a80b653dc20e32515034db1d9bc130bbdcb90051628d7d72d017be54b",
+            "lookupRoot": "sha256:6f0413da0d16123e12952d7178413749d36259bb4cb3c9cf8981665a5a213884"
+          },
+          "metadata": "metadata/6f0413da0d16123e12952d7178413749d36259bb4cb3c9cf8981665a5a213884.bin",
+          "allocated_bytes": 32432128
+        },
+        {
+          "ref": {
+            "rows": 1488103,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3995057125,
+            "toTxNum": 3997816326,
+            "path": "history/account-routing-delta-3995057125-3997816326-9c2e49f7e004676346794250ed2a8e648b4d9658c195f533ddf932ce9a0cf44c.route",
+            "size": 43802290,
+            "checksum": "sha256:9c2e49f7e004676346794250ed2a8e648b4d9658c195f533ddf932ce9a0cf44c",
+            "lookupRoot": "sha256:a1505e668aaa02df6093c86b8f5b349168f938e3fcc5410ea3fa7f02c557b57c"
+          },
+          "metadata": "metadata/a1505e668aaa02df6093c86b8f5b349168f938e3fcc5410ea3fa7f02c557b57c.bin",
+          "allocated_bytes": 43806720
+        },
+        {
+          "ref": {
+            "rows": 1269387,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 3997816327,
+            "toTxNum": 4000274873,
+            "path": "history/account-routing-delta-3997816327-4000274873-d40ae4de8b5f10b05583cd9cd4a8aa4d532aa5e638ce8fa028a727a491983051.route",
+            "size": 37362233,
+            "checksum": "sha256:d40ae4de8b5f10b05583cd9cd4a8aa4d532aa5e638ce8fa028a727a491983051",
+            "lookupRoot": "sha256:004b2cfd38395cf7bdb55ff50b24dd15084001d541a533fb7e0d885ed8b2d753"
+          },
+          "metadata": "metadata/004b2cfd38395cf7bdb55ff50b24dd15084001d541a533fb7e0d885ed8b2d753.bin",
+          "allocated_bytes": 37363712
+        },
+        {
+          "ref": {
+            "rows": 959159,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4000274874,
+            "toTxNum": 4002648585,
+            "path": "history/account-routing-delta-4000274874-4002648585-fa792998c3bc25a6e88d6eb18987be82ebb234aed200558ea5b8e938b26cf707.route",
+            "size": 28234957,
+            "checksum": "sha256:fa792998c3bc25a6e88d6eb18987be82ebb234aed200558ea5b8e938b26cf707",
+            "lookupRoot": "sha256:3de446b0be8f0bf803c1884c328025e40a5a4efb0cef1456a0578aef1d34900d"
+          },
+          "metadata": "metadata/3de446b0be8f0bf803c1884c328025e40a5a4efb0cef1456a0578aef1d34900d.bin",
+          "allocated_bytes": 28237824
+        },
+        {
+          "ref": {
+            "rows": 1106826,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4002648586,
+            "toTxNum": 4005134354,
+            "path": "history/account-routing-delta-4002648586-4005134354-430e2d4f77d884e2c0d0c57b8165d70d98b6aca16707da49ef07b213c9abaefb.route",
+            "size": 32577342,
+            "checksum": "sha256:430e2d4f77d884e2c0d0c57b8165d70d98b6aca16707da49ef07b213c9abaefb",
+            "lookupRoot": "sha256:97f4aecd2f4e7651de5cc1c65347887d9e4d5044564d678a0906eab0374ce0a8"
+          },
+          "metadata": "metadata/97f4aecd2f4e7651de5cc1c65347887d9e4d5044564d678a0906eab0374ce0a8.bin",
+          "allocated_bytes": 32579584
+        },
+        {
+          "ref": {
+            "rows": 1126984,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4005134355,
+            "toTxNum": 4007865551,
+            "path": "history/account-routing-delta-4005134355-4007865551-0914a0310268b1355f50346bd41cc851f683377f4e5ff18ec231e8f685e5cdab.route",
+            "size": 33171304,
+            "checksum": "sha256:0914a0310268b1355f50346bd41cc851f683377f4e5ff18ec231e8f685e5cdab",
+            "lookupRoot": "sha256:16f4309a05353555b2a59d3c007902dcab636272a4128e6e02dd1a1dba1d7810"
+          },
+          "metadata": "metadata/16f4309a05353555b2a59d3c007902dcab636272a4128e6e02dd1a1dba1d7810.bin",
+          "allocated_bytes": 33173504
+        },
+        {
+          "ref": {
+            "rows": 1018638,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4007865552,
+            "toTxNum": 4010280965,
+            "path": "history/account-routing-delta-4007865552-4010280965-88a56bd20d46b5ddc1d7ac7183a271e44d853a19120495b2d3307a9a821f2495.route",
+            "size": 29984118,
+            "checksum": "sha256:88a56bd20d46b5ddc1d7ac7183a271e44d853a19120495b2d3307a9a821f2495",
+            "lookupRoot": "sha256:f42d68d40a33d5557a09bc2e01c9e4fa44710f13d4e6dcebf8a728ac5e8bf33f"
+          },
+          "metadata": "metadata/f42d68d40a33d5557a09bc2e01c9e4fa44710f13d4e6dcebf8a728ac5e8bf33f.bin",
+          "allocated_bytes": 29990912
+        },
+        {
+          "ref": {
+            "rows": 1060537,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4010280966,
+            "toTxNum": 4012561208,
+            "path": "history/account-routing-delta-4010280966-4012561208-352f9cf6d51ba7fdca356a7c6ac47999b19487742ae2fe08a77f34ca0ba9314d.route",
+            "size": 31217258,
+            "checksum": "sha256:352f9cf6d51ba7fdca356a7c6ac47999b19487742ae2fe08a77f34ca0ba9314d",
+            "lookupRoot": "sha256:641e8171496b70bb64aa56df096d353f557c635d292780263e8c39b8d2c7626e"
+          },
+          "metadata": "metadata/641e8171496b70bb64aa56df096d353f557c635d292780263e8c39b8d2c7626e.bin",
+          "allocated_bytes": 31219712
+        },
+        {
+          "ref": {
+            "rows": 1135231,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4012561209,
+            "toTxNum": 4015014868,
+            "path": "history/account-routing-delta-4012561209-4015014868-4a4bfe370b3ee4d50c13228abc684f9b9abfe7f6cc9c1fa1070324969349b5f8.route",
+            "size": 33417213,
+            "checksum": "sha256:4a4bfe370b3ee4d50c13228abc684f9b9abfe7f6cc9c1fa1070324969349b5f8",
+            "lookupRoot": "sha256:45eb5ebd6856981521d0ee88b956b0726bfd6f9308f721fe5a6f0d0bda125eda"
+          },
+          "metadata": "metadata/45eb5ebd6856981521d0ee88b956b0726bfd6f9308f721fe5a6f0d0bda125eda.bin",
+          "allocated_bytes": 33419264
+        },
+        {
+          "ref": {
+            "rows": 1195173,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4015014869,
+            "toTxNum": 4017816513,
+            "path": "history/account-routing-delta-4015014869-4017816513-799fb33eeb5af6fd1cdeb64fcb7d0deb975836b9cd9d97d7044f9f13778c15dd.route",
+            "size": 35182875,
+            "checksum": "sha256:799fb33eeb5af6fd1cdeb64fcb7d0deb975836b9cd9d97d7044f9f13778c15dd",
+            "lookupRoot": "sha256:fe01b1fa3df40ea63f51df46a6d5e142df909a4ba5fc96f6ecb05ac5aa4b2e33"
+          },
+          "metadata": "metadata/fe01b1fa3df40ea63f51df46a6d5e142df909a4ba5fc96f6ecb05ac5aa4b2e33.bin",
+          "allocated_bytes": 35188736
+        },
+        {
+          "ref": {
+            "rows": 1219554,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4017816514,
+            "toTxNum": 4020293814,
+            "path": "history/account-routing-delta-4017816514-4020293814-47995884eede9711bbc0c0d1c02b46a4c29e8e85df1592a8fd0bb6edfabcb248.route",
+            "size": 35899781,
+            "checksum": "sha256:47995884eede9711bbc0c0d1c02b46a4c29e8e85df1592a8fd0bb6edfabcb248",
+            "lookupRoot": "sha256:64eb437e52c34e4d2968fc20713ee842012a27a9a011f37fb48f5ee075ed21a2"
+          },
+          "metadata": "metadata/64eb437e52c34e4d2968fc20713ee842012a27a9a011f37fb48f5ee075ed21a2.bin",
+          "allocated_bytes": 35905536
+        },
+        {
+          "ref": {
+            "rows": 1199599,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4020293815,
+            "toTxNum": 4022953075,
+            "path": "history/account-routing-delta-4020293815-4022953075-752e2b98c155d80a50cda4e98cc44af634f6500be8f9f45a495b3fe66faad29f.route",
+            "size": 35309723,
+            "checksum": "sha256:752e2b98c155d80a50cda4e98cc44af634f6500be8f9f45a495b3fe66faad29f",
+            "lookupRoot": "sha256:1a36032ecdaceef0193877a999510667babaf5fbca6b0598aefa09992a1686c9"
+          },
+          "metadata": "metadata/1a36032ecdaceef0193877a999510667babaf5fbca6b0598aefa09992a1686c9.bin",
+          "allocated_bytes": 35315712
+        },
+        {
+          "ref": {
+            "rows": 1204136,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4022953076,
+            "toTxNum": 4025621662,
+            "path": "history/account-routing-delta-4022953076-4025621662-b9079de96dbb24500d1114a054f148b0e09c2187b6af029c456f24a1ae761633.route",
+            "size": 35440891,
+            "checksum": "sha256:b9079de96dbb24500d1114a054f148b0e09c2187b6af029c456f24a1ae761633",
+            "lookupRoot": "sha256:aa8a768092c5ceb9e72c0dfade41542db66e2f2e0f18ec23fb41019c87f867c7"
+          },
+          "metadata": "metadata/aa8a768092c5ceb9e72c0dfade41542db66e2f2e0f18ec23fb41019c87f867c7.bin",
+          "allocated_bytes": 35446784
+        },
+        {
+          "ref": {
+            "rows": 1141303,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4025621663,
+            "toTxNum": 4027963409,
+            "path": "history/account-routing-delta-4025621663-4027963409-b401213723f2ec1ec2a29f45e6f38ec574dfcd46c54f6c4a929578d3cad79978.route",
+            "size": 33597458,
+            "checksum": "sha256:b401213723f2ec1ec2a29f45e6f38ec574dfcd46c54f6c4a929578d3cad79978",
+            "lookupRoot": "sha256:cae7cd56d36c7c403de24419f9ab3912521baa78a7cd1ae1dd3709fdd0280503"
+          },
+          "metadata": "metadata/cae7cd56d36c7c403de24419f9ab3912521baa78a7cd1ae1dd3709fdd0280503.bin",
+          "allocated_bytes": 33603584
+        },
+        {
+          "ref": {
+            "rows": 1207265,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4027963410,
+            "toTxNum": 4030506452,
+            "path": "history/account-routing-delta-4027963410-4030506452-aead9ed0780de5cefc7d18c3edb07b40204375b5fc738ae6995ef4911ca35570.route",
+            "size": 35539280,
+            "checksum": "sha256:aead9ed0780de5cefc7d18c3edb07b40204375b5fc738ae6995ef4911ca35570",
+            "lookupRoot": "sha256:0fbae1cd5d5a30cd40be7967d0da9af8f6ab0196cf0aa45cc6411eb59232296f"
+          },
+          "metadata": "metadata/0fbae1cd5d5a30cd40be7967d0da9af8f6ab0196cf0aa45cc6411eb59232296f.bin",
+          "allocated_bytes": 35545088
+        },
+        {
+          "ref": {
+            "rows": 1157084,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4030506453,
+            "toTxNum": 4032859674,
+            "path": "history/account-routing-delta-4030506453-4032859674-7d4e42ee933ad1781e871b2ec5ae1639f7dbba47ae7f02c5353a995debf735b8.route",
+            "size": 34060231,
+            "checksum": "sha256:7d4e42ee933ad1781e871b2ec5ae1639f7dbba47ae7f02c5353a995debf735b8",
+            "lookupRoot": "sha256:d9851768f9bfac76e7a1f8df4691f50bf6766fc0b23bb0877492681e6bdb5f61"
+          },
+          "metadata": "metadata/d9851768f9bfac76e7a1f8df4691f50bf6766fc0b23bb0877492681e6bdb5f61.bin",
+          "allocated_bytes": 34066432
+        },
+        {
+          "ref": {
+            "rows": 1177296,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4032859675,
+            "toTxNum": 4035429007,
+            "path": "history/account-routing-delta-4032859675-4035429007-c4a125dc08658ca6afe5bc115b7f1092a03a378d50c6279e0909bb3598fda5c4.route",
+            "size": 34654417,
+            "checksum": "sha256:c4a125dc08658ca6afe5bc115b7f1092a03a378d50c6279e0909bb3598fda5c4",
+            "lookupRoot": "sha256:ffb8d4b51ed72e9d7b1357d7fb99c125331ec788ceed29828311a3ad84bb06c5"
+          },
+          "metadata": "metadata/ffb8d4b51ed72e9d7b1357d7fb99c125331ec788ceed29828311a3ad84bb06c5.bin",
+          "allocated_bytes": 34660352
+        },
+        {
+          "ref": {
+            "rows": 1060263,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4035429008,
+            "toTxNum": 4037884155,
+            "path": "history/account-routing-delta-4035429008-4037884155-7389f7884fea1037e41a0a7b41cd4695bc2d15d4cfb98c0ea3a35a90079847f6.route",
+            "size": 31208970,
+            "checksum": "sha256:7389f7884fea1037e41a0a7b41cd4695bc2d15d4cfb98c0ea3a35a90079847f6",
+            "lookupRoot": "sha256:6239b26abd22592ba4df4c86b35b32476dd4758ae5db2289b146ea4f9396cdf8"
+          },
+          "metadata": "metadata/6239b26abd22592ba4df4c86b35b32476dd4758ae5db2289b146ea4f9396cdf8.bin",
+          "allocated_bytes": 31215616
+        },
+        {
+          "ref": {
+            "rows": 1160202,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4037884156,
+            "toTxNum": 4040454493,
+            "path": "history/account-routing-delta-4037884156-4040454493-ad17c609585e82dc297cff7d1b988d00f2af632ced6ed46708598dd0365d68a3.route",
+            "size": 34150663,
+            "checksum": "sha256:ad17c609585e82dc297cff7d1b988d00f2af632ced6ed46708598dd0365d68a3",
+            "lookupRoot": "sha256:38509404ff16d28a5b5001b1307dbd49ac2cedbab878482360bde839a553ec20"
+          },
+          "metadata": "metadata/38509404ff16d28a5b5001b1307dbd49ac2cedbab878482360bde839a553ec20.bin",
+          "allocated_bytes": 34156544
+        },
+        {
+          "ref": {
+            "rows": 1085706,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4040454494,
+            "toTxNum": 4043083643,
+            "path": "history/account-routing-delta-4040454494-4043083643-7e0cd7754ca50e45c736817bdd4eba211d28b1efa1e9da99902362267bce502e.route",
+            "size": 31962825,
+            "checksum": "sha256:7e0cd7754ca50e45c736817bdd4eba211d28b1efa1e9da99902362267bce502e",
+            "lookupRoot": "sha256:4f2beaf643e128afc61831f013b2a5b1d3d17a2f37875afb242cc992f60c0741"
+          },
+          "metadata": "metadata/4f2beaf643e128afc61831f013b2a5b1d3d17a2f37875afb242cc992f60c0741.bin",
+          "allocated_bytes": 31965184
+        },
+        {
+          "ref": {
+            "rows": 1153772,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4043083644,
+            "toTxNum": 4045739352,
+            "path": "history/account-routing-delta-4043083644-4045739352-fa57c8063f7b5750ec9d523df3c73670bb1ead34bd62f385d740ce8553d76343.route",
+            "size": 33961959,
+            "checksum": "sha256:fa57c8063f7b5750ec9d523df3c73670bb1ead34bd62f385d740ce8553d76343",
+            "lookupRoot": "sha256:ea01f0b752cfc4b0f4571efe66057f7b9301180e07dde41c45b1a72ac0c533ff"
+          },
+          "metadata": "metadata/ea01f0b752cfc4b0f4571efe66057f7b9301180e07dde41c45b1a72ac0c533ff.bin",
+          "allocated_bytes": 33968128
+        },
+        {
+          "ref": {
+            "rows": 1129683,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4045739353,
+            "toTxNum": 4048116838,
+            "path": "history/account-routing-delta-4045739353-4048116838-651068afb38d5eeefe5492f2f1c05dc1795668460acfa3e1e06036f32be6a709.route",
+            "size": 33253373,
+            "checksum": "sha256:651068afb38d5eeefe5492f2f1c05dc1795668460acfa3e1e06036f32be6a709",
+            "lookupRoot": "sha256:4a6fcf3ea57109058167877e500e58422b9d035fa393a7a437751cd6785d277e"
+          },
+          "metadata": "metadata/4a6fcf3ea57109058167877e500e58422b9d035fa393a7a437751cd6785d277e.bin",
+          "allocated_bytes": 33255424
+        },
+        {
+          "ref": {
+            "rows": 1080037,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4048116839,
+            "toTxNum": 4050556899,
+            "path": "history/account-routing-delta-4048116839-4050556899-1c15d1c5ad78962040efc4ae2d32c3b094d24cc189abc2d31c0737589bb5cd88.route",
+            "size": 31790836,
+            "checksum": "sha256:1c15d1c5ad78962040efc4ae2d32c3b094d24cc189abc2d31c0737589bb5cd88",
+            "lookupRoot": "sha256:3420b4189fbf845da87e198663689a6a356fac7303f76a8d137fd07ac738f3f7"
+          },
+          "metadata": "metadata/3420b4189fbf845da87e198663689a6a356fac7303f76a8d137fd07ac738f3f7.bin",
+          "allocated_bytes": 31793152
+        },
+        {
+          "ref": {
+            "rows": 1247866,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4050556900,
+            "toTxNum": 4053131390,
+            "path": "history/account-routing-delta-4050556900-4053131390-5001d7a84458e3e479c9b6245b507f9c841015289caf244cf2b2235776cd55b7.route",
+            "size": 36731375,
+            "checksum": "sha256:5001d7a84458e3e479c9b6245b507f9c841015289caf244cf2b2235776cd55b7",
+            "lookupRoot": "sha256:09bd4b7d37fd631128ff63fe1483f525602124a32607efa75ec4156dd06b3646"
+          },
+          "metadata": "metadata/09bd4b7d37fd631128ff63fe1483f525602124a32607efa75ec4156dd06b3646.bin",
+          "allocated_bytes": 36737024
+        },
+        {
+          "ref": {
+            "rows": 1119637,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4053131391,
+            "toTxNum": 4055623092,
+            "path": "history/account-routing-delta-4053131391-4055623092-941f8af32abb36b066c4d6d6b7c36dda22ccab4892743d4fdc56b44f3ccda875.route",
+            "size": 32958312,
+            "checksum": "sha256:941f8af32abb36b066c4d6d6b7c36dda22ccab4892743d4fdc56b44f3ccda875",
+            "lookupRoot": "sha256:1a532d8664d409a5f94c8ff886a2d773680efeb04040a09685c8ce1400c47e5a"
+          },
+          "metadata": "metadata/1a532d8664d409a5f94c8ff886a2d773680efeb04040a09685c8ce1400c47e5a.bin",
+          "allocated_bytes": 32960512
+        },
+        {
+          "ref": {
+            "rows": 1308187,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4055623093,
+            "toTxNum": 4058233392,
+            "path": "history/account-routing-delta-4055623093-4058233392-4411acbd38cc6a791c230cf3600163bac9c7f4075906ae727d01560f3248a77c.route",
+            "size": 38505197,
+            "checksum": "sha256:4411acbd38cc6a791c230cf3600163bac9c7f4075906ae727d01560f3248a77c",
+            "lookupRoot": "sha256:173fd44ae74f47fde4f76b6ac104d636a4e8e93fc8871874399497e4ede019c9"
+          },
+          "metadata": "metadata/173fd44ae74f47fde4f76b6ac104d636a4e8e93fc8871874399497e4ede019c9.bin",
+          "allocated_bytes": 38510592
+        },
+        {
+          "ref": {
+            "rows": 1083135,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4058233393,
+            "toTxNum": 4060520393,
+            "path": "history/account-routing-delta-4058233393-4060520393-651cf87ecad9a3b928b789b0cfa8756591aad96da92f34b7cade2f3447ec5dea.route",
+            "size": 31880948,
+            "checksum": "sha256:651cf87ecad9a3b928b789b0cfa8756591aad96da92f34b7cade2f3447ec5dea",
+            "lookupRoot": "sha256:66446b564e56e604a9b216ae2d9998eccc7e7853970eb8f698db0f63fa919837"
+          },
+          "metadata": "metadata/66446b564e56e604a9b216ae2d9998eccc7e7853970eb8f698db0f63fa919837.bin",
+          "allocated_bytes": 31883264
+        },
+        {
+          "ref": {
+            "rows": 1600942,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4060520394,
+            "toTxNum": 4063202637,
+            "path": "history/account-routing-delta-4060520394-4063202637-2df4d327e746e367b040b11c1b33e2b6815c4fc350ea05071d12bfe3a094bac6.route",
+            "size": 47124708,
+            "checksum": "sha256:2df4d327e746e367b040b11c1b33e2b6815c4fc350ea05071d12bfe3a094bac6",
+            "lookupRoot": "sha256:706823e028b46691c92ae3718de8ee2fc5386da334e6f55f82570878b4439a18"
+          },
+          "metadata": "metadata/706823e028b46691c92ae3718de8ee2fc5386da334e6f55f82570878b4439a18.bin",
+          "allocated_bytes": 47132672
+        },
+        {
+          "ref": {
+            "rows": 116735,
+            "dataset": "state-domain-change",
+            "kind": "account-history-routing-delta",
+            "fromTxNum": 4063202638,
+            "toTxNum": 4063356397,
+            "path": "history/account-routing-delta-4063202638-4063356397-35d871e9adfcb4dcc550798c8201ac438479ef33f95edd09d3c66f4b323af20b.route",
+            "size": 3437223,
+            "checksum": "sha256:35d871e9adfcb4dcc550798c8201ac438479ef33f95edd09d3c66f4b323af20b",
+            "lookupRoot": "sha256:9f11b90f65cbba01116284f26efd09108688af1710a82e2a9d6e4979feac5cc2"
+          },
+          "metadata": "metadata/9f11b90f65cbba01116284f26efd09108688af1710a82e2a9d6e4979feac5cc2.bin",
+          "allocated_bytes": 3440640
+        }
+      ],
+      "progress": {
+        "historyBuildTxNum": 4063356397,
+        "accessorBuildTxNum": 4063356397,
+        "hotPruneTxNum": 4063356397,
+        "hotPruneBlockNum": 45046617
+      },
+      "visible": [
+        1,
+        4063356397
+      ]
+    }
+  },
+  "scope": "LookupRoot metadata proof and native HTTP returns; no repeated full table/state scan"
+}

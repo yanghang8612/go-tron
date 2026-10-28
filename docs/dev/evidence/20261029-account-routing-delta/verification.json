@@ -1,0 +1,73 @@
+{
+  "complete": true,
+  "source": "78c48bd020c11dbde226cb47245ae6d3f97aaf6e",
+  "production_identity": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "http_returns": 60,
+  "head": [
+    45836827,
+    "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    4240407293,
+    "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+  ],
+  "tables": {
+    "gaps": {
+      "objects": 0,
+      "rows": 0,
+      "file_bytes": 0,
+      "allocated_bytes": 0,
+      "all_metadata_and_headers_bytes": 0,
+      "exact_new_proofs": 0,
+      "base_lookup_root": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+    },
+    "delta": {
+      "objects": 105,
+      "rows": 126577944,
+      "file_bytes": 3725906314,
+      "allocated_bytes": 3726385152,
+      "all_metadata_and_headers_bytes": 682954,
+      "exact_new_proofs": 1521,
+      "base_lookup_root": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+    },
+    "compact": {
+      "objects": 64,
+      "rows": 98700481,
+      "file_bytes": 2905247508,
+      "allocated_bytes": 2905559040,
+      "all_metadata_and_headers_bytes": 540436,
+      "exact_new_proofs": 1521,
+      "base_lookup_root": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+    }
+  },
+  "build_seconds": 428.075958736,
+  "source_reads": 1521,
+  "build_io": {
+    "rchar": 50436358193,
+    "wchar": 20670630576,
+    "syscr": 4729261,
+    "syscw": 127102,
+    "read_bytes": 12993028096,
+    "write_bytes": 20672425984,
+    "cancelled_write_bytes": 11990523904
+  },
+  "consolidation_seconds": 131.551783257,
+  "consolidation_passes": 41,
+  "canonical_refs_and_frontiers_unchanged": true,
+  "archive": {
+    "bytes": 1075414,
+    "sha256": "c6e176434939589570402361d2d238823236bcf5fe66620cb469a1c7b03d5319"
+  },
+  "scope": "actual builder/publication and full HTTP; authenticated metadata roots/exact IDs; no repeated full state/table scan; shared OS cache uncontrolled; Runner admission incomplete",
+  "private_account_index_cold_returns": 16,
+  "compiled_version_comparison_returns": 40,
+  "base_source": "69d74ae09d953a40a65b98b0a43eb22d115e7f70",
+  "binary_sha256": {
+    "before": "5d7e1eaca5df8a133a432fff72b227d590d163cbbaf8343b9162f6ede6fb11bd",
+    "candidate": "12827bd067d3632ac1bd10852cffbc3a06bec9846931846e1561a74197cff9c0"
+  },
+  "cold_scope": "only copied account delta inodes: zero resident pages at dispatch; canonical and other auxiliary caches uncontrolled"
+}

@@ -1,0 +1,178 @@
+[
+  {
+    "case": "private-account-cold-0",
+    "height": 9000000,
+    "repeat": 0,
+    "seconds_loopback_http": 2.0820860415697098,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "private-account-cold-0",
+    "height": 9000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.7341866716742516,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "private-account-cold-1",
+    "height": 10000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.9308162182569504,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "private-account-cold-1",
+    "height": 10000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.5827294513583183,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "private-account-cold-2",
+    "height": 15000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.0207074508070946,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "private-account-cold-2",
+    "height": 15000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6055577546358109,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "private-account-cold-3",
+    "height": 20000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.1183843240141869,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "private-account-cold-3",
+    "height": 20000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6287826225161552,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "private-account-cold-4",
+    "height": 9000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.0036566480994225,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "private-account-cold-4",
+    "height": 9000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6252495497465134,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "private-account-cold-5",
+    "height": 10000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.9274680092930794,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "private-account-cold-5",
+    "height": 10000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.5798644497990608,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "private-account-cold-6",
+    "height": 15000000,
+    "repeat": 0,
+    "seconds_loopback_http": 0.9560292288661003,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "private-account-cold-6",
+    "height": 15000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.5951901003718376,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "private-account-cold-7",
+    "height": 20000000,
+    "repeat": 0,
+    "seconds_loopback_http": 1.0293349400162697,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "private-account-cold-7",
+    "height": 20000000,
+    "repeat": 1,
+    "seconds_loopback_http": 0.6485962346196175,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  }
+]

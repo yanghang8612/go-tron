@@ -126,3 +126,7 @@ exact pair identities，以及所有独立可复算的布局公式；源键计�
 [线上 HTTP 原始计时](evidence/20261029-account-routing-study/production-multiheight.json)。
 生产 PID32436、启动时间 2026-10-28 14:26:39 UTC、executable 前后相同。
 本轮仅推送 feature 分支以传输研究源码，未推 master、部署、重启或删库。
+
+后续已完成独立增量表原型和 116 次完整 HTTP 实测，详见
+[增量路由实建报告](account-routing-delta-20261029.md)。该后续实验尚未接入
+正常 Runner，不改变本报告的生产版本和首次采样结论。

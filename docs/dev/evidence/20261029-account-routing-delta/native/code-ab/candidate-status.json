@@ -1,0 +1,27 @@
+{
+  "complete": true,
+  "stage": "compiled version HTTP comparison complete",
+  "source": "f31f419077bc8cc2d779a23b1839abbe73a3de47",
+  "base_source": "69d74ae09d953a40a65b98b0a43eb22d115e7f70",
+  "candidate_source": "78c48bd020c11dbde226cb47245ae6d3f97aaf6e",
+  "production_mutations": false,
+  "cache": "fresh processes, same fixed canonical cut, shared OS caches uncontrolled; no eviction",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "binary_sha256": {
+    "before": "5d7e1eaca5df8a133a432fff72b227d590d163cbbaf8343b9162f6ede6fb11bd",
+    "candidate": "12827bd067d3632ac1bd10852cffbc3a06bec9846931846e1561a74197cff9c0"
+  },
+  "utc": "2026-10-28T18:43:04.032981Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "requests": 40
+}

@@ -1,0 +1,11 @@
+{
+  "archive": "/Users/asuka/Downloads/=_AAA-gtron-account-delta-20261029-final.zip_",
+  "server_archive": "/tmp/AAA-gtron-account-delta-20261029-final.zip",
+  "bytes": 1075414,
+  "sha256": "c6e176434939589570402361d2d238823236bcf5fe66620cb469a1c7b03d5319",
+  "members": 197,
+  "crc_ok": true,
+  "source": "78c48bd020c11dbde226cb47245ae6d3f97aaf6e",
+  "harness_source": "f31f419077bc8cc2d779a23b1839abbe73a3de47",
+  "scope": "Authenticated metadata and HTTP records verified locally; full data tables retained on server and not rescanned locally."
+}
