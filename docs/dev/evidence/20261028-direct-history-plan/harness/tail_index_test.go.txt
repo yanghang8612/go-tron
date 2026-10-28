@@ -1,0 +1,44 @@
+package core
+
+import (
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "testing"
+ "time"
+
+ chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
+ "github.com/tronprotocol/go-tron/core/rawdb"
+ "github.com/tronprotocol/go-tron/core/rawdb/etl"
+ rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+ "github.com/tronprotocol/go-tron/core/state/snapshots"
+)
+
+// An offline ablation: advance only an independent copy's auxiliary posting
+// frontier. Canonical rows, state HEAD, cold files and production stay fixed.
+func TestOfflineTailIndexAblation(t *testing.T) {
+ dir,out:=os.Getenv("GTRON_TAIL_INDEX_INPUT"),os.Getenv("GTRON_TAIL_INDEX_OUTPUT")
+ if dir=="" { t.Skip("explicit fixed input required") }
+ write:=os.Getenv("GTRON_TAIL_INDEX_WRITE")=="1"
+ hot,err:=rawdb.NewPebbleDBReadOnly(filepath.Join(dir,"chaindata"),512,1024);if err!=nil {t.Fatal(err)};defer hot.Close()
+ hist,err:=rawdb.NewHistoryStagingPebbleDB(filepath.Join(dir,"history"),512,1024,!write);if err!=nil {t.Fatal(err)};defer hist.Close()
+ db:=rawdb.NewDirectHistoryStore(hot,hist)
+ head,ok,err:=rawdb.ReadStateCommitmentHead(db);if err!=nil||!ok {t.Fatal(ok,err)}
+ index,ok,err:=rawdb.ReadStageProgressRow(db,rawdb.StageStateHistoryIndex);if err!=nil||!ok {t.Fatal(ok,err)}
+ report:=map[string]any{"head":head,"index_before":index,"write_auxiliary_copy":write,"lag_blocks":head.BlockNum-index.BlockNum}
+ dump:=func(){b,_:=json.MarshalIndent(report,"","  ");if e:=os.WriteFile(out,b,0600);e!=nil {t.Fatal(e)}}
+ dump();if !write {return}
+ if index.BlockNum>=head.BlockNum || head.BlockNum-index.BlockNum>4096 {t.Fatal("tail ablation outside 4096-block cost limit")}
+ // Rebuild whole posting frames, so the last partially indexed frame cannot
+ // lose its earlier bits when the derived rows are overwritten.
+ from:=index.BlockNum/256*256
+ ancient,err:=rawdbfreezer.NewFreezer(filepath.Join(dir,"ancient"),"",true,2_000_000_000,chainfreezer.FreezerTableSet());if err!=nil {t.Fatal(err)};defer ancient.Close()
+ chain:=rawdb.NewChainDB(hot,rawdb.NewFreezerReader(ancient))
+ manager,err:=snapshots.OpenManager(filepath.Join(dir,"state-snapshots"));if err!=nil {t.Fatal(err)};chain.SetChainIndexReader(manager)
+ started:=time.Now()
+ result,err:=rawdb.RebuildStateHistoryIndexInterruptible(db,hist,from,head.BlockNum,etl.Options{TempDir:filepath.Dir(out),BufferLimit:32<<20},chain.BlockHashByNumberStrict,nil)
+ if err!=nil {t.Fatal(err)}
+ if err:=rawdb.WriteStageProgressWithHash(hist,rawdb.StageStateHistoryIndex,head.BlockNum,head.BlockHash);err!=nil {t.Fatal(err)}
+ after,ok,err:=rawdb.ReadStateCommitmentHead(db);if err!=nil||!ok||after!=head {t.Fatal("canonical state HEAD changed",err)}
+ report["result"],report["seconds"],report["canonical_head_unchanged"]=result,time.Since(started).Seconds(),true;dump()
+}
