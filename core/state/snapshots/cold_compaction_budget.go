@@ -25,7 +25,7 @@ type historyCompactionBudgetState struct {
 	outerMetrics         *historyCompactionOuterMetrics
 	routingRetiredCursor retiredMetadataSweepCursor
 	systemRouting        systemRoutingRefreshState
-	preferMetadata       bool
+	routingNext          uint8
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -194,36 +194,18 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			}
 			r.compactionBudget.routingRetiredCursor = pruned.Next
 		}
-		// Alternate the two lightweight families. Returning after every
-		// successful small batch used to starve metadata until all sources
-		// were covered, leaving expensive query fallback for hours.
-		small := func() (bool, error) { return refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
-		metadata := func() (bool, error) { return refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
-		families := []func() (bool, error){small, metadata}
-		if r.compactionBudget.preferMetadata {
-			families[0], families[1] = families[1], families[0]
-		}
-		for _, refresh := range families {
-			built, routeErr := refresh()
-			if routeErr != nil {
-				return total, routeErr
-			}
-			if built {
-				r.compactionBudget.preferMetadata = !r.compactionBudget.preferMetadata
-				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
-			}
-		}
 		r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
-		var built bool
-		var routeErr error
-		built, routeErr = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
-		if routeErr != nil {
-			return total, routeErr
-		}
-		if built {
-			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
-		}
-		built, routeErr = refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		// A continuously productive lightweight family must not prevent account
+		// and broad coverage from advancing. Each family keeps its own bounded
+		// work and publication path; only the admission order is shared.
+		built, routeErr := r.compactionBudget.refreshRoutingFamilies([4]func() (bool, error){
+			func() (bool, error) { return refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy) },
+			func() (bool, error) { return refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy) },
+			func() (bool, error) { return refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy) },
+			func() (bool, error) {
+				return refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
+			},
+		})
 		if routeErr != nil {
 			return total, routeErr
 		}
@@ -271,4 +253,21 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			return total, nil
 		}
 	}
+}
+
+// Runner.passMu serializes this cursor. Move past the family that actually did
+// work, rather than toggling the original starting position after skipped work.
+// An error is still returned, but cannot permanently deny other families a turn.
+func (s *historyCompactionBudgetState) refreshRoutingFamilies(families [4]func() (bool, error)) (bool, error) {
+	start := int(s.routingNext) % len(families)
+	for offset := range families {
+		i := (start + offset) % len(families)
+		built, err := families[i]()
+		if built || err != nil {
+			s.routingNext = uint8((i + 1) % len(families))
+			return built, err
+		}
+	}
+	s.routingNext = uint8((start + 1) % len(families))
+	return false, nil
 }

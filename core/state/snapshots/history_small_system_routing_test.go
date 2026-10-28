@@ -500,18 +500,24 @@ func TestSmallSystemHistoryRoutingBootstrapDoesNotHideUncoveredTail(t *testing.T
 }
 
 func smallManyRoutingFixture(t *testing.T) (string, *Manifest) {
+	t.Helper()
+	return smallManyRoutingFixtureSources(t, 70)
+}
+
+func smallManyRoutingFixtureSources(t *testing.T, count uint64) (string, *Manifest) {
+	t.Helper()
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
 	defer db.Close()
 	var refs []SegmentRef
 	// More than the maintenance cap, including an empty-family source and a
 	// new system key beyond the observed 59-key set.
-	for tx := uint64(1); tx <= 70; tx++ {
+	for tx := uint64(1); tx <= count; tx++ {
 		if err := rawdb.WriteStateTxRange(db, tx, common.Hash{byte(tx)}, tx, tx); err != nil {
 			t.Fatal(err)
 		}
 		owner, domain, key := common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(fmt.Sprintf("future-%d", tx))
-		if tx == 70 {
+		if tx == count {
 			owner = common.Address{0x41, 9}
 			domain = kvdomains.ContractMetadata
 		}
@@ -525,7 +531,7 @@ func smallManyRoutingFixture(t *testing.T) (string, *Manifest) {
 		}
 		refs = append(refs, built...)
 	}
-	m := NewManifest(1, 70, refs)
+	m := NewManifest(1, count, refs)
 	if err := PublishManifest(dir, m); err != nil {
 		t.Fatal(err)
 	}
