@@ -63,6 +63,13 @@ func (s *historyRoutingReadScope) put(key historyRoutingReadKey, image historyRo
 	if _, exists := s.images[key]; exists {
 		return
 	}
+	// A nearly 64 MiB broad route must not be excluded just because a tiny
+	// system route arrived first. Prefer the dominant authentication cost,
+	// without raising the per-request byte cap or evicting it for small reads.
+	if len(image.data) <= historyRoutingRequestBytes && len(image.data) > historyRoutingRequestBytes-s.bytes && len(image.data) > s.bytes {
+		s.images = make(map[historyRoutingReadKey]historyRoutingReadImage)
+		s.bytes = 0
+	}
 	if len(s.images) >= historyRoutingRequestEntries || len(image.data) > historyRoutingRequestBytes-s.bytes {
 		return
 	}

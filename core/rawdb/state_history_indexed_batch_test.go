@@ -84,3 +84,72 @@ func TestIndexedKVBatchSharesCandidateBlocksAndRetriesFalsePostings(t *testing.T
 		t.Fatal(err)
 	}
 }
+
+// Auxiliary coverage must not make a near-head query traverse the whole
+// posting history when one pinned canonical scan is cheaper.
+func TestIndexedKVShortWindowUsesPinnedCanonicalRows(t *testing.T) {
+	f, _ := queryTailFixture(t)
+	if err := WriteStageProgressWithHash(f, StageStateHistoryIndex, 10, common.Hash{10}); err != nil {
+		t.Fatal(err)
+	}
+	view, release, err := AcquireStateHistoryReadView(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	counted := &shortWindowCountView{StateHistoryReadView: view}
+	cached := WithStateHistoryQueryTailCache(counted)
+	// Include duplicate keys, absent keys, generation changes, shared packs,
+	// positive-sequence repairs, and same-block transaction cut boundaries.
+	for _, block := range []uint64{2, 3, 8, 9} {
+		var rows []*StateDomainChange
+		if err := IterateStateDomainChanges(view, block, func(r *StateDomainChange) (bool, error) {
+			rows = append(rows, cloneStateDomainChange(r))
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for _, q := range rows {
+			if q.FlatDomain != StateFlatDomainKVLatest {
+				continue
+			}
+			targetTx := block*100 + 1
+			got, err := ReadFirstStateDomainChangeByKeyBlockRangeContext(context.Background(), cached, block-1, block, targetTx, block*100+100, q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key)
+			var want *StateDomainChange
+			if e := IterateStateDomainChanges(view, block, func(r *StateDomainChange) (bool, error) {
+				if stateDomainChangeInTxWindow(r, targetTx, block*100+100) && stateDomainChangeMatchesKey(r, q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key) {
+					want = cloneStateDomainChange(r)
+					return false, nil
+				}
+				return true, nil
+			}); e != nil {
+				t.Fatal(e)
+			}
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("block %d scalar mismatch: %v", block, err)
+			}
+			batch, e := ReadFirstStateKVChangesByKeysBlockRangeContext(context.Background(), cached, block-1, block, targetTx, block*100+100, q.Owner, q.Generation, q.Domain, [][]byte{q.Key, q.Key, []byte("absent")})
+			if e != nil || !reflect.DeepEqual(batch[string(q.Key)], want) || batch["absent"] != nil {
+				t.Fatalf("batch mismatch: %v", e)
+			}
+		}
+	}
+	if counted.postings != 0 {
+		t.Fatalf("short window scanned %d posting prefixes", counted.postings)
+	}
+	if preferDirectStateHistoryWindow(cached, 0, stateHistoryDirectWindowBlocks+1) || preferDirectStateHistoryWindow(view, 0, 1) {
+		t.Fatal("direct policy escaped request/range bound")
+	}
+}
+
+type shortWindowCountView struct {
+	StateHistoryReadView
+	postings int
+}
+
+func (v *shortWindowCountView) NewIterator(prefix, start []byte) ethdb.Iterator {
+	if bytes.HasPrefix(prefix, stateChangePostingPrefix) {
+		v.postings++
+	}
+	return v.StateHistoryReadView.NewIterator(prefix, start)
+}

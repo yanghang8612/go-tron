@@ -57,3 +57,12 @@ canonical row validation; only stop before frames starting beyond toBlock.
 Do not assume a 256-block width or a non-overlapping predecessor-frame layout.
 Verify matched HTTP latency, return values, CPU and allocated bytes on the same
 input before considering the previous near-HEAD regression resolved.
+
+
+A tiny-window cost path bypasses posting prefixes only for a pinned request
+with an owner-tail cache, present stage metadata and <=16 requested blocks.
+It reuses the exact existing canonical first-tail scanner and all key/Tx/repair
+predicates. Larger/unpinned/unstaged reads retain ordinary indexed behavior.
+For request route images, let the dominant large authenticated object replace
+smaller images when byte pressure would otherwise prevent its admission;
+small images never evict it, and the same 64 MiB cap still applies.

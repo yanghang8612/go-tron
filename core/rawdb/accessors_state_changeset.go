@@ -1548,6 +1548,9 @@ func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db St
 	if !staged {
 		indexedHead = headBlock
 	}
+	if staged && preferDirectStateHistoryWindow(db, targetBlock, headBlock) {
+		indexedHead = targetBlock
+	}
 	for fromBlock <= indexedHead {
 		blockNum, ok, err := firstStateDomainChangeBlockByKeyRangeContext(ctx, db, fromBlock, indexedHead, flatDomain, owner, generation, domain, key)
 		if err != nil {
@@ -1644,6 +1647,9 @@ func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db Stat
 	if !staged {
 		indexedHead = headBlock
 	}
+	if staged && preferDirectStateHistoryWindow(db, targetBlock, headBlock) {
+		indexedHead = targetBlock
+	}
 	wanted := make(map[string][]byte, len(keys))
 	for _, key := range keys {
 		keyString := string(key)
@@ -1683,6 +1689,17 @@ func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db Stat
 		return nil, err
 	}
 	return first, nil
+}
+
+// Even a one-block seek through an exact hash prefix otherwise decodes every
+// historical posting frame below its lower bound. A request with a pinned
+// owner-tail cache can share one small canonical range scan across all keys.
+// This is only a cost choice: use the same repaired rows and Tx/key predicates.
+const stateHistoryDirectWindowBlocks = 16
+
+func preferDirectStateHistoryWindow(db StateKVHistoryReader, target, head uint64) bool {
+	_, request := db.(*stateHistoryQueryTailView)
+	return request && head > target && head-target <= stateHistoryDirectWindowBlocks
 }
 
 // stateHistoryIndexedHead returns the inclusive posting-index watermark capped

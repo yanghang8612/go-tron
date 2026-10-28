@@ -97,3 +97,21 @@ func TestHistoryRoutingReadScopeBudgetAndConcurrentReads(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestHistoryRoutingReadScopeRetainsDominantImage(t *testing.T) {
+	scope := &historyRoutingReadScope{images: make(map[historyRoutingReadKey]historyRoutingReadImage)}
+	small := historyRoutingReadKey{dir: "small"}
+	big := historyRoutingReadKey{dir: "big"}
+	scope.put(small, historyRoutingReadImage{data: make([]byte, 1<<20)})
+	scope.put(big, historyRoutingReadImage{data: make([]byte, historyRoutingRequestBytes-(1<<19))})
+	if _, ok := scope.get(big); !ok {
+		t.Fatal("small image excluded dominant route")
+	}
+	if scope.bytes > historyRoutingRequestBytes {
+		t.Fatal("budget exceeded")
+	}
+	scope.put(small, historyRoutingReadImage{data: make([]byte, 1<<20)})
+	if _, ok := scope.get(big); !ok {
+		t.Fatal("small read evicted dominant route")
+	}
+}
