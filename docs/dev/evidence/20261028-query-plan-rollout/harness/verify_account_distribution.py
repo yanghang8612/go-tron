@@ -34,6 +34,7 @@ for h in m['segments']:
     a,=[r for r in by_path[str(pathlib.PurePosixPath(h['path']).with_suffix('.kv'))] if r['kind']=='accessor' and r.get('dataset')==h['dataset'] and r['fromTxNum']==h['fromTxNum'] and r['toTxNum']==h['toTxNum'] and (r.get('aggregationSteps',0) or 1)==(h.get('aggregationSteps',0) or 1)]
     if pair(h,a) not in covered:unknown.append((h,a))
 rows=d['rows'];assert len(rows)==len(unknown)==d['sources']==1521
+headers=json.loads(z.read('accessor-headers.json'));assert len(headers)==len(rows)
 for row,(h,a) in zip(rows,unknown):
     assert row['source']==h and row['accessor']==a and row['pair_id']==pair(h,a).hex()
     count=row['account_keys']+row['generation_keys']
@@ -41,6 +42,12 @@ for row,(h,a) in zip(rows,unknown):
         size=0 if not count else 1<<(max(64,count*2)-1).bit_length()
         assert size==row['projected_filter_bytes_16bits']
         assert all(not yes or maybe for yes,maybe in zip(row['target_present'],row['target_may_contain']))
+for row,header in zip(rows,headers):
+    raw=bytes.fromhex(header['raw_header']);assert len(raw)==120 and header['pair_id']==row['pair_id']
+    assert header['version']==struct.unpack('>I',raw[8:12])[0]
+    assert struct.unpack('>QQ',raw[12:28])==(row['source']['fromTxNum'],row['source']['toTxNum'])
+    assert header['dictionary_keys']==struct.unpack('>Q',raw[40:48])[0]>=row['account_keys']+row['generation_keys']
+    row['dictionary_keys']=header['dictionary_keys']
 def io(text):return {k:int(v) for k,v in (line.split(':') for line in text.splitlines())}
 for row in rows:
     a,b=io(row['io_before']),io(row['io_after']);row['io_delta']={k:b[k]-a[k] for k in a}
@@ -68,6 +75,17 @@ for j,q in enumerate(d['queries']):
     filtered=[r for r in valid if not r['target_skipped_by_existing_routes'][j] and not r['target_may_contain'][j]]
     targets.append(dict(query=q,present_sources=sum(r['target_present'][j] for r in rows),existing_route_skips=len(rows)-len(unresolved),unresolved_sources=len(unresolved),projected_bloom_negative_sources=len(filtered),projected_bloom_false_positive_sources=sum(not r['target_present'][j] and r['target_may_contain'][j] for r in valid),filter_bytes_for_unresolved_valid_sources=sum(r['projected_filter_bytes_16bits'] for r in valid if not r['target_skipped_by_existing_routes'][j])))
 result=dict(complete=True,source=s['source'],sources=len(rows),seconds=d['seconds'],production_identity=s['production_after'],unsupported=sum(r['unsupported'] for r in rows),hash_budget_excluded=sum(r['hash_budget_excluded'] for r in rows),account_keys=sum(r['account_keys'] for r in rows),generation_keys=sum(r['generation_keys'] for r in rows),key_count_min=counts[0],key_count_median=statistics.median(counts),key_count_p90=counts[int(.9*(len(counts)-1))],key_count_max=counts[-1],projected_bloom_total_bytes=sum(r['projected_filter_bytes_16bits'] for r in valid),projected_delta_exact_groups=len(exact_groups),projected_delta_total_file_bytes=sum(g['projected_file_bytes'] for g in exact_groups),projected_delta_actual_batch_read_bytes=sum(g['projected_actual_two_key_batch_read_bytes'] for g in exact_groups),delta_incomplete_groups=len(groups)-len(exact_groups),study_io_totals={k:sum(r['io_delta'][k] for r in rows) for k in rows[0]['io_delta']},targets=targets,archive=dict(bytes=archive.stat().st_size,sha256=hashlib.sha256(archive.read_bytes()).hexdigest()),scope='native authenticated key counts and membership; local identity/coverage/formula checks; projections only, no built-index HTTP claim')
+result['total_dictionary_keys']=sum(r['dictionary_keys'] for r in rows)
+# A safe key-count upper bound remains usable when the in-memory union cap was
+# reached. Distinct keys cannot exceed the sum of per-source dictionary keys.
+upper_groups=[]
+for i,g in enumerate(groups):
+    chunk=rows[i*64:(i+1)*64];n=sum(r['account_keys']+r['generation_keys'] for r in chunk)
+    pages=(n+140)//141;dirs=(pages+76)//77;meta=64+32*len(chunk)+53*dirs
+    upper_groups.append(dict(sources=len(chunk),unique_key_upper_bound=n,root_metadata_upper_bound=meta,file_upper_bound=meta+(dirs+pages)*4096,actual_two_key_batch_read_upper_bound=64+meta+4*4096))
+result['projected_delta_all_group_file_bytes_upper_bound']=sum(g['file_upper_bound'] for g in upper_groups)
+result['projected_delta_all_group_two_key_read_bytes_upper_bound']=sum(g['actual_two_key_batch_read_upper_bound'] for g in upper_groups)
+result['projected_delta_group_bounds']=upper_groups
 for name in ['candidate-status.json','distribution.json','study.log']:(out/name).write_bytes(z.read(name))
 (out/'verification.json').write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps(result,indent=2))
