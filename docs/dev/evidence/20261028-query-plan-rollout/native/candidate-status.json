@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "stage": "merged native build and full HTTP passed",
+  "source": "52aea62ef56799b7e6c1365293123dd029286935",
+  "production_mutations": false,
+  "production_before": {
+    "MainPID": "16604",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 10:01:31 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-4486cfb61fc3-1f59d76211d1b810/gtron"
+  },
+  "utc": "2026-10-28T13:35:27.117204Z",
+  "production_after": {
+    "MainPID": "16604",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 10:01:31 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-4486cfb61fc3-1f59d76211d1b810/gtron"
+  },
+  "requests": 14,
+  "all_returns_match": true
+}

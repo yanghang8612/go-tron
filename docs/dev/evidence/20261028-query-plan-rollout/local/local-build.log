@@ -1,0 +1,2 @@
+CGO_ENABLED=1 go build -tags='sapling'  -o /Users/asuka/.codex/worktrees/history-auto-columns-policy/go-tron/build/benchmarks/20261028-query-plan-rollout/bin/gtron ./cmd/gtron
+Done building gtron with Sapling support.

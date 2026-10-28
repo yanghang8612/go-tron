@@ -1,0 +1,170 @@
+[
+  {
+    "case": "merged-fixed-http",
+    "height": 9000000,
+    "repeat": 0,
+    "cache": "fresh-process-os-cache-uncontrolled",
+    "seconds_loopback_http": 3.1690513640642166,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "merged-fixed-http",
+    "height": 9000000,
+    "repeat": 1,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.9580324813723564,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "merged-fixed-http",
+    "height": 9000000,
+    "repeat": 2,
+    "cache": "process-warm",
+    "seconds_loopback_http": 1.0288633853197098,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "merged-fixed-http",
+    "height": 35000000,
+    "repeat": 0,
+    "cache": "process-warm",
+    "seconds_loopback_http": 14.535974316298962,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-fixed-http",
+    "height": 35000000,
+    "repeat": 1,
+    "cache": "process-warm",
+    "seconds_loopback_http": 1.8045413047075272,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-fixed-http",
+    "height": 45836826,
+    "repeat": 0,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.2488851621747017,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-fixed-http",
+    "height": 45836826,
+    "repeat": 1,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.2648739814758301,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 9000000,
+    "repeat": 0,
+    "cache": "fresh-process-os-cache-uncontrolled",
+    "seconds_loopback_http": 1.736782819032669,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 9000000,
+    "repeat": 1,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.6062411293387413,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 9000000,
+    "repeat": 2,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.6153347939252853,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 35000000,
+    "repeat": 0,
+    "cache": "process-warm",
+    "seconds_loopback_http": 2.8593993186950684,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 35000000,
+    "repeat": 1,
+    "cache": "process-warm",
+    "seconds_loopback_http": 1.3259674534201622,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 45836826,
+    "repeat": 0,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.3824772834777832,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "merged-indexed-http",
+    "height": 45836826,
+    "repeat": 1,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.2683158367872238,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  }
+]

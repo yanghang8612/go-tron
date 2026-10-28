@@ -1,0 +1,9 @@
+{
+  "source": "52aea62ef56799b7e6c1365293123dd029286935",
+  "complete": true,
+  "same_databases_flags_environment_and_memory_limit": true,
+  "height_advancing": true,
+  "all_live_return_checks_pass": true,
+  "new_full_muhash_scan": false,
+  "latest_height": 47276623
+}

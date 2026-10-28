@@ -1,0 +1,117 @@
+[2026-10-28 13:39:01] running Sapling-enabled tests
+CGO_ENABLED=1 go test -tags='sapling' ./... -count=1 -timeout 900s
+ok  	github.com/tronprotocol/go-tron/actuator	0.178s
+ok  	github.com/tronprotocol/go-tron/cmd/balance-trace	0.013s
+?   	github.com/tronprotocol/go-tron/cmd/compact-corpus-export	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/compact-corpus-measure	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/db-compare	0.017s
+ok  	github.com/tronprotocol/go-tron/cmd/fixture-capture	0.014s
+?   	github.com/tronprotocol/go-tron/cmd/fixture-closure	[no test files]
+?   	github.com/tronprotocol/go-tron/cmd/fixture-digest	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/generation-census	0.100s
+ok  	github.com/tronprotocol/go-tron/cmd/gtron	116.528s
+?   	github.com/tronprotocol/go-tron/cmd/gtron-replay	[no test files]
+ok  	github.com/tronprotocol/go-tron/cmd/history-dictionary-benchmark	0.006s
+ok  	github.com/tronprotocol/go-tron/cmd/history-value-bench	0.284s
+ok  	github.com/tronprotocol/go-tron/cmd/hot-maintenance	25.835s
+ok  	github.com/tronprotocol/go-tron/cmd/other-cold-distribution	0.033s
+ok  	github.com/tronprotocol/go-tron/cmd/other-storage-distribution	0.073s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-census	0.100s
+ok  	github.com/tronprotocol/go-tron/cmd/posting-reclaim-experiment	3.011s
+ok  	github.com/tronprotocol/go-tron/cmd/reward-trace	0.021s
+ok  	github.com/tronprotocol/go-tron/cmd/storage-distribution	0.291s
+ok  	github.com/tronprotocol/go-tron/cmd/tx-index-width-census	0.024s
+?   	github.com/tronprotocol/go-tron/cmd/txsign	[no test files]
+ok  	github.com/tronprotocol/go-tron/common	0.011s
+ok  	github.com/tronprotocol/go-tron/common/log	0.011s
+ok  	github.com/tronprotocol/go-tron/common/muhash3072	0.241s
+?   	github.com/tronprotocol/go-tron/consensus	[no test files]
+ok  	github.com/tronprotocol/go-tron/consensus/dpos	0.020s
+ok  	github.com/tronprotocol/go-tron/core	492.924s
+ok  	github.com/tronprotocol/go-tron/core/blockbuffer	4.234s
+ok  	github.com/tronprotocol/go-tron/core/conformance	0.067s
+ok  	github.com/tronprotocol/go-tron/core/delegation	0.015s
+ok  	github.com/tronprotocol/go-tron/core/forks	0.015s
+ok  	github.com/tronprotocol/go-tron/core/freezer	25.429s
+ok  	github.com/tronprotocol/go-tron/core/maintenance	0.009s
+?   	github.com/tronprotocol/go-tron/core/pointread	[no test files]
+ok  	github.com/tronprotocol/go-tron/core/producer	0.235s
+ok  	github.com/tronprotocol/go-tron/core/rawdb	40.577s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/etl	4.018s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/freezer	24.200s
+ok  	github.com/tronprotocol/go-tron/core/rawdb/pebbledb	9.696s
+ok  	github.com/tronprotocol/go-tron/core/reward	0.017s
+ok  	github.com/tronprotocol/go-tron/core/state	10.257s
+ok  	github.com/tronprotocol/go-tron/core/state/domains	0.017s
+ok  	github.com/tronprotocol/go-tron/core/state/kvdomains	0.020s
+ok  	github.com/tronprotocol/go-tron/core/state/pruning	27.715s
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	222.662s
+ok  	github.com/tronprotocol/go-tron/core/state/statecodec	0.608s
+ok  	github.com/tronprotocol/go-tron/core/txpool	0.031s
+ok  	github.com/tronprotocol/go-tron/core/types	0.158s
+ok  	github.com/tronprotocol/go-tron/core/zksnark	0.123s
+ok  	github.com/tronprotocol/go-tron/crypto	0.039s
+ok  	github.com/tronprotocol/go-tron/crypto/pq	0.005s
+?   	github.com/tronprotocol/go-tron/crypto/pq/falcon	[no test files]
+?   	github.com/tronprotocol/go-tron/docs/dev/evidence/20261019-compact-v3-rollout	[no test files]
+?   	github.com/tronprotocol/go-tron/docs/dev/evidence/20261019-compact-v3-rollout/heartbeats/20261019T0806	[no test files]
+ok  	github.com/tronprotocol/go-tron/internal/dbcompare	0.208s
+ok  	github.com/tronprotocol/go-tron/internal/debugapi	0.045s
+ok  	github.com/tronprotocol/go-tron/internal/grpcapi	0.129s
+ok  	github.com/tronprotocol/go-tron/internal/historychunk	1.372s
+ok  	github.com/tronprotocol/go-tron/internal/jsonrpc	0.536s
+ok  	github.com/tronprotocol/go-tron/internal/math/strictmath	0.007s
+ok  	github.com/tronprotocol/go-tron/internal/metricsapi	0.044s
+ok  	github.com/tronprotocol/go-tron/internal/rpc	0.068s
+ok  	github.com/tronprotocol/go-tron/internal/testutil/fixture	0.027s
+ok  	github.com/tronprotocol/go-tron/internal/tronapi	0.869s
+ok  	github.com/tronprotocol/go-tron/net	9.048s
+ok  	github.com/tronprotocol/go-tron/net/sync	0.048s
+ok  	github.com/tronprotocol/go-tron/net/sync/downloader	0.044s
+?   	github.com/tronprotocol/go-tron/net/sync/fetcher	[no test files]
+ok  	github.com/tronprotocol/go-tron/node	0.014s
+ok  	github.com/tronprotocol/go-tron/p2p	1.597s
+ok  	github.com/tronprotocol/go-tron/p2p/discover	0.007s
+ok  	github.com/tronprotocol/go-tron/params	0.004s
+?   	github.com/tronprotocol/go-tron/proto/api	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core	[no test files]
+?   	github.com/tronprotocol/go-tron/proto/core/contract	[no test files]
+ok  	github.com/tronprotocol/go-tron/proto/p2p	0.007s
+?   	github.com/tronprotocol/go-tron/scripts/dev/abi_hash	[no test files]
+?   	github.com/tronprotocol/go-tron/scripts/fixtures/cmd/gen-smoke	[no test files]
+ok  	github.com/tronprotocol/go-tron/vm	3.225s
+ok  	github.com/tronprotocol/go-tron/vm/tracers	0.019s
+[2026-10-28 13:48:21] building Sapling-enabled gtron
+CGO_ENABLED=1 go build -tags='sapling'  -o /data/gtron/go-tron/build/deploy.nTznba/gtron ./cmd/gtron
+Done building gtron with Sapling support.
+[2026-10-28 13:48:32] publishing root-owned mainnet release for 52aea62ef56799b7e6c1365293123dd029286935
+{"binary": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron", "binary_sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18", "deployed": true, "pid": 21128, "source_commit": "52aea62ef56799b7e6c1365293123dd029286935"}
+[2026-10-28 13:49:13] successfully deployed root-owned mainnet release 52aea62ef56799b7e6c1365293123dd029286935
+{"ok": true, "direct_history": true}
+[2026-10-28 13:49:13] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-28 13:49:13] remote revision:   52aea62ef56799b7e6c1365293123dd029286935
+[2026-10-28 13:49:13] deployed revision: 52aea62ef56799b7e6c1365293123dd029286935
+{"binary": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron", "binary_sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18", "source_commit": "52aea62ef56799b7e6c1365293123dd029286935", "verified": true}
+[2026-10-28 13:49:14] gtron.service already runs verified 52aea62ef56799b7e6c1365293123dd029286935
+{"ok": true, "direct_history": true}
+[2026-10-28 13:50:13] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-28 13:50:14] remote revision:   52aea62ef56799b7e6c1365293123dd029286935
+[2026-10-28 13:50:14] deployed revision: 52aea62ef56799b7e6c1365293123dd029286935
+{"binary": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron", "binary_sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18", "source_commit": "52aea62ef56799b7e6c1365293123dd029286935", "verified": true}
+[2026-10-28 13:50:15] gtron.service already runs verified 52aea62ef56799b7e6c1365293123dd029286935
+{"ok": true, "direct_history": true}
+[2026-10-28 13:51:14] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-28 13:51:15] remote revision:   52aea62ef56799b7e6c1365293123dd029286935
+[2026-10-28 13:51:15] deployed revision: 52aea62ef56799b7e6c1365293123dd029286935
+{"binary": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron", "binary_sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18", "source_commit": "52aea62ef56799b7e6c1365293123dd029286935", "verified": true}
+[2026-10-28 13:51:16] gtron.service already runs verified 52aea62ef56799b7e6c1365293123dd029286935
+{"ok": true, "direct_history": true}
+[2026-10-28 13:52:15] checking origin/master
+Fetching submodule third_party/librustzcash
+[2026-10-28 13:52:16] remote revision:   52aea62ef56799b7e6c1365293123dd029286935
+[2026-10-28 13:52:16] deployed revision: 52aea62ef56799b7e6c1365293123dd029286935
+{"binary": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron", "binary_sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18", "source_commit": "52aea62ef56799b7e6c1365293123dd029286935", "verified": true}
+[2026-10-28 13:52:16] gtron.service already runs verified 52aea62ef56799b7e6c1365293123dd029286935

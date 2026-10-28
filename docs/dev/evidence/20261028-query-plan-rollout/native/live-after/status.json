@@ -1,0 +1,400 @@
+{
+  "complete": true,
+  "mode": "after",
+  "cache": "uncontrolled production caches; no eviction",
+  "requests": [
+    {
+      "case": "9000000-0",
+      "utc": "2026-10-28T13:49:16.260863Z",
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ],
+      "seconds_loopback_http": 24.179801858961582,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      }
+    },
+    {
+      "case": "9000000-1",
+      "utc": "2026-10-28T13:49:40.441133Z",
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ],
+      "seconds_loopback_http": 1.8206522017717361,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      }
+    },
+    {
+      "case": "35000000-0",
+      "utc": "2026-10-28T13:49:42.262261Z",
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x2160ec0"
+      ],
+      "seconds_loopback_http": 2.062137432396412,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      }
+    },
+    {
+      "case": "35000000-1",
+      "utc": "2026-10-28T13:49:44.324907Z",
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x2160ec0"
+      ],
+      "seconds_loopback_http": 2.1328223943710327,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      }
+    },
+    {
+      "case": "balance-341",
+      "utc": "2026-10-28T13:49:46.458271Z",
+      "method": "eth_getBalance",
+      "params": [
+        "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+        "0x155"
+      ],
+      "seconds_loopback_http": 0.1901128813624382,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": "0x0"
+      }
+    },
+    {
+      "case": "balance-342",
+      "utc": "2026-10-28T13:49:46.648948Z",
+      "method": "eth_getBalance",
+      "params": [
+        "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+        "0x156"
+      ],
+      "seconds_loopback_http": 0.08012843877077103,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": "0x6b714021d45c37522e100000"
+      }
+    },
+    {
+      "case": "genesis-balance",
+      "utc": "2026-10-28T13:49:46.729644Z",
+      "method": "eth_getBalance",
+      "params": [
+        "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "0x0"
+      ],
+      "seconds_loopback_http": 0.2059670090675354,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": "0x13fe2e171cda1978db8000000"
+      }
+    },
+    {
+      "case": "transaction-342",
+      "utc": "2026-10-28T13:49:46.936219Z",
+      "method": "eth_getTransactionByHash",
+      "params": [
+        "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2"
+      ],
+      "seconds_loopback_http": 3.2020079270005226,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "blockHash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+          "blockNumber": "0x156",
+          "from": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+          "gas": "0x0",
+          "gasPrice": "0x1",
+          "hash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+          "input": "0x",
+          "nonce": "0x0",
+          "r": "0x0",
+          "s": "0x0",
+          "to": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+          "transactionIndex": "0x0",
+          "type": "0x0",
+          "v": "0x0",
+          "value": "0x762257bf9b9100"
+        }
+      }
+    }
+  ],
+  "initial": {
+    "utc": "2026-10-28T13:49:14.923519Z",
+    "pid": "21128",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron",
+    "sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18",
+    "started": "Wed 2026-10-28 13:48:50 UTC",
+    "argv": [
+      "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron",
+      "--history.reference-container=false",
+      "--history.shared-read-workers=0",
+      "--history.shared-chunk-cache=true",
+      "--history.cross-block-dedup=true",
+      "--datadir",
+      "/data/gtron/main/datadir",
+      "--prune.mode",
+      "snap",
+      "--history.enabled=true",
+      "--history.block-dedup=true",
+      "--history.compression-format=auto",
+      "--history.catchup-mode=throughput",
+      "--sync.async-commit",
+      "--sync.import-batch",
+      "64",
+      "--p2p.port",
+      "18890",
+      "--discover.port",
+      "18890",
+      "--external.ip",
+      "3.12.206.71",
+      "--http.port",
+      "8090",
+      "--jsonrpc.port",
+      "8545",
+      "--grpc.port",
+      "50051",
+      "--pprof.port",
+      "6062",
+      "--pprof.addr",
+      "127.0.0.1",
+      "--metrics",
+      "--metrics.addr",
+      "127.0.0.1",
+      "--metrics.port",
+      "6071",
+      "--maxpeers",
+      "30",
+      "--db.cache",
+      "12288",
+      "--db.handles",
+      "8192",
+      "--state.trie.cache",
+      "128",
+      "--log.file",
+      "/data/gtron/main/gtron.log",
+      "--log.file.format",
+      "terminal",
+      "--state.latest.cache",
+      "128"
+    ],
+    "environment": {
+      "GOMEMLIMIT": "20GiB",
+      "GOGC": "100",
+      "GTRON_HISTORY_ROLLOUT_READERS_ONLY": "0",
+      "GTRON_HISTORY_COMPRESSION_FORMAT": "auto",
+      "GTRON_PEBBLE_BOUNDED_POINT_READ": "get"
+    },
+    "memory_current": "11540987904",
+    "memory_limit": "42949672960",
+    "roots": {
+      ".": {
+        "path": "/data/gtron/main/datadir/gtron",
+        "dev": 66304,
+        "ino": 94642624
+      },
+      "chaindata": {
+        "path": "/data/gtron/main/datadir/gtron/chaindata",
+        "dev": 66304,
+        "ino": 94642625
+      },
+      "history": {
+        "path": "/data/gtron/main/datadir/gtron/history",
+        "dev": 66304,
+        "ino": 94642631
+      },
+      "state-snapshots": {
+        "path": "/data/gtron/main/datadir/gtron/state-snapshots",
+        "dev": 66304,
+        "ino": 94642636
+      },
+      "ancient": {
+        "path": "/data/gtron/main/datadir/gtron/ancient",
+        "dev": 66304,
+        "ino": 94642637
+      }
+    },
+    "height": 47275053,
+    "routes": [
+      {
+        "rows": 66,
+        "dataset": "state-domain-change",
+        "kind": "small-system-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 4498571620,
+        "path": "history/small-system-routing-1-4498571620-1a98eec4f0f2331ff2bb253d5dd25be0607f0a0ff5e39adad67dd3eb515dcbd4.route",
+        "size": 1174371,
+        "checksum": "sha256:1a98eec4f0f2331ff2bb253d5dd25be0607f0a0ff5e39adad67dd3eb515dcbd4",
+        "sources": 34431
+      },
+      {
+        "rows": 951169,
+        "dataset": "state-domain-change",
+        "kind": "system-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 3006279261,
+        "path": "history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        "size": 66948766,
+        "checksum": "sha256:a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de",
+        "sources": 25600
+      }
+    ],
+    "cold_history_sources": 34475,
+    "metadata_routes": 171
+  },
+  "final": {
+    "utc": "2026-10-28T13:49:50.758387Z",
+    "pid": "21128",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron",
+    "sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18",
+    "started": "Wed 2026-10-28 13:48:50 UTC",
+    "argv": [
+      "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron",
+      "--history.reference-container=false",
+      "--history.shared-read-workers=0",
+      "--history.shared-chunk-cache=true",
+      "--history.cross-block-dedup=true",
+      "--datadir",
+      "/data/gtron/main/datadir",
+      "--prune.mode",
+      "snap",
+      "--history.enabled=true",
+      "--history.block-dedup=true",
+      "--history.compression-format=auto",
+      "--history.catchup-mode=throughput",
+      "--sync.async-commit",
+      "--sync.import-batch",
+      "64",
+      "--p2p.port",
+      "18890",
+      "--discover.port",
+      "18890",
+      "--external.ip",
+      "3.12.206.71",
+      "--http.port",
+      "8090",
+      "--jsonrpc.port",
+      "8545",
+      "--grpc.port",
+      "50051",
+      "--pprof.port",
+      "6062",
+      "--pprof.addr",
+      "127.0.0.1",
+      "--metrics",
+      "--metrics.addr",
+      "127.0.0.1",
+      "--metrics.port",
+      "6071",
+      "--maxpeers",
+      "30",
+      "--db.cache",
+      "12288",
+      "--db.handles",
+      "8192",
+      "--state.trie.cache",
+      "128",
+      "--log.file",
+      "/data/gtron/main/gtron.log",
+      "--log.file.format",
+      "terminal",
+      "--state.latest.cache",
+      "128"
+    ],
+    "environment": {
+      "GOMEMLIMIT": "20GiB",
+      "GOGC": "100",
+      "GTRON_HISTORY_ROLLOUT_READERS_ONLY": "0",
+      "GTRON_HISTORY_COMPRESSION_FORMAT": "auto",
+      "GTRON_PEBBLE_BOUNDED_POINT_READ": "get"
+    },
+    "memory_current": "19736948736",
+    "memory_limit": "42949672960",
+    "roots": {
+      ".": {
+        "path": "/data/gtron/main/datadir/gtron",
+        "dev": 66304,
+        "ino": 94642624
+      },
+      "chaindata": {
+        "path": "/data/gtron/main/datadir/gtron/chaindata",
+        "dev": 66304,
+        "ino": 94642625
+      },
+      "history": {
+        "path": "/data/gtron/main/datadir/gtron/history",
+        "dev": 66304,
+        "ino": 94642631
+      },
+      "state-snapshots": {
+        "path": "/data/gtron/main/datadir/gtron/state-snapshots",
+        "dev": 66304,
+        "ino": 94642636
+      },
+      "ancient": {
+        "path": "/data/gtron/main/datadir/gtron/ancient",
+        "dev": 66304,
+        "ino": 94642637
+      }
+    },
+    "height": 47275162,
+    "routes": [
+      {
+        "rows": 66,
+        "dataset": "state-domain-change",
+        "kind": "small-system-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 4498571620,
+        "path": "history/small-system-routing-1-4498571620-1a98eec4f0f2331ff2bb253d5dd25be0607f0a0ff5e39adad67dd3eb515dcbd4.route",
+        "size": 1174371,
+        "checksum": "sha256:1a98eec4f0f2331ff2bb253d5dd25be0607f0a0ff5e39adad67dd3eb515dcbd4",
+        "sources": 34431
+      },
+      {
+        "rows": 951169,
+        "dataset": "state-domain-change",
+        "kind": "system-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 3006279261,
+        "path": "history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        "size": 66948766,
+        "checksum": "sha256:a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de",
+        "sources": 25600
+      }
+    ],
+    "cold_history_sources": 34477,
+    "metadata_routes": 173
+  }
+}
