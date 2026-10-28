@@ -14,10 +14,17 @@ reports its error only if needed. Preserve authoritative row, range, owner,
 generation and Seq checks, plus bounded read-ahead and cancellation.
 
 Measure incomplete and complete cold routing separately. Rebuild only derived
-postings in an independent copy of the fixed hot-history database, aligned to
-whole posting frames, then advance its auxiliary frontier after success. Source
+postings in an independent copy of the fixed hot-history database, appending only
+the unpublished range, then advance its auxiliary frontier after success. Source
 state HEAD and canonical cold refs remain fixed. This ablation quantifies the
 unindexed-tail penalty; it does not claim a production atomic indexing policy or
 unchanged import throughput. Bound the tail to 4096 blocks and mutable copy bytes
 to 1 GiB. Do not clear shared/production file caches; reuse private cold-history
 inodes with zero-residency and actual-read coverage for cold comparisons.
+
+Batch indexed KV reads by raw hash candidate block, then validate full keys in
+canonical repaired rows once per group. Never accept the hash match as a value;
+retry stale/colliding candidates and retain the independent unindexed tail.
+The preliminary block-aligned index ablation is not admitted: 256 is a count of
+key occurrences per frame, not a block-alignment rule. Final data appends from
+the exact previous frontier plus one, with no overlapping rebuild.

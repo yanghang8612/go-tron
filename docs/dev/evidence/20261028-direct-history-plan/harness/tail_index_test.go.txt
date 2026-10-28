@@ -29,9 +29,10 @@ func TestOfflineTailIndexAblation(t *testing.T) {
  dump:=func(){b,_:=json.MarshalIndent(report,"","  ");if e:=os.WriteFile(out,b,0600);e!=nil {t.Fatal(e)}}
  dump();if !write {return}
  if index.BlockNum>=head.BlockNum || head.BlockNum-index.BlockNum>4096 {t.Fatal("tail ablation outside 4096-block cost limit")}
- // Rebuild whole posting frames, so the last partially indexed frame cannot
- // lose its earlier bits when the derived rows are overwritten.
- from:=index.BlockNum/256*256
+ // Frames contain up to 256 occurrences of a key, not aligned block buckets.
+ // Append only the unpublished range, exactly like the production stage; an
+ // overlapping rebuild could introduce interleaved duplicate posting frames.
+ from:=index.BlockNum+1
  ancient,err:=rawdbfreezer.NewFreezer(filepath.Join(dir,"ancient"),"",true,2_000_000_000,chainfreezer.FreezerTableSet());if err!=nil {t.Fatal(err)};defer ancient.Close()
  chain:=rawdb.NewChainDB(hot,rawdb.NewFreezerReader(ancient))
  manager,err:=snapshots.OpenManager(filepath.Join(dir,"state-snapshots"));if err!=nil {t.Fatal(err)};chain.SetChainIndexReader(manager)

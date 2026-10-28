@@ -1652,18 +1652,8 @@ func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db Stat
 		}
 	}
 	if targetBlock < indexedHead {
-		for keyString, key := range wanted {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			change, err := ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx, db, targetBlock, indexedHead, targetTxNum, headTxNum, StateFlatDomainKVLatest, owner, generation, domain, key)
-			if err != nil {
-				return nil, err
-			}
-			if change != nil {
-				first[keyString] = change
-				delete(wanted, keyString)
-			}
+		if err := readFirstIndexedStateKVBatch(ctx, db, targetBlock+1, indexedHead, targetTxNum, headTxNum, owner, generation, domain, wanted, first); err != nil {
+			return nil, err
 		}
 	}
 	if !staged || len(wanted) == 0 {
