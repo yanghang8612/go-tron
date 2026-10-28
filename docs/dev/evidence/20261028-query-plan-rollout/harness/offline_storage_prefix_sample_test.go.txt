@@ -1,0 +1,47 @@
+package snapshots
+
+import (
+ "bytes"
+ "context"
+ "encoding/hex"
+ "encoding/json"
+ "errors"
+ "os"
+ "path/filepath"
+ "strings"
+ "testing"
+ "time"
+ "github.com/tronprotocol/go-tron/common"
+ "github.com/tronprotocol/go-tron/core/rawdb"
+ "github.com/tronprotocol/go-tron/core/state/kvdomains"
+)
+
+func TestOfflineStoragePrefixSample(t *testing.T) {
+ dir,out,trace:=os.Getenv("GTRON_STORAGE_SAMPLE_INPUT"),os.Getenv("GTRON_STORAGE_SAMPLE_OUTPUT"),os.Getenv("GTRON_STORAGE_SAMPLE_TRACE")
+ if dir=="" {t.Skip("offline only")}
+ data,err:=os.ReadFile(trace);if err!=nil {t.Fatal(err)}
+ type query struct {Flat rawdb.StateFlatDomain `json:"flat"`; Owner string `json:"owner"`; Generation uint64 `json:"generation"`; Domain kvdomains.KVDomain `json:"domain"`; Key string `json:"key"`}
+ var target query
+ for _,line:=range strings.Split(string(data),"\n") {if line=="" {continue};var b struct {Queries []query `json:"queries"`};if err=json.Unmarshal([]byte(line),&b);err!=nil {t.Fatal(err)};for _,q:=range b.Queries {if q.Domain==kvdomains.ContractStorage {target=q;break}};if target.Owner!="" {break}}
+ owner,err:=hex.DecodeString(target.Owner);if err!=nil||len(owner)!=21 {t.Fatal("missing storage query",target,err)}
+ var address common.Address;copy(address[:],owner);key,err:=hex.DecodeString(target.Key);if err!=nil {t.Fatal(err)}
+ lookup:=stateDomainChangeBinaryAccessorLookupKey(target.Flat,address,target.Generation,target.Domain,key);prefix:=lookup[:31]
+ m,err:=LoadProductionManifest(dir);if err!=nil {t.Fatal(err)};m=manifestLookupView(m)
+ route,err:=loadSystemHistoryRouting(context.Background(),dir,m);if err!=nil {t.Fatal(err)}
+ cfg,_:=DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+ type pair struct {h,a SegmentRef};var unknown []pair
+ for _,h:=range m.Segments {if h.Kind!=SegmentHistory||h.normalizedDataset()!=SegmentDatasetStateDomainChange {continue};a,ok:=cfg.HistoryAccessorRef(m,h);if !ok {t.Fatal(h.Path)};_,covered:=route.columns[systemHistoryRoutingPairID(h,a)];if !covered {unknown=append(unknown,pair{h,a})}}
+ var rows []map[string]any;start:=time.Now();n:=min(128,len(unknown))
+ for i:=0;i<n;i++ {
+  p:=unknown[(i*len(unknown)+len(unknown)/2)/n];keys,prefixes:=0,0;hasPrefix,hasSlot:=false,false;var prior []byte
+  started:=time.Now();err:=iterateHistoryRoutingSourceKeys(context.Background(),dir,p.h,p.a,func(k []byte) error {
+   if !contractStorageHistoryRoutingKey(k) {return nil};keys++
+   if !bytes.Equal(prior,k[:31]) {prefixes++;prior=bytes.Clone(k[:31])}
+   hasPrefix=hasPrefix||bytes.Equal(prefix,k[:31]);hasSlot=hasSlot||bytes.Equal(lookup,k);return nil
+  })
+  if err!=nil&&!errors.Is(err,errSystemHistoryRoutingBudget) {t.Fatal(err)}
+  filterBytes:=0;if prefixes>0 {filterBytes=64;for filterBytes<prefixes*2 {filterBytes*=2}}
+  row:=map[string]any{"source":p.h,"accessor_bytes":p.a.Size,"storage_keys":keys,"distinct_prefixes":prefixes,"target_prefix_present":hasPrefix,"target_slot_present":hasSlot,"adaptive_filter_bytes":filterBytes,"seconds":time.Since(started).Seconds(),"unsupported":errors.Is(err,errSystemHistoryRoutingBudget)}
+  rows=append(rows,row);encoded,_:=json.MarshalIndent(map[string]any{"total_unknown_sources":len(unknown),"target_query":target,"sample_size":len(rows),"seconds":time.Since(start).Seconds(),"rows":rows},"","  ");if e:=os.WriteFile(filepath.Join(out,"sample.json"),encoded,0644);e!=nil {t.Fatal(e)}
+ }
+}
