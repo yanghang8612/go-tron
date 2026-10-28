@@ -68,6 +68,10 @@ func encodeHistoryTxEntry(p historyTxPage) ([32]byte, error) {
 // The whole bounded routing directory is authenticated before binary search.
 // A corrupt unvisited first-Tx value must not silently turn a hit into a miss.
 func decodeHistoryTxFooter(r io.ReaderAt, size uint64, h stateDomainChangeBinaryAccessorV6Header) (*historyTxTable, error) {
+	return decodeHistoryTxFooterWithCache(r, size, h, sharedHistoryTxDirectories)
+}
+
+func decodeHistoryTxFooterWithCache(r io.ReaderAt, size uint64, h stateDomainChangeBinaryAccessorV6Header, cache *historyTxMetadataCache[historyTxDirectoryKey, historyTxPage]) (*historyTxTable, error) {
 	if size < historyTxFooterSize || size > math.MaxInt64 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -78,7 +82,7 @@ func decodeHistoryTxFooter(r io.ReaderAt, size uint64, h stateDomainChangeBinary
 	if !bytes.Equal(b[:8], historyTxMagic[:]) || binary.BigEndian.Uint32(b[40:44]) != uint32(historyTxPageRuns) || binary.BigEndian.Uint32(b[44:48]) != uint32(historyTxEntrySize) || binary.BigEndian.Uint32(b[48:52]) > 1 || binary.BigEndian.Uint32(b[56:60]) != 0 || binary.BigEndian.Uint32(b[60:]) != crc32.ChecksumIEEE(b[:60]) {
 		return nil, errors.New("snapshots: invalid V11 transaction footer")
 	}
-	t := &historyTxTable{r: r, prefix: binary.BigEndian.Uint64(b[8:16]), dataLen: binary.BigEndian.Uint64(b[16:24]), runCount: binary.BigEndian.Uint64(b[32:40]), recordCount: h.recordCount, from: h.fromTxNum, to: h.toTxNum, owners: binary.BigEndian.Uint32(b[48:52]) == 1, cache: make(map[int][]historyTxRun)}
+	t := &historyTxTable{r: r, prefix: binary.BigEndian.Uint64(b[8:16]), dataLen: binary.BigEndian.Uint64(b[16:24]), runCount: binary.BigEndian.Uint64(b[32:40]), recordCount: h.recordCount, from: h.fromTxNum, to: h.toTxNum, owners: binary.BigEndian.Uint32(b[48:52]) == 1}
 	dirLen := binary.BigEndian.Uint64(b[24:32])
 	if t.prefix < 120+historyOffsetFooterSize || t.prefix > size-64 || t.runCount > h.recordCount || (t.runCount == 0) != (h.recordCount == 0) || dirLen > historyTxDirectoryLimit || dirLen != ceilDiv(t.runCount, historyTxPageRuns)*32 {
 		return nil, errors.New("snapshots: invalid V11 transaction counts")
@@ -87,13 +91,23 @@ func decodeHistoryTxFooter(r io.ReaderAt, size uint64, h stateDomainChangeBinary
 	if t.dataLen > remain || remain-t.dataLen != dirLen {
 		return nil, errors.New("snapshots: invalid V11 transaction section length")
 	}
-	raw := make([]byte, int(dirLen))
+	raw := sharedHistoryTxScratch.take(int(dirLen))
+	defer sharedHistoryTxScratch.release(raw)
 	if _, err := r.ReadAt(raw, int64(t.prefix+t.dataLen)); err != nil {
 		return nil, err
 	}
 	if crc32.ChecksumIEEE(raw) != binary.BigEndian.Uint32(b[52:56]) {
 		return nil, errors.New("snapshots: V11 transaction directory checksum mismatch")
 	}
+	key := historyTxDirectoryKey{footer: b, records: h.recordCount, from: h.fromTxNum, to: h.toTxNum}
+	if pages, ok := cache.get(key, raw); ok {
+		t.pages = pages
+		return t, nil
+	}
+	// The footer bounds the exact number of entries before allocation. Keep the
+	// complete CRC and coverage validation, but avoid growing/copying this slice
+	// repeatedly on every fresh descriptor, including negative/inline lookups.
+	t.pages = make([]historyTxPage, 0, dirLen/historyTxEntrySize)
 	var rows, off, runs uint64
 	for i := uint64(0); i < dirLen/32; i++ {
 		e := raw[i*32 : (i+1)*32]
@@ -111,6 +125,7 @@ func decodeHistoryTxFooter(r io.ReaderAt, size uint64, h stateDomainChangeBinary
 	if rows != h.recordCount || runs != t.runCount || off != t.dataLen {
 		return nil, errors.New("snapshots: V11 transaction directory coverage mismatch")
 	}
+	cache.put(key, raw, t.pages)
 	return t, nil
 }
 func (t *historyTxTable) page(index int) ([]historyTxRun, error) {
@@ -123,7 +138,8 @@ func (t *historyTxTable) page(index int) ([]historyTxRun, error) {
 		return v, nil
 	}
 	p := t.pages[index]
-	raw := make([]byte, int(p.length))
+	raw := sharedHistoryTxScratch.take(int(p.length))
+	defer sharedHistoryTxScratch.release(raw)
 	if _, err := t.r.ReadAt(raw, int64(t.prefix+p.off)); err != nil {
 		return nil, err
 	}
@@ -133,6 +149,15 @@ func (t *historyTxTable) page(index int) ([]historyTxRun, error) {
 	}
 	if historyTxPageCRC(uint64(index), entry[:], raw) != p.crc {
 		return nil, errors.New("snapshots: V11 transaction page checksum mismatch")
+	}
+	var nextTx uint64
+	if index+1 < len(t.pages) {
+		nextTx = t.pages[index+1].firstTx
+	}
+	key := historyTxRunKey{entry: entry, index: uint64(index), records: t.recordCount, to: t.to, nextTx: nextTx}
+	if runs, ok := sharedHistoryTxRuns.get(key, raw); ok {
+		t.rememberPage(index, runs)
+		return runs, nil
 	}
 	runs := make([]historyTxRun, 0, p.runs)
 	pos := 0
@@ -171,6 +196,14 @@ func (t *historyTxTable) page(index int) ([]historyTxRun, error) {
 	if pos != len(raw) || first != uint64(p.first)+uint64(p.rows) {
 		return nil, errors.New("snapshots: transaction page row coverage mismatch")
 	}
+	sharedHistoryTxRuns.put(key, raw, runs)
+	t.rememberPage(index, runs)
+	return runs, nil
+}
+
+// Caller holds t.mu. Cross-open cache values contain only immutable runs; the
+// mutable working set and all following reads belong to this current reader.
+func (t *historyTxTable) rememberPage(index int, runs []historyTxRun) {
 	cost := len(runs) * 16
 	for t.cacheBytes+cost > historyTxDecodedCacheLimit && len(t.order) > 0 {
 		old := t.order[0]
@@ -178,10 +211,12 @@ func (t *historyTxTable) page(index int) ([]historyTxRun, error) {
 		t.cacheBytes -= len(t.cache[old]) * 16
 		delete(t.cache, old)
 	}
+	if t.cache == nil {
+		t.cache = make(map[int][]historyTxRun)
+	}
 	t.cache[index] = runs
 	t.order = append(t.order, index)
 	t.cacheBytes += cost
-	return runs, nil
 }
 func (t *historyTxTable) TxNum(ordinal uint32) (uint64, error) {
 	if t == nil || uint64(ordinal) >= t.recordCount {

@@ -123,6 +123,7 @@ func resolveHistoryOwnerKeys(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6H
 		return errors.New("snapshots: missing V10 owner dictionary")
 	}
 	pages := make([]uint64, 0, historyOwnerKeyPageLimit)
+	keyBytes := 0
 	for _, rec := range records {
 		if len(rec.key) < 5 {
 			return errors.New("snapshots: truncated V10 owner reference")
@@ -131,6 +132,7 @@ func resolveHistoryOwnerKeys(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6H
 		if id >= h.owners.count || len(rec.key)+16 > math.MaxUint16 {
 			return errors.New("snapshots: V10 owner reference outside dictionary")
 		}
+		keyBytes += len(rec.key) + 16
 		page := id / historyOwnerPageRows
 		if !containsHistoryOwnerPage(pages, page) {
 			pages = append(pages, page)
@@ -194,11 +196,17 @@ func resolveHistoryOwnerKeys(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6H
 		}
 		start = end
 	}
+	// All expanded keys have known lengths after validating the references.
+	// Share one bounded backing allocation, retaining independent key slices.
+	keys := make([]byte, keyBytes)
+	keyAt := 0
 	for i := range records {
 		encoded := records[i].key
 		id := uint64(binary.BigEndian.Uint32(encoded[1:5]))
 		owner := decoded[id/historyOwnerPageRows][id%historyOwnerPageRows]
-		key := make([]byte, len(encoded)+16)
+		end := keyAt + len(encoded) + 16
+		key := keys[keyAt:end:end]
+		keyAt = end
 		key[0] = encoded[0]
 		copy(key[1:21], owner[:])
 		copy(key[21:], encoded[5:])

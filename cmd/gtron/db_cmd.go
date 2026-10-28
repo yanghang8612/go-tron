@@ -90,6 +90,7 @@ func dbCommand() *cli.Command {
 			dbBenchmarkTxIndexCommand(),
 			dbMigrateHistoryReferenceCommand(),
 			dbMigrateHistoryCDCCommand(),
+			dbAdoptHistoryAccessorsCommand(),
 			dbHistoryStagingCommand(),
 			dbMigrateAncientV2Command(),
 			dbCompactAncientTxInfoV2Command(),
