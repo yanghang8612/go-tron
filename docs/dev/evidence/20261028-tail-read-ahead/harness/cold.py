@@ -53,6 +53,13 @@ class Observer:
  def close(self):
   self.stop.set();self.t.join();self.read();os.close(self.fd);assert not self.overflow,'inotify overflow';return self.seen
 try:
+ until=time.monotonic()+1800
+ while True:
+  warm=json.loads((W/'candidate-status.json').read_text())
+  if warm.get('complete'):break
+  assert warm.get('stage')!='failed',warm
+  assert time.monotonic()<until,'waiting for warm matrix'
+  time.sleep(2)
  s['production_before']=identity();save();readset=set()
  for name,exe in [('discovery-baseline',baseline),('discovery-candidate',candidate)]:
   with host(name,exe,partial) as ready:
