@@ -1,0 +1,13 @@
+{
+  "gomaxprocs": 2,
+  "head": 45836827,
+  "head_hash": "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+  "head_tx": 4240407293,
+  "history_cache_mib": 512,
+  "hot_cache_mib": 512,
+  "manifest_generation": 40858,
+  "pid": 32189,
+  "read_only": true,
+  "root": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627",
+  "url": "http://127.0.0.1:27113/"
+}

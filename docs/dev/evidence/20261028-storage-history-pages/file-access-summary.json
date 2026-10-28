@@ -1,0 +1,82 @@
+[
+  {
+    "case": "control-1",
+    "repeat": 0,
+    "distinct_accessed_files": 13308,
+    "by_suffix": {
+      ".route": 358,
+      ".kv": 6475,
+      ".seg": 6475
+    }
+  },
+  {
+    "case": "control-1",
+    "repeat": 1,
+    "distinct_accessed_files": 13308,
+    "by_suffix": {
+      ".route": 358,
+      ".kv": 6475,
+      ".seg": 6475
+    }
+  },
+  {
+    "case": "indexed-1",
+    "repeat": 0,
+    "distinct_accessed_files": 923,
+    "by_suffix": {
+      ".route": 779,
+      ".kv": 72,
+      ".seg": 72
+    }
+  },
+  {
+    "case": "indexed-1",
+    "repeat": 1,
+    "distinct_accessed_files": 923,
+    "by_suffix": {
+      ".route": 779,
+      ".kv": 72,
+      ".seg": 72
+    }
+  },
+  {
+    "case": "indexed-2",
+    "repeat": 0,
+    "distinct_accessed_files": 923,
+    "by_suffix": {
+      ".route": 779,
+      ".kv": 72,
+      ".seg": 72
+    }
+  },
+  {
+    "case": "indexed-2",
+    "repeat": 1,
+    "distinct_accessed_files": 923,
+    "by_suffix": {
+      ".route": 779,
+      ".kv": 72,
+      ".seg": 72
+    }
+  },
+  {
+    "case": "control-2",
+    "repeat": 0,
+    "distinct_accessed_files": 13308,
+    "by_suffix": {
+      ".route": 358,
+      ".kv": 6475,
+      ".seg": 6475
+    }
+  },
+  {
+    "case": "control-2",
+    "repeat": 1,
+    "distinct_accessed_files": 13308,
+    "by_suffix": {
+      ".route": 358,
+      ".kv": 6475,
+      ".seg": 6475
+    }
+  }
+]

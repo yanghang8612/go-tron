@@ -1,0 +1,35 @@
+{
+  "complete": true,
+  "stage": "diagnostic complete",
+  "source": "bde5a7aa39f558616242caaef59d062f2fc6fdbd",
+  "production_mutations": false,
+  "performance_samples": false,
+  "cache": "OS cache uncontrolled; diagnostic instrumentation",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T15:37:38.578599Z",
+  "ready": {
+    "gomaxprocs": 2,
+    "head": 45836827,
+    "head_hash": "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    "head_tx": 4240407293,
+    "history_cache_mib": 512,
+    "hot_cache_mib": 512,
+    "manifest_generation": 40858,
+    "pid": 21725,
+    "read_only": true,
+    "root": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627",
+    "url": "http://127.0.0.1:19762/"
+  },
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true
+}

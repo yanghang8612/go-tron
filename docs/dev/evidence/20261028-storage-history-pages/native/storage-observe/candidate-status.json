@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "stage": "file-access observation complete",
+  "production_mutations": false,
+  "source": "19bdd0dd239f4bd0c2ea097beca15980e2f4e629",
+  "cache": "uncontrolled OS caches; diagnostics excluded from primary matrix",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T16:09:58.374026Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true
+}

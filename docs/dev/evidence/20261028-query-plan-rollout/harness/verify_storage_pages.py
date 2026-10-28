@@ -51,7 +51,8 @@ for phase, count in [('storage-pages', 60), ('storage-observe', 8), ('storage-tr
         assert event['params'][0] == {'to': '0xa4997124a328a4615eab437cede31da47a31b375', 'data': '0x9fa6a6e3'}
         assert 'error' not in q['response'] and int(q['response']['result'], 16) == expected[height]
         a, b = io(event['io_before']), io(event['io_after'])
-        rows.append(dict(q, phase=phase, height=height, io_delta={k: b[k]-a[k] for k in a},
+        compact = {k: v for k, v in q.items() if k != 'paths'}
+        rows.append(dict(compact, phase=phase, height=height, io_delta={k: b[k]-a[k] for k in a},
                          cpu_seconds=cpu(event['usage_after'])-cpu(event['usage_before']),
                          server_seconds=event['elapsed_ns']/1e9, alloc_bytes=event['alloc_bytes'],
                          num_gc=event['num_gc'], maxrss_kib=event['usage_after']['Maxrss']))
@@ -179,6 +180,10 @@ verification = dict(archive=seal, correct_primary_http_returns=60, correct_diagn
 for name, value in [('verification.json', verification), ('grouped-http.json', groups), ('verified-requests.json', rows), ('file-access-summary.json', observations), ('storage-batches.json', storage_batches)]:
     (output/name).write_text(json.dumps(value, indent=2)+'\n')
 for name in z.namelist():
+    # Large path lists and the intermediate build state remain in the sealed
+    # ZIP. The summary above is checked against those original bytes.
+    if name in ['storage-observe/requests.json', 'storage-index-cold/requests.json', 'storage-pages/build-progress.json']:
+        continue
     if name.endswith(('.json', '.jsonl', '.log', '.txt')):
         p = output/'native'/name
         p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(z.read(name))

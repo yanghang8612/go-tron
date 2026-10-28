@@ -1,0 +1,41 @@
+{
+  "archive": {
+    "path": "/tmp/AAA-gtron-storage-pages-20261028-01.zip",
+    "bytes": 10602992,
+    "sha256": "b799a1df631281be649a768ad047ee33017a6f1e5e8406e61ff37d3130265ec2",
+    "members": 491
+  },
+  "correct_primary_http_returns": 60,
+  "correct_diagnostic_http_returns": 20,
+  "head": [
+    45836827,
+    "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    4240407293,
+    "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+  ],
+  "production_identity": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "canonical_refs_unchanged": true,
+  "authenticated_storage_pages": 421,
+  "authenticated_storage_bytes": 10119232,
+  "exact_current_pairs": 6436,
+  "max_page_bytes": 73176,
+  "max_prefixes_per_source": 5436,
+  "sample": {
+    "sources": 128,
+    "prefix_present": 0,
+    "slot_present": 0,
+    "max_distinct_prefixes": 1043,
+    "filter_bytes": 204800
+  },
+  "target_prefix_possible_sources": 0,
+  "build_seconds": 704.247978854,
+  "build_passes": 421,
+  "cache": "fresh processes; shared OS caches uncontrolled; no eviction",
+  "auxiliary_cold_scope": "four processes, only the 421 new storage pages on private inodes zero resident at dispatch; canonical and other routing caches uncontrolled",
+  "file_observation_scope": "distinct accessed paths, not an open or syscall count"
+}

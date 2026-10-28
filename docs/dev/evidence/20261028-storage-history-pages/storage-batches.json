@@ -1,0 +1,124 @@
+[
+  {
+    "candidate_sources": 6436,
+    "from": 1026832225,
+    "io_delta": {
+      "cancelled_write_bytes": 0,
+      "rchar": 624412217,
+      "read_bytes": 1409802240,
+      "syscr": 93269,
+      "syscw": 0,
+      "wchar": 0,
+      "write_bytes": 151552
+    },
+    "matches": null,
+    "queries": [
+      {
+        "domain": 256,
+        "flat": 2,
+        "generation": 0,
+        "key": "6e8935d029f96ae6e183f6b344312f2d00000000000000000000000000000000",
+        "owner": "41a4997124a328a4615eab437cede31da47a31b375"
+      }
+    ],
+    "seconds": 13.098153225,
+    "submitted_keys": 6436,
+    "submitted_sources": 6436,
+    "to": 4240407293
+  },
+  {
+    "candidate_sources": 6436,
+    "from": 1026832225,
+    "io_delta": {
+      "cancelled_write_bytes": 0,
+      "rchar": 624412219,
+      "read_bytes": 0,
+      "syscr": 93269,
+      "syscw": 0,
+      "wchar": 0,
+      "write_bytes": 0
+    },
+    "matches": null,
+    "queries": [
+      {
+        "domain": 256,
+        "flat": 2,
+        "generation": 0,
+        "key": "6e8935d029f96ae6e183f6b344312f2d00000000000000000000000000000000",
+        "owner": "41a4997124a328a4615eab437cede31da47a31b375"
+      }
+    ],
+    "seconds": 1.094085699,
+    "submitted_keys": 6436,
+    "submitted_sources": 6436,
+    "to": 4240407293
+  },
+  {
+    "candidate_sources": 8,
+    "from": 415035058,
+    "io_delta": {
+      "cancelled_write_bytes": 0,
+      "rchar": 68372307,
+      "read_bytes": 3121152,
+      "syscr": 112,
+      "syscw": 0,
+      "wchar": 0,
+      "write_bytes": 0
+    },
+    "matches": [
+      {
+        "block": 9271766,
+        "query": 0,
+        "seq": 347892585304,
+        "tx": 433868222
+      }
+    ],
+    "queries": [
+      {
+        "domain": 256,
+        "flat": 2,
+        "generation": 0,
+        "key": "6e8935d029f96ae6e183f6b344312f2d00000000000000000000000000000000",
+        "owner": "41a4997124a328a4615eab437cede31da47a31b375"
+      }
+    ],
+    "seconds": 0.319128537,
+    "submitted_keys": 8,
+    "submitted_sources": 8,
+    "to": 4240407293
+  },
+  {
+    "candidate_sources": 8,
+    "from": 830439113,
+    "io_delta": {
+      "cancelled_write_bytes": 0,
+      "rchar": 68264187,
+      "read_bytes": 3870720,
+      "syscr": 101,
+      "syscw": 0,
+      "wchar": 0,
+      "write_bytes": 0
+    },
+    "matches": [
+      {
+        "block": 15840261,
+        "query": 0,
+        "seq": 60129624686,
+        "tx": 863916800
+      }
+    ],
+    "queries": [
+      {
+        "domain": 256,
+        "flat": 2,
+        "generation": 0,
+        "key": "6e8935d029f96ae6e183f6b344312f2d00000000000000000000000000000000",
+        "owner": "41a4997124a328a4615eab437cede31da47a31b375"
+      }
+    ],
+    "seconds": 0.316762075,
+    "submitted_keys": 8,
+    "submitted_sources": 8,
+    "to": 4240407293
+  }
+]

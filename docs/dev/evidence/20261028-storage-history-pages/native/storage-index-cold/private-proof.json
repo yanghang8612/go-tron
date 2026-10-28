@@ -1,0 +1,3370 @@
+[
+  {
+    "path": "state-snapshots/history/storage-routing-3006279262-3008090439-3ba1ecc75399673d125ea4438ac2a5232fbc52c780cb0ebc89bd199d9425b58f.route",
+    "bytes": 36952,
+    "source_dev": 66304,
+    "source_ino": 99753839,
+    "private_dev": 66304,
+    "private_ino": 99876911
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3008090440-3009865668-beed7666af4bba536319695c48df0757b433bf0c1cd7b924d5634dec12271590.route",
+    "bytes": 29224,
+    "source_dev": 66304,
+    "source_ino": 99753844,
+    "private_dev": 66304,
+    "private_ino": 99876912
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3009865669-3011756509-557b042eb0854b773d7609acc1b1ddccd854346f78e266bdcf37c979f18ecc4c.route",
+    "bytes": 33440,
+    "source_dev": 66304,
+    "source_ino": 99753837,
+    "private_dev": 66304,
+    "private_ino": 99876913
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3011756510-3013543797-d7e56e6b4eea11c90135dba49d9df6499fc39209d020e82e92758397b1e3d130.route",
+    "bytes": 23000,
+    "source_dev": 66304,
+    "source_ino": 99753838,
+    "private_dev": 66304,
+    "private_ino": 99876914
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3013543798-3015344978-335c9e330d8ee67f037164cdbbc5ee51e62c98962b2335f4dccea7330cf2e35f.route",
+    "bytes": 31152,
+    "source_dev": 66304,
+    "source_ino": 99753841,
+    "private_dev": 66304,
+    "private_ino": 99876915
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3015344979-3017149754-ceb41392c6fa38c51434b438ab2153cdb9eb0da7f09d21a08def4b553e6bc7e9.route",
+    "bytes": 27256,
+    "source_dev": 66304,
+    "source_ino": 99753842,
+    "private_dev": 66304,
+    "private_ino": 99876916
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3017149755-3018825470-4633e0d7e28b2fab246c0e54fac990b1d2dd655463a689ac62c663ea4f3a2219.route",
+    "bytes": 30288,
+    "source_dev": 66304,
+    "source_ino": 99753843,
+    "private_dev": 66304,
+    "private_ino": 99876917
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3018825471-3020646566-c7fc3dab639c560d2aecccf15feb8468a69a5038dc925bc254fdae190f6bde5f.route",
+    "bytes": 35568,
+    "source_dev": 66304,
+    "source_ino": 99753845,
+    "private_dev": 66304,
+    "private_ino": 99876918
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3020646567-3022264207-da9ded44a81baf3288cd8abe8e05930b491ce4e9eee3611115bd4d758ac7ecee.route",
+    "bytes": 27176,
+    "source_dev": 66304,
+    "source_ino": 99753846,
+    "private_dev": 66304,
+    "private_ino": 99876919
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3022264208-3024069730-b9454abdb28157d8a4fa15c8762c68c0ab75c428098cdcf5f0d2e6bc4dad8f6c.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753847,
+    "private_dev": 66304,
+    "private_ino": 99876920
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3024069731-3025915489-decb766fbba23449a584a4c2499727ef86291861fad4a292baf19fa748e0173b.route",
+    "bytes": 35408,
+    "source_dev": 66304,
+    "source_ino": 99753848,
+    "private_dev": 66304,
+    "private_ino": 99876921
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3025915490-3027718069-781b45a253806964e2e8b0443f9a0b23b08f5591425bab8a4b28614923ad0896.route",
+    "bytes": 33400,
+    "source_dev": 66304,
+    "source_ino": 99753849,
+    "private_dev": 66304,
+    "private_ino": 99876922
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3027718070-3029511186-57bddafa5b44f386cd4c4c098d09a546ea27cacf8008738ed8f222ad6a8a25ef.route",
+    "bytes": 25992,
+    "source_dev": 66304,
+    "source_ino": 99753852,
+    "private_dev": 66304,
+    "private_ino": 99876923
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3029511187-3031240919-a2addda1293c02ff3fce455989981ae37a1973ad557daed9fc1a528f4cb3c561.route",
+    "bytes": 33240,
+    "source_dev": 66304,
+    "source_ino": 99753850,
+    "private_dev": 66304,
+    "private_ino": 99876924
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3031240920-3033146302-47da68cee15a92693add4c844e8132d00f11f28b0eccc541d175deefef8702c2.route",
+    "bytes": 32296,
+    "source_dev": 66304,
+    "source_ino": 99753853,
+    "private_dev": 66304,
+    "private_ino": 99876925
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3033146303-3034955262-5049b180681cf7ca47a6144fa1a9ab31a3e964f521c0a22e26fc833ae24f3b4b.route",
+    "bytes": 31352,
+    "source_dev": 66304,
+    "source_ino": 99753851,
+    "private_dev": 66304,
+    "private_ino": 99876926
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3034955263-3036775326-6a58309d95a5d5c05055d07c287d0cd7cd75e4f5b757876fe8d8ab89a514f8a1.route",
+    "bytes": 27136,
+    "source_dev": 66304,
+    "source_ino": 99753854,
+    "private_dev": 66304,
+    "private_ino": 99876927
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3036775327-3038552243-7abbe26dd2ac92b912cc2da63d63238c51caa8d61dc70d6f4beb48fce566dd7e.route",
+    "bytes": 26976,
+    "source_dev": 66304,
+    "source_ino": 99753855,
+    "private_dev": 66304,
+    "private_ino": 99876928
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3038552244-3040398826-3fcaea6fe250836047311c6779fb197c816b6863eca9d6caff25eda389300efc.route",
+    "bytes": 30328,
+    "source_dev": 66304,
+    "source_ino": 99753856,
+    "private_dev": 66304,
+    "private_ino": 99876929
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3040398827-3042352294-e62b022a07e23005de8132c0fc4a005527c18bfa25d53534a8c3750fd73ce0e1.route",
+    "bytes": 35368,
+    "source_dev": 66304,
+    "source_ino": 99753857,
+    "private_dev": 66304,
+    "private_ino": 99876930
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3042352295-3044311109-9bf0b531d634837fd410ee700821b7fc81ec7594646e40e999920690d0446097.route",
+    "bytes": 35368,
+    "source_dev": 66304,
+    "source_ino": 99753858,
+    "private_dev": 66304,
+    "private_ino": 99876931
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3044311110-3046262745-53e4dcde1e3e3e24feea02dd37a3ef151173f758a9d4c1a2311590d77bd58d58.route",
+    "bytes": 22880,
+    "source_dev": 66304,
+    "source_ino": 99753859,
+    "private_dev": 66304,
+    "private_ino": 99876932
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3046262746-3047974424-8466a6e8b46f74e97d25264969fc04fc241135420a72f47c192a38450788473d.route",
+    "bytes": 31232,
+    "source_dev": 66304,
+    "source_ino": 99753860,
+    "private_dev": 66304,
+    "private_ino": 99876933
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3047974425-3049907461-ea3af84355086609bf078ebb8278cd661a8c71b215d56cb3fb0c29a25bd20997.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99753861,
+    "private_dev": 66304,
+    "private_ino": 99876934
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3049907462-3051687696-4ee75e74bf13f1e5580549eed3676794e1d3d924cc5a1f83000f2b2422989d33.route",
+    "bytes": 33400,
+    "source_dev": 66304,
+    "source_ino": 99753862,
+    "private_dev": 66304,
+    "private_ino": 99876935
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3051687697-3053547766-25916f7a6de3632678c35ecdd6838488b4bba1a580ab25b4e87e7ec3d57c5a68.route",
+    "bytes": 27056,
+    "source_dev": 66304,
+    "source_ino": 99753863,
+    "private_dev": 66304,
+    "private_ino": 99876936
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3053547767-3055300709-e18490c7f77d4692ede81610c36599d1d54df7fba3c6f24cc03bd0c2b6c0f29b.route",
+    "bytes": 29104,
+    "source_dev": 66304,
+    "source_ino": 99753866,
+    "private_dev": 66304,
+    "private_ino": 99876937
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3055300710-3057162090-fb68ef73cb9809a0a45a658b6e02d9c4ccd9c3af9fd111757dd88f491952d3f0.route",
+    "bytes": 37496,
+    "source_dev": 66304,
+    "source_ino": 99753864,
+    "private_dev": 66304,
+    "private_ino": 99876938
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3057162091-3058745248-c6bee710f98284ac932693e8c6e3e3ec0e48549c94d1f8eae607a3f1a381c94a.route",
+    "bytes": 31312,
+    "source_dev": 66304,
+    "source_ino": 99753867,
+    "private_dev": 66304,
+    "private_ino": 99876939
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3058745249-3060657659-dcddd8a24b975f831107518842b952e335642c27655e1ef6aebf0004b1d1f9c2.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753865,
+    "private_dev": 66304,
+    "private_ino": 99876940
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3060657660-3062547521-294282a281da76c2c4491f5e11d71f244c2c651e56fee9fd50c4af48becd548f.route",
+    "bytes": 32296,
+    "source_dev": 66304,
+    "source_ino": 99753868,
+    "private_dev": 66304,
+    "private_ino": 99876941
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3062547522-3064391841-127004280767dd5d9e2f504478cbf4438638e126ee05331375228273c4444ccd.route",
+    "bytes": 29304,
+    "source_dev": 66304,
+    "source_ino": 99753869,
+    "private_dev": 66304,
+    "private_ino": 99876942
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3064391842-3066145721-73cba33cbf3e75b9395515ef125453c872b5a2d6b63488adc35d0d12d83ef5fb.route",
+    "bytes": 31312,
+    "source_dev": 66304,
+    "source_ino": 99753870,
+    "private_dev": 66304,
+    "private_ino": 99876943
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3066145722-3067986118-d3d93a0cffe2d289b9283e7a389caec457ab6ae090d08d8e6e4284bc61b97efc.route",
+    "bytes": 29144,
+    "source_dev": 66304,
+    "source_ino": 99753872,
+    "private_dev": 66304,
+    "private_ino": 99876944
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3067986119-3069796729-24d56320d39c2a94d4bbbc25905d9ed3e3a7db672c4f78401a565b02f2f4ee74.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99753874,
+    "private_dev": 66304,
+    "private_ino": 99876945
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3069796730-3071674118-8e8b38a8ebbb2985208c54feb0888e2d040316802489a5d450021ea430968f8c.route",
+    "bytes": 33480,
+    "source_dev": 66304,
+    "source_ino": 99753876,
+    "private_dev": 66304,
+    "private_ino": 99876946
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3071674119-3073496434-35f16280ad64dfaedc0c20f756e1c301ffcd86e606e25148b6700c94a3656ec5.route",
+    "bytes": 26112,
+    "source_dev": 66304,
+    "source_ino": 99753879,
+    "private_dev": 66304,
+    "private_ino": 99876947
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3073496435-3075288947-c1c6d9c02ba5cf8325a2452956d17e6ef1f8009032aa6c81c6173f13812fc246.route",
+    "bytes": 33520,
+    "source_dev": 66304,
+    "source_ino": 99753871,
+    "private_dev": 66304,
+    "private_ino": 99876948
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3075288948-3077182337-cefea350d728808213d2b066de49e2f87dc67eb39596575737e048990857d8b2.route",
+    "bytes": 31352,
+    "source_dev": 66304,
+    "source_ino": 99753873,
+    "private_dev": 66304,
+    "private_ino": 99876949
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3077182338-3078955774-8be8de039f91581a7736eb1ee74b5fc40b380bc657a7035132e3f3e1a20b8dc8.route",
+    "bytes": 30248,
+    "source_dev": 66304,
+    "source_ino": 99753875,
+    "private_dev": 66304,
+    "private_ino": 99876950
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3078955775-3080749382-63740fdf94d470d8937b1e05d9d4edf7e452651d57bbba38b91b8416b0c26f60.route",
+    "bytes": 26192,
+    "source_dev": 66304,
+    "source_ino": 99753877,
+    "private_dev": 66304,
+    "private_ino": 99876951
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3080749383-3082497688-0ffb5c39a76db84e9742164ca885b741558a44730c44fb0ed95aa7bc374cd9e8.route",
+    "bytes": 34544,
+    "source_dev": 66304,
+    "source_ino": 99753878,
+    "private_dev": 66304,
+    "private_ino": 99876952
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3082497689-3084391816-3f78c92d5152b3664578e05a9c879db0d22924c22e28a1e1df1668fbdfaaaa6b.route",
+    "bytes": 23080,
+    "source_dev": 66304,
+    "source_ino": 99753880,
+    "private_dev": 66304,
+    "private_ino": 99876953
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3084391817-3086168742-a921c2dd34cccbe0c07165d8d3c20ee8e86cd8f8609e0310ffd1a0ec0ba85cb8.route",
+    "bytes": 29184,
+    "source_dev": 66304,
+    "source_ino": 99753881,
+    "private_dev": 66304,
+    "private_ino": 99876954
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3086168743-3087896417-905a02576cb70707407c32b1e2b7d6ed8596c41b3ef329a3d47f623bd91c2ea2.route",
+    "bytes": 27256,
+    "source_dev": 66304,
+    "source_ino": 99753882,
+    "private_dev": 66304,
+    "private_ino": 99876955
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3087896418-3089657661-c90ab5c6284930d6c7593a12e1465dff2899f6dfdfe136bc2f89bf1f1c948657.route",
+    "bytes": 33360,
+    "source_dev": 66304,
+    "source_ino": 99753883,
+    "private_dev": 66304,
+    "private_ino": 99876956
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3089657662-3091502768-cb3e6f5e1b668c272a0e6bbac78e35f430587454a163d3aabc7dec92c47b01a9.route",
+    "bytes": 20952,
+    "source_dev": 66304,
+    "source_ino": 99753884,
+    "private_dev": 66304,
+    "private_ino": 99876957
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3091502769-3093220407-d659ac06d9e9cdef671de50ce8fc03b357ddeb19cf5381ee27b35d350252af65.route",
+    "bytes": 36592,
+    "source_dev": 66304,
+    "source_ino": 99753885,
+    "private_dev": 66304,
+    "private_ino": 99876958
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3093220408-3095097338-b67f758fa1bd316829619dffc912bc7246c3cab0f2e7b3186897dae15c7b04da.route",
+    "bytes": 30368,
+    "source_dev": 66304,
+    "source_ino": 99753886,
+    "private_dev": 66304,
+    "private_ino": 99876959
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3095097339-3096774620-d4b31c7de1baabb6c1d36e033d1485f4372b639f0a0554bcf044d0180486ae50.route",
+    "bytes": 33400,
+    "source_dev": 66304,
+    "source_ino": 99753889,
+    "private_dev": 66304,
+    "private_ino": 99876960
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3096774621-3098529861-f556e0f225ab0b428a26f2e696c4f56642d77748711ae20a1a4063d6e9a2e991.route",
+    "bytes": 28320,
+    "source_dev": 66304,
+    "source_ino": 99753887,
+    "private_dev": 66304,
+    "private_ino": 99876961
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3098529862-3100271107-36a72a632c1d8b16f291611dda26733110bf530dac8615dea29dcf07224611c8.route",
+    "bytes": 31432,
+    "source_dev": 66304,
+    "source_ino": 99753888,
+    "private_dev": 66304,
+    "private_ino": 99876962
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3100271108-3102052108-715b4fc846ade7963824180dc0826554d7f109bd376c7d2433e79481a22914da.route",
+    "bytes": 23040,
+    "source_dev": 66304,
+    "source_ino": 99753890,
+    "private_dev": 66304,
+    "private_ino": 99876963
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3102052109-3103709500-739d3050934341bbef6194baab8f737d7d542fed31f7ac908cf498cb5e5bbee8.route",
+    "bytes": 38760,
+    "source_dev": 66304,
+    "source_ino": 99753891,
+    "private_dev": 66304,
+    "private_ino": 99876964
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3103709501-3105419299-6de0d237fbb98bfca8934071c3ccd8b76a27a82502169ff1358cb32323e2eab5.route",
+    "bytes": 32616,
+    "source_dev": 66304,
+    "source_ino": 99753892,
+    "private_dev": 66304,
+    "private_ino": 99876965
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3105419300-3107063260-b11b7451b644dd22fe0dfec122b4b277156e7de7bfd5af43a983b1c4dc6f09af.route",
+    "bytes": 35688,
+    "source_dev": 66304,
+    "source_ino": 99753893,
+    "private_dev": 66304,
+    "private_ino": 99876966
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3107063261-3108719370-87deb0f77698ec071f97822b6030c314aa0c51cd2f066584603da0ebd47c1a16.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753894,
+    "private_dev": 66304,
+    "private_ino": 99876967
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3108719371-3110486212-74a64095be5d953cda23c4eb9c3b81e303c8aa5fbcf04317d9cf4c075ee8f484.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753895,
+    "private_dev": 66304,
+    "private_ino": 99876968
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3110486213-3112059121-82db557064b577871300d3cd4c622d20269b9ce3254f885e60ce395f6c0e5cb7.route",
+    "bytes": 20912,
+    "source_dev": 66304,
+    "source_ino": 99753896,
+    "private_dev": 66304,
+    "private_ino": 99876969
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3112059122-3113852347-fcdb277aa8cb74c288b319115d7df2069ab35008aecdfd9735d88376b0768c5b.route",
+    "bytes": 19888,
+    "source_dev": 66304,
+    "source_ino": 99753897,
+    "private_dev": 66304,
+    "private_ino": 99876970
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3113852348-3115570596-a7a23e8c636678e8d7347d59e41dfdd0ca8e30a1d09baf61f35bd1e455e23fae.route",
+    "bytes": 18824,
+    "source_dev": 66304,
+    "source_ino": 99753898,
+    "private_dev": 66304,
+    "private_ino": 99876971
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3115570597-3117356018-6628e3c0120eb8ba6d728e7772e97cb9c14c7d94029f992b3cfbe42a4e6ed770.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99753899,
+    "private_dev": 66304,
+    "private_ino": 99876972
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3117356019-3119157001-54347da14690466c05779852755e6f274b043e78e26b348ab2705a3317290262.route",
+    "bytes": 27176,
+    "source_dev": 66304,
+    "source_ino": 99753900,
+    "private_dev": 66304,
+    "private_ino": 99876973
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3119157002-3121007047-638ea2aff041e425e9006985e452a68a5a4038322b0c6fe40c7d7f95ab822e7b.route",
+    "bytes": 24264,
+    "source_dev": 66304,
+    "source_ino": 99753901,
+    "private_dev": 66304,
+    "private_ino": 99876974
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3121007048-3122697852-c937a54d32e7c8748ed47e0dc829f02c4616b92f9c0ca4b162de10f5301d8c46.route",
+    "bytes": 32496,
+    "source_dev": 66304,
+    "source_ino": 99753902,
+    "private_dev": 66304,
+    "private_ino": 99876975
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3122697853-3124438975-5ee3e0b147a9abe3488c9db42ec0ed11e5460330b9c54540173117f0d3bdcbc2.route",
+    "bytes": 18864,
+    "source_dev": 66304,
+    "source_ino": 99753903,
+    "private_dev": 66304,
+    "private_ino": 99876976
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3124438976-3126246710-4b656015e0363989f47d3cf60e0ae58faff43ce5fdbeb64f741b0f8c60c7fe9c.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753904,
+    "private_dev": 66304,
+    "private_ino": 99876977
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3126246711-3127941623-557a29be062d4d3f5d60d7a3833e8de9c91ec242ff89ee94ae6f50a292354811.route",
+    "bytes": 20912,
+    "source_dev": 66304,
+    "source_ino": 99753905,
+    "private_dev": 66304,
+    "private_ino": 99876978
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3127941624-3129651806-2999cd966b6dd4cd260bba9b47b8bead42038b4c635fc62fdb2f4aa1e198a9ff.route",
+    "bytes": 24104,
+    "source_dev": 66304,
+    "source_ino": 99753906,
+    "private_dev": 66304,
+    "private_ino": 99876979
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3129651807-3131344545-948ee1104520594fca0d6c83d117ba22bf898d71fdd3f2ce84bc27cd5ded6245.route",
+    "bytes": 30368,
+    "source_dev": 66304,
+    "source_ino": 99753907,
+    "private_dev": 66304,
+    "private_ino": 99876980
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3131344546-3133134120-6a03373a54d81d542971da4f5aa2de2e5c0226552156ebca61009f10fe47131f.route",
+    "bytes": 38800,
+    "source_dev": 66304,
+    "source_ino": 99753909,
+    "private_dev": 66304,
+    "private_ino": 99876981
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3133134121-3134840843-1da0f1d68c1cd2d6b427a7c1c09934783aea0d2e991697cc3e0cba8bd4c16f0f.route",
+    "bytes": 37736,
+    "source_dev": 66304,
+    "source_ino": 99753908,
+    "private_dev": 66304,
+    "private_ino": 99876982
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3134840844-3136580285-0348992cbad92d072df273099962d36df51c6ff1728a468d798c50c83003d4e6.route",
+    "bytes": 33680,
+    "source_dev": 66304,
+    "source_ino": 99753910,
+    "private_dev": 66304,
+    "private_ino": 99876983
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3136580286-3138243660-4f22a0a284550cd074ded368a5f4ae0d7eba7e32bb958673b3400f25f75a41c7.route",
+    "bytes": 35728,
+    "source_dev": 66304,
+    "source_ino": 99753911,
+    "private_dev": 66304,
+    "private_ino": 99876984
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3138243661-3139857500-fe8f3f2a137cb01905020d94d63fc9b6f46248755e53c97e548594cbc1458290.route",
+    "bytes": 32616,
+    "source_dev": 66304,
+    "source_ino": 99753912,
+    "private_dev": 66304,
+    "private_ino": 99876985
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3139857501-3141703340-968a7d8fd66f046016a0c5e68e0c55d668e93c44f6d0a9a7b92e3b116a04a5dc.route",
+    "bytes": 26904,
+    "source_dev": 66304,
+    "source_ino": 99753913,
+    "private_dev": 66304,
+    "private_ino": 99876986
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3141703341-3143365245-6dd4992941a2dd4cb066616d8c19b8ba7a041fdd51ed670d62b11ca89f8f8b46.route",
+    "bytes": 23000,
+    "source_dev": 66304,
+    "source_ino": 99753914,
+    "private_dev": 66304,
+    "private_ino": 99876987
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3143365246-3145086949-1ec38ee57d372b5e056857b228c7f951c3f2b2eeff63334d22ad1a541294976a.route",
+    "bytes": 24104,
+    "source_dev": 66304,
+    "source_ino": 99753915,
+    "private_dev": 66304,
+    "private_ino": 99876988
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3145086950-3146786412-452a02e6d8bbac9d9806dabbbf2c32f551561a06ebccb51b99c3858c59c4b25b.route",
+    "bytes": 18824,
+    "source_dev": 66304,
+    "source_ino": 99753916,
+    "private_dev": 66304,
+    "private_ino": 99876989
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3146786413-3148647278-f224cf996511114976031565ed812a3274c937d3c8f70a98212633bbdbe2f9ea.route",
+    "bytes": 25088,
+    "source_dev": 66304,
+    "source_ino": 99753917,
+    "private_dev": 66304,
+    "private_ino": 99876990
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3148647279-3150290664-d58a0bea9f3b688a1410c6d2f1ba693b40f54f493204406ae1d8315233ef3bb5.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753918,
+    "private_dev": 66304,
+    "private_ino": 99876991
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3150290665-3152180284-7161abaa1b9294536cdb27e0b5b5d53ce240201dbcf57fc6b76a2ae4eb6885db.route",
+    "bytes": 21936,
+    "source_dev": 66304,
+    "source_ino": 99753920,
+    "private_dev": 66304,
+    "private_ino": 99876992
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3152180285-3153932237-bd8fc9fd2c783448893c68902c8b0510fcd290ba3fd9181b3dd6c11b674ddc3d.route",
+    "bytes": 22016,
+    "source_dev": 66304,
+    "source_ino": 99753921,
+    "private_dev": 66304,
+    "private_ino": 99876993
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3153932238-3155661196-973725c03be01e7f972a257fb46c3e2f763188917ba5f18448093afeb7834228.route",
+    "bytes": 20912,
+    "source_dev": 66304,
+    "source_ino": 99753919,
+    "private_dev": 66304,
+    "private_ino": 99876994
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3155661197-3157528136-c5f8268afaa2c03d9c4db96b575b26ba5fd7528ed7e66d9c16baf009fdeb3917.route",
+    "bytes": 20992,
+    "source_dev": 66304,
+    "source_ino": 99753922,
+    "private_dev": 66304,
+    "private_ino": 99876995
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3157528137-3159130576-a7c1a2db1e79ab6a7a7dc0d6305e2c4626ed56cee82f0931c108d4aa0c1b85a8.route",
+    "bytes": 25088,
+    "source_dev": 66304,
+    "source_ino": 99753923,
+    "private_dev": 66304,
+    "private_ino": 99876996
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3159130577-3160920178-56a6b976d3af857ca421cf43b0a16c4fee2744bde0154906893fd18f4e647bc0.route",
+    "bytes": 23984,
+    "source_dev": 66304,
+    "source_ino": 99753924,
+    "private_dev": 66304,
+    "private_ino": 99876997
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3160920179-3162558748-f1cde5dd33f4499b6804064c4721d04cabdf1d24f9c84b4bef3f618dfd488dbb.route",
+    "bytes": 18784,
+    "source_dev": 66304,
+    "source_ino": 99753925,
+    "private_dev": 66304,
+    "private_ino": 99876998
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3162558749-3164498337-f0592d8db951fb999d6ec8413ec2011eb6c08fbc867330765b7786bec1582380.route",
+    "bytes": 20832,
+    "source_dev": 66304,
+    "source_ino": 99753926,
+    "private_dev": 66304,
+    "private_ino": 99876999
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3164498338-3166278810-64c2718c8c90efdd48119844cee3f3ca7dd9ad5300b6793e28607a8d6f8b569c.route",
+    "bytes": 18744,
+    "source_dev": 66304,
+    "source_ino": 99753927,
+    "private_dev": 66304,
+    "private_ino": 99877000
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3166278811-3168140196-5535c6cbcbf5c78647581021d709fe92c95d9a9b93c1034b8251f288b63570c2.route",
+    "bytes": 26192,
+    "source_dev": 66304,
+    "source_ino": 99753928,
+    "private_dev": 66304,
+    "private_ino": 99877001
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3168140197-3170419990-24e9dfcb6a64a7f0ac21fb4adbc0d9b3b07c5b133e7f6e5cbaf92ea89b9ab435.route",
+    "bytes": 42192,
+    "source_dev": 66304,
+    "source_ino": 99753929,
+    "private_dev": 66304,
+    "private_ino": 99877002
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3170419991-3172611064-3106dbf3c08f92d148b2db3f34c1275884c89a15e21525a3b407471384f5274d.route",
+    "bytes": 32696,
+    "source_dev": 66304,
+    "source_ino": 99753930,
+    "private_dev": 66304,
+    "private_ino": 99877003
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3172611065-3174995719-ef48d892a3ed768cdcc074504a90e368b0af172d5b4fc14e6f1faa1819418958.route",
+    "bytes": 47272,
+    "source_dev": 66304,
+    "source_ino": 99753931,
+    "private_dev": 66304,
+    "private_ino": 99877004
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3174995720-3177286200-a9f6828aa0d4b3f13edcd038db0e6ba714088baa268e57dc8ff42eb3bad02ded.route",
+    "bytes": 32896,
+    "source_dev": 66304,
+    "source_ino": 99753932,
+    "private_dev": 66304,
+    "private_ino": 99877005
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3177286201-3179582584-21a2d66cf051cd3d2668bc13dccbc9889225794b3f841cc243c8c73cb20647b5.route",
+    "bytes": 40888,
+    "source_dev": 66304,
+    "source_ino": 99753933,
+    "private_dev": 66304,
+    "private_ino": 99877006
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3179582585-3182075703-236ce154994c5047c79548e4a2cfb9e98a06382ec332c074951ef70540426d0d.route",
+    "bytes": 31592,
+    "source_dev": 66304,
+    "source_ino": 99753934,
+    "private_dev": 66304,
+    "private_ino": 99877007
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3182075704-3184309576-1faf70de1a378115b03ecde91c2ced6249e9f21cc63675e7d226ff9ed59adea1.route",
+    "bytes": 34504,
+    "source_dev": 66304,
+    "source_ino": 99753935,
+    "private_dev": 66304,
+    "private_ino": 99877008
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3184309577-3186660555-99cfe79801c9fe040e493998376c1a22dfcf7c142103e1ec85797929d3d2c4c2.route",
+    "bytes": 32496,
+    "source_dev": 66304,
+    "source_ino": 99753936,
+    "private_dev": 66304,
+    "private_ino": 99877009
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3186660556-3189171660-a8ea3e2eb828bca99fe8dca1c8986cf7bc9daefa898b7f77f61bfc074f29840a.route",
+    "bytes": 46872,
+    "source_dev": 66304,
+    "source_ino": 99753937,
+    "private_dev": 66304,
+    "private_ino": 99877010
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3189171661-3191622060-1917ef1d51e71d86a5c8d0a1d7a70942db7218aa4540204b68449019fdb33730.route",
+    "bytes": 32536,
+    "source_dev": 66304,
+    "source_ino": 99753938,
+    "private_dev": 66304,
+    "private_ino": 99877011
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3191622061-3194067362-f61353e9aaa27fcf84475aa2578c082cf34e9e82e4c4674d1f2302c1dbdac92b.route",
+    "bytes": 24144,
+    "source_dev": 66304,
+    "source_ino": 99753939,
+    "private_dev": 66304,
+    "private_ino": 99877012
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3194067363-3196417515-a20943ba649d79fd1435555a40d27cd60de619d240da0c3f6dfb56d207753e9c.route",
+    "bytes": 35608,
+    "source_dev": 66304,
+    "source_ino": 99753940,
+    "private_dev": 66304,
+    "private_ino": 99877013
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3196417516-3198901755-87ba76124055132f6266e60580f6fa01ae853ee0e7d5f2766ddeca689f1d5156.route",
+    "bytes": 34584,
+    "source_dev": 66304,
+    "source_ino": 99753941,
+    "private_dev": 66304,
+    "private_ino": 99877014
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3198901756-3201392515-aa610a15de082582bc2b4fcf1993b63c2520bed8ef559cd9241b331befa91a04.route",
+    "bytes": 27176,
+    "source_dev": 66304,
+    "source_ino": 99753942,
+    "private_dev": 66304,
+    "private_ino": 99877015
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3201392516-3203830260-758f175db2afa08242ccd6bf470495b9114266fcba65e6ad17fde83e3eeb69b4.route",
+    "bytes": 25088,
+    "source_dev": 66304,
+    "source_ino": 99753943,
+    "private_dev": 66304,
+    "private_ino": 99877016
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3203830261-3206234228-fdb7434fc319abbeb82baa1184f9d1820803b63bfe793c4a7edf706a14065632.route",
+    "bytes": 29264,
+    "source_dev": 66304,
+    "source_ino": 99753944,
+    "private_dev": 66304,
+    "private_ino": 99877017
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3206234229-3208674687-c0ef6dbff9c21713eba978c8e90af6845a244ea0e44db8fef8a5d250d6cb0968.route",
+    "bytes": 57192,
+    "source_dev": 66304,
+    "source_ino": 99753945,
+    "private_dev": 66304,
+    "private_ino": 99877018
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3208674688-3211025506-00e7ea95eb69ce7402c3e8111cbf55d79f04c81d9262de9a035f73e7dfba45e2.route",
+    "bytes": 25088,
+    "source_dev": 66304,
+    "source_ino": 99753946,
+    "private_dev": 66304,
+    "private_ino": 99877019
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3211025507-3213614866-776b7a8047d0f93e9684adc4443cee959c74ed519c1fb971c9871358f633db1e.route",
+    "bytes": 38840,
+    "source_dev": 66304,
+    "source_ino": 99753947,
+    "private_dev": 66304,
+    "private_ino": 99877020
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3213614867-3216121196-207e50208535c0eca77867961b9193649c667d496891aa15961b01aec32b55b3.route",
+    "bytes": 33520,
+    "source_dev": 66304,
+    "source_ino": 99753948,
+    "private_dev": 66304,
+    "private_ino": 99877021
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3216121197-3218547083-83d8ed1c3c2c44702ef1db3fed42a8c5f8ab10f4c367b961b76a0f64cb5d0450.route",
+    "bytes": 36432,
+    "source_dev": 66304,
+    "source_ino": 99753951,
+    "private_dev": 66304,
+    "private_ino": 99877022
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3218547084-3220817274-9112ccc98da6fbf9f3fb24b3985e87e60d8d1438b4e28c94980227868373f81c.route",
+    "bytes": 27176,
+    "source_dev": 66304,
+    "source_ino": 99753949,
+    "private_dev": 66304,
+    "private_ino": 99877023
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3220817275-3223263063-07f807fe7832db90a2c72d5f5f4cb92d850aaaf4b292fc080ab3fa411e5f1ea5.route",
+    "bytes": 25248,
+    "source_dev": 66304,
+    "source_ino": 99753950,
+    "private_dev": 66304,
+    "private_ino": 99877024
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3223263064-3225854820-cbf0318978eb8e4cf37dce6f89e4d0b7a1b9bb5988a4178065a26f9688987fe5.route",
+    "bytes": 28240,
+    "source_dev": 66304,
+    "source_ino": 99753952,
+    "private_dev": 66304,
+    "private_ino": 99877025
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3225854821-3228250741-0f61871954015bf068394a1a62bc8237b9e25ff37a63a88e7ddbc5f5d55e94dc.route",
+    "bytes": 28440,
+    "source_dev": 66304,
+    "source_ino": 99753953,
+    "private_dev": 66304,
+    "private_ino": 99877026
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3228250742-3230721486-75d1dc09386323d5f80128d3f4dc3122200da57e7e365c2a62de7f8c2fee87d9.route",
+    "bytes": 28280,
+    "source_dev": 66304,
+    "source_ino": 99753954,
+    "private_dev": 66304,
+    "private_ino": 99877027
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3230721487-3233220681-048e24cbde8b6dddfeea80489b9dbf853d801b5da50ea63a28a5ec8cf3c33d05.route",
+    "bytes": 28360,
+    "source_dev": 66304,
+    "source_ino": 99753955,
+    "private_dev": 66304,
+    "private_ino": 99877028
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3233220682-3235627838-83af64f9f9d3e03865d492e30c20c7982e7d519b0f52ce3267aeab353e2d269f.route",
+    "bytes": 24064,
+    "source_dev": 66304,
+    "source_ino": 99753956,
+    "private_dev": 66304,
+    "private_ino": 99877029
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3235627839-3238211058-d4d48c4dd47f9be93438cb2952d9cc71d962a7fbb4abb57a3a7cdd61a1137803.route",
+    "bytes": 27296,
+    "source_dev": 66304,
+    "source_ino": 99753957,
+    "private_dev": 66304,
+    "private_ino": 99877030
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3238211059-3240602873-e1a1cddf478fc388fc9852de6e5b839ce1f518d02875cc4ba30a0d371c22afbe.route",
+    "bytes": 27176,
+    "source_dev": 66304,
+    "source_ino": 99753958,
+    "private_dev": 66304,
+    "private_ino": 99877031
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3240602874-3243249826-25aaca43e592b997e2aafc676e103989aac872561fe144d2e7a5bf4b9594bfbb.route",
+    "bytes": 24104,
+    "source_dev": 66304,
+    "source_ino": 99753959,
+    "private_dev": 66304,
+    "private_ino": 99877032
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3243249827-3245878345-44a1b265a0ed8b3c7815d59dc89b300a305f2e38571609e3790d072b97168e90.route",
+    "bytes": 26664,
+    "source_dev": 66304,
+    "source_ino": 99753960,
+    "private_dev": 66304,
+    "private_ino": 99877033
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3245878346-3248391136-5d944ce406071734ba41ccc66b42c5d308700d026334bccabb3910b92cfe4110.route",
+    "bytes": 30408,
+    "source_dev": 66304,
+    "source_ino": 99753961,
+    "private_dev": 66304,
+    "private_ino": 99877034
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3248391137-3250759162-7085c424b354d5beb3a6803cf76e974380e555b0dc8941c7e397a42b8aa1ebe6.route",
+    "bytes": 26312,
+    "source_dev": 66304,
+    "source_ino": 99753962,
+    "private_dev": 66304,
+    "private_ino": 99877035
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3250759163-3253159061-8e4fb74fb1afdb78e2ed4ccf82fe396aea487e94115270f94660c45f93754601.route",
+    "bytes": 37656,
+    "source_dev": 66304,
+    "source_ino": 99753963,
+    "private_dev": 66304,
+    "private_ino": 99877036
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3253159062-3255680087-43da8f39f4ede5201a6764c06893a629e9735fb7ca5e817bde46752dde552b87.route",
+    "bytes": 21976,
+    "source_dev": 66304,
+    "source_ino": 99753964,
+    "private_dev": 66304,
+    "private_ino": 99877037
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3255680088-3258056393-41663f035790cae3cb8d66f840c58b75f92dfdcf7fcbe56802f5f70c7261395f.route",
+    "bytes": 28280,
+    "source_dev": 66304,
+    "source_ino": 99753965,
+    "private_dev": 66304,
+    "private_ino": 99877038
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3258056394-3260406760-9f65cc7e13ea3745cc32b33c733ae8444edc8c3ad861ecc9863763c0bb746787.route",
+    "bytes": 29344,
+    "source_dev": 66304,
+    "source_ino": 99753966,
+    "private_dev": 66304,
+    "private_ino": 99877039
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3260406761-3262897128-6dc823228088f43a48ca2e9646cb8f62f2ba94e29627abd263b33278001f1053.route",
+    "bytes": 26152,
+    "source_dev": 66304,
+    "source_ino": 99753967,
+    "private_dev": 66304,
+    "private_ino": 99877040
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3262897129-3265383807-78cfc8a096b6d1b145de868cffab820727c542d95e6ad0b2311e59df00040162.route",
+    "bytes": 23120,
+    "source_dev": 66304,
+    "source_ino": 99753968,
+    "private_dev": 66304,
+    "private_ino": 99877041
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3265383808-3267726955-166c95519bbab615ac906eeb2fe43af55537a023da57de7fd7845895ecc6c73e.route",
+    "bytes": 20912,
+    "source_dev": 66304,
+    "source_ino": 99753969,
+    "private_dev": 66304,
+    "private_ino": 99877042
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3267726956-3270094672-b6d265d8499e78e6cc14eaf9eb7aab3254a0b7d2e743ef7eeff1a4d52e0709e9.route",
+    "bytes": 27296,
+    "source_dev": 66304,
+    "source_ino": 99753970,
+    "private_dev": 66304,
+    "private_ino": 99877043
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3270094673-3272452238-6795284b363ca0d539952626bdacdcc960f093e059716cdf1c37ca1ef679db41.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99753971,
+    "private_dev": 66304,
+    "private_ino": 99877044
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3272452239-3274854427-22e189f22a5b5b3e85924cd34222935443c350b3a19d598418f0bab91269d4ca.route",
+    "bytes": 30448,
+    "source_dev": 66304,
+    "source_ino": 99753972,
+    "private_dev": 66304,
+    "private_ino": 99877045
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3274854428-3277246142-d3ea78376d672ed3dabebbdd328e7c6525746a05b95d1e065108000e06514806.route",
+    "bytes": 31352,
+    "source_dev": 66304,
+    "source_ino": 99753973,
+    "private_dev": 66304,
+    "private_ino": 99877046
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3277246143-3279768654-9a35f78037e8d60d5a385ee0301c72832645a94c151bb1711df1590c04d84a11.route",
+    "bytes": 32456,
+    "source_dev": 66304,
+    "source_ino": 99753974,
+    "private_dev": 66304,
+    "private_ino": 99877047
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3279768655-3282243004-21d5fa391b6cd12bbb6db3f49c5e35f7aafd9d29e5025ecab9cbcacea0e87759.route",
+    "bytes": 31432,
+    "source_dev": 66304,
+    "source_ino": 99753975,
+    "private_dev": 66304,
+    "private_ino": 99877048
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3282243005-3284898701-a68fe49a0c5fe5afb5967b7df768eef6e40190791d92e9b950f5339e9156d93d.route",
+    "bytes": 27256,
+    "source_dev": 66304,
+    "source_ino": 99753978,
+    "private_dev": 66304,
+    "private_ino": 99877049
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3284898702-3287496387-995062da388d5e693a45e2b8c47f3f1ce51f0831549cfd4444dd1e45681e5464.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99753976,
+    "private_dev": 66304,
+    "private_ino": 99877050
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3287496388-3290033591-afa04ac23140b200d6668f58ab3db0ff367291cba2660bc145869697ab655cdc.route",
+    "bytes": 30368,
+    "source_dev": 66304,
+    "source_ino": 99753977,
+    "private_dev": 66304,
+    "private_ino": 99877051
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3290033592-3292543783-bf9d42568b191788008ee76d94023cc0bcbf46455f05fa2802b4443d9baf24f2.route",
+    "bytes": 23120,
+    "source_dev": 66304,
+    "source_ino": 99753979,
+    "private_dev": 66304,
+    "private_ino": 99877052
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3292543784-3295061205-7f5fcd127daed16554b6452d3366cf127853f19de0f636bf8e35537bbfb7b83f.route",
+    "bytes": 37496,
+    "source_dev": 66304,
+    "source_ino": 99753980,
+    "private_dev": 66304,
+    "private_ino": 99877053
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3295061206-3297563856-b31c04576208b042a4b3f62c9e117a2d74caad5e16d4fdc5bdbcdd9c76cd4a7e.route",
+    "bytes": 22096,
+    "source_dev": 66304,
+    "source_ino": 99753981,
+    "private_dev": 66304,
+    "private_ino": 99877054
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3297563857-3300063515-7251aaa8bc0878766bc57cdce15135d0d1e60aaf20575066e8055996e0b807e0.route",
+    "bytes": 29304,
+    "source_dev": 66304,
+    "source_ino": 99753982,
+    "private_dev": 66304,
+    "private_ino": 99877055
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3300063516-3302557005-c935fbbc6ca57876f653df598327260ee6cf34d0ba7368a0d01879174e8d5f58.route",
+    "bytes": 28480,
+    "source_dev": 66304,
+    "source_ino": 99753983,
+    "private_dev": 66304,
+    "private_ino": 99877056
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3302557006-3305074059-9129cdf693fc1e1207962154f0c23376e4f2d40b4a1c28729ad32d6dad233a0e.route",
+    "bytes": 32496,
+    "source_dev": 66304,
+    "source_ino": 99753984,
+    "private_dev": 66304,
+    "private_ino": 99877057
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3305074060-3307600472-42087f0d547fdbb7982642255864d0ea48b90b14dcb5b1382c61810b44aebb21.route",
+    "bytes": 23912,
+    "source_dev": 66304,
+    "source_ino": 99753985,
+    "private_dev": 66304,
+    "private_ino": 99877058
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3307600473-3310301946-61949341947dbd37d0efcba9a417f3e865425db20de688e39b29c4805bf82df9.route",
+    "bytes": 34544,
+    "source_dev": 66304,
+    "source_ino": 99753986,
+    "private_dev": 66304,
+    "private_ino": 99877059
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3310301947-3312938491-a440c1b0aa817aa147e383e91d5c5f581236989cc7aabcd51818d7f62711883c.route",
+    "bytes": 28400,
+    "source_dev": 66304,
+    "source_ino": 99753987,
+    "private_dev": 66304,
+    "private_ino": 99877060
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3312938492-3315490956-067d4dee8d3261d4f8bc606b2fc50cb32d8ee1e9ab56df345ab3d610f9b8e838.route",
+    "bytes": 29344,
+    "source_dev": 66304,
+    "source_ino": 99753988,
+    "private_dev": 66304,
+    "private_ino": 99877061
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3315490957-3318034475-b8d795cdd649b8fc4d98f97e7dc66fcec2ca549465613c62ce4c5c8df34e4dc0.route",
+    "bytes": 22096,
+    "source_dev": 66304,
+    "source_ino": 99753989,
+    "private_dev": 66304,
+    "private_ino": 99877062
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3318034476-3320591793-0ad1874e92887acab730a97a39cda0f75a155d91f9346729e405cf89d6af8f83.route",
+    "bytes": 32496,
+    "source_dev": 66304,
+    "source_ino": 99753990,
+    "private_dev": 66304,
+    "private_ino": 99877063
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3320591794-3323256912-33588766922f3d11dc215a25205140de5a714741f47af680fc1a0c362ed13b50.route",
+    "bytes": 24144,
+    "source_dev": 66304,
+    "source_ino": 99753991,
+    "private_dev": 66304,
+    "private_ino": 99877064
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3323256913-3325966798-a08ac0bb20ce879f4766679dc963dd2824f97c1efd836633c5006d62dff389d4.route",
+    "bytes": 32576,
+    "source_dev": 66304,
+    "source_ino": 99753992,
+    "private_dev": 66304,
+    "private_ino": 99877065
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3325966799-3328782729-a4521a39194d03be46b246f781f63efc021834d02940c3e3db28f3e27277f984.route",
+    "bytes": 29424,
+    "source_dev": 66304,
+    "source_ino": 99753993,
+    "private_dev": 66304,
+    "private_ino": 99877066
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3328782730-3331436185-39778f82146bb9e3d4a3e13f70911a1cceb1cdc2da3ff3e982171edf689017b4.route",
+    "bytes": 27416,
+    "source_dev": 66304,
+    "source_ino": 99753994,
+    "private_dev": 66304,
+    "private_ino": 99877067
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3331436186-3334092948-1638c98af7cc98bee19dd672a03cf8908841596a9ff749fb5df12e872b9d2fe5.route",
+    "bytes": 27136,
+    "source_dev": 66304,
+    "source_ino": 99753995,
+    "private_dev": 66304,
+    "private_ino": 99877068
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3334092949-3336908367-825d7047776f2ec4de58e5a60c64bf384468c833dfd19fd3322e5b4117c370b9.route",
+    "bytes": 24856,
+    "source_dev": 66304,
+    "source_ino": 99753996,
+    "private_dev": 66304,
+    "private_ino": 99877069
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3336908368-3339526155-6a2d16cf415116e678067d99a5c7f69d303fe796492933020f602677d2ec0dcb.route",
+    "bytes": 28440,
+    "source_dev": 66304,
+    "source_ino": 99753997,
+    "private_dev": 66304,
+    "private_ino": 99877070
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3339526156-3342259453-ed308bda40175da75f058d856363a17d397c019eb7f997909c34d48e808f424c.route",
+    "bytes": 25208,
+    "source_dev": 66304,
+    "source_ino": 99753998,
+    "private_dev": 66304,
+    "private_ino": 99877071
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3342259454-3344818389-f14f198ca069e0b7ccd9b11f104c606c9ac0b957460a4ff1d77a360733f08a55.route",
+    "bytes": 27256,
+    "source_dev": 66304,
+    "source_ino": 99753999,
+    "private_dev": 66304,
+    "private_ino": 99877072
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3344818390-3347509531-4f49aebe0a06021c1479795d459dae93415d12eea2c4fdd6fb2cf3078d124d45.route",
+    "bytes": 26512,
+    "source_dev": 66304,
+    "source_ino": 99754000,
+    "private_dev": 66304,
+    "private_ino": 99877073
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3347509532-3350088639-3e221ebcb0383e957aabbe61c62a426e23a6cd7f3bdb2f327440b04f7abe06c8.route",
+    "bytes": 29424,
+    "source_dev": 66304,
+    "source_ino": 99754001,
+    "private_dev": 66304,
+    "private_ino": 99877074
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3350088640-3352881303-79fa8a8b1b40a93f78970d878d38fb6d80829e6e8bf82ee1e9844bd5759f5da7.route",
+    "bytes": 28008,
+    "source_dev": 66304,
+    "source_ino": 99754002,
+    "private_dev": 66304,
+    "private_ino": 99877075
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3352881304-3355654316-ce110b82ef13e44f5082540617147a9eeab369899334716bba2fd5c9c55d7423.route",
+    "bytes": 34544,
+    "source_dev": 66304,
+    "source_ino": 99754003,
+    "private_dev": 66304,
+    "private_ino": 99877076
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3355654317-3358239064-8e50dea300f09852e84d6f1f0d2c4455db5e179c057663d2ac1c72b8fc25eaad.route",
+    "bytes": 21152,
+    "source_dev": 66304,
+    "source_ino": 99754004,
+    "private_dev": 66304,
+    "private_ino": 99877077
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3358239065-3360864394-0ab168647265275bbd1f52ee28130a12dfd06689b86aff748df0ac0199b2f0b0.route",
+    "bytes": 25288,
+    "source_dev": 66304,
+    "source_ino": 99754005,
+    "private_dev": 66304,
+    "private_ino": 99877078
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3360864395-3363449394-dc57de3d8dfdc9dfc7d28aef3363bd17763d50b7bcdd90f1cbfccae11f84bbeb.route",
+    "bytes": 25288,
+    "source_dev": 66304,
+    "source_ino": 99754006,
+    "private_dev": 66304,
+    "private_ino": 99877079
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3363449395-3366131034-719a72801c684109af94054ccacae0448f541184e687fd7c6d7eacdf68d73073.route",
+    "bytes": 23160,
+    "source_dev": 66304,
+    "source_ino": 99754007,
+    "private_dev": 66304,
+    "private_ino": 99877080
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3366131035-3368867440-16bb18307157afc4376460fa814403ba173b192e46418002c46915561ccaac70.route",
+    "bytes": 31432,
+    "source_dev": 66304,
+    "source_ino": 99754008,
+    "private_dev": 66304,
+    "private_ino": 99877081
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3368867441-3371785946-644c9b55d2b44cb03c1c2b8aaf74e77153558274e40f5da9ab99e18f0e3adcef.route",
+    "bytes": 27296,
+    "source_dev": 66304,
+    "source_ino": 99754009,
+    "private_dev": 66304,
+    "private_ino": 99877082
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3371785947-3374536788-bca0766e7b3d1b2f4ae862ada94abe57397fd009457e84f7b37018f60c091453.route",
+    "bytes": 27456,
+    "source_dev": 66304,
+    "source_ino": 99754010,
+    "private_dev": 66304,
+    "private_ino": 99877083
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3374536789-3377283018-80866f1836dc138d1e8a03048377067d53aa80bf11626c04ac675b07afa15855.route",
+    "bytes": 29344,
+    "source_dev": 66304,
+    "source_ino": 99754011,
+    "private_dev": 66304,
+    "private_ino": 99877084
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3377283019-3379914859-80d18c2d201dd4f675e570ac6170b0bc6e28f64c6ab6ec54af4b849db6fbe628.route",
+    "bytes": 25088,
+    "source_dev": 66304,
+    "source_ino": 99754012,
+    "private_dev": 66304,
+    "private_ino": 99877085
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3379914860-3382715685-033f8327b7283f190b1cc8afbadccf2781d0793ab3c808a94268f500d995e8a9.route",
+    "bytes": 20048,
+    "source_dev": 66304,
+    "source_ino": 99754013,
+    "private_dev": 66304,
+    "private_ino": 99877086
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3382715686-3385415288-1388e477d5b0384367f029be8af0968fdbb23c0989f356407bc677d5b2f6439e.route",
+    "bytes": 21976,
+    "source_dev": 66304,
+    "source_ino": 99754014,
+    "private_dev": 66304,
+    "private_ino": 99877087
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3385415289-3388158029-19c4f2eb8d3054ce23999338bdc4846cb1315a30e4e1d165b780d6bcb476cfca.route",
+    "bytes": 24816,
+    "source_dev": 66304,
+    "source_ino": 99754017,
+    "private_dev": 66304,
+    "private_ino": 99877088
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3388158030-3391038715-eb6c707f5663cbf76ff44eb46fc4342f03d0b06665ad7a90553dc538ca7c9abf.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99754015,
+    "private_dev": 66304,
+    "private_ino": 99877089
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3391038716-3393863642-187b7227b10b18d4af8381b0fe1b5f1824c30fcbf9ef80705cf08f0feba4b05a.route",
+    "bytes": 23040,
+    "source_dev": 66304,
+    "source_ino": 99754016,
+    "private_dev": 66304,
+    "private_ino": 99877090
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3393863643-3396631773-550239ded6d6439cee3ef246afdb966c9059a0413bc577f11b3c94a4249c8784.route",
+    "bytes": 20952,
+    "source_dev": 66304,
+    "source_ino": 99754018,
+    "private_dev": 66304,
+    "private_ino": 99877091
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3396631774-3399513060-b34b81d5995417a0d6aa283dc3b2caa6b734dddfe51208eb85d1f151f3c00491.route",
+    "bytes": 22016,
+    "source_dev": 66304,
+    "source_ino": 99754019,
+    "private_dev": 66304,
+    "private_ino": 99877092
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3399513061-3402326465-b7082901a69bdfcdb8e7854a520b3451f90509bf22918f71c97ddeff431dc201.route",
+    "bytes": 23160,
+    "source_dev": 66304,
+    "source_ino": 99754020,
+    "private_dev": 66304,
+    "private_ino": 99877093
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3402326466-3405226171-849a914a71f652d4966e2fa743c2b211be54b8740ac803549fb4410804d33cb6.route",
+    "bytes": 26432,
+    "source_dev": 66304,
+    "source_ino": 99754021,
+    "private_dev": 66304,
+    "private_ino": 99877094
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3405226172-3408119285-f9608b3b720d44527b897a64a2319719971469d41a8ee79feaac8c3d6a0188de.route",
+    "bytes": 19104,
+    "source_dev": 66304,
+    "source_ino": 99754022,
+    "private_dev": 66304,
+    "private_ino": 99877095
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3408119286-3410845925-d70b05d85fa5c9e433d16a055d2ce80663c122ae50e8da954f217640527be63e.route",
+    "bytes": 23120,
+    "source_dev": 66304,
+    "source_ino": 99754023,
+    "private_dev": 66304,
+    "private_ino": 99877096
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3410845926-3413544913-721ee2204ea1ad4292a74d5f4a4bff0e684a34b3b953693ac31dab11ff51b330.route",
+    "bytes": 73176,
+    "source_dev": 66304,
+    "source_ino": 99754024,
+    "private_dev": 66304,
+    "private_ino": 99877097
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3413544914-3416359699-b23c8fd38d54922dfb39f616741f743d6eed1c975e5caf9d403a6fc33d8229cb.route",
+    "bytes": 43640,
+    "source_dev": 66304,
+    "source_ino": 99754025,
+    "private_dev": 66304,
+    "private_ino": 99877098
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3416359700-3419146773-3579ff0f4068d98ededafe2a67592738922ed29c85c43e6239dcc3deddda2dcf.route",
+    "bytes": 41472,
+    "source_dev": 66304,
+    "source_ino": 99754026,
+    "private_dev": 66304,
+    "private_ino": 99877099
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3419146774-3421807852-7bcc8cbd3e9f0bdde3d416edb30504661bf7792edef1b2536985610f7f5cebef.route",
+    "bytes": 57856,
+    "source_dev": 66304,
+    "source_ino": 99754027,
+    "private_dev": 66304,
+    "private_ino": 99877100
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3421807853-3424532735-0010b965fb894b63de475c6d35b30fa063aba7f5f2dae7ea186eed5a63579cc2.route",
+    "bytes": 33280,
+    "source_dev": 66304,
+    "source_ino": 99754028,
+    "private_dev": 66304,
+    "private_ino": 99877101
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3424532736-3427466357-6204f184337bdda9c52c549e59776b0cbf36020dc7a98714f42d18b2b0e46497.route",
+    "bytes": 51952,
+    "source_dev": 66304,
+    "source_ino": 99754029,
+    "private_dev": 66304,
+    "private_ino": 99877102
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3427466358-3430337534-69e8e6bd01a5cf985d2274995fca5b6b610b8b2ece9dfc05fe22b1af0006ac11.route",
+    "bytes": 35488,
+    "source_dev": 66304,
+    "source_ino": 99754030,
+    "private_dev": 66304,
+    "private_ino": 99877103
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3430337535-3433094840-68fc9722c4f1a4371e54f5bb350a8ec1dd9d5123bf8d969c7ce80c9cf63f5ab4.route",
+    "bytes": 20048,
+    "source_dev": 66304,
+    "source_ino": 99754031,
+    "private_dev": 66304,
+    "private_ino": 99877104
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3433094841-3435910870-47ee72c2085dfd7c54333b98021e75b271641645215ae79163805366b8892d14.route",
+    "bytes": 24344,
+    "source_dev": 66304,
+    "source_ino": 99754032,
+    "private_dev": 66304,
+    "private_ino": 99877105
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3435910871-3438682922-3825b1822c5be5192053c813fb90660fc935050af7f096bbc790f820d2450a72.route",
+    "bytes": 16856,
+    "source_dev": 66304,
+    "source_ino": 99754033,
+    "private_dev": 66304,
+    "private_ino": 99877106
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3438682923-3441600711-aead38b6d19436ebc2e729c34c1859cd4f3b001d07d4235b6b392342b9bd668c.route",
+    "bytes": 17960,
+    "source_dev": 66304,
+    "source_ino": 99754034,
+    "private_dev": 66304,
+    "private_ino": 99877107
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3441600712-3444603754-59c89067ec048747701d23f6cd9d062259f70299694a38de520a3c3c407adfed.route",
+    "bytes": 21976,
+    "source_dev": 66304,
+    "source_ino": 99754035,
+    "private_dev": 66304,
+    "private_ino": 99877108
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3444603755-3447326296-043a83d15c014a758de33fb6082b78b5ceda4b60483bed9feb9a67f95573a1f3.route",
+    "bytes": 14808,
+    "source_dev": 66304,
+    "source_ino": 99754036,
+    "private_dev": 66304,
+    "private_ino": 99877109
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3447326297-3450134507-095a5e55deb10734790e228edcc354a2eabc8b00123f8df01c2a9989cbb6981b.route",
+    "bytes": 22808,
+    "source_dev": 66304,
+    "source_ino": 99754037,
+    "private_dev": 66304,
+    "private_ino": 99877110
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3450134508-3452814069-3966e673a8b1cd2115d8533aa8b774322ccc160641f4b0518fff2b4af625b67c.route",
+    "bytes": 21192,
+    "source_dev": 66304,
+    "source_ino": 99754038,
+    "private_dev": 66304,
+    "private_ino": 99877111
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3452814070-3455644177-b85d99e68fce36080d0846a5d9003b40d6704cf9c47388b72c8847280c0c10a4.route",
+    "bytes": 12760,
+    "source_dev": 66304,
+    "source_ino": 99754039,
+    "private_dev": 66304,
+    "private_ino": 99877112
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3455644178-3458446313-89b8434af8d312d83f0f0c89484b6b51645e3a2049171a48d2ebbc64b4c9cd9c.route",
+    "bytes": 21544,
+    "source_dev": 66304,
+    "source_ino": 99754040,
+    "private_dev": 66304,
+    "private_ino": 99877113
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3458446314-3461457670-d8581f22b51d26ac54807ff22575a02665ee3c41192a9c9042f7ac1cbab50d3e.route",
+    "bytes": 20640,
+    "source_dev": 66304,
+    "source_ino": 99754041,
+    "private_dev": 66304,
+    "private_ino": 99877114
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3461457671-3464395881-d0d24f2c7d0beec3e85e15a2ada42be9fb070184b309e107a710b2c835322aa5.route",
+    "bytes": 20128,
+    "source_dev": 66304,
+    "source_ino": 99754042,
+    "private_dev": 66304,
+    "private_ino": 99877115
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3464395882-3467258280-9345a114e934714b257ba043e239a27a1a4f5fd7bee9b92018eab00bde8e63af.route",
+    "bytes": 22136,
+    "source_dev": 66304,
+    "source_ino": 99754043,
+    "private_dev": 66304,
+    "private_ino": 99877116
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3467258281-3470180587-9431323b51e3e785f351cc2a086787880a8467ee8a3046aa708d53343c29226a.route",
+    "bytes": 24464,
+    "source_dev": 66304,
+    "source_ino": 99754044,
+    "private_dev": 66304,
+    "private_ino": 99877117
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3470180588-3472751586-2641aa71868001971828d90c63ada4d653aa624556ffae0ba8b18144391f717f.route",
+    "bytes": 27216,
+    "source_dev": 66304,
+    "source_ino": 99754045,
+    "private_dev": 66304,
+    "private_ino": 99877118
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3472751587-3475859363-15961c83528c7e000522bdd3b51ae714a08cf9276d44440aebd8f0499c8e505b.route",
+    "bytes": 21072,
+    "source_dev": 66304,
+    "source_ino": 99754046,
+    "private_dev": 66304,
+    "private_ino": 99877119
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3475859364-3478471637-829865418dabc46ee659801c9d8432a0d3c148c9966f02a8fc40315b05e766b4.route",
+    "bytes": 23200,
+    "source_dev": 66304,
+    "source_ino": 99754047,
+    "private_dev": 66304,
+    "private_ino": 99877120
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3478471638-3481249054-de964bddbe541c7cd3c3f1d177ead5bf6026b1961d444c69cb6971d7d9ec1020.route",
+    "bytes": 19224,
+    "source_dev": 66304,
+    "source_ino": 99754048,
+    "private_dev": 66304,
+    "private_ino": 99877121
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3481249055-3484206720-80daa5315eeb09963d08369ae713b54b1aa90d686ea567582c2eee670154ad28.route",
+    "bytes": 25168,
+    "source_dev": 66304,
+    "source_ino": 99754049,
+    "private_dev": 66304,
+    "private_ino": 99877122
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3484206721-3487041446-22b305510ecffaa36d7907b0b378010762160d6ba043df3b36a649c543abc32a.route",
+    "bytes": 20720,
+    "source_dev": 66304,
+    "source_ino": 99754051,
+    "private_dev": 66304,
+    "private_ino": 99877123
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3487041447-3490013049-0ba0fa9d895e45bba84fe0bce3160751e3daaae1d0cbd168b92b19c76988babc.route",
+    "bytes": 25168,
+    "source_dev": 66304,
+    "source_ino": 99754050,
+    "private_dev": 66304,
+    "private_ino": 99877124
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3490013050-3492867743-30644473264136a9b891341cb128cec48f703c119a95b382c48c7c0f3ad8f2da.route",
+    "bytes": 19024,
+    "source_dev": 66304,
+    "source_ino": 99754052,
+    "private_dev": 66304,
+    "private_ino": 99877125
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3492867744-3495768119-020b75db70a51594c10714088b152c625af99d2a5c6aa6dd835e98bac6521fcd.route",
+    "bytes": 22136,
+    "source_dev": 66304,
+    "source_ino": 99754053,
+    "private_dev": 66304,
+    "private_ino": 99877126
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3495768120-3498352938-2c093a0c134d4e2bba88e5a37bba7a684f800b06a491fd383c29e5e7e90def82.route",
+    "bytes": 23200,
+    "source_dev": 66304,
+    "source_ino": 99754054,
+    "private_dev": 66304,
+    "private_ino": 99877127
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3498352939-3501064206-70cab63afabd78d48f8d8c24ba2462f99c049960a2a6f5a649e8a576d9c5f892.route",
+    "bytes": 21784,
+    "source_dev": 66304,
+    "source_ino": 99754055,
+    "private_dev": 66304,
+    "private_ino": 99877128
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3501064207-3503932059-140ac312f5ea8f238f22207c311ce3c0bc9e3a947524e58a242fa721112720bc.route",
+    "bytes": 23040,
+    "source_dev": 66304,
+    "source_ino": 99754056,
+    "private_dev": 66304,
+    "private_ino": 99877129
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3503932060-3506834603-7ff51b81018a249045fe27352b6200618fc6909ba330795f062e32bbc75f49dd.route",
+    "bytes": 21704,
+    "source_dev": 66304,
+    "source_ino": 99754057,
+    "private_dev": 66304,
+    "private_ino": 99877130
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3506834604-3509867877-fdd362f42589fcb81376dc39a2246f9eae9aa7a00161b1062510f749f37d2a20.route",
+    "bytes": 23120,
+    "source_dev": 66304,
+    "source_ino": 99754059,
+    "private_dev": 66304,
+    "private_ino": 99877131
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3509867878-3512865145-6be51ef105e4b239fef2f807be4d4cd953d799105d9e3fe575d2d948cfb6697d.route",
+    "bytes": 24064,
+    "source_dev": 66304,
+    "source_ino": 99754058,
+    "private_dev": 66304,
+    "private_ino": 99877132
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3512865146-3515791661-627c815e5d9c7c4b832e26037d3b3a6d71b52e339f5870b6edb2be931ae673ea.route",
+    "bytes": 25328,
+    "source_dev": 66304,
+    "source_ino": 99754060,
+    "private_dev": 66304,
+    "private_ino": 99877133
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3515791662-3518658659-f05e76df72621618f335ade47258d2a452fa0f5df50da07639f891247fcc690c.route",
+    "bytes": 26232,
+    "source_dev": 66304,
+    "source_ino": 99754061,
+    "private_dev": 66304,
+    "private_ino": 99877134
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3518658660-3521648424-22f74ea16eea0734dfd8f17a49c19e000508d54f47b476b65395e59b2897a4df.route",
+    "bytes": 22056,
+    "source_dev": 66304,
+    "source_ino": 99754062,
+    "private_dev": 66304,
+    "private_ino": 99877135
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3521648425-3524452055-bf3e4040b5abe26afef2e8e84a0b1aa919e95938130e662edc8ee3084c6211b5.route",
+    "bytes": 19968,
+    "source_dev": 66304,
+    "source_ino": 99754063,
+    "private_dev": 66304,
+    "private_ino": 99877136
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3524452056-3527188810-e3ef1f3ef08ddaedd7849b59b324bd8edc4c3fdf300586e7977b018a3bac1419.route",
+    "bytes": 20168,
+    "source_dev": 66304,
+    "source_ino": 99754064,
+    "private_dev": 66304,
+    "private_ino": 99877137
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3527188811-3529833081-f8739f1e5222e6d33f9f891a2883c04208f7349a4365b1993751c8262d7ffdd1.route",
+    "bytes": 24224,
+    "source_dev": 66304,
+    "source_ino": 99754065,
+    "private_dev": 66304,
+    "private_ino": 99877138
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3529833082-3532557506-48db8550965625abcb4f6e4a893d6fa93a16316cd23deeae37a573408bb20733.route",
+    "bytes": 22096,
+    "source_dev": 66304,
+    "source_ino": 99754066,
+    "private_dev": 66304,
+    "private_ino": 99877139
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3532557507-3535536087-83de7c6a25e0036be70f331c9d8b3c6b3de6e7e1111cc4b0d8a028770dd2f412.route",
+    "bytes": 24264,
+    "source_dev": 66304,
+    "source_ino": 99754067,
+    "private_dev": 66304,
+    "private_ino": 99877140
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3535536088-3538622065-ca20ae849747e94ec77ce916411f692e137f71ff09722c4102cbb5f0846989c0.route",
+    "bytes": 19064,
+    "source_dev": 66304,
+    "source_ino": 99754068,
+    "private_dev": 66304,
+    "private_ino": 99877141
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3538622066-3541620140-af1a47283d34fad507d27b3d041cb0c5f3ab7369fcd38b36ebf5b97afb4fb925.route",
+    "bytes": 24104,
+    "source_dev": 66304,
+    "source_ino": 99754069,
+    "private_dev": 66304,
+    "private_ino": 99877142
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3541620141-3544635146-258cb9791dc3fdc745a110075bbfbc03622a733b3c6f561ba36fe5424d6c6f92.route",
+    "bytes": 21072,
+    "source_dev": 66304,
+    "source_ino": 99754070,
+    "private_dev": 66304,
+    "private_ino": 99877143
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3544635147-3547464952-7d1fb6f1a6a4f374b538a9de2eb67febfc6fc6ceabdf940a1891170eaca383bc.route",
+    "bytes": 24304,
+    "source_dev": 66304,
+    "source_ino": 99754071,
+    "private_dev": 66304,
+    "private_ino": 99877144
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3547464953-3550653915-ca6bab459f39683499505c9a0d7c81e864bedce62ff1f8e6919ed258104d0465.route",
+    "bytes": 21152,
+    "source_dev": 66304,
+    "source_ino": 99754072,
+    "private_dev": 66304,
+    "private_ino": 99877145
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3550653916-3553576895-390f42e71a683e883e864c0b95585bbe7e79f0ec7ac0abb85c037dea157e872b.route",
+    "bytes": 18000,
+    "source_dev": 66304,
+    "source_ino": 99754075,
+    "private_dev": 66304,
+    "private_ino": 99877146
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3553576896-3556518288-c99d1c317e3361ff85ae9a6b0b10bed065437d70448fe76c9fbb38524a9a7de5.route",
+    "bytes": 17920,
+    "source_dev": 66304,
+    "source_ino": 99754073,
+    "private_dev": 66304,
+    "private_ino": 99877147
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3556518289-3559228621-62bce6373a5c3b02e9888a83b651a436b18ac4383d1ed6e0a58c547ea043c534.route",
+    "bytes": 19064,
+    "source_dev": 66304,
+    "source_ino": 99754074,
+    "private_dev": 66304,
+    "private_ino": 99877148
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3559228622-3562255849-26f35540a8a7e4363a3f47b11692cca51534a741a61c6a4ca7de141288431ab9.route",
+    "bytes": 24072,
+    "source_dev": 66304,
+    "source_ino": 99754076,
+    "private_dev": 66304,
+    "private_ino": 99877149
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3562255850-3565219606-eb616b79b71a270d8771449214dcf1347abeb46cbe986b844c79dcdd5df1da8f.route",
+    "bytes": 22096,
+    "source_dev": 66304,
+    "source_ino": 99754077,
+    "private_dev": 66304,
+    "private_ino": 99877150
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3565219607-3568281922-6261d4ade96602f3018663ae8de240d44b8318af820df6850a48f80b99135800.route",
+    "bytes": 18040,
+    "source_dev": 66304,
+    "source_ino": 99754078,
+    "private_dev": 66304,
+    "private_ino": 99877151
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3568281923-3571068396-78ad757b48c83673da41e25e1e31d53d1f00dfa7d92415395b1deec5aa114f68.route",
+    "bytes": 25328,
+    "source_dev": 66304,
+    "source_ino": 99754079,
+    "private_dev": 66304,
+    "private_ino": 99877152
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3571068397-3574059040-0c2cf5d3504a89adfdd5ee0e4addbacea88e2a02de4e9fd454cf41703a64627b.route",
+    "bytes": 21272,
+    "source_dev": 66304,
+    "source_ino": 99754080,
+    "private_dev": 66304,
+    "private_ino": 99877153
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3574059041-3576752947-9afc58a4029ca59679625309a1388dcdfb59af4e05683d2579a0d4796f0b9838.route",
+    "bytes": 21192,
+    "source_dev": 66304,
+    "source_ino": 99754081,
+    "private_dev": 66304,
+    "private_ino": 99877154
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3576752948-3579563839-7bdb22fa7c24442d379159be93f782b9f32a25980c4e03427dd9655fb17a281e.route",
+    "bytes": 21232,
+    "source_dev": 66304,
+    "source_ino": 99754082,
+    "private_dev": 66304,
+    "private_ino": 99877155
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3579563840-3582326333-feb322f612ec70883573ded491329e49c0b75f1a074d8f07f7331ce1962671c6.route",
+    "bytes": 23280,
+    "source_dev": 66304,
+    "source_ino": 99754083,
+    "private_dev": 66304,
+    "private_ino": 99877156
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3582326334-3585364493-7ae587a844e602ccb6509bde665215a9e011611d0276239b251d625da2b69fe6.route",
+    "bytes": 21112,
+    "source_dev": 66304,
+    "source_ino": 99754084,
+    "private_dev": 66304,
+    "private_ino": 99877157
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3585364494-3588436408-5b53909747328b13c8efd45db5c0d573122ea8724bc4efc47ba89da2ed23ce54.route",
+    "bytes": 23672,
+    "source_dev": 66304,
+    "source_ino": 99754085,
+    "private_dev": 66304,
+    "private_ino": 99877158
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3588436409-3591202497-22ba30f211e99aa6c84cc7476df9c661d5ad4aac34035bcee564b244f7028c14.route",
+    "bytes": 18984,
+    "source_dev": 66304,
+    "source_ino": 99754086,
+    "private_dev": 66304,
+    "private_ino": 99877159
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3591202498-3593931319-708d60b823ea450aa3b9bddbf3c24cfd3b6b0e2f3fa556a2ceb9b35444236fb4.route",
+    "bytes": 22056,
+    "source_dev": 66304,
+    "source_ino": 99754087,
+    "private_dev": 66304,
+    "private_ino": 99877160
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3593931320-3596744227-f050ffa248ad1a0c9f845eab490985c584a0ff4511d091edcae543e02e426507.route",
+    "bytes": 18904,
+    "source_dev": 66304,
+    "source_ino": 99754090,
+    "private_dev": 66304,
+    "private_ino": 99877161
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3596744228-3599474283-88218065c40fb9b6024abe33353b0abe8c4a8bf39dbd9ce744f3a9890ef9a9bd.route",
+    "bytes": 22096,
+    "source_dev": 66304,
+    "source_ino": 99754088,
+    "private_dev": 66304,
+    "private_ino": 99877162
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3599474284-3602308485-6f09ad04573dab55923a104ad9a3948104382715b0e9814c3c972892bf49fc13.route",
+    "bytes": 20992,
+    "source_dev": 66304,
+    "source_ino": 99754089,
+    "private_dev": 66304,
+    "private_ino": 99877163
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3602308486-3604999968-b9adf6a26b98418c54b45bdf0909a9e0c2c0591a2a004f4a6f9d2159e2a85ae9.route",
+    "bytes": 20992,
+    "source_dev": 66304,
+    "source_ino": 99754091,
+    "private_dev": 66304,
+    "private_ino": 99877164
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3604999969-3607574314-9721f3dd8f379ac5632f28c24eafe32d44f9b740a21a41ef332b2d446d027058.route",
+    "bytes": 16936,
+    "source_dev": 66304,
+    "source_ino": 99754092,
+    "private_dev": 66304,
+    "private_ino": 99877165
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3607574315-3610490436-aa7ac871ba55a3979f3627e8f7459a7f6b692dc4f1a58b7ea0053e745719d81f.route",
+    "bytes": 24344,
+    "source_dev": 66304,
+    "source_ino": 99754093,
+    "private_dev": 66304,
+    "private_ino": 99877166
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3610490437-3613150722-1eff768921e3f00a2e25c2f729898b604be4510d34c1f222750107d37af2a97c.route",
+    "bytes": 19064,
+    "source_dev": 66304,
+    "source_ino": 99754094,
+    "private_dev": 66304,
+    "private_ino": 99877167
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3613150723-3615929440-9db3a0f57d8c422a6cb3af25a6b2dbf358eb66037cec9d0c2b6a5cd655286333.route",
+    "bytes": 16032,
+    "source_dev": 66304,
+    "source_ino": 99754097,
+    "private_dev": 66304,
+    "private_ino": 99877168
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3615929441-3618472276-4ffcf8b03825fa15106b9826057849f0587a9c8ed0558aa8e56669cb37d1c69b.route",
+    "bytes": 21032,
+    "source_dev": 66304,
+    "source_ino": 99754095,
+    "private_dev": 66304,
+    "private_ino": 99877169
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3618472277-3621297876-4647e9278899a20fa0467428cc57d532e9965e94377f8f4d699c862e39233071.route",
+    "bytes": 20680,
+    "source_dev": 66304,
+    "source_ino": 99754096,
+    "private_dev": 66304,
+    "private_ino": 99877170
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3621297877-3624043966-b7328d3a3edc6bc8bde06202eb20deaa1f530d55bed3631a2a6abf50aedfb0b7.route",
+    "bytes": 19968,
+    "source_dev": 66304,
+    "source_ino": 99754098,
+    "private_dev": 66304,
+    "private_ino": 99877171
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3624043967-3627028890-08539f01444455c982270e041187446c1bc152a48bc360cc0ca2ea0cc25cd124.route",
+    "bytes": 18080,
+    "source_dev": 66304,
+    "source_ino": 99754099,
+    "private_dev": 66304,
+    "private_ino": 99877172
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3627028891-3629802232-4314d1e84641ef73322b75d381609f087ca2a8e04e8dfa1f852d9018450739b6.route",
+    "bytes": 20048,
+    "source_dev": 66304,
+    "source_ino": 99754100,
+    "private_dev": 66304,
+    "private_ino": 99877173
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3629802233-3632558781-5da2cd765422340ba3ae091ae0bfcf1def40e159d0d3a247f3d1130a57c9e95a.route",
+    "bytes": 21784,
+    "source_dev": 66304,
+    "source_ino": 99754101,
+    "private_dev": 66304,
+    "private_ino": 99877174
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3632558782-3635230133-78ef92f769e66e60d735757f009fdf51dd4de1e53ecbafe0e85fb91c87cd89bc.route",
+    "bytes": 24184,
+    "source_dev": 66304,
+    "source_ino": 99754102,
+    "private_dev": 66304,
+    "private_ino": 99877175
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3635230134-3637951300-aef50e18a4127027f44b25a6596c338e45469fc3fe8be829a24a818ec95ed9fe.route",
+    "bytes": 19144,
+    "source_dev": 66304,
+    "source_ino": 99754105,
+    "private_dev": 66304,
+    "private_ino": 99877176
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3637951301-3640757350-d4282e5176a558a73264e291b82bd53ab7495e1bc3f1e00916669a6bd07301e8.route",
+    "bytes": 22216,
+    "source_dev": 66304,
+    "source_ino": 99754103,
+    "private_dev": 66304,
+    "private_ino": 99877177
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3640757351-3643549962-4dbad76a184f92e42834e386df751c83c9825e5dbbeeffc84715d4329b071c9b.route",
+    "bytes": 23360,
+    "source_dev": 66304,
+    "source_ino": 99754104,
+    "private_dev": 66304,
+    "private_ino": 99877178
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3643549963-3646357885-e0e40332e7c5ef7f92ede1e2f375cb267de96c7b36a5cc54828a45adb40962e3.route",
+    "bytes": 21072,
+    "source_dev": 66304,
+    "source_ino": 99754106,
+    "private_dev": 66304,
+    "private_ino": 99877179
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3646357886-3649240636-22448315fddde0a1e041b9b7bd1cbcbe5c006089f1a7ce78045b09982917effc.route",
+    "bytes": 20128,
+    "source_dev": 66304,
+    "source_ino": 99754107,
+    "private_dev": 66304,
+    "private_ino": 99877180
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3649240637-3651940671-825d561144c15434132f4f09294ac4f335e0f8eb0f5de57ecf29c2a4f2fe926f.route",
+    "bytes": 23200,
+    "source_dev": 66304,
+    "source_ino": 99754108,
+    "private_dev": 66304,
+    "private_ino": 99877181
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3651940672-3654822814-a504f1edff0a9b840b6b14fbf5a5ed8130f40bc7f75545f207d43f0ebb3ef0ee.route",
+    "bytes": 26432,
+    "source_dev": 66304,
+    "source_ino": 99754111,
+    "private_dev": 66304,
+    "private_ino": 99877182
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3654822815-3657466847-087a4b0aa96c6833b7c3d6eacf23a11512a9abbcfabd69133c68d146c3ad3034.route",
+    "bytes": 27496,
+    "source_dev": 66304,
+    "source_ino": 99754109,
+    "private_dev": 66304,
+    "private_ino": 99877183
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3657466848-3660453238-bebc2f3d95d428265f225899a0511ca4f75f1f0ac2129717b3b8dfa8a8bdb00e.route",
+    "bytes": 22216,
+    "source_dev": 66304,
+    "source_ino": 99754110,
+    "private_dev": 66304,
+    "private_ino": 99877184
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3660453239-3663194297-c1d3ee4a0511dadc1b24339e7a761a81e54af91af051af3a988a045e594321ff.route",
+    "bytes": 25528,
+    "source_dev": 66304,
+    "source_ino": 99754112,
+    "private_dev": 66304,
+    "private_ino": 99877185
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3663194298-3666123064-0c8ee49ed4e7e85d6e78b27a552b706c517c1433e6e0978c783de8ed706fba9b.route",
+    "bytes": 37736,
+    "source_dev": 66304,
+    "source_ino": 99754113,
+    "private_dev": 66304,
+    "private_ino": 99877186
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3666123065-3668945087-87dc35d808d28e4950173677b272e34adbb084ae16bb443ed1f3b0d31179d21e.route",
+    "bytes": 26472,
+    "source_dev": 66304,
+    "source_ino": 99754114,
+    "private_dev": 66304,
+    "private_ino": 99877187
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3668945088-3671821614-9f2d0a1a5288e6e79ddf4aaa347a430dd1c16bb815208ef6d9a50ddb13ede850.route",
+    "bytes": 23200,
+    "source_dev": 66304,
+    "source_ino": 99754115,
+    "private_dev": 66304,
+    "private_ino": 99877188
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3671821615-3674625487-e4b3006428de9c590d7fcbdf26f1ce38fea3f8eea20b71d2412fa0683a60997d.route",
+    "bytes": 20128,
+    "source_dev": 66304,
+    "source_ino": 99754116,
+    "private_dev": 66304,
+    "private_ino": 99877189
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3674625488-3677576395-a114868be2557c8c3abd83c1c817bd46417c5d56f97fd6eac50dedcf649ea0b8.route",
+    "bytes": 24104,
+    "source_dev": 66304,
+    "source_ino": 99754117,
+    "private_dev": 66304,
+    "private_ino": 99877190
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3677576396-3680468257-7aaea8199113461a85510f72403a064c0709e6a9813fb86d0a5ff2be55b0b629.route",
+    "bytes": 15832,
+    "source_dev": 66304,
+    "source_ino": 99754118,
+    "private_dev": 66304,
+    "private_ino": 99877191
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3680468258-3683461266-1a0385a695e3abb6f0f734872a179ed6995ab09a92a08fddabfed1b3b8400950.route",
+    "bytes": 21072,
+    "source_dev": 66304,
+    "source_ino": 99754119,
+    "private_dev": 66304,
+    "private_ino": 99877192
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3683461267-3686411345-51bd2e0dec90bb6f4416d8250952411184c58547fa6aa38f24cf2467eabd042f.route",
+    "bytes": 22176,
+    "source_dev": 66304,
+    "source_ino": 99754120,
+    "private_dev": 66304,
+    "private_ino": 99877193
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3686411346-3689138096-bebfc77f0ac7ac9b12fb8e1d10b2f24f0cf2d40cee876c8ad46606b0fa68a4ff.route",
+    "bytes": 22056,
+    "source_dev": 66304,
+    "source_ino": 99754121,
+    "private_dev": 66304,
+    "private_ino": 99877194
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3689138097-3692136161-255657652921abeb9bdec06f2ef999eab278baf7e2dd1ccc3b1dc35ab93148a7.route",
+    "bytes": 18160,
+    "source_dev": 66304,
+    "source_ino": 99754122,
+    "private_dev": 66304,
+    "private_ino": 99877195
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3692136162-3694870111-c33a13cf1f0b826a890b3b375abfa4726fbdad9aed3c9c5d6a45013bdaf6e6e8.route",
+    "bytes": 22136,
+    "source_dev": 66304,
+    "source_ino": 99754123,
+    "private_dev": 66304,
+    "private_ino": 99877196
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3694870112-3697645792-f2283c5a089525e5ac6728f84eb475a94ca49eef8bd6f79abbdd20fe3ac38283.route",
+    "bytes": 15832,
+    "source_dev": 66304,
+    "source_ino": 99754124,
+    "private_dev": 66304,
+    "private_ino": 99877197
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3697645793-3700650298-15fb5464245ceaa4f5898ac7a989b87d4f78a7cde82a2760ddcea6429f6e53ab.route",
+    "bytes": 15952,
+    "source_dev": 66304,
+    "source_ino": 99754125,
+    "private_dev": 66304,
+    "private_ino": 99877198
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3700650299-3703572705-a146bfc67026df56512e84b8a8d54e50502453e73ba65076040704773d338931.route",
+    "bytes": 17920,
+    "source_dev": 66304,
+    "source_ino": 99754126,
+    "private_dev": 66304,
+    "private_ino": 99877199
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3703572706-3706576741-41c7813164c507c7c02db6739e032250b65b9bbbb1750adbffddf01241f76eef.route",
+    "bytes": 18472,
+    "source_dev": 66304,
+    "source_ino": 99754127,
+    "private_dev": 66304,
+    "private_ino": 99877200
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3706576742-3709528368-91c36df6bde4652adc962dceb5b105bb287e44c87d3b5abebf4085a74219de0b.route",
+    "bytes": 19024,
+    "source_dev": 66304,
+    "source_ino": 99754128,
+    "private_dev": 66304,
+    "private_ino": 99877201
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3709528369-3712592757-5c21fc74b1962083f22234924efb992989dd395c2bc0626547c7b11bd56a07bd.route",
+    "bytes": 21664,
+    "source_dev": 66304,
+    "source_ino": 99754129,
+    "private_dev": 66304,
+    "private_ino": 99877202
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3712592758-3715555564-a5b65d15587d4bd074891aeae15127c1f8174e63ce08193b0d2a3e1cd26b8300.route",
+    "bytes": 17488,
+    "source_dev": 66304,
+    "source_ino": 99754130,
+    "private_dev": 66304,
+    "private_ino": 99877203
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3715555565-3718389638-5ce565a96a427df955875ae33efdd28fa75b6dc3736cadf9dac30372ebcd4be3.route",
+    "bytes": 21544,
+    "source_dev": 66304,
+    "source_ino": 99754131,
+    "private_dev": 66304,
+    "private_ino": 99877204
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3718389639-3721017444-5ca271a88d81a81731ca38409ee034163700d5e676490bc502282fc78b341423.route",
+    "bytes": 18632,
+    "source_dev": 66304,
+    "source_ino": 99754133,
+    "private_dev": 66304,
+    "private_ino": 99877205
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3721017445-3723950402-7c4c09ea9288e5913a28d0abaf2f01d45ea81a3b321cdf04dd9a0862ddc4ed05.route",
+    "bytes": 19968,
+    "source_dev": 66304,
+    "source_ino": 99754132,
+    "private_dev": 66304,
+    "private_ino": 99877206
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3723950403-3726742207-fe11193492c92d1e3b96af84176f1f3c164e52998adede686d055b54bd05d399.route",
+    "bytes": 17568,
+    "source_dev": 66304,
+    "source_ino": 99754134,
+    "private_dev": 66304,
+    "private_ino": 99877207
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3726742208-3729546894-023f7616e23d996415eaf0b68e5ab6de57bc2b9720ebdca0025785592efdb953.route",
+    "bytes": 18080,
+    "source_dev": 66304,
+    "source_ino": 99754135,
+    "private_dev": 66304,
+    "private_ino": 99877208
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3729546895-3732233425-d99aa06afb8ac10e8f552d22a74af6646e225a0056b63aee6577ff3a72c6f2b2.route",
+    "bytes": 20992,
+    "source_dev": 66304,
+    "source_ino": 99754136,
+    "private_dev": 66304,
+    "private_ino": 99877209
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3732233426-3734892148-5aac5a92c86501af034e02e470e5eb29b12b7139f4812a0230229f4fd24fad8a.route",
+    "bytes": 18944,
+    "source_dev": 66304,
+    "source_ino": 99754137,
+    "private_dev": 66304,
+    "private_ino": 99877210
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3734892149-3737514591-7a561a337311c16d85b3ceef665db775ed66babce6674ea4613b9805535dca35.route",
+    "bytes": 18864,
+    "source_dev": 66304,
+    "source_ino": 99754139,
+    "private_dev": 66304,
+    "private_ino": 99877211
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3737514592-3740300119-a3f44dfab2af9804ee806c780b08a4f7599c44b6138d3f668351a38ae8a6b758.route",
+    "bytes": 19576,
+    "source_dev": 66304,
+    "source_ino": 99754138,
+    "private_dev": 66304,
+    "private_ino": 99877212
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3740300120-3743004818-a356c9fa89842d1d76c4e7afaecd8ea324f8160f38915cc18995da542dedded1.route",
+    "bytes": 18944,
+    "source_dev": 66304,
+    "source_ino": 99754141,
+    "private_dev": 66304,
+    "private_ino": 99877213
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3743004819-3745640214-16ee1d87c7b061a0aef2e45eca33591c8eb04478a4eeea81e01b5fe47faeccef.route",
+    "bytes": 25408,
+    "source_dev": 66304,
+    "source_ino": 99754140,
+    "private_dev": 66304,
+    "private_ino": 99877214
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3745640215-3748557657-69510b9054d71f2dc53e82bb0972117a36b34f023c9a2524d4e2e8f8ef54b6da.route",
+    "bytes": 21232,
+    "source_dev": 66304,
+    "source_ino": 99754142,
+    "private_dev": 66304,
+    "private_ino": 99877215
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3748557658-3751289791-9d34648c0c9e297c93c0bdafb88b8517fd56e606177a14323dc6d860ab61b794.route",
+    "bytes": 26392,
+    "source_dev": 66304,
+    "source_ino": 99754143,
+    "private_dev": 66304,
+    "private_ino": 99877216
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3751289792-3754046900-f263b6f1cf54734adbbad866c4b129b18927919191aef65400d0d2ac2893b0a6.route",
+    "bytes": 22336,
+    "source_dev": 66304,
+    "source_ino": 99754144,
+    "private_dev": 66304,
+    "private_ino": 99877217
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3754046901-3756824146-a503af7641820ffff49b96d67fcd790a533deac2230c22eaa24ba8830172cec9.route",
+    "bytes": 20088,
+    "source_dev": 66304,
+    "source_ino": 99754145,
+    "private_dev": 66304,
+    "private_ino": 99877218
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3756824147-3759748742-990a5448cf8ed4156d969f0971eb16a6205adf1b1a612d2fa6dc67f4bc1b88ad.route",
+    "bytes": 20720,
+    "source_dev": 66304,
+    "source_ino": 99754146,
+    "private_dev": 66304,
+    "private_ino": 99877219
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3759748743-3762425481-5d858da669eb90ce49cbc3dfda9cba38dd8bfe824e75e3b1d86deea49c9b7521.route",
+    "bytes": 22136,
+    "source_dev": 66304,
+    "source_ino": 99754147,
+    "private_dev": 66304,
+    "private_ino": 99877220
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3762425482-3765238030-fffef01c02b5a7ec2549af572f61593a3471243c7da5e3f72d351ac0fffb0074.route",
+    "bytes": 16856,
+    "source_dev": 66304,
+    "source_ino": 99754149,
+    "private_dev": 66304,
+    "private_ino": 99877221
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3765238031-3767886968-2295b28c1a19fea187fb2b1bb917a3348310028769d6a4ccfa42dbfc1ce1be9e.route",
+    "bytes": 21152,
+    "source_dev": 66304,
+    "source_ino": 99754148,
+    "private_dev": 66304,
+    "private_ino": 99877222
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3767886969-3770672091-8de81c6a00bfcbb20c60b56b2d00114c362823346595103d5c4fe047b2a003de.route",
+    "bytes": 19736,
+    "source_dev": 66304,
+    "source_ino": 99754150,
+    "private_dev": 66304,
+    "private_ino": 99877223
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3770672092-3773457683-39c99003493dfd6571536d5b353c7c487a81b59970f7ca814556b81aed8ddfa9.route",
+    "bytes": 21112,
+    "source_dev": 66304,
+    "source_ino": 99754151,
+    "private_dev": 66304,
+    "private_ino": 99877224
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3773457684-3776285731-417aa596b221bc8a4427dbdc98171f3b81742f693b3dcace0df8550d7477af0f.route",
+    "bytes": 22768,
+    "source_dev": 66304,
+    "source_ino": 99754152,
+    "private_dev": 66304,
+    "private_ino": 99877225
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3776285732-3778976439-c7d0df93266e7b52536d8de267badae9957a814b59227bb8547906b0c6d03c23.route",
+    "bytes": 20048,
+    "source_dev": 66304,
+    "source_ino": 99754153,
+    "private_dev": 66304,
+    "private_ino": 99877226
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3778976440-3781752610-4005ba6145b704af9f07817ac9e03ee4e43b9e3a086e6db5bf8e352353f58544.route",
+    "bytes": 25960,
+    "source_dev": 66304,
+    "source_ino": 99754154,
+    "private_dev": 66304,
+    "private_ino": 99877227
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3781752611-3784624987-9e636f7b60ebbcaace43963fe1eba94dabf3bd55dd4363628c3a2dfa1366557d.route",
+    "bytes": 23560,
+    "source_dev": 66304,
+    "source_ino": 99754155,
+    "private_dev": 66304,
+    "private_ino": 99877228
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3784624988-3787218202-b63fb8607388cd85ce2761d9daed264a10d5e95680e11fc95c7e3e423da678ee.route",
+    "bytes": 15952,
+    "source_dev": 66304,
+    "source_ino": 99754156,
+    "private_dev": 66304,
+    "private_ino": 99877229
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3787218203-3790045166-bb7b2f2257452f81749f768c0ebd2e97eaec3234b00d60fe0e103a3aad7e20a5.route",
+    "bytes": 18000,
+    "source_dev": 66304,
+    "source_ino": 99754157,
+    "private_dev": 66304,
+    "private_ino": 99877230
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3790045167-3792896211-da0313d53c500309aceb75f19254f07cc241785b4948fc6b71ad506d9b17ead3.route",
+    "bytes": 19024,
+    "source_dev": 66304,
+    "source_ino": 99754158,
+    "private_dev": 66304,
+    "private_ino": 99877231
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3792896212-3795714060-16f31acaa0181af88e84af0f7d3d8347bf4129a0d9d8ee8a475c97a99979ddd0.route",
+    "bytes": 20088,
+    "source_dev": 66304,
+    "source_ino": 99754159,
+    "private_dev": 66304,
+    "private_ino": 99877232
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3795714061-3798573291-9f9864d03a64b39d3de48028850e90c9781b9bcf165d747f13ce53242d9d0509.route",
+    "bytes": 18000,
+    "source_dev": 66304,
+    "source_ino": 99754160,
+    "private_dev": 66304,
+    "private_ino": 99877233
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3798573292-3801362030-5a75b62ca7f25671ecf84e4726d24652847e28938c3f43759a2bd349e3726555.route",
+    "bytes": 20640,
+    "source_dev": 66304,
+    "source_ino": 99754161,
+    "private_dev": 66304,
+    "private_ino": 99877234
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3801362031-3803970764-3e9b4192611b320cf98c97b26d98b4b8d06a1e531e50f5654001fe43a48ebc0e.route",
+    "bytes": 12760,
+    "source_dev": 66304,
+    "source_ino": 99754162,
+    "private_dev": 66304,
+    "private_ino": 99877235
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3803970765-3806732584-462ae7b7af99d0c403f45450c270a432e68bfbe7b03521865ccdd916614180c9.route",
+    "bytes": 18944,
+    "source_dev": 66304,
+    "source_ino": 99754163,
+    "private_dev": 66304,
+    "private_ino": 99877236
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3806732585-3809504064-9558572ff67a6b04262f37f7a719b8241968d5c530e558316b76f6ba512e70af.route",
+    "bytes": 19184,
+    "source_dev": 66304,
+    "source_ino": 99754164,
+    "private_dev": 66304,
+    "private_ino": 99877237
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3809504065-3812442386-7f903cd3c247d897edcee61dada61d9c6fd7009461ba5b332378d61b86c9f3d7.route",
+    "bytes": 22136,
+    "source_dev": 66304,
+    "source_ino": 99754165,
+    "private_dev": 66304,
+    "private_ino": 99877238
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3812442387-3815265036-09027ce698caa1668f9dc52acec8502bd639b5ad3fcec550961720c405355f70.route",
+    "bytes": 18200,
+    "source_dev": 66304,
+    "source_ino": 99754166,
+    "private_dev": 66304,
+    "private_ino": 99877239
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3815265037-3818079531-fc34629881d96ac9235cf3feca8e97067529f137e7d7a38b2a0dedab21c5451d.route",
+    "bytes": 19968,
+    "source_dev": 66304,
+    "source_ino": 99754167,
+    "private_dev": 66304,
+    "private_ino": 99877240
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3818079532-3820822656-c1f592c80e5a0d2bd9e22ef3daf8e6acb00dc6f7f405592e6fdc0773840333bb.route",
+    "bytes": 18672,
+    "source_dev": 66304,
+    "source_ino": 99754168,
+    "private_dev": 66304,
+    "private_ino": 99877241
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3820822657-3823623510-82529c44263a267419755ca2c86eb6d1583878c29c1402aed6df61c629d36d57.route",
+    "bytes": 20680,
+    "source_dev": 66304,
+    "source_ino": 99754169,
+    "private_dev": 66304,
+    "private_ino": 99877242
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3823623511-3826374943-0120b6fbfaaddca9b7c056fce1e9b5167cfc51e02a5b2df96eb5aa087ec7012c.route",
+    "bytes": 22216,
+    "source_dev": 66304,
+    "source_ino": 99754170,
+    "private_dev": 66304,
+    "private_ino": 99877243
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3826374944-3829240598-8666e44ba158e475481c29f7df64bab3b5a87b17b8a16e5349a09b449005ae07.route",
+    "bytes": 18904,
+    "source_dev": 66304,
+    "source_ino": 99754171,
+    "private_dev": 66304,
+    "private_ino": 99877244
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3829240599-3832076755-dbf7cc997ab61cb7923c7d8ff6caaae5c6ebafb2dc25fae03494e5c7b8fe70fc.route",
+    "bytes": 22728,
+    "source_dev": 66304,
+    "source_ino": 99754172,
+    "private_dev": 66304,
+    "private_ino": 99877245
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3832076756-3834896649-c88c99cb9206658aa28d2ab0e046e63609ccd943eb1f36cfeb6af679f0ccf696.route",
+    "bytes": 15912,
+    "source_dev": 66304,
+    "source_ino": 99754173,
+    "private_dev": 66304,
+    "private_ino": 99877246
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3834896650-3837684244-127f4442eff6ec93adc5951a35319ded7fad89550f8b780ab24a78b2d518881c.route",
+    "bytes": 21112,
+    "source_dev": 66304,
+    "source_ino": 99754174,
+    "private_dev": 66304,
+    "private_ino": 99877247
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3837684245-3840496133-37d609f98885455432942254257036f7ed6a3a05b740b459ec3e829e2bf339d2.route",
+    "bytes": 17056,
+    "source_dev": 66304,
+    "source_ino": 99754175,
+    "private_dev": 66304,
+    "private_ino": 99877248
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3840496134-3843318575-69b2d7c2e6ffdd5f0ede15a6e81513215c2548faed04f3de8877c8d1ad42008a.route",
+    "bytes": 18984,
+    "source_dev": 66304,
+    "source_ino": 99754177,
+    "private_dev": 66304,
+    "private_ino": 99877249
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3843318576-3846120664-39ad5b90db34f145f4126e8a38ae82356acc35b1a8e2739af4618a1c5e294bf6.route",
+    "bytes": 20800,
+    "source_dev": 66304,
+    "source_ino": 99754178,
+    "private_dev": 66304,
+    "private_ino": 99877250
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3846120665-3848992247-67d4d6c4291f6f65769f29dfe9d22e9e64581161e63b8767c7e33ec4448dd69b.route",
+    "bytes": 19064,
+    "source_dev": 66304,
+    "source_ino": 99754179,
+    "private_dev": 66304,
+    "private_ino": 99877251
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3848992248-3851903971-d84130b51a68adfd1c564fc4f485666fca57a660ecd29d673bcbb84b34458d49.route",
+    "bytes": 18592,
+    "source_dev": 66304,
+    "source_ino": 99754180,
+    "private_dev": 66304,
+    "private_ino": 99877252
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3851903972-3854630540-49e7d3c0547c03b8cf422a3a4e611801d71ea8a309056d95fafa9a03507643a2.route",
+    "bytes": 18904,
+    "source_dev": 66304,
+    "source_ino": 99754181,
+    "private_dev": 66304,
+    "private_ino": 99877253
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3854630541-3857428616-69f0e5660e87ad3f79b9d40239d825e927590110ff13690bb1d432b0fde588f6.route",
+    "bytes": 22096,
+    "source_dev": 66304,
+    "source_ino": 99754182,
+    "private_dev": 66304,
+    "private_ino": 99877254
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3857428617-3860272321-c255f3a46372242674d4675e80ba9bd97fc41410cd76b9fd55caa3bc26dec366.route",
+    "bytes": 16976,
+    "source_dev": 66304,
+    "source_ino": 99754183,
+    "private_dev": 66304,
+    "private_ino": 99877255
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3860272322-3863012699-ab90f54fd3c07cd06f46a7dac5016a27aa7e28fea38767e91c0171a06ea13ade.route",
+    "bytes": 16896,
+    "source_dev": 66304,
+    "source_ino": 99754184,
+    "private_dev": 66304,
+    "private_ino": 99877256
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3863012700-3865778554-853dffd72b823911f68cd52b6f68b3db8b8157a60dbed3537f2ae838703ec2c5.route",
+    "bytes": 17016,
+    "source_dev": 66304,
+    "source_ino": 99754185,
+    "private_dev": 66304,
+    "private_ino": 99877257
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3865778555-3868572956-ba6435037618e90bf0bb5cf61ab7d233847a1d19ff365ec59ad292e961159f71.route",
+    "bytes": 17960,
+    "source_dev": 66304,
+    "source_ino": 99754188,
+    "private_dev": 66304,
+    "private_ino": 99877258
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3868572957-3871584979-97b009485493e4feadd1bdddee0a94a1b5596094c77fbbc6daa6be19d2fe9df0.route",
+    "bytes": 18120,
+    "source_dev": 66304,
+    "source_ino": 99754186,
+    "private_dev": 66304,
+    "private_ino": 99877259
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3871584980-3874426459-c4582e3d66e6b78f2e6670c9bc395079870a011262464bd23d796feb8dff9466.route",
+    "bytes": 21032,
+    "source_dev": 66304,
+    "source_ino": 99754187,
+    "private_dev": 66304,
+    "private_ino": 99877260
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3874426460-3877297879-15649929317ad863637d4359cdb97e9c76d5f3a05174270d3cff01c285b58bd5.route",
+    "bytes": 21192,
+    "source_dev": 66304,
+    "source_ino": 99754189,
+    "private_dev": 66304,
+    "private_ino": 99877261
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3877297880-3880064204-daa8a6a38c7f5adfc6025669705956b79a644b0b5af1d794ed406f12296c64c6.route",
+    "bytes": 18944,
+    "source_dev": 66304,
+    "source_ino": 99754190,
+    "private_dev": 66304,
+    "private_ino": 99877262
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3880064205-3882932280-8e0c809f76b12686f416e2ce89344e8bb577fd091c7315a62c7fb3bcdd63a124.route",
+    "bytes": 18672,
+    "source_dev": 66304,
+    "source_ino": 99754191,
+    "private_dev": 66304,
+    "private_ino": 99877263
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3882932281-3885812396-67f5c886f2c9cbba92bf981048f551d704e5465b89d19e533bc094e2f100762b.route",
+    "bytes": 20048,
+    "source_dev": 66304,
+    "source_ino": 99754192,
+    "private_dev": 66304,
+    "private_ino": 99877264
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3885812397-3888646066-0d8a8be872d4d7bc99e10ce0fc6cc71c851c96134315a67ca780fc10f02f75a0.route",
+    "bytes": 19616,
+    "source_dev": 66304,
+    "source_ino": 99754193,
+    "private_dev": 66304,
+    "private_ino": 99877265
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3888646067-3891380614-b254701195f82aabc906c997bd1fd39675ec53a3796689db62a1c6c8c3bc15c9.route",
+    "bytes": 21664,
+    "source_dev": 66304,
+    "source_ino": 99754194,
+    "private_dev": 66304,
+    "private_ino": 99877266
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3891380615-3894190482-03ebc1a1a27e7ec93e2dd9e3eec000b610984042acc350f2b238fa916b441068.route",
+    "bytes": 18040,
+    "source_dev": 66304,
+    "source_ino": 99754195,
+    "private_dev": 66304,
+    "private_ino": 99877267
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3894190483-3896897935-99d4fbdee4cc74483543cbf8fc3199a6cddf38e24dbc38e3218f0d6508db05bf.route",
+    "bytes": 23280,
+    "source_dev": 66304,
+    "source_ino": 99754196,
+    "private_dev": 66304,
+    "private_ino": 99877268
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3896897936-3899696027-e6154f12d64acf43702bbf495e97f4ee959c9948e97892d341c329dbc205c260.route",
+    "bytes": 23320,
+    "source_dev": 66304,
+    "source_ino": 99754197,
+    "private_dev": 66304,
+    "private_ino": 99877269
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3899696028-3902419580-fd28261afef2310c849695c085b295fad9da73ad79a597748a4c984fad7903ef.route",
+    "bytes": 19656,
+    "source_dev": 66304,
+    "source_ino": 99754198,
+    "private_dev": 66304,
+    "private_ino": 99877270
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3902419581-3905080639-1db8ab0474d8f8a4876be49e14dc3bb5ec7828cfcb3b161d11574a638d37560e.route",
+    "bytes": 24184,
+    "source_dev": 66304,
+    "source_ino": 99754199,
+    "private_dev": 66304,
+    "private_ino": 99877271
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3905080640-3907452219-83514a4fb05afe092a736d6d26d97de7ec5afc5624f588d9c4671168db64c8d3.route",
+    "bytes": 21272,
+    "source_dev": 66304,
+    "source_ino": 99754200,
+    "private_dev": 66304,
+    "private_ino": 99877272
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3907452220-3909698535-945d0f6bcf3e2cfa4977cca4d3409581c8de28109f71dd26b46e4e4f14c6eca7.route",
+    "bytes": 14888,
+    "source_dev": 66304,
+    "source_ino": 99754201,
+    "private_dev": 66304,
+    "private_ino": 99877273
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3909698536-3911961922-43346884aa159c255ace0bc637210cb6e800464568c7fe4ed9658bacc4faca09.route",
+    "bytes": 19264,
+    "source_dev": 66304,
+    "source_ino": 99754202,
+    "private_dev": 66304,
+    "private_ino": 99877274
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3911961923-3914574903-d38d3f80320bd154930a2a64570d098b361daaf60c61c93b096cae9662dd5768.route",
+    "bytes": 20208,
+    "source_dev": 66304,
+    "source_ino": 99754203,
+    "private_dev": 66304,
+    "private_ino": 99877275
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3914574904-3917410628-3b8a638f04bf40d0d5af03236aa3b888d66d9f74d9b38ee25832cfe98d91b2fa.route",
+    "bytes": 20248,
+    "source_dev": 66304,
+    "source_ino": 99754204,
+    "private_dev": 66304,
+    "private_ino": 99877276
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3917410629-3920345480-6527a4aac0bf5f8a5bbf7a13309c49139659a788dac306c6c22c3a8c41ba76ac.route",
+    "bytes": 20128,
+    "source_dev": 66304,
+    "source_ino": 99754205,
+    "private_dev": 66304,
+    "private_ino": 99877277
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3920345481-3923073597-028ea092959fc25d8fe5375e6ae6824db0ecf00d320aa9ed293fb227f3c75ae2.route",
+    "bytes": 19144,
+    "source_dev": 66304,
+    "source_ino": 99754206,
+    "private_dev": 66304,
+    "private_ino": 99877278
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3923073598-3925772112-55aaabe60236ca1bb24ecf198f3263ddb8985c7c56952158b8a48f7a22b56359.route",
+    "bytes": 13864,
+    "source_dev": 66304,
+    "source_ino": 99754207,
+    "private_dev": 66304,
+    "private_ino": 99877279
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3925772113-3928334445-478438f6b34d7d4b55d6e123db5ad83cfba9d4133b0953c304501dae2273a224.route",
+    "bytes": 12720,
+    "source_dev": 66304,
+    "source_ino": 99754208,
+    "private_dev": 66304,
+    "private_ino": 99877280
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3928334446-3930833223-75a0c35f231b97d8b6bb651ed243f6e9a70859432c8d98a747b878e17973e114.route",
+    "bytes": 14416,
+    "source_dev": 66304,
+    "source_ino": 99754209,
+    "private_dev": 66304,
+    "private_ino": 99877281
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3930833224-3933427710-4addd33df049d9a0b1dfa4f2d43a208b44e300db5f5b51ee78af0791dde1664f.route",
+    "bytes": 15992,
+    "source_dev": 66304,
+    "source_ino": 99754210,
+    "private_dev": 66304,
+    "private_ino": 99877282
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3933427711-3936066196-2767220fe9ab8fbce335a8363fca8fedf69be291b088bcb0da780fa0fbad378e.route",
+    "bytes": 13904,
+    "source_dev": 66304,
+    "source_ino": 99754211,
+    "private_dev": 66304,
+    "private_ino": 99877283
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3936066197-3938706378-dd21b90c170cd24a15729e32008bcd55ccf796017af625c1f821a172b2474449.route",
+    "bytes": 12720,
+    "source_dev": 66304,
+    "source_ino": 99754212,
+    "private_dev": 66304,
+    "private_ino": 99877284
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3938706379-3941364403-e50b62afaa3108d6560336c27a5aece9ad21b80284994f4a9d08e6a630cbbdfe.route",
+    "bytes": 11736,
+    "source_dev": 66304,
+    "source_ino": 99754213,
+    "private_dev": 66304,
+    "private_ino": 99877285
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3941364404-3944030854-8d95a6950c58380d92bacef17a8781fed43e574e6f7083e5bb54244d01db4cac.route",
+    "bytes": 12800,
+    "source_dev": 66304,
+    "source_ino": 99754214,
+    "private_dev": 66304,
+    "private_ino": 99877286
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3944030855-3946739800-4eaf7bf6e79728f647abf551348c0368666aab59182cb4725fb8ce2c3e92bc9d.route",
+    "bytes": 14968,
+    "source_dev": 66304,
+    "source_ino": 99754215,
+    "private_dev": 66304,
+    "private_ino": 99877287
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3946739801-3949263181-0725a8506badefdd6c27f6c73e96635e1bc575080e32a7e6a2b24f387ff99731.route",
+    "bytes": 12448,
+    "source_dev": 66304,
+    "source_ino": 99754216,
+    "private_dev": 66304,
+    "private_ino": 99877288
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3949263182-3952031857-e684b8cbc48ec243a7fd6ad52eb8c0128d1fecd67708b2a509c928d29029ad8d.route",
+    "bytes": 13864,
+    "source_dev": 66304,
+    "source_ino": 99754217,
+    "private_dev": 66304,
+    "private_ino": 99877289
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3952031858-3954525680-feccba4c67a946288b5680d27aea3afa30a3c047a92a7710b2a8d45a694a8878.route",
+    "bytes": 12840,
+    "source_dev": 66304,
+    "source_ino": 99754218,
+    "private_dev": 66304,
+    "private_ino": 99877290
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3954525681-3957244515-e5f2f82f85d5026d4178b8e851e1a3cf0d4a4f7f4ac1242a91945220551598c3.route",
+    "bytes": 16584,
+    "source_dev": 66304,
+    "source_ino": 99754219,
+    "private_dev": 66304,
+    "private_ino": 99877291
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3957244516-3959991628-e09e8f25dd77dae11579b8e861817afd1b48f3fe52668364fe9c32e2fd35497c.route",
+    "bytes": 15520,
+    "source_dev": 66304,
+    "source_ino": 99754220,
+    "private_dev": 66304,
+    "private_ino": 99877292
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3959991629-3962752730-7e688525770c2785a6d137ae8e576d17c51e7dc0db3ea1c87130898aca089cb6.route",
+    "bytes": 18080,
+    "source_dev": 66304,
+    "source_ino": 99754221,
+    "private_dev": 66304,
+    "private_ino": 99877293
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3962752731-3965508561-4cfcefeead06f58a35c37a451b0b5196bcd32ef5a36619bb1f059a5efc58c556.route",
+    "bytes": 14968,
+    "source_dev": 66304,
+    "source_ino": 99754222,
+    "private_dev": 66304,
+    "private_ino": 99877294
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3965508562-3968153144-5814e2e637b9cd81f1829fead1eb213b7bc69ead4d8e76fac13e712ba41c3f55.route",
+    "bytes": 16624,
+    "source_dev": 66304,
+    "source_ino": 99754223,
+    "private_dev": 66304,
+    "private_ino": 99877295
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3968153145-3970497495-d470f7fb361f27de45aa899664dbd058317e3622e97f7bc60ea3efb128fb0a11.route",
+    "bytes": 14968,
+    "source_dev": 66304,
+    "source_ino": 99754224,
+    "private_dev": 66304,
+    "private_ino": 99877296
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3970497496-3973094662-45bb8f66d656cef95dda970065e29a24bdb28cfee0620ebef87859bf9d857293.route",
+    "bytes": 15560,
+    "source_dev": 66304,
+    "source_ino": 99754225,
+    "private_dev": 66304,
+    "private_ino": 99877297
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3973094663-3975596030-7402580cdbd43c0ea61573f6abb8061ec574772daada290a2d6293abe20dfedc.route",
+    "bytes": 13352,
+    "source_dev": 66304,
+    "source_ino": 99754226,
+    "private_dev": 66304,
+    "private_ino": 99877298
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3975596031-3978238834-7bbd1d2d09dff98d32df4a50670de0bb55bd01d1d2564b0296efc78ef94a1e2e.route",
+    "bytes": 13984,
+    "source_dev": 66304,
+    "source_ino": 99754227,
+    "private_dev": 66304,
+    "private_ino": 99877299
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3978238835-3981087505-f2c02ed02ad800593f28a20861f3ae163c3213a1ce7d9e7a171d77961649f029.route",
+    "bytes": 14928,
+    "source_dev": 66304,
+    "source_ino": 99754228,
+    "private_dev": 66304,
+    "private_ino": 99877300
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3981087506-3983702825-d83a9bd70097528d2da17a036419dedc11f793034b74e456129e7a8abb8ce797.route",
+    "bytes": 17096,
+    "source_dev": 66304,
+    "source_ino": 99754229,
+    "private_dev": 66304,
+    "private_ino": 99877301
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3983702826-3986563846-6bf7661c2c403222027f90788336c985b60055bb7b398ef19c7ec068c4bf295d.route",
+    "bytes": 18672,
+    "source_dev": 66304,
+    "source_ino": 99754230,
+    "private_dev": 66304,
+    "private_ino": 99877302
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3986563847-3989276432-1525be86f2c377bb186bf46599dddf595199a11498595832eb196b915de59674.route",
+    "bytes": 18120,
+    "source_dev": 66304,
+    "source_ino": 99754231,
+    "private_dev": 66304,
+    "private_ino": 99877303
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3989276433-3992090695-ee64a8f3ce978f98c38b0f47b8a5d5d9ac931b3b24011ca51e2537528c2c5c97.route",
+    "bytes": 13392,
+    "source_dev": 66304,
+    "source_ino": 99754232,
+    "private_dev": 66304,
+    "private_ino": 99877304
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3992090696-3994930075-cd9b364b075799ab1f0c9dccd02e7863c5881615a27d4cb01bf3e8476f7682ba.route",
+    "bytes": 17608,
+    "source_dev": 66304,
+    "source_ino": 99754233,
+    "private_dev": 66304,
+    "private_ino": 99877305
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3994930076-3997816326-1e2b5c5c4d858e1d6fa46e540d1239a323c87f435798c89aebcac83acd3a1c9e.route",
+    "bytes": 16544,
+    "source_dev": 66304,
+    "source_ino": 99754234,
+    "private_dev": 66304,
+    "private_ino": 99877306
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-3997816327-4000545882-8e7c7bf6a57badcc87baa0b5569a9afcfbb2be34effc9b5a23734df52cd528e8.route",
+    "bytes": 17056,
+    "source_dev": 66304,
+    "source_ino": 99754235,
+    "private_dev": 66304,
+    "private_ino": 99877307
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4000545883-4003364005-9b25d509c56c1ca98313ccad7ef867fd6c7373da56b2af86298e90a54babbdbb.route",
+    "bytes": 21864,
+    "source_dev": 66304,
+    "source_ino": 99754236,
+    "private_dev": 66304,
+    "private_ino": 99877308
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4003364006-4006051331-57d96c2c25d1989ddabe484e06b961eb8bdde2899e4aa87817c86a4b7d6d6b3a.route",
+    "bytes": 13864,
+    "source_dev": 66304,
+    "source_ino": 99754237,
+    "private_dev": 66304,
+    "private_ino": 99877309
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4006051332-4008768886-4c31fe0e2712cb2d932e4bc206b49891323e8ccd46401c7c95abc51ff0c7897f.route",
+    "bytes": 14928,
+    "source_dev": 66304,
+    "source_ino": 99754238,
+    "private_dev": 66304,
+    "private_ino": 99877310
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4008768887-4011628097-a40e4495048039969164f67ee28ae16dbce33dc34419591551777bc90754f6cc.route",
+    "bytes": 17648,
+    "source_dev": 66304,
+    "source_ino": 99754239,
+    "private_dev": 66304,
+    "private_ino": 99877311
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4011628098-4014425075-40f8e64917d50773e9f45e21a262040c14bbd7113db0ef34ba5e20e05292f047.route",
+    "bytes": 18672,
+    "source_dev": 66304,
+    "source_ino": 99754240,
+    "private_dev": 66304,
+    "private_ino": 99877312
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4014425076-4017221966-b988dc504b437dd9c6a4761f8ee2c8ef92c2ac32c1ea4cb99a8095b3e6cd389e.route",
+    "bytes": 17056,
+    "source_dev": 66304,
+    "source_ino": 99754241,
+    "private_dev": 66304,
+    "private_ino": 99877313
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4017221967-4019981380-4a0fac35136260fa07c38da87410a3b212ff0b64d9e0b06c4cdec0f4e3f96b23.route",
+    "bytes": 17056,
+    "source_dev": 66304,
+    "source_ino": 99754242,
+    "private_dev": 66304,
+    "private_ino": 99877314
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4019981381-4022683659-22753339b862c466ef13e793ece95c6afb15e5264beecb8a3b31fc9c2ea0f182.route",
+    "bytes": 12800,
+    "source_dev": 66304,
+    "source_ino": 99754243,
+    "private_dev": 66304,
+    "private_ino": 99877315
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4022683660-4025404486-387e492175080c4fea121f01af2c1062003b2de3d6a182b12e8496eadd864b9e.route",
+    "bytes": 14928,
+    "source_dev": 66304,
+    "source_ino": 99754244,
+    "private_dev": 66304,
+    "private_ino": 99877316
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4025404487-4028102695-9d14b7cbe48bd39031d04f7881ce095c4e97e422951297ea36be580fd77aad7e.route",
+    "bytes": 17096,
+    "source_dev": 66304,
+    "source_ino": 99754245,
+    "private_dev": 66304,
+    "private_ino": 99877317
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4028102696-4030906512-37ccda9b8e58749cf1fcc84120fca185893b4065d4cd8e901512085a21c8460c.route",
+    "bytes": 18080,
+    "source_dev": 66304,
+    "source_ino": 99754246,
+    "private_dev": 66304,
+    "private_ino": 99877318
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4030906513-4033591355-d6461b0a54dcf2171e47266489e2cf549558be7542dbf3b7d6d3d4e8a27d9232.route",
+    "bytes": 13904,
+    "source_dev": 66304,
+    "source_ino": 99754247,
+    "private_dev": 66304,
+    "private_ino": 99877319
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4033591356-4036377543-2d56e3a92693e43dc747e161eaa305043acc710a1e3a2728e414ed668de77847.route",
+    "bytes": 20168,
+    "source_dev": 66304,
+    "source_ino": 99754248,
+    "private_dev": 66304,
+    "private_ino": 99877320
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4036377544-4039180529-0a3ae2a1811d868a809b5a1c1a27ae0e3a6cc2d09f0918dbb2b36f2c66ed0694.route",
+    "bytes": 13944,
+    "source_dev": 66304,
+    "source_ino": 99754249,
+    "private_dev": 66304,
+    "private_ino": 99877321
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4039180530-4041840052-081b44319cfc350806cf7dbdca15bd52a450d0ea28df798497e1f6bc67f5fb19.route",
+    "bytes": 19224,
+    "source_dev": 66304,
+    "source_ino": 99754250,
+    "private_dev": 66304,
+    "private_ino": 99877322
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4041840053-4044583919-0cef14829c9f64b1d1ffa6d101c5f3e683b8e6cfde66eef991fdea4107c431b1.route",
+    "bytes": 13824,
+    "source_dev": 66304,
+    "source_ino": 99754251,
+    "private_dev": 66304,
+    "private_ino": 99877323
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4044583920-4047193266-99648c4f59168d4be5efebd1602e561a47da8b77a1b2ec5bd2e1df5fd854f9d9.route",
+    "bytes": 16544,
+    "source_dev": 66304,
+    "source_ino": 99754252,
+    "private_dev": 66304,
+    "private_ino": 99877324
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4047193267-4049772628-56bc671b840dcc362d69b6aec314a7852fa6587c5a92b894bf9ecf3935982c18.route",
+    "bytes": 16584,
+    "source_dev": 66304,
+    "source_ino": 99754255,
+    "private_dev": 66304,
+    "private_ino": 99877325
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4049772629-4052338823-569563eba60fda2cf3f5a58a86c2e150c055d8596303f07af6cf32464fa2d6f7.route",
+    "bytes": 15952,
+    "source_dev": 66304,
+    "source_ino": 99754253,
+    "private_dev": 66304,
+    "private_ino": 99877326
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4052338824-4055019876-b63081f2ba11c60ec6c46849b9eadf75ff7376de1613e0de566dc3b5911e8051.route",
+    "bytes": 13904,
+    "source_dev": 66304,
+    "source_ino": 99754254,
+    "private_dev": 66304,
+    "private_ino": 99877327
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4055019877-4057679073-79ab77281a3c70458035f7e15fd251c1b661779b689118af88cb10862875fe53.route",
+    "bytes": 15520,
+    "source_dev": 66304,
+    "source_ino": 99754256,
+    "private_dev": 66304,
+    "private_ino": 99877328
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4057679074-4060358067-feef6c03af0ac6300a3477be10fa1ed51af60588fcb479ff672a6bd155a11716.route",
+    "bytes": 17568,
+    "source_dev": 66304,
+    "source_ino": 99754257,
+    "private_dev": 66304,
+    "private_ino": 99877329
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4060358068-4063043642-41540ec4873a6f1e79955ecda2b5474474525c9d8b1292073a9634ba94c12354.route",
+    "bytes": 14024,
+    "source_dev": 66304,
+    "source_ino": 99754258,
+    "private_dev": 66304,
+    "private_ino": 99877330
+  },
+  {
+    "path": "state-snapshots/history/storage-routing-4063043643-4063356397-64a3204b0ee7137825a82a703c345c219a0414a3a75596fc7f71c8bfbbe4f456.route",
+    "bytes": 2160,
+    "source_dev": 66304,
+    "source_ino": 99754259,
+    "private_dev": 66304,
+    "private_ino": 99877331
+  }
+]

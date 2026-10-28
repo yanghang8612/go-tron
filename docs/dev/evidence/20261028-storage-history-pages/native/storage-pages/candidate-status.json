@@ -1,0 +1,24 @@
+{
+  "complete": true,
+  "stage": "storage pages build and HTTP complete",
+  "source": "7a1d189ad2cd3927a1d9a506c418f2a34e22ab23",
+  "base": "52aea62ef56799b7e6c1365293123dd029286935",
+  "production_mutations": false,
+  "canonical_data_mutations": false,
+  "cache": "fresh processes; shared OS caches uncontrolled; no eviction",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T16:09:22.174558Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true,
+  "requests": 60
+}

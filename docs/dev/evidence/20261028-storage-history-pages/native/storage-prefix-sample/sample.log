@@ -1,0 +1,4 @@
+=== RUN   TestOfflineStoragePrefixSample
+--- PASS: TestOfflineStoragePrefixSample (14.57s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	14.618s

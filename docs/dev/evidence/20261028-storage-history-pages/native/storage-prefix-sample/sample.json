@@ -1,0 +1,2574 @@
+{
+  "rows": [
+    {
+      "accessor_bytes": 4843172,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 720,
+      "seconds": 0.049726222,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3007942275,
+        "toTxNum": 3008008101,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3007942275-3008008101-42c43e630d51c242.seg",
+        "size": 5280354,
+        "checksum": "sha256:42c43e630d51c242aa76f95294c33baaed27785a9f425724064abbede5933f13"
+      },
+      "storage_keys": 27228,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9565757,
+      "adaptive_filter_bytes": 4096,
+      "distinct_prefixes": 1043,
+      "seconds": 0.08430095,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3015103960,
+        "toTxNum": 3015223119,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3015103960-3015223119-588890c79e7d6805.seg",
+        "size": 9950889,
+        "checksum": "sha256:588890c79e7d68058011c0193ed424835a1790344eb9d91073eeff2654c7222d"
+      },
+      "storage_keys": 53771,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8736195,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 790,
+      "seconds": 0.069133289,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3020743463,
+        "toTxNum": 3020862674,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3020743463-3020862674-063e8d6a9baf594f.seg",
+        "size": 11070559,
+        "checksum": "sha256:063e8d6a9baf594f96bd55ff9c036383585efd3cb050259a132813f9560a926f"
+      },
+      "storage_keys": 41130,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5675057,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 651,
+      "seconds": 0.045954272,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3027291785,
+        "toTxNum": 3027367943,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3027291785-3027367943-1a335842dc214882.seg",
+        "size": 6096774,
+        "checksum": "sha256:1a335842dc2148825063c5d478686e9b91d8a8d183efbdf574f6944aeec26471"
+      },
+      "storage_keys": 29200,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9781507,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 854,
+      "seconds": 0.080055353,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3034824988,
+        "toTxNum": 3034955262,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3034824988-3034955262-10dc32d6f3a08094.seg",
+        "size": 10515988,
+        "checksum": "sha256:10dc32d6f3a080941df304f575ab30cc161b461513bc80baf84ee5707dd210cd"
+      },
+      "storage_keys": 54237,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 13186005,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 842,
+      "seconds": 0.246335635,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3042568028,
+        "toTxNum": 3042764972,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3042568028-3042764972-b21fa861857b7620.seg",
+        "size": 17690367,
+        "checksum": "sha256:b21fa861857b76209738271ab8770585c471c0e5dc4db774c87c73d71622f1bf"
+      },
+      "storage_keys": 60708,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8417716,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 775,
+      "seconds": 0.065117104,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3050406684,
+        "toTxNum": 3050531833,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3050406684-3050531833-5742e83db7d20a53.seg",
+        "size": 10233039,
+        "checksum": "sha256:5742e83db7d20a53a63bf7dca2d8badbc2c379fa8299abf6c1bcb8295ce97ee9"
+      },
+      "storage_keys": 45157,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6230356,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 739,
+      "seconds": 0.050340214,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3057761638,
+        "toTxNum": 3057845606,
+        "aggregationSteps": 2,
+        "path": "history/state-domain-change-3057761638-3057845606-c19dcb92ee420e20.seg",
+        "size": 7346704,
+        "checksum": "sha256:c19dcb92ee420e20fe39e05cea9e63d1c8d83969186ff37897e27de096db1aae"
+      },
+      "storage_keys": 41652,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8874494,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 834,
+      "seconds": 0.072385533,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3064391842,
+        "toTxNum": 3064512557,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3064391842-3064512557-31f80c721698ab45.seg",
+        "size": 10591406,
+        "checksum": "sha256:31f80c721698ab454840883a571be303c320d46e5aea247836c3b39e11034c8e"
+      },
+      "storage_keys": 54998,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8900395,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 832,
+      "seconds": 0.061453916,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3070901112,
+        "toTxNum": 3071024477,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3070901112-3071024477-6867fef2e87743a8.seg",
+        "size": 10653716,
+        "checksum": "sha256:6867fef2e87743a833b4b353ef72eae5cdc788f213cf0f22ceb9673ce380afdb"
+      },
+      "storage_keys": 52669,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6832010,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 614,
+      "seconds": 0.04436193,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3077095258,
+        "toTxNum": 3077182337,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3077095258-3077182337-7d9707c440596bbb.seg",
+        "size": 9596290,
+        "checksum": "sha256:7d9707c440596bbb7be37f945f0423065c9c5eb9e18474f5afd30ec9e907e40f"
+      },
+      "storage_keys": 36992,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9710565,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 651,
+      "seconds": 0.082073275,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3083368348,
+        "toTxNum": 3083515931,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3083368348-3083515931-b1b4e656eca66ce2.seg",
+        "size": 10675423,
+        "checksum": "sha256:b1b4e656eca66ce2364c13d153df836ec14126e92fa9f75e50d2bce259d08ede"
+      },
+      "storage_keys": 44693,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 17829313,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 956,
+      "seconds": 0.134271155,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3089859094,
+        "toTxNum": 3090101353,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3089859094-3090101353-3dd39ea502e29fe1.seg",
+        "size": 20203133,
+        "checksum": "sha256:3dd39ea502e29fe1322ba74a821da1e87b8214fa64e7d325a15d326808017438"
+      },
+      "storage_keys": 95704,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6941108,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 557,
+      "seconds": 0.049288757,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3095631696,
+        "toTxNum": 3095736010,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3095631696-3095736010-52d67f73d83978b7.seg",
+        "size": 6734445,
+        "checksum": "sha256:52d67f73d83978b73b87cfac8112df5c4760c098760bebe04c17c791a6628b42"
+      },
+      "storage_keys": 67327,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5506661,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 365,
+      "seconds": 0.037970093,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3101792213,
+        "toTxNum": 3101867763,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3101792213-3101867763-616977e4c2c0f654.seg",
+        "size": 5640713,
+        "checksum": "sha256:616977e4c2c0f654227fe513c441504c0f6e90824f7e27c964d46299a6bac2a5"
+      },
+      "storage_keys": 23924,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5946111,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 529,
+      "seconds": 0.050355179,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3105772385,
+        "toTxNum": 3105843174,
+        "aggregationSteps": 3,
+        "path": "history/state-domain-change-3105772385-3105843174-4d4eb57130bfe20b.seg",
+        "size": 7049870,
+        "checksum": "sha256:4d4eb57130bfe20be3d389c750e1bb3bcaf713eff1ece8e6c14934a7b1aae00e"
+      },
+      "storage_keys": 35781,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 13060009,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 746,
+      "seconds": 0.09205666,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3111672473,
+        "toTxNum": 3111844306,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3111672473-3111844306-af358eb0a0e9703d.seg",
+        "size": 13833155,
+        "checksum": "sha256:af358eb0a0e9703d591ed142236fc24a76f016e20094b8da95004f9858f52377"
+      },
+      "storage_keys": 74334,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9728856,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 658,
+      "seconds": 0.066364683,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3119416318,
+        "toTxNum": 3119551390,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3119416318-3119551390-59d1d3e5a4ba81b0.seg",
+        "size": 10456149,
+        "checksum": "sha256:59d1d3e5a4ba81b047b943495f7fd1cb1e900e606ae01c5843485e6457087d45"
+      },
+      "storage_keys": 58593,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11422118,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 657,
+      "seconds": 0.08397707,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3125543001,
+        "toTxNum": 3125686691,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3125543001-3125686691-20a4ec6c19e9a459.seg",
+        "size": 11329138,
+        "checksum": "sha256:20a4ec6c19e9a459451c4a384c436429ac54d6e450a43f0307c9f795dad54071"
+      },
+      "storage_keys": 51619,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5516533,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 576,
+      "seconds": 0.038746921,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3131777027,
+        "toTxNum": 3131844230,
+        "aggregationSteps": 2,
+        "path": "history/state-domain-change-3131777027-3131844230-24fac91459b06290.seg",
+        "size": 5333057,
+        "checksum": "sha256:24fac91459b062900d0c3a4e0644d793e7848976cb25f464c682725116138f91"
+      },
+      "storage_keys": 32566,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5122113,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 497,
+      "seconds": 0.035247589,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3135880283,
+        "toTxNum": 3135946158,
+        "aggregationSteps": 2,
+        "path": "history/state-domain-change-3135880283-3135946158-1b7739f2ff4bff02.seg",
+        "size": 5171043,
+        "checksum": "sha256:1b7739f2ff4bff020e9958b4798c52aacf90a548d45c89ee6f08543cc4a82a13"
+      },
+      "storage_keys": 32563,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6765075,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 523,
+      "seconds": 0.045585511,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3139749713,
+        "toTxNum": 3139857500,
+        "aggregationSteps": 4,
+        "path": "history/state-domain-change-3139749713-3139857500-69bc8b699fa9292c.seg",
+        "size": 7847771,
+        "checksum": "sha256:69bc8b699fa9292c846745a9a9f859d788fc6297c16d089bd3a1d9f860254a0a"
+      },
+      "storage_keys": 36860,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10271394,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 650,
+      "seconds": 0.076633281,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3146336853,
+        "toTxNum": 3146475954,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3146336853-3146475954-5f6f1cf1d5a21746.seg",
+        "size": 10283550,
+        "checksum": "sha256:5f6f1cf1d5a2174647c58e3b04f34ad72807f6291c33dbf806ac84aae6bde3f9"
+      },
+      "storage_keys": 63655,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9842449,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 847,
+      "seconds": 0.068120432,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3153932238,
+        "toTxNum": 3154064899,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3153932238-3154064899-a308b507ec38356e.seg",
+        "size": 9958570,
+        "checksum": "sha256:a308b507ec38356eb142b6b512d3d875a2ee98b9b9f9810ec6e5d6c64b1068ac"
+      },
+      "storage_keys": 54364,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 15441397,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 919,
+      "seconds": 0.110010633,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3162083583,
+        "toTxNum": 3162296232,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3162083583-3162296232-8c5191a3d2b48839.seg",
+        "size": 16337827,
+        "checksum": "sha256:8c5191a3d2b488397c51c6f2ce6989db7ca3b8c7b993ae5390bb0fdcb70bae43"
+      },
+      "storage_keys": 75189,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 4109558,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 554,
+      "seconds": 0.050607097,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3169668674,
+        "toTxNum": 3169745129,
+        "aggregationSteps": 3,
+        "path": "history/state-domain-change-3169668674-3169745129-43724c3c194e9d3b.seg",
+        "size": 6468825,
+        "checksum": "sha256:43724c3c194e9d3bcb5fe39884cabee32dbfe5876021e6dbe7bed75f95821195"
+      },
+      "storage_keys": 30824,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 4899947,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 539,
+      "seconds": 0.059762917,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3173984725,
+        "toTxNum": 3174075146,
+        "aggregationSteps": 3,
+        "path": "history/state-domain-change-3173984725-3174075146-005ff713861e84e8.seg",
+        "size": 7236554,
+        "checksum": "sha256:005ff713861e84e8020f42a685bb44586303952e9a527d0ee3a54fc62a1e1b7f"
+      },
+      "storage_keys": 29447,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 2665314,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 397,
+      "seconds": 0.039291793,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3178049215,
+        "toTxNum": 3178092217,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3178049215-3178092217-4062901d3b289c33.seg",
+        "size": 3416246,
+        "checksum": "sha256:4062901d3b289c33ea8647d05af23118a0a464e79810a96b08b695e66d71a66e"
+      },
+      "storage_keys": 16967,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10766040,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 736,
+      "seconds": 0.148824165,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3184309577,
+        "toTxNum": 3184513942,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3184309577-3184513942-80427bcfd5e1bda9.seg",
+        "size": 15411045,
+        "checksum": "sha256:80427bcfd5e1bda9164ad17b7f630c566abfa5c1b5232c9de0bc73ded2bf881e"
+      },
+      "storage_keys": 73031,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7010984,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 796,
+      "seconds": 0.092082223,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3190539211,
+        "toTxNum": 3190659670,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3190539211-3190659670-a79f3f25c1d2a8ee.seg",
+        "size": 9581206,
+        "checksum": "sha256:a79f3f25c1d2a8ee5fb9c82cd3df5bf9aa8eb9e33409ad1ac2b218121efa4fe0"
+      },
+      "storage_keys": 66004,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7355923,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 445,
+      "seconds": 0.093997488,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3197976862,
+        "toTxNum": 3198111457,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3197976862-3198111457-998883f1f34ec3a2.seg",
+        "size": 9993043,
+        "checksum": "sha256:998883f1f34ec3a204f88c1a1ba9600b838938a31a0080f3865c43a915140e9e"
+      },
+      "storage_keys": 51350,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7750711,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 490,
+      "seconds": 0.10414588,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3206623909,
+        "toTxNum": 3206768411,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3206623909-3206768411-4e28edf407669f67.seg",
+        "size": 10521502,
+        "checksum": "sha256:4e28edf407669f679ba5b26fd3291b39e05115a8b779b874201f8a2ca84ab7d5"
+      },
+      "storage_keys": 44001,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5455973,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 654,
+      "seconds": 0.07281492,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3213387383,
+        "toTxNum": 3213488890,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3213387383-3213488890-1dcfab16aa17fd29.seg",
+        "size": 7916868,
+        "checksum": "sha256:1dcfab16aa17fd29223d46d6f95188dbd095968a14a9f2c2a7a75c3b5b8c32b0"
+      },
+      "storage_keys": 42673,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7021379,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 469,
+      "seconds": 0.094156972,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3221422788,
+        "toTxNum": 3221549553,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3221422788-3221549553-bbffe34188def0aa.seg",
+        "size": 9300121,
+        "checksum": "sha256:bbffe34188def0aaefe24d6f56ee633bb5c1c4137f18fa20a5036e36fc25ba7e"
+      },
+      "storage_keys": 42528,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6286550,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 518,
+      "seconds": 0.082776158,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3228702228,
+        "toTxNum": 3228821228,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3228702228-3228821228-b7651cb4ebb58d89.seg",
+        "size": 8871932,
+        "checksum": "sha256:b7651cb4ebb58d89baedd4efe9d0939e42abadbe4d8202458996b2f9ff34e267"
+      },
+      "storage_keys": 38680,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6337876,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 598,
+      "seconds": 0.078985664,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3237218958,
+        "toTxNum": 3237339085,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3237218958-3237339085-43fd09c26b6afb0e.seg",
+        "size": 10099204,
+        "checksum": "sha256:43fd09c26b6afb0e5ad9ddb28c8da65a90fdc6ada8b54b408fda74de2b5d4b6e"
+      },
+      "storage_keys": 38717,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9315141,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 668,
+      "seconds": 0.148886206,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3246513035,
+        "toTxNum": 3246676211,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3246513035-3246676211-4dc4ee00f9f5face.seg",
+        "size": 14308783,
+        "checksum": "sha256:4dc4ee00f9f5face0681239bfe1f64d8cf39c83c60896e5a4a10208fc273ee66"
+      },
+      "storage_keys": 40449,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12155090,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 746,
+      "seconds": 0.178450431,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3253838428,
+        "toTxNum": 3254074394,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3253838428-3254074394-dedfb63b0585059f.seg",
+        "size": 19137492,
+        "checksum": "sha256:dedfb63b0585059fffe8663e189b8308a7c4ee6da9a298479f66206ee31e5132"
+      },
+      "storage_keys": 87251,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7343917,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 598,
+      "seconds": 0.096723859,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3262627093,
+        "toTxNum": 3262757915,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3262627093-3262757915-b7230994e9d4dcfb.seg",
+        "size": 10096598,
+        "checksum": "sha256:b7230994e9d4dcfbee496541fcb8a8735ca4d65d34c985406a7c7c9c97bf8ae4"
+      },
+      "storage_keys": 56276,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6323297,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 613,
+      "seconds": 0.101714054,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3271698336,
+        "toTxNum": 3271816765,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3271698336-3271816765-fb26e7ea16ac35a2.seg",
+        "size": 8746674,
+        "checksum": "sha256:fb26e7ea16ac35a2caded5c38ca06ce1238e18d6424c0ad9faf7b7d11ece48b5"
+      },
+      "storage_keys": 47230,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7326415,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 788,
+      "seconds": 0.084732486,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3278844961,
+        "toTxNum": 3278986911,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3278844961-3278986911-6349e6f2005b5dff.seg",
+        "size": 13095331,
+        "checksum": "sha256:6349e6f2005b5dff929f87bf2ea2f4abe7deceb8804d0a187ea19e75573d0e2b"
+      },
+      "storage_keys": 54409,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5482909,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 443,
+      "seconds": 0.067183392,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3287386143,
+        "toTxNum": 3287496387,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3287386143-3287496387-d44d247383577745.seg",
+        "size": 7946391,
+        "checksum": "sha256:d44d24738357774523bc318a4749d722f1cd0e9db51812f4d90a6bd6e9abaae1"
+      },
+      "storage_keys": 38408,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11826156,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 749,
+      "seconds": 0.144315091,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3296021904,
+        "toTxNum": 3296274130,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3296021904-3296274130-e81884cba58d5092.seg",
+        "size": 18419547,
+        "checksum": "sha256:e81884cba58d509201c4fe14b2a35da4397d0d117ea19e36b5723371a123ed38"
+      },
+      "storage_keys": 77367,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6005237,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 665,
+      "seconds": 0.073547097,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3303220711,
+        "toTxNum": 3303354233,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3303220711-3303354233-e68a41d2aa8a3584.seg",
+        "size": 9002525,
+        "checksum": "sha256:e68a41d2aa8a358478f5410ae504391b1d4def50b5d87deec3ba5528aaf76030"
+      },
+      "storage_keys": 45861,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6405390,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 557,
+      "seconds": 0.077307232,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3310169766,
+        "toTxNum": 3310301946,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3310169766-3310301946-f192308191f3eb2b.seg",
+        "size": 9840224,
+        "checksum": "sha256:f192308191f3eb2be7237bf12e85fa92ae6d286b0a21e0dcb5b9607c1e87844a"
+      },
+      "storage_keys": 56731,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7798083,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 592,
+      "seconds": 0.107763517,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3318152971,
+        "toTxNum": 3318301113,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3318152971-3318301113-c723408ef33a0f2b.seg",
+        "size": 10603961,
+        "checksum": "sha256:c723408ef33a0f2b4bd81af89762e8267e184d9ec219869443700dca927ceed4"
+      },
+      "storage_keys": 39888,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6144781,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 444,
+      "seconds": 0.075900961,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3325966799,
+        "toTxNum": 3326112183,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3325966799-3326112183-32523a1e95b53a0b.seg",
+        "size": 9569619,
+        "checksum": "sha256:32523a1e95b53a0b2e1521582d29bd80cb7ae51b6621767cb2820476e0d0ed01"
+      },
+      "storage_keys": 38995,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11126917,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 699,
+      "seconds": 0.126736648,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3334340054,
+        "toTxNum": 3334587633,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3334340054-3334587633-04a0ec481246c4b6.seg",
+        "size": 17354691,
+        "checksum": "sha256:04a0ec481246c4b6ed3965206ba385550c7976a921a0ce1d3879cd1900294112"
+      },
+      "storage_keys": 72550,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8465496,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 535,
+      "seconds": 0.107452995,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3341847945,
+        "toTxNum": 3342039535,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3341847945-3342039535-90783c0f8a6a51b2.seg",
+        "size": 11808485,
+        "checksum": "sha256:90783c0f8a6a51b23a5f61a9380794b15d502bdb251625553af6ad28a08acb68"
+      },
+      "storage_keys": 47899,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 3539630,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 432,
+      "seconds": 0.044708167,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3349255687,
+        "toTxNum": 3349324008,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3349255687-3349324008-25414a1340eecd16.seg",
+        "size": 4860942,
+        "checksum": "sha256:25414a1340eecd16673563683b31a463e29381410ac12b08e69701669176f4f5"
+      },
+      "storage_keys": 22353,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7916515,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 399,
+      "seconds": 0.084782764,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3356643174,
+        "toTxNum": 3356774679,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3356643174-3356774679-5477b2dda7c13d83.seg",
+        "size": 7851290,
+        "checksum": "sha256:5477b2dda7c13d836e88e094096b0c8254b0a9111301597947ab6543c635c771"
+      },
+      "storage_keys": 26602,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8839628,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 518,
+      "seconds": 0.112506979,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3364141181,
+        "toTxNum": 3364321316,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3364141181-3364321316-041944e40f7c3280.seg",
+        "size": 13751780,
+        "checksum": "sha256:041944e40f7c32806ef5ee726e5aa32022c2bcff7573ce86e99689d6bbbf7b30"
+      },
+      "storage_keys": 32879,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7198166,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 527,
+      "seconds": 0.086398526,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3372707663,
+        "toTxNum": 3372861443,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3372707663-3372861443-19ac4dcaf0a6ec63.seg",
+        "size": 10374216,
+        "checksum": "sha256:19ac4dcaf0a6ec635ed716c4f90a2cb8b377e362407fe1d1b0232e143eee29ca"
+      },
+      "storage_keys": 41012,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9164482,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 594,
+      "seconds": 0.104340793,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3381740726,
+        "toTxNum": 3381935110,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3381740726-3381935110-3144f42de0a6ba36.seg",
+        "size": 24350985,
+        "checksum": "sha256:3144f42de0a6ba36b70a41b01bc94c98ea8647e251f4416c29d86f4e6d6100a6"
+      },
+      "storage_keys": 37623,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12650408,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 804,
+      "seconds": 0.149701536,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3391854043,
+        "toTxNum": 3392123770,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3391854043-3392123770-7c23ad15a59afa90.seg",
+        "size": 20092438,
+        "checksum": "sha256:7c23ad15a59afa90a1dd9b76a74d03a5439e30fab319e97d090bd090101cba7b"
+      },
+      "storage_keys": 79885,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8657120,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 539,
+      "seconds": 0.100691436,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3403023293,
+        "toTxNum": 3403242752,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3403023293-3403242752-966d5d1262d90ca2.seg",
+        "size": 13373340,
+        "checksum": "sha256:966d5d1262d90ca27aa09c5063da9a72c106f1b2fd83920f785f65b49c504b95"
+      },
+      "storage_keys": 45949,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12463660,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 539,
+      "seconds": 0.147224293,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3411540736,
+        "toTxNum": 3411805159,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3411540736-3411805159-184327d8c69d20e0.seg",
+        "size": 16824494,
+        "checksum": "sha256:184327d8c69d20e04317feb137d6c5cf913482b981ecc503067f31ab13eba775"
+      },
+      "storage_keys": 55269,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 13665219,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 956,
+      "seconds": 0.175228597,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3423025560,
+        "toTxNum": 3423300986,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3423025560-3423300986-1a144dccd2df23a4.seg",
+        "size": 15429145,
+        "checksum": "sha256:1a144dccd2df23a4a2b1ab49f160c125655f931d876492d11934edace1824fc7"
+      },
+      "storage_keys": 46570,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12191694,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 563,
+      "seconds": 0.139202056,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3431611785,
+        "toTxNum": 3431878045,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3431611785-3431878045-603d54fa6d9f9111.seg",
+        "size": 17733269,
+        "checksum": "sha256:603d54fa6d9f91114a102a5601b9c5209d18de494dfaa85f9fe7564ebad26b96"
+      },
+      "storage_keys": 63805,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11878398,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 562,
+      "seconds": 0.145200008,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3441826175,
+        "toTxNum": 3442091651,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3441826175-3442091651-a9b18feb3ea3b8be.seg",
+        "size": 18552148,
+        "checksum": "sha256:a9b18feb3ea3b8bed54ef470a97b3b7e44a48e5c247aa0683bb3cde11a1ec876"
+      },
+      "storage_keys": 40601,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7103373,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 411,
+      "seconds": 0.08893484,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3451839949,
+        "toTxNum": 3451989729,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3451839949-3451989729-35026914a26e28af.seg",
+        "size": 9788644,
+        "checksum": "sha256:35026914a26e28af8e8bfbeefacbfc813dfb2675d7edb4013a8b2c6952528572"
+      },
+      "storage_keys": 37274,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6757474,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 343,
+      "seconds": 0.077272423,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3461921503,
+        "toTxNum": 3462081399,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3461921503-3462081399-52580617bcc475c2.seg",
+        "size": 10344275,
+        "checksum": "sha256:52580617bcc475c2d5f6ae2d2b0ed740f2c58ae4ebc5332d08a78e9ac2423ddf"
+      },
+      "storage_keys": 28197,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6777134,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 513,
+      "seconds": 0.084509945,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3470423239,
+        "toTxNum": 3470565008,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3470423239-3470565008-1c0278ed0f1e1921.seg",
+        "size": 9386666,
+        "checksum": "sha256:1c0278ed0f1e1921abdbe35b80c96f82687fbf505ff4ea2d86ce8f3b17f1b05c"
+      },
+      "storage_keys": 39316,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9451060,
+      "adaptive_filter_bytes": 512,
+      "distinct_prefixes": 253,
+      "seconds": 0.075722782,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3479615604,
+        "toTxNum": 3479789388,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3479615604-3479789388-53f82960e9209fde.seg",
+        "size": 8427024,
+        "checksum": "sha256:53f82960e9209fdece7e84eb1ac6c05f4531b848e8847413040fec95fd4ace45"
+      },
+      "storage_keys": 16828,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6338407,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 519,
+      "seconds": 0.071597099,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3488386016,
+        "toTxNum": 3488526612,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3488386016-3488526612-9f05d3eafd05be93.seg",
+        "size": 9754325,
+        "checksum": "sha256:9f05d3eafd05be930cb21a19004744f2ae0bd8ab5502d43386ce8a15069e018a"
+      },
+      "storage_keys": 30701,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12120905,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 610,
+      "seconds": 0.150270121,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3497844282,
+        "toTxNum": 3498091904,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3497844282-3498091904-58ad3bfbf16c9b06.seg",
+        "size": 16219946,
+        "checksum": "sha256:58ad3bfbf16c9b06ea36e4c92448aacca576074dea8ce08db2892fd117896318"
+      },
+      "storage_keys": 66712,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12020810,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 642,
+      "seconds": 0.137711111,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3506834604,
+        "toTxNum": 3507108450,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3506834604-3507108450-45ffd2311a822923.seg",
+        "size": 18266876,
+        "checksum": "sha256:45ffd2311a8229234a373934b5f844fc0fc51a3890e972d630c7deea0d7445fe"
+      },
+      "storage_keys": 60638,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12744111,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 642,
+      "seconds": 0.141331584,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3516790625,
+        "toTxNum": 3517082123,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3516790625-3517082123-ebd9ddc7e4934dd2.seg",
+        "size": 20380145,
+        "checksum": "sha256:ebd9ddc7e4934dd2727ef69d8fc5763889989f9f757e9e149cb37179ff579e1a"
+      },
+      "storage_keys": 59588,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8423140,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 482,
+      "seconds": 0.095456138,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3527188811,
+        "toTxNum": 3527375628,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3527188811-3527375628-64e2fe4ad49b5c1b.seg",
+        "size": 12563940,
+        "checksum": "sha256:64e2fe4ad49b5c1b85dc1c7c8258d3f2ff63395712ef689f4a058025ac37a1dc"
+      },
+      "storage_keys": 38249,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7248170,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 459,
+      "seconds": 0.122417936,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3535986063,
+        "toTxNum": 3536147734,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3535986063-3536147734-59b1cbd393c246a3.seg",
+        "size": 10621593,
+        "checksum": "sha256:59b1cbd393c246a3c0e4f98ed8e1544995a3b4dc780b8659164a377ee40ebfe2"
+      },
+      "storage_keys": 43500,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5563571,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 435,
+      "seconds": 0.062092492,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3545958865,
+        "toTxNum": 3546080274,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3545958865-3546080274-c5f69c56e5d69fee.seg",
+        "size": 9706907,
+        "checksum": "sha256:c5f69c56e5d69feef28326a84a48f89f123ee359e9256400101b9d73edee539c"
+      },
+      "storage_keys": 32545,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10747592,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 529,
+      "seconds": 0.133145044,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3556856156,
+        "toTxNum": 3557074222,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3556856156-3557074222-1b6cbe5731083b5f.seg",
+        "size": 14050497,
+        "checksum": "sha256:1b6cbe5731083b5fd3738a9477e69b6697be57696ea93259dfe269f501a43a69"
+      },
+      "storage_keys": 40651,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12889088,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 602,
+      "seconds": 0.149991322,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3564649885,
+        "toTxNum": 3564929865,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3564649885-3564929865-d53b38ea6dd1220c.seg",
+        "size": 19457778,
+        "checksum": "sha256:d53b38ea6dd1220c6592e1bbde28151a4e026753154e5b0f212094e1180edb79"
+      },
+      "storage_keys": 71306,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6331839,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 397,
+      "seconds": 0.073333507,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3573364390,
+        "toTxNum": 3573515599,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3573364390-3573515599-80c0f52d1bb9133c.seg",
+        "size": 9288918,
+        "checksum": "sha256:80c0f52d1bb9133c3e42be0b5c2a07c5dd537e4f198d7f5edfd2e0bdc2761f32"
+      },
+      "storage_keys": 32189,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8276844,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 460,
+      "seconds": 0.095110415,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3581060475,
+        "toTxNum": 3581238328,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3581060475-3581238328-e6c48b193de56102.seg",
+        "size": 12398456,
+        "checksum": "sha256:e6c48b193de5610292e21c77e1d3d8b6e6358c972b30ba919f731670be146d90"
+      },
+      "storage_keys": 37935,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11575401,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 691,
+      "seconds": 0.128667203,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3591488345,
+        "toTxNum": 3591750002,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3591488345-3591750002-81cd13bd1a2e6e8c.seg",
+        "size": 17998082,
+        "checksum": "sha256:81cd13bd1a2e6e8c309c453b83a830db0c652a37681f1738449a1fe233862546"
+      },
+      "storage_keys": 57361,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8550100,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 553,
+      "seconds": 0.101535871,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3602591106,
+        "toTxNum": 3602777134,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3602591106-3602777134-9d848c38e7afde22.seg",
+        "size": 13105980,
+        "checksum": "sha256:9d848c38e7afde22f8e1dff088a38018c6f7727acf61759cd34af4b3b1efe688"
+      },
+      "storage_keys": 44525,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6830271,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 486,
+      "seconds": 0.081629473,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3611790408,
+        "toTxNum": 3611926587,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3611790408-3611926587-32a710453835e58b.seg",
+        "size": 9417044,
+        "checksum": "sha256:32a710453835e58b7f865b4d96f6dc14b856ba829e789a354dc3f3d4735b7785"
+      },
+      "storage_keys": 43469,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12249633,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 539,
+      "seconds": 0.143994358,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3620453380,
+        "toTxNum": 3620728418,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3620453380-3620728418-2b93088df9f0cb4e.seg",
+        "size": 18216457,
+        "checksum": "sha256:2b93088df9f0cb4e7d4223aa4968504d5a09e40d7fffcfef30527d010c9e99e8"
+      },
+      "storage_keys": 68303,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 4214829,
+      "adaptive_filter_bytes": 512,
+      "distinct_prefixes": 231,
+      "seconds": 0.052626593,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3630365384,
+        "toTxNum": 3630453810,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3630365384-3630453810-1a7401e7663f71ac.seg",
+        "size": 6077435,
+        "checksum": "sha256:1a7401e7663f71ac2be8494873b88ffab589326f584b518777c0b871c967868d"
+      },
+      "storage_keys": 25498,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 13160316,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 658,
+      "seconds": 0.170175095,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3638916217,
+        "toTxNum": 3639202183,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3638916217-3639202183-4ce93bc654f5a137.seg",
+        "size": 19437410,
+        "checksum": "sha256:4ce93bc654f5a137e7f043b9cafc2f921cc2112441150d0532a07f09e85cf6cf"
+      },
+      "storage_keys": 67545,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12064513,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 437,
+      "seconds": 0.148985557,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3646891830,
+        "toTxNum": 3647161180,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3646891830-3647161180-213e3965112fe13d.seg",
+        "size": 17280801,
+        "checksum": "sha256:213e3965112fe13d3199c72a76184355e5c1d82b76734c9c1d073808e7110b39"
+      },
+      "storage_keys": 55770,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9847770,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 652,
+      "seconds": 0.113461044,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3655146088,
+        "toTxNum": 3655368735,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3655146088-3655368735-8bba7808ea868218.seg",
+        "size": 15220187,
+        "checksum": "sha256:8bba7808ea8682187cc739173bc165ea43ea426a30b532e2e80bff59f803b9b6"
+      },
+      "storage_keys": 53998,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7428228,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 389,
+      "seconds": 0.098467679,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3661954765,
+        "toTxNum": 3662106579,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3661954765-3662106579-aae4178fe6a60355.seg",
+        "size": 10012323,
+        "checksum": "sha256:aae4178fe6a60355e96b8f87408e9c11ebcd73244774e0ecae3396e42ae9de70"
+      },
+      "storage_keys": 37417,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10665926,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 520,
+      "seconds": 0.120300096,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3668703795,
+        "toTxNum": 3668945087,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3668703795-3668945087-8178317fb31b6e0d.seg",
+        "size": 16445848,
+        "checksum": "sha256:8178317fb31b6e0d1d176d2378ea0e84500e72dd7a82bc4dff0d0692438da4c1"
+      },
+      "storage_keys": 49848,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 13013894,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 474,
+      "seconds": 0.138617225,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3678976260,
+        "toTxNum": 3679259978,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3678976260-3679259978-cfbcbc66394f79e3.seg",
+        "size": 18928909,
+        "checksum": "sha256:cfbcbc66394f79e37e19551e5e489eef8a701dd1c8638a4849b7839b5cb38916"
+      },
+      "storage_keys": 57157,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8823089,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 473,
+      "seconds": 0.104884334,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3689291566,
+        "toTxNum": 3689483562,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3689291566-3689483562-0eb288be28d8c0bd.seg",
+        "size": 12619836,
+        "checksum": "sha256:0eb288be28d8c0bde1c207a5c35ba3036dc85105752ef37b483adde8a147f956"
+      },
+      "storage_keys": 49271,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6057604,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 347,
+      "seconds": 0.071714677,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3699277308,
+        "toTxNum": 3699413511,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3699277308-3699413511-bf5dbb6934b64a2c.seg",
+        "size": 8549250,
+        "checksum": "sha256:bf5dbb6934b64a2c90280bbbbc74b76187a0c23ddc3f4f247ee665cf3e62a051"
+      },
+      "storage_keys": 21805,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7055131,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 344,
+      "seconds": 0.077066426,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3710021203,
+        "toTxNum": 3710196408,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3710021203-3710196408-4bc4936573fa1633.seg",
+        "size": 11970108,
+        "checksum": "sha256:4bc4936573fa163320eafdfbb2786f8536404be095a6f140ea84c6888d473b0b"
+      },
+      "storage_keys": 24856,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6069162,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 299,
+      "seconds": 0.079129724,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3720250556,
+        "toTxNum": 3720378005,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3720250556-3720378005-48f95b22126aa9d8.seg",
+        "size": 8002763,
+        "checksum": "sha256:48f95b22126aa9d80855856d91bb575319f323cbcec79f9c74c8de578697b0a8"
+      },
+      "storage_keys": 30052,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10438967,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 596,
+      "seconds": 0.125243804,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3729727358,
+        "toTxNum": 3729946469,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3729727358-3729946469-0bea6c072481f2e3.seg",
+        "size": 15266671,
+        "checksum": "sha256:0bea6c072481f2e3da19736149a9109a5baf1a9c352af6a5d3366920297b98d2"
+      },
+      "storage_keys": 67294,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11946416,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 595,
+      "seconds": 0.139745544,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3740841270,
+        "toTxNum": 3741106771,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3740841270-3741106771-6d45a3ed9d310492.seg",
+        "size": 18649175,
+        "checksum": "sha256:6d45a3ed9d31049238b25101df52ea6d4a930a7ceb5526a13391481298410fca"
+      },
+      "storage_keys": 73975,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 3049596,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 311,
+      "seconds": 0.03985727,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3748834278,
+        "toTxNum": 3748897303,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3748834278-3748897303-ae8d769c034bd500.seg",
+        "size": 4218580,
+        "checksum": "sha256:ae8d769c034bd5004bd1356be37d674c0bdfc344c710fab2b76b28474e06a14d"
+      },
+      "storage_keys": 16906,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7153140,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 408,
+      "seconds": 0.08885545,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3756677536,
+        "toTxNum": 3756824146,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3756677536-3756824146-40aa730c0baf6ae8.seg",
+        "size": 10089040,
+        "checksum": "sha256:40aa730c0baf6ae8dd20f179422d12ddfab64fbd7690249e07056d49787eb90c"
+      },
+      "storage_keys": 46963,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6161275,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 398,
+      "seconds": 0.093074042,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3766037821,
+        "toTxNum": 3766157235,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3766037821-3766157235-99cafad9cfeedd10.seg",
+        "size": 8082467,
+        "checksum": "sha256:99cafad9cfeedd109a7052098cab7f1795c3e5150b8094bc83e372bc927ecc6f"
+      },
+      "storage_keys": 34898,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5470671,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 371,
+      "seconds": 0.064016648,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3774149533,
+        "toTxNum": 3774272566,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3774149533-3774272566-db7e12f67c9a1db7.seg",
+        "size": 9103091,
+        "checksum": "sha256:db7e12f67c9a1db7edd7bc1f515100d72366dcbb540735332f75da842ccbb537"
+      },
+      "storage_keys": 22753,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 3937838,
+      "adaptive_filter_bytes": 512,
+      "distinct_prefixes": 187,
+      "seconds": 0.043344247,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3782092808,
+        "toTxNum": 3782177410,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3782092808-3782177410-17a08465130bbf67.seg",
+        "size": 5264512,
+        "checksum": "sha256:17a08465130bbf67b9667852a5ea80eae7fdbfcce36cc93a1497e14eff369594"
+      },
+      "storage_keys": 15648,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6627464,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 408,
+      "seconds": 0.083718602,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3790045167,
+        "toTxNum": 3790177808,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3790045167-3790177808-ff00b947882be45a.seg",
+        "size": 9055680,
+        "checksum": "sha256:ff00b947882be45a304abfb3b5728a05f113faaa0647ce2bb4d792c409ff2567"
+      },
+      "storage_keys": 43158,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11168816,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 592,
+      "seconds": 0.126747323,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3799656065,
+        "toTxNum": 3799905129,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3799656065-3799905129-cbd1e812427c2df8.seg",
+        "size": 16899857,
+        "checksum": "sha256:cbd1e812427c2df84b7d4b4b45d0ae0fea1264433986dff044c0057d6a34fae8"
+      },
+      "storage_keys": 63394,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8763842,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 564,
+      "seconds": 0.12464749,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3809504065,
+        "toTxNum": 3809707270,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3809504065-3809707270-dd5ee851cce10898.seg",
+        "size": 13946008,
+        "checksum": "sha256:dd5ee851cce1089871c67dc35172c9b6461bbe1cea470a084fa705e5193f62fb"
+      },
+      "storage_keys": 37440,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 5019921,
+      "adaptive_filter_bytes": 512,
+      "distinct_prefixes": 249,
+      "seconds": 0.060165966,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3818858408,
+        "toTxNum": 3818963075,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3818858408-3818963075-0e82c2ac039b6875.seg",
+        "size": 7511704,
+        "checksum": "sha256:0e82c2ac039b68752654a6d674fb905abc82d449be1dc0c4e379969930d5da69"
+      },
+      "storage_keys": 21881,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12668451,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 572,
+      "seconds": 0.152641803,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3827173360,
+        "toTxNum": 3827448379,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3827173360-3827448379-c7a081f30b853955.seg",
+        "size": 19366176,
+        "checksum": "sha256:c7a081f30b853955280ce1e147b485a606b6d83e8a9948bba98185667e731790"
+      },
+      "storage_keys": 77374,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6697647,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 423,
+      "seconds": 0.084246179,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3837230793,
+        "toTxNum": 3837369938,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3837230793-3837369938-04b2fd531d422784.seg",
+        "size": 9604052,
+        "checksum": "sha256:04b2fd531d4227841cf7d7bdaa9ac9bcfa53aa2e0025fd3c5aef82ef792e50a6"
+      },
+      "storage_keys": 48035,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6977683,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 382,
+      "seconds": 0.083623677,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3845967505,
+        "toTxNum": 3846120664,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3845967505-3846120664-25d7c428c3bf0f3d.seg",
+        "size": 9792309,
+        "checksum": "sha256:25d7c428c3bf0f3d368a8bee1c6d08d33c2c507f36ce952fa2eb9c065f603c47"
+      },
+      "storage_keys": 34969,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11638715,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 566,
+      "seconds": 0.14310726,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3855933910,
+        "toTxNum": 3856190564,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3855933910-3856190564-e06e8a191f030a54.seg",
+        "size": 17328943,
+        "checksum": "sha256:e06e8a191f030a547e21ea47271d74abd5a8a03f30e87ee90d17d2a31a8ae254"
+      },
+      "storage_keys": 67426,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11243895,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 574,
+      "seconds": 0.135066,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3866156363,
+        "toTxNum": 3866403407,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3866156363-3866403407-683ee0861b3d14ec.seg",
+        "size": 16303703,
+        "checksum": "sha256:683ee0861b3d14ec5a07847c7ccaf4e83d42839d7888e2d6d8543275563ac22d"
+      },
+      "storage_keys": 64489,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11306774,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 585,
+      "seconds": 0.129837904,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3875930935,
+        "toTxNum": 3876192638,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3875930935-3876192638-14f4dad313175955.seg",
+        "size": 17204722,
+        "checksum": "sha256:14f4dad31317595534189e5182c9053fa24ceba1c248851db0d1f04b227d5bb9"
+      },
+      "storage_keys": 57788,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 11923740,
+      "adaptive_filter_bytes": 2048,
+      "distinct_prefixes": 517,
+      "seconds": 0.139103717,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3885541392,
+        "toTxNum": 3885812396,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3885541392-3885812396-2e848bfac9c6c138.seg",
+        "size": 18556770,
+        "checksum": "sha256:2e848bfac9c6c138ce4fc2997d8f3631c4dde9e96a19a821e68ef7ccb6c9cd1d"
+      },
+      "storage_keys": 55491,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6212651,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 381,
+      "seconds": 0.076396754,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3894523524,
+        "toTxNum": 3894650642,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3894523524-3894650642-541e55c8a0e2a5f3.seg",
+        "size": 8660477,
+        "checksum": "sha256:541e55c8a0e2a5f39d6e83ef1dc27e5b9f1bd607c8de08bb1c0cd82265cc4d08"
+      },
+      "storage_keys": 33072,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 3911424,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 314,
+      "seconds": 0.047754054,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3902231453,
+        "toTxNum": 3902315061,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3902231453-3902315061-7f6651db9ccd47ce.seg",
+        "size": 6552139,
+        "checksum": "sha256:7f6651db9ccd47ce4d6ca5b2ce61866d5618cfcd9bbce617f91d11b9d9538346"
+      },
+      "storage_keys": 23539,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7530363,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 363,
+      "seconds": 0.111083434,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3909954166,
+        "toTxNum": 3910110870,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3909954166-3910110870-130b1b3b972787fc.seg",
+        "size": 10995920,
+        "checksum": "sha256:130b1b3b972787fce74eacf38018cf943d8502d11705ab5d46df13d2fcd0889b"
+      },
+      "storage_keys": 47346,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8027453,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 392,
+      "seconds": 0.101793735,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3916363604,
+        "toTxNum": 3916541570,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3916363604-3916541570-f4551fc8911752cb.seg",
+        "size": 12062233,
+        "checksum": "sha256:f4551fc8911752cb6bee9f0943ac3d78bbc875ce958ded3d8c10394d9aecb6db"
+      },
+      "storage_keys": 47728,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12345361,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 505,
+      "seconds": 0.151404719,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3925501981,
+        "toTxNum": 3925772112,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3925501981-3925772112-1c670ea7d88b9539.seg",
+        "size": 17997165,
+        "checksum": "sha256:1c670ea7d88b9539b4ff89aad8d2f82b4d2ea8f5b8be412bd8debaf4fc74fb09"
+      },
+      "storage_keys": 66385,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10409695,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 285,
+      "seconds": 0.126398254,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3935192220,
+        "toTxNum": 3935396389,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3935192220-3935396389-57ea326c65c6b9c9.seg",
+        "size": 13605735,
+        "checksum": "sha256:57ea326c65c6b9c980a6323858354417117d4733ba873c58c87c27059a33a97a"
+      },
+      "storage_keys": 36474,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7610116,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 258,
+      "seconds": 0.088712665,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3946595827,
+        "toTxNum": 3946739800,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3946595827-3946739800-1b9f80c99d9bd515.seg",
+        "size": 9856214,
+        "checksum": "sha256:1b9f80c99d9bd5150d2d965add025996eacfacae76fea134ea350032f0f08088"
+      },
+      "storage_keys": 29827,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 10899966,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 411,
+      "seconds": 0.127516505,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3955864664,
+        "toTxNum": 3956085334,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3955864664-3956085334-3653b2a4cc6a0943.seg",
+        "size": 14303861,
+        "checksum": "sha256:3653b2a4cc6a0943ff0453afdab76ce50679c81ccac7026d034c6f2603ebab01"
+      },
+      "storage_keys": 43457,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8040651,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 319,
+      "seconds": 0.094793827,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3964108037,
+        "toTxNum": 3964274317,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3964108037-3964274317-d5199f55ddb6ea2b.seg",
+        "size": 10807407,
+        "checksum": "sha256:d5199f55ddb6ea2be33044af9158723f098397197118f20b00fd17a6d49cadac"
+      },
+      "storage_keys": 42603,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8833561,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 271,
+      "seconds": 0.126684742,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3972154999,
+        "toTxNum": 3972341901,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3972154999-3972341901-117cc601db717291.seg",
+        "size": 11887882,
+        "checksum": "sha256:117cc601db71729160d197e5479c1c57fc55decee9ae0bea9017d0e9a00d8b64"
+      },
+      "storage_keys": 33610,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8860330,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 411,
+      "seconds": 0.11533145,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3981229959,
+        "toTxNum": 3981408122,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3981229959-3981408122-883ce40c51c40cb7.seg",
+        "size": 11876053,
+        "checksum": "sha256:883ce40c51c40cb7d1059bc9ca33bb8d0a757664bd30a7690da7781b3d199300"
+      },
+      "storage_keys": 48780,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6441753,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 293,
+      "seconds": 0.077098865,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3989135882,
+        "toTxNum": 3989276432,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3989135882-3989276432-214858c7d37227db.seg",
+        "size": 9475960,
+        "checksum": "sha256:214858c7d37227db2cc3968a1788a1ad9ad6b7a1f04783477a46fcd09fb6de30"
+      },
+      "storage_keys": 42244,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6492258,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 360,
+      "seconds": 0.08997293,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 3998390695,
+        "toTxNum": 3998525397,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-3998390695-3998525397-3dc7901d700dc07a.seg",
+        "size": 8868751,
+        "checksum": "sha256:3dc7901d700dc07a59671301b4ee235d03d13e99f9d34b82dc2a57da778d6fe9"
+      },
+      "storage_keys": 32649,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 12229519,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 492,
+      "seconds": 0.149322333,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4006827198,
+        "toTxNum": 4007096141,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4006827198-4007096141-9694e8151f665440.seg",
+        "size": 18721753,
+        "checksum": "sha256:9694e8151f6654407a1289c258daf931a7f267f24a95a6fc33dd5ab280e70af3"
+      },
+      "storage_keys": 63161,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9579276,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 427,
+      "seconds": 0.120577185,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4014819417,
+        "toTxNum": 4015014868,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4014819417-4015014868-bfbb17cec0de2177.seg",
+        "size": 13686538,
+        "checksum": "sha256:bfbb17cec0de21771ada4533d0a974c7acfb763a8a26081ab094f589df522f34"
+      },
+      "storage_keys": 59608,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6638501,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 395,
+      "seconds": 0.079103566,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4024544969,
+        "toTxNum": 4024686463,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4024544969-4024686463-f9080d01fedd0865.seg",
+        "size": 9666188,
+        "checksum": "sha256:f9080d01fedd0865b168520c38ed94c1a2ff542ed4ffed4b4f212b8e676cedaf"
+      },
+      "storage_keys": 40963,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 6606137,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 265,
+      "seconds": 0.091066815,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4033459845,
+        "toTxNum": 4033591355,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4033459845-4033591355-5270169fe5cf3db7.seg",
+        "size": 8922681,
+        "checksum": "sha256:5270169fe5cf3db755be85456ff0cd4215d85a18dc0c29beda321780967bb21b"
+      },
+      "storage_keys": 25963,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 9963720,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 407,
+      "seconds": 0.117819774,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4041360277,
+        "toTxNum": 4041573387,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4041360277-4041573387-52224d0f1f4711e5.seg",
+        "size": 14609280,
+        "checksum": "sha256:52224d0f1f4711e55623f87c190717904d86c624af02a01d876f604cb7d3d9e0"
+      },
+      "storage_keys": 63037,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 8157666,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 382,
+      "seconds": 0.112558106,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4050182978,
+        "toTxNum": 4050349141,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4050182978-4050349141-f3193da61abdfc9a.seg",
+        "size": 11102242,
+        "checksum": "sha256:f3193da61abdfc9a2481ffe1c25a6760a16b0e9e31ea469a8b9df4568e9151f5"
+      },
+      "storage_keys": 29171,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    },
+    {
+      "accessor_bytes": 7463918,
+      "adaptive_filter_bytes": 1024,
+      "distinct_prefixes": 307,
+      "seconds": 0.088700104,
+      "source": {
+        "dataset": "state-domain-change",
+        "kind": "history",
+        "fromTxNum": 4059435398,
+        "toTxNum": 4059581153,
+        "aggregationSteps": 1,
+        "path": "history/state-domain-change-4059435398-4059581153-d618b7cfdfa6a102.seg",
+        "size": 9882899,
+        "checksum": "sha256:d618b7cfdfa6a102354dd9eee631fa63e7b203fd81f20b0d786e387e9b220cc6"
+      },
+      "storage_keys": 51926,
+      "target_prefix_present": false,
+      "target_slot_present": false,
+      "unsupported": false
+    }
+  ],
+  "sample_size": 128,
+  "seconds": 12.681458224,
+  "target_query": {
+    "flat": 2,
+    "owner": "41a4997124a328a4615eab437cede31da47a31b375",
+    "generation": 0,
+    "domain": 256,
+    "key": "6e8935d029f96ae6e183f6b344312f2d00000000000000000000000000000000"
+  },
+  "total_unknown_sources": 6436
+}

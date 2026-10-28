@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "stage": "new auxiliary cold-page HTTP complete",
+  "source": "4f4344f4465f86622041fda0bf48d352d02cf265",
+  "production_mutations": false,
+  "cache": "new storage route files are private inodes, zero resident at dispatch; canonical and older routing caches uncontrolled",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T16:10:42.641807Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true
+}
