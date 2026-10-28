@@ -573,6 +573,24 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		}
 		return false, nil
 	}
+	reads := newHistoryOrderedReads(ctx, func(lookup []byte, change *rawdb.StateDomainChange) bool {
+		entry := byLookup[string(lookup)]
+		if entry == nil || change == nil || change.TxNum < fromTxNum || change.TxNum > toTxNum {
+			return false
+		}
+		q := entry.query
+		return stateDomainChangeMatchesAccessorLookup(change, q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key)
+	})
+	defer reads.close()
+	active := func(key []byte) bool { return byLookup[string(key)].first == nil }
+	flush := func() error {
+		for len(reads.queue) > 0 {
+			if err := reads.consume(active, consider); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for _, ref := range manifest.Segments {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -682,10 +700,23 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			if !ok {
 				return nil, fmt.Errorf("snapshots: binary state-domain-change history %q missing required accessor %q", ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
 			}
-			if err := iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx, m.dir, ref, accessorRef, lookupKeys, fromTxNum, toTxNum, consider); err != nil {
-				return nil, err
+			// Immutable pairs can issue independent point reads concurrently, but
+			// callbacks and query resolution retain the original manifest order.
+			reads.submit(&historyReadAheadTask{keys: lookupKeys, read: func(readCtx context.Context, keys [][]byte, emit func([]byte, *rawdb.StateDomainChange) (bool, error)) error {
+				return iterateStateDomainChangeBinarySegmentByAccessorKeysFile(readCtx, m.dir, ref, accessorRef, keys, fromTxNum, toTxNum, emit)
+			}})
+			if len(reads.queue) >= historyReadAheadWindow {
+				if err := reads.consume(active, consider); err != nil {
+					return nil, err
+				}
 			}
-		} else if err := iterateStateDomainChangeHistoryRange(m.dir, manifest, ref, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			continue
+		}
+		// JSON/legacy readers retain their original sequential path.
+		if err := flush(); err != nil {
+			return nil, err
+		}
+		if err := iterateStateDomainChangeHistoryRange(m.dir, manifest, ref, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
@@ -700,6 +731,9 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		}); err != nil {
 			return nil, err
 		}
+	}
+	if err := flush(); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

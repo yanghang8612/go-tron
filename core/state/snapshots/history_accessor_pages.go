@@ -77,6 +77,12 @@ func (r *historyAccessorPages) readWindow(dst []byte, off int64) (int, error) {
 	start, length := off, int64(historyDirectoryPageSize)
 	if off < int64(r.prefix) && int64(len(dst)) <= int64(r.prefix)-off {
 		start, length = 0, int64(r.prefix)
+	} else if off >= max(int64(r.prefix), p.end-historyDirectoryPageSize) {
+		// Several independent authenticated footers are read backwards from
+		// EOF. An offset-anchored window cannot reuse the preceding footer;
+		// one bounded final page covers all of these adjacent small reads.
+		start = max(int64(r.prefix), p.end-historyDirectoryPageSize)
+		length = p.end - start
 	}
 	size := int(min(length, p.end-start))
 	n, err := p.source.ReadAt(page.bytes[:size], start)

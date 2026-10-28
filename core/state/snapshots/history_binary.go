@@ -4186,23 +4186,22 @@ func openStateDomainChangeBinaryAccessorReaderContext(ctx context.Context, dir s
 		_ = file.Close()
 		return nil, stateDomainChangeBinaryHeader{}, 0, fmt.Errorf("snapshots: state-domain-change binary accessor %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
 	}
+	physicalFile := newHistoryAccessorPages(ctx, file, uint64(stat.Size()))
 	var magic [8]byte
-	if _, err := (contextReaderAt{ctx: ctx, r: file}).ReadAt(magic[:], 0); err != nil {
-		_ = file.Close()
+	if _, err := (contextReaderAt{ctx: ctx, r: physicalFile}).ReadAt(magic[:], 0); err != nil {
+		_ = physicalFile.Close()
 		return nil, stateDomainChangeBinaryHeader{}, 0, err
 	}
-	var reader historySegmentReader = file
+	var reader historySegmentReader = physicalFile
 	logicalSize := uint64(stat.Size())
 	if string(magic[:]) == compressedBlockMagic {
-		cr, err := openCompressedBlockFileWithCacheLimitContext(ctx, file, stat, cbCacheBlocks)
+		cr, err := openCompressedBlockFileWithCacheLimitContext(ctx, physicalFile, stat, cbCacheBlocks)
 		if err != nil {
 			return nil, stateDomainChangeBinaryHeader{}, 0, err
 		}
 		cr.prefixCache = sharedHistoryHeaderCache
 		reader = cr
 		logicalSize = cr.UncompressedSize()
-	} else {
-		reader = newHistoryAccessorPages(ctx, file, logicalSize)
 	}
 	header, err := readStateDomainChangeBinaryHeaderAt(contextReaderAt{ctx: ctx, r: reader}, stateDomainChangeBinaryAccessorMagic)
 	if err != nil {
