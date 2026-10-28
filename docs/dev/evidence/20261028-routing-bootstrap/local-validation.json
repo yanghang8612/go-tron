@@ -1,0 +1,11 @@
+{
+  "source_product_commit": "143aed9282e8467fce4779562e656a3fcf1e7cfe",
+  "transport_recipe_commit": "99423eaf16fd4bc87f31e2c17ec55228361ffc02",
+  "focused_tests": "passed 21.479s",
+  "new_bootstrap_budget_fairness_fence_tests": "passed 6.537s",
+  "targeted_race": "passed 9.511s",
+  "vet": "passed",
+  "production_deploy": false,
+  "repeated_full_muhash": false,
+  "full_restore_repeated": false
+}
