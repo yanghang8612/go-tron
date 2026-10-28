@@ -1,7 +1,7 @@
 import pathlib,sys,json,os,shutil,time,urllib.request,traceback
 W=pathlib.Path('/data/gtron/maintenance/tail-read-ahead-20261028-01')
 exec(compile((W/'cold.py').read_text().split('\ntry:\n until=',1)[0],'fixed-host-definitions','exec'))
-R=pathlib.Path('/data/gtron/maintenance/first-cold-followup-20261028-01/storage-maintenance');R.mkdir()
+R=pathlib.Path('/data/gtron/maintenance/first-cold-followup-20261028-01')/(sys.argv[2] if len(sys.argv)>2 else 'storage-maintenance');R.mkdir()
 P=R.parent/'storage-pages';original=P/'input-storage';s={'complete':False,'stage':'native runtime maintenance tests and build','source':SOURCE,'production_mutations':False,'cache':'fresh HTTP processes; shared canonical/OS caches uncontrolled; no eviction'};requests=[]
 try:
  s['production_before']=identity();save();src=archive_source('source-candidate',SOURCE)

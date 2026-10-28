@@ -72,7 +72,12 @@ no eligible merge. This prevents permanent auxiliary backlog from starving the
 canonical merge. A storage slice that has read dictionaries or authenticated a
 broad hint ends this maintenance opportunity even without output; it cannot fall
 through into another expensive broad/account task on the same lease. New
-cold-history publication deadlines remain independent.
+cold-history publication deadlines remain independent. Count reported non-cancel
+family failures toward the reserved opportunity and advance the family rotation;
+a permanently broken optional object must not block every later family/merge.
+Retained storage-page boundaries constrain a new page even when the intervening
+canonical source is skipped by the broad admission hint. Storage's idle timeout
+is not a wall-clock promise: global recovery, load and gate admission still apply.
 
 Validate exact broad-ID reuse (including a hole inside its range), directory and
 source replacement invalidation, cursor retry on publication conflict, budget

@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -120,6 +122,43 @@ func TestStorageRoutingRuntimeReusesBroadAndRepairsInteriorHole(t *testing.T) {
 	_ = addRoutingFixture(t, otherDir, other, 1)
 	if built, err := refreshStorageHistoryRoutingContext(context.Background(), otherDir, &s, now.Add(2*time.Second)); err != nil || !built || s.last.broadReads != 1 || s.last.sourceReads != 2 {
 		t.Fatal("another directory inherited broad hints or idle backoff", built, s.last, err)
+	}
+}
+
+func TestStorageRoutingRuntimeBroadSkipCannotRetireRetainedPage(t *testing.T) {
+	dir, m, _ := routingFixture(t)
+	m = addRoutingFixture(t, dir, m, 3)
+	ref, built, err := buildStorageHistoryRoutingContext(context.Background(), dir, m, 1, 2, nil, smallSystemRoutingWorkLimit{})
+	if err != nil || !built || ref.FromTxNum != 2 || ref.ToTxNum != 2 {
+		t.Fatal("middle retained page fixture", ref, built, err)
+	}
+	if _, err := publishPagedHistoryRoutingContext(context.Background(), dir, m, ref, SegmentStorageHistoryRouting); err != nil {
+		t.Fatal(err)
+	}
+	_ = replaceMetadataRepairFixtureSources(t, dir, 1, 1)
+	_ = replaceMetadataRepairFixtureSources(t, dir, 3, 3)
+	s := storageRoutingRefreshState{}
+	for pass := 0; pass < 2; pass++ {
+		if built, err := refreshStorageHistoryRoutingContext(context.Background(), dir, &s, time.Unix(8000+int64(pass), 0)); err != nil || !built {
+			t.Fatal("new page crossed retained broad-covered page", built, s.last, err)
+		}
+		current, err := LoadProductionManifest(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := newStorageHistoryRoutingReader(current)
+		cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+		for _, h := range current.Segments {
+			if h.Kind == SegmentHistory && (h.FromTxNum == 2 || pass == 1) {
+				a, _ := cfg.HistoryAccessorRef(current, h)
+				if _, ok, err := reader.source(context.Background(), dir, h, systemHistoryRoutingPairID(h, a)); err != nil || !ok {
+					t.Fatal("broad skip retired an unchanged storage proof", h.FromTxNum, ok, err)
+				}
+			}
+		}
+		if s.last.sourceReads != 1 {
+			t.Fatal("retained-page barrier did not bound the batch", s.last)
+		}
 	}
 }
 
@@ -346,5 +385,103 @@ func TestStorageRoutingRuntimeNoOutputEndsHeavyOpportunity(t *testing.T) {
 	result, err := r.compactHistory(context.Background(), false)
 	if err != nil || !result.Deferred || result.DeferReason != "storage-routing-work" || r.compactionBudget.storageRouting.last.sourceReads != 3 || r.compactionBudget.systemRouting.metric != nil || r.compactionBudget.routingWorkSinceMerge != 1 {
 		t.Fatal("no-output budget stacked additional heavy work", result, err)
+	}
+}
+
+func TestHistoryRoutingMaintenanceErrorCannotStarveOtherFamiliesAndMerge(t *testing.T) {
+	dir, m := smallManyRoutingFixture(t)
+	m.Progress = &Progress{HistoryBuildTxNum: 70, AccessorBuildTxNum: 70}
+	if err := PublishManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	m = addSmallRoutingFixture(t, dir, m, 256)
+	ref := mustSmallRoutingRef(t, m)
+	p := filepath.Join(dir, ref.Path)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 1
+	if err := os.WriteFile(p, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(nil, Config{Enabled: true, Dir: dir, HistoryDataset: SegmentDatasetStateDomainChange, HeavyWorkGate: maintenance.NewHeavyWorkGate()})
+	if _, err := r.compactHistory(context.Background(), false); err == nil || r.compactionBudget.nextLightweightRoute != 1 || r.compactionBudget.routingWorkSinceMerge != 1 {
+		t.Fatal("reported error pinned the failing family", err, r.compactionBudget.nextLightweightRoute, r.compactionBudget.routingWorkSinceMerge)
+	}
+	for i := 0; i < 2; i++ {
+		result, err := r.compactHistory(context.Background(), false)
+		if err != nil || !result.RoutingBuilt {
+			t.Fatal("healthy family starved behind an error", i, result, err)
+		}
+	}
+	result, err := r.compactHistory(context.Background(), false)
+	if err != nil || !result.Merged || result.RoutingBuilt || result.MergePasses != 1 {
+		t.Fatal("persistent optional error starved canonical compaction", result, err)
+	}
+}
+
+func TestStorageRoutingRuntimeSnapshotAndSignedRestore(t *testing.T) {
+	dir, identity, owner := writeVerifiableHistoryManifest(t)
+	m, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = addStorageFilterFixture(t, dir, m, 1)
+	// The canonical bytes and MuHash stay identical, while relocated immutable
+	// trios have new exact pair IDs. Runtime must replace the stale proof.
+	for i := range m.Segments {
+		r := &m.Segments[i]
+		if r.normalizedDataset() != SegmentDatasetStateDomainChange || r.Kind != SegmentHistory && r.Kind != SegmentAccessor && r.Kind != SegmentInverted {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, r.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Path = "history/state-domain-change-runtime-relocated" + filepath.Ext(r.Path)
+		if err := os.WriteFile(filepath.Join(dir, r.Path), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := PublishManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	s := storageRoutingRefreshState{}
+	if built, err := refreshStorageHistoryRoutingContext(context.Background(), dir, &s, time.Now()); err != nil || !built || s.last.sourceReads != 1 {
+		t.Fatal("stale snapshot proof was not repaired", built, s.last, err)
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishSignedSnapshotCatalog(dir, priv); err != nil {
+		t.Fatal(err)
+	}
+	for _, signed := range []bool{false, true} {
+		db := rawdb.NewMemoryDatabase()
+		if signed {
+			r, err := RestoreSnapshotFromVerifiedCatalog(db, dir, identity, []ed25519.PublicKey{pub})
+			if err != nil || r.ChangesRestored != 2 {
+				db.Close()
+				t.Fatal(r, err)
+			}
+		} else {
+			r, err := RestoreSnapshotFromVerifiedManifestWithOptions(db, dir, identity, strictBoundaryOptions(t, db))
+			if err != nil || r.ChangesRestored != 2 {
+				db.Close()
+				t.Fatal(r, err)
+			}
+		}
+		row, ok, err := rawdb.ReadStateDomainChange(db, 1, 1)
+		if err != nil || !ok || row.Owner != owner || string(row.Prev) != "old-a" {
+			db.Close()
+			t.Fatal("restored historical row changed", row, ok, err)
+		}
+		census, err := rawdb.InspectStateKVGenerations(context.Background(), db, true, nil, nil)
+		db.Close()
+		if err != nil || !census.Complete || !census.MuHashVerified {
+			t.Fatal(census, err)
+		}
 	}
 }

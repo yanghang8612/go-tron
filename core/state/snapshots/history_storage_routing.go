@@ -299,6 +299,16 @@ func buildStorageHistoryRoutingWithPolicy(ctx context.Context, dir string, m *Ma
 			return SegmentRef{}, false, errors.New("snapshots: storage source missing accessor")
 		}
 		id := systemHistoryRoutingPairID(h, a)
+		first := sort.Search(len(reader.refs), func(i int) bool { return reader.refs[i].ToTxNum >= h.FromTxNum })
+		last := first
+		for last < len(reader.refs) && reader.refs[last].FromTxNum <= h.ToTxNum {
+			last++
+		}
+		// A skipped broad source may still own a retained storage page. Never
+		// let a new page span that page and retire proofs it does not copy.
+		if len(rows) > 0 && last > first {
+			break
+		}
 		if _, covered := policy.broadCovered[id]; covered && h.FromTxNum >= policy.broadFrom && h.ToTxNum <= policy.broadTo {
 			continue
 		}
@@ -311,14 +321,6 @@ func buildStorageHistoryRoutingWithPolicy(ctx context.Context, dir string, m *Ma
 				break
 			}
 			continue
-		}
-		first := sort.Search(len(reader.refs), func(i int) bool { return reader.refs[i].ToTxNum >= h.FromTxNum })
-		last := first
-		for last < len(reader.refs) && reader.refs[last].FromTxNum <= h.ToTxNum {
-			last++
-		}
-		if len(rows) > 0 && last > first {
-			break
 		}
 		if attempts > 0 && (work.bytes > 0 && a.Size > work.bytes-min(readBytes, work.bytes) || work.duration > 0 && time.Since(started) >= work.duration) {
 			break

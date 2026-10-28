@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"time"
@@ -216,6 +217,10 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			refresh := families[i]
 			built, routeErr := refresh()
 			if routeErr != nil {
+				if routingFailureCountsAsWork(routeErr) {
+					r.compactionBudget.nextLightweightRoute = uint8((i + 1) % len(families))
+					r.compactionBudget.routingWorkSinceMerge++
+				}
 				return total, routeErr
 			}
 			if built {
@@ -236,6 +241,9 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		var routeErr error
 		built, routeErr = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
 		if routeErr != nil {
+			if routingFailureCountsAsWork(routeErr) {
+				r.compactionBudget.routingWorkSinceMerge++
+			}
 			return total, routeErr
 		}
 		if built {
@@ -244,6 +252,9 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		}
 		built, routeErr = refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy)
 		if routeErr != nil {
+			if routingFailureCountsAsWork(routeErr) {
+				r.compactionBudget.routingWorkSinceMerge++
+			}
 			return total, routeErr
 		}
 		if built {
@@ -291,4 +302,8 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			return total, nil
 		}
 	}
+}
+
+func routingFailureCountsAsWork(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
