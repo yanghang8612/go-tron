@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -47,6 +48,7 @@ type systemHistoryRouting struct {
 	sources         [][sha256.Size]byte
 	columns         map[[sha256.Size]byte]int
 	keys            map[string][]byte
+	selection       map[string]bool // nil means a full view; other keys remain unknown
 	from, to        uint64
 	storagePrefixes bool
 }
@@ -146,10 +148,21 @@ func (r *systemHistoryRouting) mayContain(column int, lookup []byte) bool {
 		// entries in that object must never prove a storage key absent.
 		return true
 	}
-	return systemHistoryMembersContain(r.keys[string(normalizedHistoryRoutingKey(lookup))], column)
+	key := normalizedHistoryRoutingKey(lookup)
+	if r.selection != nil && !r.selection[string(key)] {
+		return true
+	}
+	return systemHistoryMembersContain(r.keys[string(key)], column)
 }
 
 func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifest, window ...TxRange) (*systemHistoryRouting, error) {
+	return loadSystemHistoryRoutingForKeys(ctx, dir, manifest, nil, window...)
+}
+
+// A non-nil selection is a request-local view. Still authenticate the complete
+// physical object and validate every encoded row, but do not allocate the
+// million-key map for a request that only needs a handful of memberships.
+func loadSystemHistoryRoutingForKeys(ctx context.Context, dir string, manifest *Manifest, lookups [][]byte, window ...TxRange) (*systemHistoryRouting, error) {
 	var found *SegmentRef
 	for i := range manifest.Segments {
 		if manifest.Segments[i].Kind == SegmentSystemHistoryRouting {
@@ -165,10 +178,21 @@ func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifes
 	if len(window) != 0 && (found.ToTxNum < window[0].From || found.FromTxNum > window[0].To) {
 		return nil, nil // The index cannot skip a pair in this request's range.
 	}
-	return readSystemHistoryRouting(ctx, dir, *found)
+	var wanted map[string]bool
+	if lookups != nil && len(lookups) <= 4096 {
+		wanted = make(map[string]bool, len(lookups))
+		for _, key := range lookups {
+			wanted[string(normalizedHistoryRoutingKey(key))] = true
+		}
+	}
+	return readSystemHistoryRoutingSelected(ctx, dir, *found, wanted)
 }
 
 func readSystemHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (*systemHistoryRouting, error) {
+	return readSystemHistoryRoutingSelected(ctx, dir, ref, nil)
+}
+
+func readSystemHistoryRoutingSelected(ctx context.Context, dir string, ref SegmentRef, wanted map[string]bool) (*systemHistoryRouting, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -207,7 +231,7 @@ func readSystemHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (
 	if cached != nil && cached.from == ref.FromTxNum && cached.to == ref.ToTxNum && uint64(len(cached.keys)) == ref.Rows {
 		return cached, nil
 	}
-	decoded, err := decodeSystemHistoryRouting(data, ref)
+	decoded, err := decodeHistoryRoutingFamilySelected(ctx, data, ref, false, wanted)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +239,7 @@ func readSystemHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (
 	for key, members := range decoded.keys {
 		charge += len(key) + len(members)
 	}
-	if charge <= systemHistoryRoutingMaxBytes {
+	if wanted == nil && charge <= systemHistoryRoutingMaxBytes {
 		sharedSystemHistoryRouting.Lock()
 		sharedSystemHistoryRouting.digest = digest
 		sharedSystemHistoryRouting.value = decoded
@@ -225,23 +249,53 @@ func readSystemHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (
 }
 
 func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRouting, error) {
+	return decodeHistoryRoutingFamily(context.Background(), data, ref, false)
+}
+
+func decodeHistoryRoutingFamily(ctx context.Context, data []byte, ref SegmentRef, small bool) (*systemHistoryRouting, error) {
+	return decodeHistoryRoutingFamilySelected(ctx, data, ref, small, nil)
+}
+
+func decodeHistoryRoutingFamilySelected(ctx context.Context, data []byte, ref SegmentRef, small bool, wanted map[string]bool) (*systemHistoryRouting, error) {
 	bad := errors.New("snapshots: invalid system history routing encoding")
-	if len(data) < systemHistoryRoutingHeaderSize || len(data) > systemHistoryRoutingMaxBytes || !bytes.Equal(data[:8], systemHistoryRoutingMagic[:]) || binary.BigEndian.Uint32(data[20:24]) != 0 {
+	magic, maxKeys := systemHistoryRoutingMagic, systemHistoryRoutingMaxKeys
+	if small {
+		magic, maxKeys = smallSystemHistoryRoutingMagic, smallSystemHistoryRoutingMaxKeys
+	}
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if len(data) < systemHistoryRoutingHeaderSize || len(data) > systemHistoryRoutingMaxBytes || !bytes.Equal(data[:8], magic[:]) || binary.BigEndian.Uint32(data[20:24]) != 0 {
 		return nil, bad
 	}
 	version := binary.BigEndian.Uint32(data[8:12])
-	if version != 1 && version != 2 {
+	if small && version != 1 || !small && version != 1 && version != 2 {
 		return nil, bad
 	}
 	n, keys := uint64(binary.BigEndian.Uint32(data[12:16])), uint64(binary.BigEndian.Uint32(data[16:20]))
 	width := (n + 7) / 8
-	if n == 0 || n > systemHistoryRoutingMaxSources || keys > systemHistoryRoutingMaxKeys || ref.Rows != keys || binary.BigEndian.Uint64(data[24:32]) != ref.FromTxNum || binary.BigEndian.Uint64(data[32:40]) != ref.ToTxNum || uint64(len(data)) < systemHistoryRoutingHeaderSize+n*32+keys*29 {
+	if n == 0 || n > systemHistoryRoutingMaxSources || keys > uint64(maxKeys) || ref.Rows != keys || binary.BigEndian.Uint64(data[24:32]) != ref.FromTxNum || binary.BigEndian.Uint64(data[32:40]) != ref.ToTxNum || uint64(len(data)) < systemHistoryRoutingHeaderSize+n*32+keys*29 {
 		return nil, bad
 	}
-	r := &systemHistoryRouting{sources: make([][32]byte, n), columns: make(map[[32]byte]int, n), keys: make(map[string][]byte, keys), from: ref.FromTxNum, to: ref.ToTxNum}
+	retained := keys
+	if wanted != nil {
+		retained = min(retained, uint64(len(wanted)))
+	}
+	r := &systemHistoryRouting{sources: make([][32]byte, n), columns: make(map[[32]byte]int, n), keys: make(map[string][]byte, retained), from: ref.FromTxNum, to: ref.ToTxNum}
+	if wanted != nil {
+		r.selection = make(map[string]bool, len(wanted))
+		for key, selected := range wanted {
+			r.selection[key] = selected
+		}
+	}
 	r.storagePrefixes = version == 2
 	off := systemHistoryRoutingHeaderSize
 	for i := range r.sources {
+		if i%256 == 0 {
+			if err := contextError(ctx); err != nil {
+				return nil, err
+			}
+		}
 		copy(r.sources[i][:], data[off:off+32])
 		off += 32
 		if _, exists := r.columns[r.sources[i]]; exists {
@@ -251,6 +305,9 @@ func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRout
 	}
 	var previous []byte
 	for i := uint64(0); i < keys; i++ {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		if off+2 > len(data) {
 			return nil, bad
 		}
@@ -296,15 +353,21 @@ func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRout
 		default:
 			return nil, bad
 		}
-		if !systemHistoryRoutingKey(key) || !r.storagePrefixes && contractStorageHistoryRoutingKey(key) || previous != nil && bytes.Compare(previous, key) >= 0 {
+		validKey := systemHistoryRoutingKey(key) && (r.storagePrefixes || !contractStorageHistoryRoutingKey(key))
+		if small {
+			validKey = smallSystemHistoryRoutingKey(key)
+		}
+		if !validKey || previous != nil && bytes.Compare(previous, key) >= 0 {
 			return nil, bad
 		}
-		// Keep the one-byte tag contiguous with its payload without copying it.
-		// The encoded uint32 length is between them, so own this small view header.
-		members := make([]byte, 1+len(payload))
-		members[0] = mode
-		copy(members[1:], payload)
-		r.keys[string(key)] = members
+		if wanted == nil || wanted[string(key)] {
+			// The encoded length separates the mode tag and payload. Own only
+			// the memberships needed by this view, after validating all rows.
+			members := make([]byte, 1+len(payload))
+			members[0] = mode
+			copy(members[1:], payload)
+			r.keys[string(key)] = members
+		}
 		previous = key
 	}
 	if off != len(data) {
@@ -314,12 +377,20 @@ func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRout
 }
 
 func iterateHistoryRoutingSourceKeys(ctx context.Context, dir string, history, accessor SegmentRef, fn func([]byte) error) error {
+	return withAuthenticatedHistoryRoutingDictionary(ctx, dir, history, accessor, func(r io.ReaderAt, size uint64, _ stateDomainChangeBinaryAccessorV6Header) error {
+		_, err := iterateStateDomainChangeBinaryAccessorV6Keys(r, size, func(_ uint32, key []byte) error { return fn(key) })
+		return err
+	})
+}
+
+func withAuthenticatedHistoryRoutingDictionary(ctx context.Context, dir string, history, accessor SegmentRef, fn func(io.ReaderAt, uint64, stateDomainChangeBinaryAccessorV6Header) error) error {
 	// Authenticate this exact open descriptor before using dictionary absences.
 	f, err := os.Open(filepath.Join(dir, accessor.Path))
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	var reader historySegmentReader = f
+	defer func() { _ = reader.Close() }()
 	stat, err := f.Stat()
 	if err != nil {
 		return err
@@ -344,8 +415,9 @@ func iterateHistoryRoutingSourceKeys(ctx context.Context, dir string, history, a
 	if fmt.Sprintf("sha256:%x", hash.Sum(nil)) != accessor.Checksum {
 		return errors.New("snapshots: routing source accessor checksum mismatch")
 	}
-	r := contextReaderAt{ctx: ctx, r: f}
 	size := uint64(stat.Size())
+	reader = newHistoryAccessorPages(ctx, f, size)
+	r := contextReaderAt{ctx: ctx, r: reader}
 	h, err := decodeStateDomainChangeBinaryAccessorKeyHeader(r, size)
 	if err != nil {
 		return err
@@ -373,7 +445,7 @@ func iterateHistoryRoutingSourceKeys(ctx context.Context, dir string, history, a
 	if closeErr != nil {
 		return closeErr
 	}
-	_, err = iterateStateDomainChangeBinaryAccessorV6Keys(r, size, func(_ uint32, key []byte) error { return fn(key) })
+	err = fn(r, size, h)
 	if err != nil {
 		return err
 	}
@@ -418,18 +490,23 @@ func systemHistorySourceKeysWithStorage(ctx context.Context, dir string, history
 // BuildSystemHistoryRoutingContext creates at most one bounded optional index.
 // It does not publish or retire anything. The caller owns a pinned manifest and
 // the normal build/publication transaction. Unsupported inputs defer safely.
-func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int) (ref SegmentRef, built bool, err error) {
+func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int) (SegmentRef, bool, error) {
 	if manifest == nil || maxNew < 1 {
-		return ref, false, nil
+		return SegmentRef{}, false, nil
 	}
-	maxNew = min(maxNew, systemHistoryRoutingMaxNewSources)
 	old, err := loadSystemHistoryRouting(ctx, dir, manifest)
 	if err != nil {
-		return ref, false, err
+		return SegmentRef{}, false, err
 	}
+	_, ref, built, err := buildAdaptiveSystemHistoryRouting(ctx, dir, manifest, old, maxNew, 0, defaultSystemHistoryRoutingLimits)
+	return ref, built, err
+}
+
+// A candidate reuses authenticated input keys across smaller assemblies. Budget
+// errors are internal scheduling results; the public optional builder still
+// returns built=false without an error when no candidate can fit.
+func buildSystemHistoryRoutingCandidate(ctx context.Context, dir string, manifest *Manifest, old *systemHistoryRouting, maxNew int, startTx uint64, cache *systemRoutingSourceCache, stats *systemRoutingBuildStats, limits systemRoutingBuildLimits) (ref SegmentRef, built bool, err error) {
 	if old != nil && !old.storagePrefixes {
-		// Reauthenticate dictionaries before making the broader V2 claim.
-		// Uncovered pairs retain ordinary authoritative reads during rebuild.
 		old = nil
 	}
 	manifest = manifestLookupView(manifest)
@@ -442,7 +519,22 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 	var pairs []pair
 	newSources, attempted, collectedBytes := 0, 0, 0
 	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
-	for _, history := range manifest.Segments {
+	start := 0
+	if startTx != 0 {
+		for i, h := range manifest.Segments {
+			if h.Kind == SegmentHistory && h.normalizedDataset() == SegmentDatasetStateDomainChange && h.FromTxNum >= startTx {
+				start = i
+				break
+			}
+		}
+	}
+	for offset := range manifest.Segments {
+		if offset%256 == 0 {
+			if err := contextError(ctx); err != nil {
+				return ref, false, err
+			}
+		}
+		history := manifest.Segments[(start+offset)%len(manifest.Segments)]
 		if history.Kind != SegmentHistory || history.normalizedDataset() != SegmentDatasetStateDomainChange || !isStateDomainChangeBinarySegmentPath(history.Path) {
 			continue
 		}
@@ -463,7 +555,12 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 		p := pair{history: history, accessor: accessor, id: id, oldColumn: column}
 		if column < 0 {
 			attempted++
-			p.keys, err = systemHistorySourceKeys(ctx, dir, history, accessor)
+			stats.boundTo = max(stats.boundTo, history.ToTxNum)
+			stats.nextTx = history.ToTxNum + 1
+			if stats.firstTo == 0 {
+				stats.firstTo = history.ToTxNum
+			}
+			p.keys, err = cache.keys(ctx, dir, history, accessor, id, stats)
 			if errors.Is(err, errSystemHistoryRoutingBudget) {
 				continue
 			}
@@ -482,8 +579,8 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 			newSources++
 		}
 		pairs = append(pairs, p)
-		if len(pairs) > systemHistoryRoutingMaxSources {
-			return ref, false, nil
+		if len(pairs) > limits.sources {
+			return ref, false, errSystemHistoryRoutingBudget
 		}
 	}
 	if newSources == 0 {
@@ -492,10 +589,13 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 	width := (len(pairs) + 7) / 8
 	rows := make(map[string][]uint32)
 	estimated := systemHistoryRoutingHeaderSize + len(pairs)*32
+	if estimated > limits.bytes {
+		return ref, false, errSystemHistoryRoutingBudget
+	}
 	add := func(key string, column int) error {
 		columns := rows[key]
 		if len(columns) == 0 {
-			if len(rows) >= systemHistoryRoutingMaxKeys {
+			if len(rows) >= limits.keys {
 				return errSystemHistoryRoutingBudget
 			}
 			estimated += 2 + len(key) + 5
@@ -506,7 +606,7 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 		before := min(len(columns)*4, width)
 		after := min((len(columns)+1)*4, width)
 		estimated += after - before
-		if estimated > systemHistoryRoutingMaxBytes {
+		if estimated > limits.bytes {
 			return errSystemHistoryRoutingBudget
 		}
 		rows[key] = append(columns, uint32(column))
@@ -523,12 +623,15 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 		}
 		for _, key := range p.keys {
 			if err := add(key, column); err != nil {
-				return ref, false, nil
+				return ref, false, err
 			}
 		}
 	}
 	if old != nil {
 		for key, members := range old.keys {
+			if err := contextError(ctx); err != nil {
+				return ref, false, err
+			}
 			var columns []int
 			systemHistoryMembersIterate(members, func(oldColumn int) {
 				if column, ok := oldToNew[oldColumn]; ok {
@@ -538,22 +641,32 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 			sort.Ints(columns)
 			for _, column := range columns {
 				if err := add(key, column); err != nil {
-					return ref, false, nil
+					return ref, false, err
 				}
 			}
 		}
 	}
 	// New-source columns may precede reused columns after a range replacement.
 	for key, columns := range rows {
+		if err := contextError(ctx); err != nil {
+			return ref, false, err
+		}
 		sort.Slice(columns, func(i, j int) bool { return columns[i] < columns[j] })
 		rows[key] = columns
 	}
 
 	keys := make([]string, 0, len(rows))
 	for key := range rows {
+		if len(keys)%256 == 0 {
+			if err := contextError(ctx); err != nil {
+				return ref, false, err
+			}
+		}
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	if err := sortSystemRoutingKeysContext(ctx, keys); err != nil {
+		return ref, false, err
+	}
 	from, to := pairs[0].history.FromTxNum, pairs[0].history.ToTxNum
 	for _, p := range pairs {
 		from = min(from, p.history.FromTxNum)
@@ -570,6 +683,9 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 		data = append(data, p.id[:]...)
 	}
 	for _, key := range keys {
+		if err := contextError(ctx); err != nil {
+			return ref, false, err
+		}
 		data = binary.BigEndian.AppendUint16(data, uint16(len(key)))
 		data = append(data, key...)
 		columns := rows[key]
@@ -592,7 +708,7 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 	sum := sha256.Sum256(data)
 	ref = SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentSystemHistoryRouting, FromTxNum: from, ToTxNum: to, Rows: uint64(len(keys)), Size: uint64(len(data)), Checksum: fmt.Sprintf("sha256:%x", sum)}
 	ref.Path = fmt.Sprintf("history/system-routing-%d-%d-%x.route", from, to, sum)
-	if _, err := decodeSystemHistoryRouting(data, ref); err != nil {
+	if _, err := decodeHistoryRoutingFamily(ctx, data, ref, false); err != nil {
 		return SegmentRef{}, false, err
 	}
 	if err := contextError(ctx); err != nil {
@@ -622,6 +738,11 @@ func BuildSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 	}
 	if err := syncSnapshotDir(filepath.Join(dir, "history")); err != nil {
 		return SegmentRef{}, false, err
+	}
+	stats.selected = newSources
+	stats.sources = make([][32]byte, len(pairs))
+	for i := range pairs {
+		stats.sources[i] = pairs[i].id
 	}
 	return ref, true, nil
 }
@@ -676,62 +797,5 @@ func checkSystemHistoryRoutingContext(ctx context.Context, dir string, manifest 
 }
 
 func refreshSystemHistoryRoutingContext(ctx context.Context, dir string, busy bool) (bool, error) {
-	if !historyReadLeaseGate.TryRLock() {
-		return false, nil
-	}
-	defer historyReadLeaseGate.RUnlock()
-	manifest, err := loadProductionManifestReadOnly(dir)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	count, indexed := 0, false
-	for _, ref := range manifest.Segments {
-		if ref.Kind == SegmentSystemHistoryRouting {
-			indexed = true
-		}
-		if ref.Kind == SegmentHistory && ref.normalizedDataset() == SegmentDatasetStateDomainChange {
-			count++
-		}
-	}
-	// Small catalogs keep the original path. Once installed, finish their tail
-	// when idle; busy refreshes wait for a full bounded batch of new sources.
-	if count < systemHistoryRoutingMaxNewSources && !indexed {
-		return false, nil
-	}
-	old, err := loadSystemHistoryRouting(ctx, dir, manifest)
-	if err != nil {
-		return false, err
-	}
-	manifest = manifestLookupView(manifest)
-	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
-	uncovered := 0
-	for _, history := range manifest.Segments {
-		if history.Kind != SegmentHistory || history.normalizedDataset() != SegmentDatasetStateDomainChange {
-			continue
-		}
-		accessor, ok := cfg.HistoryAccessorRef(manifest, history)
-		if !ok {
-			continue
-		}
-		if old == nil {
-			uncovered++
-		} else if _, ok := old.columns[systemHistoryRoutingPairID(history, accessor)]; !ok {
-			uncovered++
-		}
-	}
-	if uncovered == 0 || busy && uncovered < systemHistoryRoutingMaxNewSources {
-		return false, nil
-	}
-	ref, built, err := BuildSystemHistoryRoutingContext(ctx, dir, manifest, systemHistoryRoutingMaxNewSources)
-	if err != nil || !built {
-		return false, err
-	}
-	if err := contextError(ctx); err != nil {
-		return false, err
-	}
-	_, err = NewAggregator(dir).Integrate(manifest.VisibleTxStart, manifest.VisibleTxEnd, []SegmentRef{ref})
-	return err == nil, err
+	return refreshSystemHistoryRoutingWithStateContext(ctx, dir, busy, nil, time.Now())
 }

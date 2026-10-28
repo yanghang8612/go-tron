@@ -499,9 +499,33 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		entry.indices = append(entry.indices, i)
 	}
 	var routing *systemHistoryRouting
+	broadLoaded := false
+	loadBroad := func() error {
+		if !broadLoaded {
+			broadLoaded = true
+			lookups := make([][]byte, 0, len(entries))
+			for _, candidate := range entries {
+				if systemHistoryRoutingQuery(candidate.query) && !smallSystemHistoryRoutingQuery(candidate.query) {
+					lookups = append(lookups, candidate.lookup)
+				}
+			}
+			routing, err = loadSystemHistoryRoutingForKeys(ctx, m.dir, manifest, lookups, TxRange{From: fromTxNum, To: toTxNum})
+		}
+		return err
+	}
+	metadataRouting := newMetadataHistoryRoutingReader(manifest)
 	for _, entry := range entries {
-		if systemHistoryRoutingQuery(entry.query) {
-			routing, err = loadSystemHistoryRouting(ctx, m.dir, manifest, TxRange{From: fromTxNum, To: toTxNum})
+		if systemHistoryRoutingQuery(entry.query) && !smallSystemHistoryRoutingQuery(entry.query) && entry.query.Domain != kvdomains.ContractMetadata {
+			if err := loadBroad(); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	var smallRouting *systemHistoryRouting
+	for _, entry := range entries {
+		if smallSystemHistoryRoutingQuery(entry.query) {
+			smallRouting, err = loadSmallSystemHistoryRouting(ctx, m.dir, manifest, TxRange{From: fromTxNum, To: toTxNum})
 			if err != nil {
 				return nil, err
 			}
@@ -555,14 +579,31 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			continue
 		}
 		var lookupKeys [][]byte
-		if routing == nil && accountRouting == nil {
+		if routing == nil && smallRouting == nil && accountRouting == nil {
 			lookupKeys = make([][]byte, 0, len(entries))
 		}
 		column, covered := 0, false
+		smallColumn, smallCovered := 0, false
 		accountCovered := false
-		if routing != nil || accountRouting != nil {
+		var metadataFilter metadataSourceFilter
+		metadataCovered := false
+		var pairID [32]byte
+		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || !broadLoaded {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
 				id := systemHistoryRoutingPairID(ref, accessor)
+				pairID = id
+				for _, entry := range entries {
+					if entry.first == nil && entry.query.FlatDomain == rawdb.StateFlatDomainKVLatest && entry.query.Domain == kvdomains.ContractMetadata {
+						metadataFilter, metadataCovered, err = metadataRouting.source(ctx, m.dir, ref, id)
+						if err != nil {
+							return nil, err
+						}
+						break
+					}
+				}
+				if smallRouting != nil {
+					smallColumn, smallCovered = smallRouting.columns[id]
+				}
 				if routing != nil {
 					column, covered = routing.columns[id]
 				}
@@ -572,10 +613,29 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			}
 		}
 		for _, entry := range entries {
+			if entry.first != nil {
+				continue
+			}
+			if entry.query.FlatDomain == rawdb.StateFlatDomainKVLatest && entry.query.Domain == kvdomains.ContractMetadata {
+				if metadataCovered && !metadataFilter.mayContain(entry.lookup) {
+					continue
+				}
+				if !metadataCovered {
+					if err := loadBroad(); err != nil {
+						return nil, err
+					}
+					if routing != nil {
+						column, covered = routing.columns[pairID]
+					}
+				}
+			}
 			if accountCovered && accountRoutingQuery(entry.query) && (!entry.accountBoundFound || fromTxNum > entry.accountBound || ref.FromTxNum > entry.accountBound) {
 				continue
 			}
-			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
+			if smallCovered && smallSystemHistoryRoutingQuery(entry.query) && !smallRouting.mayContain(smallColumn, entry.lookup) {
+				continue
+			}
+			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !smallSystemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
 				lookupKeys = append(lookupKeys, entry.lookup)
 			}
 		}

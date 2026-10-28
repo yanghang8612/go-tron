@@ -1,0 +1,19 @@
+{
+  "complete": true,
+  "archive_sha256": "858f32c6e1aa11a91b48b61886c81175793c6ecba2e58f92585f433a219623c7",
+  "members": 185,
+  "requests": 96,
+  "groups_recomputed": 32,
+  "known_answer_heights": [
+    3144020,
+    3144021,
+    5000000,
+    9000000
+  ],
+  "all_96_version_results_equal": true,
+  "full_source_muhash_previously_passed": true,
+  "full_snapshot_restore_verified": false,
+  "filepage_cold_deferred": true,
+  "profile_calls": 12,
+  "scope": "Archive and raw HTTP/resource receipt recomputation; no repeated database scan."
+}

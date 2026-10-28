@@ -1,0 +1,242 @@
+Total: 23.14s
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateMaterializedStateHistoryBlock in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/rawdb/accessors_state_changeset_borrowed.go
+     100ms      8.13s (flat, cum) 35.13% of Total
+         .          .    284:func iterateMaterializedStateHistoryBlock(data []byte, blockNum uint64, scratch *StateDomainChange, fn func(*StateDomainChange) (bool, error)) (bool, error) {
+         .      2.44s    285:	decoded, pooled, err := borrowStateDomainChangeBlockPayload(data)
+         .          .    286:	if err != nil {
+         .          .    287:		return false, err
+         .          .    288:	}
+         .          .    289:	if pooled != nil {
+         .          .    290:		defer releaseBorrowedStateDomainChangeBlockPayload(pooled)
+         .          .    291:	}
+         .          .    292:
+         .          .    293:	block, trailing, err := rlp.SplitList(decoded)
+         .          .    294:	if err != nil {
+         .          .    295:		return false, fmt.Errorf("rawdb: decode borrowed state domain change block: %w", err)
+         .          .    296:	}
+         .          .    297:	if len(trailing) != 0 {
+         .          .    298:		return false, fmt.Errorf("rawdb: borrowed state domain change block has %d trailing bytes", len(trailing))
+         .          .    299:	}
+         .          .    300:	version, block, err := splitBorrowedStateDomainChangeUint(block, "version", ^uint64(0))
+         .          .    301:	if err != nil {
+         .          .    302:		return false, err
+         .          .    303:	}
+         .          .    304:	if version != uint64(persistedStateDomainChangeBlockVersion) {
+         .          .    305:		return false, fmt.Errorf("rawdb: unsupported state domain change block version %d", version)
+         .          .    306:	}
+         .          .    307:	firstSeq, block, err := splitBorrowedStateDomainChangeUint(block, "first sequence", ^uint64(0))
+         .          .    308:	if err != nil {
+         .          .    309:		return false, err
+         .          .    310:	}
+         .          .    311:	if firstSeq == 0 {
+         .          .    312:		return false, fmt.Errorf("rawdb: invalid state domain change block first sequence for block %d", blockNum)
+         .          .    313:	}
+         .          .    314:	rows, block, err := rlp.SplitList(block)
+         .          .    315:	if err != nil {
+         .          .    316:		return false, fmt.Errorf("rawdb: decode borrowed state domain change rows: %w", err)
+         .          .    317:	}
+         .          .    318:	if len(block) != 0 {
+         .          .    319:		return false, fmt.Errorf("rawdb: borrowed state domain change block header has %d trailing bytes", len(block))
+         .          .    320:	}
+         .          .    321:	if len(rows) == 0 {
+         .          .    322:		return false, fmt.Errorf("rawdb: empty state domain change block pack for block %d", blockNum)
+         .          .    323:	}
+         .          .    324:
+         .          .    325:	var (
+         .          .    326:		rowIndex      uint64
+         .          .    327:		previousTxNum uint64
+         .          .    328:		havePrevious  bool
+         .          .    329:	)
+         .          .    330:	for len(rows) > 0 {
+      30ms      520ms    331:		row, remainingRows, err := rlp.SplitList(rows)
+         .          .    332:		if err != nil {
+         .          .    333:			return false, fmt.Errorf("rawdb: decode borrowed state domain change row %d: %w", rowIndex, err)
+         .          .    334:		}
+         .          .    335:		if rowIndex > ^uint64(0)-firstSeq {
+         .          .    336:			return false, fmt.Errorf("rawdb: state domain change block sequence overflows at row %d", rowIndex)
+         .          .    337:		}
+      10ms      4.09s    338:		if err := decodeBorrowedStateDomainChangeRow(row, blockNum, firstSeq+rowIndex, scratch); err != nil {
+         .          .    339:			return false, fmt.Errorf("rawdb: decode borrowed state domain change row %d: %w", rowIndex, err)
+         .          .    340:		}
+      20ms       20ms    341:		if havePrevious && scratch.TxNum < previousTxNum {
+         .          .    342:			return false, fmt.Errorf("rawdb: state domain change block %d txNum %d at sequence %d follows txNum %d", blockNum, scratch.TxNum, scratch.Seq, previousTxNum)
+         .          .    343:		}
+      10ms      1.03s    344:		cont, err := fn(scratch)
+      20ms       20ms    345:		if err != nil || !cont {
+         .          .    346:			return cont, err
+         .          .    347:		}
+      10ms       10ms    348:		previousTxNum = scratch.TxNum
+         .          .    349:		havePrevious = true
+         .          .    350:		rowIndex++
+         .          .    351:		rows = remainingRows
+         .          .    352:	}
+         .          .    353:	return true, nil
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistorySelectedOwnersTail in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/rawdb/state_history_query_tail.go
+         0     12.70s (flat, cum) 54.88% of Total
+         .          .    164:func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistoryReader, from, to uint64, selected func(common.Address) bool, fn func(*StateDomainChange) (bool, error)) error {
+         .          .    165:	if err := ctx.Err(); err != nil {
+         .          .    166:		return err
+         .          .    167:	}
+         .          .    168:	if from > to {
+         .          .    169:		return nil
+         .          .    170:	}
+         .          .    171:	var start [8]byte
+         .          .    172:	binary.BigEndian.PutUint64(start[:], from)
+         .          .    173:	it := db.NewIterator(stateChangeSetPrefix, start[:])
+         .          .    174:	defer it.Release()
+         .          .    175:	var block uint64
+         .          .    176:	haveBlock := false
+         .          .    177:	rows := make(map[uint64]*StateDomainChange)
+         .          .    178:	flush := func() (bool, error) {
+         .          .    179:		seqs := make([]uint64, 0, len(rows))
+         .          .    180:		for seq := range rows {
+         .          .    181:			seqs = append(seqs, seq)
+         .          .    182:		}
+         .          .    183:		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+         .          .    184:		for _, seq := range seqs {
+         .          .    185:			if err := ctx.Err(); err != nil {
+         .          .    186:				return false, err
+         .          .    187:			}
+         .          .    188:			cont, err := fn(rows[seq])
+         .          .    189:			if err != nil || !cont {
+         .          .    190:				return cont, err
+         .          .    191:			}
+         .          .    192:		}
+         .          .    193:		clear(rows)
+         .          .    194:		return true, nil
+         .          .    195:	}
+         .          .    196:	var scratch StateDomainChange
+         .          .    197:	for {
+         .          .    198:		if err := ctx.Err(); err != nil {
+         .          .    199:			return err
+         .          .    200:		}
+         .       30ms    201:		if !it.Next() {
+         .          .    202:			break
+         .          .    203:		}
+         .          .    204:		key := it.Key()
+         .          .    205:		if !bytes.HasPrefix(key, stateChangeSetPrefix) || len(key) != len(stateChangeSetPrefix)+16 {
+         .          .    206:			continue
+         .          .    207:		}
+         .          .    208:		num := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix):])
+         .          .    209:		if num < from {
+         .          .    210:			continue
+         .          .    211:		}
+         .          .    212:		if num > to {
+         .          .    213:			break
+         .          .    214:		}
+         .          .    215:		if haveBlock && num != block {
+         .      780ms    216:			cont, err := flush()
+         .          .    217:			if err != nil || !cont {
+         .          .    218:				return err
+         .          .    219:			}
+         .          .    220:		}
+         .          .    221:		block = num
+         .          .    222:		haveBlock = true
+         .          .    223:		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
+         .          .    224:		if seq == 0 {
+         .          .    225:			value := it.Value()
+         .      3.76s    226:			used, err := iterateHistoryOwnerSpans(ctx, db, value, num, selected, &scratch, func(row *StateDomainChange) (bool, error) {
+         .          .    227:				rows[row.Seq] = cloneStateDomainChange(row)
+         .          .    228:				return true, nil
+         .          .    229:			})
+         .          .    230:			if err != nil {
+         .          .    231:				return err
+         .          .    232:			}
+         .          .    233:			if used {
+         .          .    234:				continue
+         .          .    235:			}
+         .      8.13s    236:			_, err = iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, num, &scratch, func(row *StateDomainChange) (bool, error) {
+         .          .    237:				if err := ctx.Err(); err != nil {
+         .          .    238:					return false, err
+         .          .    239:				}
+         .          .    240:				if selected(row.Owner) {
+         .          .    241:					rows[row.Seq] = cloneStateDomainChange(row)
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistorySelectedOwnersTail.func1 in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/rawdb/state_history_query_tail.go
+         0      780ms (flat, cum)  3.37% of Total
+         .          .    178:	flush := func() (bool, error) {
+         .          .    179:		seqs := make([]uint64, 0, len(rows))
+         .       30ms    180:		for seq := range rows {
+         .          .    181:			seqs = append(seqs, seq)
+         .          .    182:		}
+         .       60ms    183:		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+         .          .    184:		for _, seq := range seqs {
+         .       30ms    185:			if err := ctx.Err(); err != nil {
+         .          .    186:				return false, err
+         .          .    187:			}
+         .      650ms    188:			cont, err := fn(rows[seq])
+         .          .    189:			if err != nil || !cont {
+         .          .    190:				return cont, err
+         .          .    191:			}
+         .          .    192:		}
+         .       10ms    193:		clear(rows)
+         .          .    194:		return true, nil
+         .          .    195:	}
+         .          .    196:	var scratch StateDomainChange
+         .          .    197:	for {
+         .          .    198:		if err := ctx.Err(); err != nil {
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistorySelectedOwnersTail.func1.1 in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/rawdb/state_history_query_tail.go
+      10ms       10ms (flat, cum) 0.043% of Total
+      10ms       10ms    183:		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+         .          .    184:		for _, seq := range seqs {
+         .          .    185:			if err := ctx.Err(); err != nil {
+         .          .    186:				return false, err
+         .          .    187:			}
+         .          .    188:			cont, err := fn(rows[seq])
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistorySelectedOwnersTail.func2 in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/rawdb/state_history_query_tail.go
+         0      100ms (flat, cum)  0.43% of Total
+         .          .    226:			used, err := iterateHistoryOwnerSpans(ctx, db, value, num, selected, &scratch, func(row *StateDomainChange) (bool, error) {
+         .      100ms    227:				rows[row.Seq] = cloneStateDomainChange(row)
+         .          .    228:				return true, nil
+         .          .    229:			})
+         .          .    230:			if err != nil {
+         .          .    231:				return err
+         .          .    232:			}
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistorySelectedOwnersTail.func3 in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/rawdb/state_history_query_tail.go
+     320ms      1.02s (flat, cum)  4.41% of Total
+      20ms       20ms    236:			_, err = iteratePersistedStateDomainChangeBlockBorrowedWithScratch(value, num, &scratch, func(row *StateDomainChange) (bool, error) {
+      10ms       90ms    237:				if err := ctx.Err(); err != nil {
+         .          .    238:					return false, err
+         .          .    239:				}
+     240ms      490ms    240:				if selected(row.Owner) {
+         .      370ms    241:					rows[row.Seq] = cloneStateDomainChange(row)
+         .          .    242:				}
+      50ms       50ms    243:				return true, nil
+         .          .    244:			}, db)
+         .          .    245:			if err == nil {
+         .          .    246:				continue
+         .          .    247:			}
+         .          .    248:			if ctx.Err() != nil {
+ROUTINE ======================== github.com/tronprotocol/go-tron/core/state/snapshots.readSmallSystemHistoryRouting in /data/gtron/maintenance/full-state-acceptance-20261028-01/source-candidate/core/state/snapshots/history_small_system_routing.go
+         0       90ms (flat, cum)  0.39% of Total
+         .          .    126:func readSmallSystemHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (*systemHistoryRouting, error) {
+         .          .    127:	if err := contextError(ctx); err != nil {
+         .          .    128:		return nil, err
+         .          .    129:	}
+         .          .    130:	if ref.Kind != SegmentSmallSystemHistoryRouting || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < systemHistoryRoutingHeaderSize || ref.Size > systemHistoryRoutingMaxBytes {
+         .          .    131:		return nil, errors.New("snapshots: invalid system history routing reference")
+         .          .    132:	}
+         .          .    133:	if err := validateSegmentRef(ref); err != nil {
+         .          .    134:		return nil, err
+         .          .    135:	}
+         .          .    136:	f, err := os.Open(filepath.Join(dir, ref.Path))
+         .          .    137:	if err != nil {
+         .          .    138:		return nil, err
+         .          .    139:	}
+         .          .    140:	defer f.Close()
+         .          .    141:	stat, err := f.Stat()
+         .          .    142:	if err != nil {
+         .          .    143:		return nil, err
+         .          .    144:	}
+         .          .    145:	if stat.Size() != int64(ref.Size) {
+         .          .    146:		return nil, errors.New("snapshots: system history routing size mismatch")
+         .          .    147:	}
+         .          .    148:	data := make([]byte, ref.Size)
+         .       10ms    149:	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, data); err != nil {
+         .          .    150:		return nil, err
+         .          .    151:	}
+         .       80ms    152:	digest := sha256.Sum256(data)
+         .          .    153:	if fmt.Sprintf("sha256:%x", digest) != ref.Checksum {
+         .          .    154:		return nil, errors.New("snapshots: system history routing checksum mismatch")
+         .          .    155:	}
+         .          .    156:	sharedSmallSystemHistoryRouting.Lock()
+         .          .    157:	cached := sharedSmallSystemHistoryRouting.value

@@ -1,0 +1,21 @@
+{
+  "identity": {
+    "MainPID": "12881",
+    "ActiveState": "active",
+    "start_ticks": "4879056747",
+    "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8"
+  },
+  "head_response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x2a0b8f9"
+  },
+  "diagnostic_units": {
+    "gtron-offline-routing-budget-resume-20261027-05": "Result=success\nActiveState=inactive\n",
+    "gtron-offline-routing-budget-post-20261027-06": "Result=success\nActiveState=inactive\n",
+    "gtron-offline-routing-budget-extra-20261027-07": "Result=success\nActiveState=inactive\n",
+    "gtron-offline-routing-budget-correctness-20261027-08": "Result=success\nActiveState=inactive\n"
+  },
+  "utc": "2026-10-27T09:42:08.715743+00:00",
+  "production_mutations": false
+}

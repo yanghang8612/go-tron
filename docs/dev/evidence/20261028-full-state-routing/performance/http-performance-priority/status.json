@@ -1,0 +1,54 @@
+{
+  "complete": true,
+  "stage": "complete fast HTTP matrix, file-page cold still separate",
+  "production_mutations": false,
+  "full_snapshot_restore_not_a_gate": true,
+  "os_cache_controlled": false,
+  "utc": "2026-10-28T04:14:12.702590+00:00",
+  "production_before": {
+    "pid": 30916,
+    "active": "active",
+    "exe": "/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron",
+    "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8"
+  },
+  "fixed_cut": {
+    "head": 45836827,
+    "head_tx": 4240407293,
+    "head_hash": "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    "root": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+  },
+  "last_request": {
+    "utc": "2026-10-28T04:14:12.223147+00:00",
+    "mode": "baseline",
+    "cache": "process-warm",
+    "round": 1,
+    "repeat": 1,
+    "height": 45836827,
+    "tag": "latest",
+    "expected": "0x00000000000000000000000000000000000000000000000000000000000000f9",
+    "reference": "same-cut baseline, source full MuHash passed",
+    "id": 96,
+    "seconds_complete_loopback_http": 0.0030785948038101196,
+    "correct": true
+  },
+  "completed_heights": [
+    9000000,
+    3144020,
+    3144021,
+    5000000,
+    35000000,
+    45836571,
+    45836826,
+    45836827
+  ],
+  "production_after": {
+    "pid": 30916,
+    "active": "active",
+    "exe": "/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron",
+    "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8"
+  },
+  "all_results_correct": true,
+  "requests": 96,
+  "production_identity_unchanged": true,
+  "full_snapshot_verified": false
+}

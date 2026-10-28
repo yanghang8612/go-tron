@@ -1,0 +1,18 @@
+{
+  "complete": true,
+  "members": 777,
+  "sources": 29658,
+  "metadata_pages": 116,
+  "metadata_page_bytes": 1190032,
+  "nonempty_metadata_sources": 0,
+  "queries": 141,
+  "non_nil_rows": 39,
+  "restored_full_rows": 22496,
+  "restored_block_ranges": 60,
+  "private_trace_files": {
+    "baseline": 8157,
+    "candidate": 146
+  },
+  "product_files": 20,
+  "samples": 53
+}

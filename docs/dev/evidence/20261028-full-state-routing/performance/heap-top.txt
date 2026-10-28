@@ -1,0 +1,48 @@
+File: candidate-http-final.test
+Build ID: d4c32da0708379f836528103faf3211d23580aee
+Type: inuse_space
+Time: 2026-10-28 04:30:50 UTC
+Showing nodes accounting for 1102.92MB, 97.06% of 1136.30MB total
+Dropped 101 nodes (cum <= 5.68MB)
+Showing top 40 nodes out of 61
+      flat  flat%   sum%        cum   cum%
+  739.37MB 65.07% 65.07%   739.87MB 65.11%  github.com/tronprotocol/go-tron/core/rawdb/freezer.OpenTransactionIndexRun
+  131.40MB 11.56% 76.63%   131.40MB 11.56%  github.com/tronprotocol/go-tron/core/rawdb/freezer.openV2Segment
+   53.50MB  4.71% 81.34%    53.50MB  4.71%  encoding/json.(*decodeState).literalStore
+   47.33MB  4.17% 85.51%    58.88MB  5.18%  github.com/klauspost/compress/zstd.loadDict
+   44.84MB  3.95% 89.45%    44.84MB  3.95%  os.readFileContents
+   24.54MB  2.16% 91.61%    24.54MB  2.16%  reflect.growslice
+   20.80MB  1.83% 93.44%    20.80MB  1.83%  github.com/tronprotocol/go-tron/core/state/snapshots.cloneDecodedManifest
+   16.01MB  1.41% 94.85%    16.01MB  1.41%  github.com/tronprotocol/go-tron/core/state/snapshots.eventLogVerificationRecordKey
+    8.05MB  0.71% 95.56%    45.06MB  3.97%  github.com/tronprotocol/go-tron/core/state/snapshots.(*ChainFreezerVerificationCache).load
+    7.53MB  0.66% 96.22%     7.53MB  0.66%  github.com/klauspost/compress/huff0.(*Scratch).prepare
+    5.50MB  0.48% 96.71%     8.50MB  0.75%  github.com/cockroachdb/pebble/internal/manifest.(*VersionEdit).Decode
+    3.51MB  0.31% 97.02%    11.54MB  1.02%  github.com/klauspost/compress/huff0.ReadTable
+    0.52MB 0.046% 97.06%   742.89MB 65.38%  github.com/tronprotocol/go-tron/core/rawdb/freezer.OpenTransactionIndexStore
+         0     0% 97.06%    15.50MB  1.36%  encoding/json.(*Decoder).Decode
+         0     0% 97.06%    78.04MB  6.87%  encoding/json.(*decodeState).array
+         0     0% 97.06%    78.04MB  6.87%  encoding/json.(*decodeState).object
+         0     0% 97.06%    78.04MB  6.87%  encoding/json.(*decodeState).unmarshal
+         0     0% 97.06%    78.04MB  6.87%  encoding/json.(*decodeState).value
+         0     0% 97.06%    62.54MB  5.50%  encoding/json.Unmarshal
+         0     0% 97.06%        9MB  0.79%  github.com/cockroachdb/pebble.(*versionSet).load
+         0     0% 97.06%    10.66MB  0.94%  github.com/cockroachdb/pebble.Open
+         0     0% 97.06%    58.88MB  5.18%  github.com/klauspost/compress/zstd.NewReader
+         0     0% 97.06%    11.71MB  1.03%  github.com/tronprotocol/go-tron/core.(*TronBackend).CallAtContext
+         0     0% 97.06%    11.71MB  1.03%  github.com/tronprotocol/go-tron/core.(*TronBackend).TriggerConstantContractAtContext
+         0     0% 97.06%    10.16MB  0.89%  github.com/tronprotocol/go-tron/core.(*TronBackend).triggerConstantContractAtRoot
+         0     0% 97.06%  1123.08MB 98.84%  github.com/tronprotocol/go-tron/core.TestOfflineFullEthCallHTTP
+         0     0% 97.06%     7.11MB  0.63%  github.com/tronprotocol/go-tron/core/rawdb.NewHistoryStagingPebbleDB
+         0     0% 97.06%   933.67MB 82.17%  github.com/tronprotocol/go-tron/core/rawdb/freezer.NewFreezer
+         0     0% 97.06%    58.88MB  5.18%  github.com/tronprotocol/go-tron/core/rawdb/freezer.newV2DecoderForSegmentSets
+         0     0% 97.06%    58.88MB  5.18%  github.com/tronprotocol/go-tron/core/rawdb/freezer.newV2DecoderForSegmentSets.func1.WithDecoderDicts.2
+         0     0% 97.06%    58.88MB  5.18%  github.com/tronprotocol/go-tron/core/rawdb/freezer.newV2DecoderForSegments (inline)
+         0     0% 97.06%   131.40MB 11.56%  github.com/tronprotocol/go-tron/core/rawdb/freezer.openV2ManifestReaders
+         0     0% 97.06%   190.78MB 16.79%  github.com/tronprotocol/go-tron/core/rawdb/freezer.openV2Store
+         0     0% 97.06%    10.66MB  0.94%  github.com/tronprotocol/go-tron/core/rawdb/pebbledb.New
+         0     0% 97.06%    10.16MB  0.89%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).PrefetchExecutionAt
+         0     0% 97.06%    10.16MB  0.89%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).prefetchFirst
+         0     0% 97.06%     9.58MB  0.84%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+         0     0% 97.06%    83.35MB  7.33%  github.com/tronprotocol/go-tron/core/state/snapshots.(*manifestDecodeCache).decodeMode
+         0     0% 97.06%    20.80MB  1.83%  github.com/tronprotocol/go-tron/core/state/snapshots.(*manifestDecodeCache).retainDecodedLocked
+         0     0% 97.06%   128.18MB 11.28%  github.com/tronprotocol/go-tron/core/state/snapshots.LoadProductionManifest (inline)

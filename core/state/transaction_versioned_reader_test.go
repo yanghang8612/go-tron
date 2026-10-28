@@ -2,16 +2,186 @@ package state
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 type testTransactionVersion struct {
 	txIndex int
 	value   TransactionWriteValue
+}
+
+func TestTransactionVersionedMetadataAliasesChooseLatestWriter(t *testing.T) {
+	addr := testAddr(0x78)
+	typedKey := TransactionAccessKey{Kind: TransactionAccessContractMetadata, Address: addr}
+	genericKey := TransactionAccessKey{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: kvdomains.ContractMetadata, LogicalKey: string(contractMetaKVKey)}
+	typed, err := proto.Marshal(&contractpb.SmartContract{Name: "typed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generic, err := statecodec.Marshal(&contractpb.SmartContract{Name: "generic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                       string
+		typedWriter, genericWriter int
+		typedValue, genericValue   TransactionWriteValue
+		want                       string
+		wantError                  bool
+	}{
+		{"generic newer", 1, 2, TransactionWriteValue{Exists: true, Value: typed}, TransactionWriteValue{Exists: true, Value: generic}, "generic", false},
+		{"typed newer", 2, 1, TransactionWriteValue{Exists: true, Value: typed}, TransactionWriteValue{Exists: true, Value: generic}, "typed", false},
+		{"generic deletion newer", 1, 2, TransactionWriteValue{Exists: true, Value: typed}, TransactionWriteValue{}, "", false},
+		{"typed deletion newer", 2, 1, TransactionWriteValue{}, TransactionWriteValue{Exists: true, Value: generic}, "", false},
+		{"obsolete malformed typed", 1, 2, TransactionWriteValue{Exists: true, Value: []byte{0xff}}, TransactionWriteValue{Exists: true, Value: generic}, "generic", false},
+		{"same writer aliases", 1, 1, TransactionWriteValue{Exists: true, Value: typed}, TransactionWriteValue{Exists: true, Value: generic}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStateDB(t)
+			s.CreateAccount(addr, corepb.AccountType_Contract)
+			if _, err := s.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			s.SetTransactionVersionedValueReader(testTransactionVersionedReader{
+				typedKey:   {{txIndex: tc.typedWriter, value: tc.typedValue}},
+				genericKey: {{txIndex: tc.genericWriter, value: tc.genericValue}},
+			}, 3)
+			var recorder TransactionAccessRecorder
+			s.SetTransactionAccessRecorder(&recorder)
+			value, exists, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey)
+			if tc.wantError {
+				if err == nil && s.Error() == nil {
+					t.Fatal("conflicting same-writer aliases accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if exists != (tc.want != "") {
+				t.Fatalf("exists=%v want=%q", exists, tc.want)
+			}
+			if exists {
+				var metadata contractpb.SmartContract
+				if err := statecodec.Unmarshal(value, &metadata); err != nil {
+					t.Fatal(err)
+				}
+				if metadata.Name != tc.want {
+					t.Fatalf("name=%q want=%q", metadata.Name, tc.want)
+				}
+			}
+			seen := map[TransactionAccessKey]bool{}
+			for _, read := range recorder.CaptureReadSet().Reads {
+				seen[read.Key] = true
+			}
+			if !seen[typedKey] || !seen[genericKey] {
+				t.Fatalf("missing metadata alias read dependencies: %v", seen)
+			}
+		})
+	}
+}
+
+func TestTransactionVersionedMetadataRecordsAbsentTypedDependency(t *testing.T) {
+	s := newTestStateDB(t)
+	addr := testAddr(0x79)
+	s.CreateAccount(addr, corepb.AccountType_Contract)
+	if _, err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s.SetTransactionVersionedValueReader(testTransactionVersionedReader{}, 3)
+	var recorder TransactionAccessRecorder
+	s.SetTransactionAccessRecorder(&recorder)
+	if _, _, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range recorder.CaptureReadSet().Reads {
+		if read.Key == (TransactionAccessKey{Kind: TransactionAccessContractMetadata, Address: addr}) {
+			return
+		}
+	}
+	t.Fatal("missing absent typed metadata dependency")
+}
+
+func TestTransactionVersionedMetadataApplyRejectsReadFailure(t *testing.T) {
+	s := newTestStateDB(t)
+	addr := testAddr(0x7a)
+	s.CreateAccount(addr, corepb.AccountType_Contract)
+	s.AddBalance(addr, 100)
+	if _, err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	value, err := proto.Marshal(&contractpb.SmartContract{Name: "next", ContractAddress: addr.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetTransactionVersionedValueReader(testTransactionVersionedReader{
+		{Kind: TransactionAccessContractMetadata, Address: addr}:                                                                       {{txIndex: 1, value: TransactionWriteValue{Exists: true, Value: value}}},
+		{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: kvdomains.ContractMetadata, LogicalKey: string(contractMetaKVKey)}: {{txIndex: 1, value: TransactionWriteValue{}}},
+	}, 2)
+	writes := TransactionWriteSet{{Kind: TransactionAccessContractMetadata, Address: addr}: {Exists: true, Value: value}}
+	if err := s.ApplyTransactionWriteSet(writes, NewDynamicProperties(), nil); err == nil || s.Error() == nil {
+		t.Fatalf("metadata preimage failure accepted: apply=%v state=%v", err, s.Error())
+	}
+	// Once a read fails, even a later otherwise-valid write set must be
+	// rejected before changing any more state.
+	writes = TransactionWriteSet{{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldBalance}: testVersionedInt64(200)}
+	if err := s.ApplyTransactionWriteSet(writes, NewDynamicProperties(), nil); err == nil {
+		t.Fatal("pre-existing sticky state error accepted")
+	}
+	if got := s.GetBalance(addr); got != 100 {
+		t.Fatalf("balance changed after sticky failure: %d", got)
+	}
+}
+
+func TestTransactionVersionedMetadataSurvivesLocalRollback(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprint("deleted=", deleted), func(t *testing.T) {
+			s := newTestStateDB(t)
+			addr := testAddr(0x77)
+			s.CreateAccount(addr, corepb.AccountType_Contract)
+			s.SetContract(addr, &contractpb.SmartContract{ContractAddress: addr.Bytes(), Name: "durable"})
+			if _, err := s.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			// A prewarmed clean cache belongs to the old transaction boundary.
+			if got := s.GetContract(addr); got == nil || got.Name != "durable" {
+				t.Fatal(got)
+			}
+			encoded, err := proto.Marshal(&contractpb.SmartContract{ContractAddress: addr.Bytes(), Name: "versioned"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := TransactionWriteValue{Exists: !deleted, Value: encoded}
+			if deleted {
+				value.Value = nil
+			}
+			s.SetTransactionVersionedValueReader(testTransactionVersionedReader{{Kind: TransactionAccessContractMetadata, Address: addr}: {{txIndex: 1, value: value}}}, 2)
+			check := func() {
+				t.Helper()
+				got := s.GetContract(addr)
+				if deleted {
+					if got != nil {
+						t.Fatal("versioned deletion", got)
+					}
+				} else if got == nil || got.Name != "versioned" {
+					t.Fatal("versioned metadata", got)
+				}
+			}
+			check()
+			snapshot := s.Snapshot()
+			s.SetContract(addr, &contractpb.SmartContract{ContractAddress: addr.Bytes(), Name: "local"})
+			s.RevertToSnapshot(snapshot)
+			check()
+		})
+	}
 }
 
 type testTransactionVersionedReader map[TransactionAccessKey][]testTransactionVersion

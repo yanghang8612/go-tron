@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-27T12:49:22.898488+00:00",
+  "pid": "12881",
+  "start_ticks": "4879056747",
+  "exe": "/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron",
+  "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8",
+  "service": "MainPID=12881\nActiveState=active\n",
+  "original_identity_unchanged": true,
+  "block_number_rpc": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x2a7e1e7"
+  }
+}

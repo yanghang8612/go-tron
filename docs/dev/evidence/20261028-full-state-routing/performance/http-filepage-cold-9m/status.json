@@ -1,0 +1,37 @@
+{
+  "complete": false,
+  "stage": "file-page cold deferred by performance-first priority",
+  "production_mutations": false,
+  "full_snapshot_restore_not_a_gate": true,
+  "scope": "9M only, query-read files cold at dispatch; process startup caches retained",
+  "os_cache_controlled": true,
+  "utc": "2026-10-28T04:29:57.563444Z",
+  "fixed_cut": {
+    "head": 45836827,
+    "head_tx": 4240407293,
+    "head_hash": "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    "root": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+  },
+  "last_request": {
+    "id": 2,
+    "utc": "2026-10-28T04:25:35.963834+00:00",
+    "mode": "candidate",
+    "cache": "readset-discovery-excluded",
+    "height": 9000000,
+    "tag": "0x895440",
+    "directory": "readset-candidate",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    },
+    "seconds_complete_loopback_http": 3.4855908304452896,
+    "correct": true
+  },
+  "required_private_copy_bytes": 147639521806,
+  "private_copy_bytes": 55648524035,
+  "private_mode": "baseline",
+  "private_files_completed": 4200,
+  "deferred": true,
+  "reason": "Query-read files require 147639521806B private copies; defer further copying per performance-first priority. No controlled-cold measurements admitted."
+}

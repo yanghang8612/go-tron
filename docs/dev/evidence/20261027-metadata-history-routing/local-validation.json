@@ -1,0 +1,19 @@
+{
+  "utc": "2026-10-27T15:48:49.898709+00:00",
+  "product_files": 20,
+  "product_sources_unchanged": true,
+  "core": {
+    "seconds": 316.909,
+    "passed_test_events": 1087,
+    "full_package_passed": true,
+    "timeout_seconds": 900
+  },
+  "packages_log": "ok  \tgithub.com/tronprotocol/go-tron/core/state\t9.388s\nok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t47.261s\nok  \tgithub.com/tronprotocol/go-tron/internal/jsonrpc\t1.278s\nok  \tgithub.com/tronprotocol/go-tron/actuator\t1.021s\n",
+  "state_race_log": "ok  \tgithub.com/tronprotocol/go-tron/core/state\t3.275s\n",
+  "vet_exit_code": 0,
+  "build_exit_code": 0,
+  "snapshots_full_package_seconds": 164.096,
+  "snapshot_focused_race_passed": true,
+  "limits": "snapshots full/race ran before final state-only alias/Apply guards; snapshot product sources unchanged. No full-state current HTTP or full current MuHash copy exists.",
+  "vm_log": "ok  \tgithub.com/tronprotocol/go-tron/vm\t3.681s\n"
+}

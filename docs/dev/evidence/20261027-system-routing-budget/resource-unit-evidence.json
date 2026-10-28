@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-27T09:26:43.377333+00:00",
+  "units": {
+    "gtron-offline-routing-budget-resume-20261027-05": "ControlGroup=/system.slice/gtron-offline-routing-budget-resume-20261027-05.service\nCPUQuotaPerSecUSec=2s\nMemoryLimit=6442450944\nNice=15\nActiveState=active\n",
+    "gtron-offline-routing-budget-post-20261027-06": "ControlGroup=/system.slice/gtron-offline-routing-budget-post-20261027-06.service\nCPUQuotaPerSecUSec=2s\nMemoryLimit=6442450944\nNice=15\nActiveState=active\n"
+  },
+  "host_meminfo": "MemTotal:       64298988 kB\nMemFree:          357992 kB\nMemAvailable:   18240784 kB\nBuffers:          147784 kB\nCached:         21210304 kB\nSwapCached:            0 kB\nActive:         49440236 kB\nInactive:       12082216 kB\nActive(anon):   42647772 kB\nInactive(anon):  1617888 kB\nActive(file):    6792464 kB\nInactive(file): 10464328 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:            213352 kB\nWriteback:             0 kB\nAnonPages:      40166556 kB\nMapped:           271772 kB\nShmem:           4099284 kB\nSlab:            1340328 kB\nSReclaimable:    1151964 kB\nSUnreclaim:       188364 kB\nKernelStack:       23248 kB\nPageTables:       318928 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32149492 kB\nCommitted_AS:   46458604 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      123096 kB\nVmallocChunk:   34359548308 kB\nPercpu:            10624 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    370688 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nDirectMap4k:      309156 kB\nDirectMap2M:    43249664 kB\nDirectMap1G:    22020096 kB\n",
+  "host_loadavg": "13.65 12.18 11.67 5/1440 1772\n"
+}

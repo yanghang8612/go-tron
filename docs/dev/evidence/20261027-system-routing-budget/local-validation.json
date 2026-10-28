@@ -1,0 +1,70 @@
+{
+  "utc": "2026-10-27T09:44:23.209177+00:00",
+  "go_version": "go version go1.27.3 darwin/arm64",
+  "product_sha256": {
+    "core/state/snapshots/aggregator.go": "da748638bb45a2d7f3fda4a0462061c1b2b69ae0ae55f50e985e8e74a4056298",
+    "core/state/snapshots/cold_compaction_budget.go": "092f533be166eedf480a388d48be21d2a3f0df30dcc9e79c5fe4c63c545b3566",
+    "core/state/snapshots/domain_registry.go": "3bc8cf32d5187da1a270303ca14ded6ce3ae20e1566a1fd87587b1d11cbc839b",
+    "core/state/snapshots/history_routing_retired.go": "0112eaeb20a52eaa3454b771eb411cdd5e7130cb0115ba0135ce13cecf512fd0",
+    "core/state/snapshots/history_segment.go": "a101fb51d71b20fd676bee5fe2822d460ab3fbd31bf418370f90665060673afd",
+    "core/state/snapshots/history_system_routing.go": "572a60b5705a2fa7b4edecf09c8455454cf960cb8faf43060b654ae91c0256c2",
+    "core/state/snapshots/manifest.go": "c84185f1be39f4ec35771f945621c101776e64fd48fb74ec3ce15da90b218e5b",
+    "core/state/snapshots/manifest_verify.go": "250202c52b339f44486586009e00181f0f21efb54e995ba9b0fa35f18c539267",
+    "core/state/snapshots/history_small_system_routing.go": "6eafbcd4af750a4997d3eb63ef5345f0020050345c15aca2f6497a617ec2a83d",
+    "core/state/snapshots/history_system_routing_policy.go": "23d560fd2495ab0bfa7019c1d9e484396346d838ddf1e556cc8a4dccbae5ca3b"
+  },
+  "logs": {
+    "local-package.log": {
+      "bytes": 67,
+      "sha256": "ab70b56f4f89e80b8576d0f44838bd24f2703396c66feb5d7b7baa90621af47e"
+    },
+    "local-race.log": {
+      "bytes": 66,
+      "sha256": "5482451fc6f2ffbf85722c0152a5a057d1433de7a9b1a58b8b556620cc919076"
+    },
+    "local-policy-final.log": {
+      "bytes": 65,
+      "sha256": "01e21b973063095fc5cb8c216f50d2d796ca50b892bf8d27e0f1df44d17673ad"
+    },
+    "local-policy-final-race.log": {
+      "bytes": 65,
+      "sha256": "1306a0ee07c46649182f8ac87679e476fe3a0f9a811f53752ae3ca966ce7074d"
+    },
+    "local-related.log": {
+      "bytes": 167,
+      "sha256": "fab4d00c05ecc8a3d0ec413660a5e7dfd0904d1dedd6b2e6ccab7431476ecfa1"
+    },
+    "local-vet-corrected.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "local-build.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "checks": {
+    "full_snapshots_package": true,
+    "core_state_jsonrpc": true,
+    "relevant_race": true,
+    "final_policy_race": true,
+    "vet": true,
+    "gtron_build": true,
+    "rpc_diagnostic_selftest": true,
+    "native_latest_routing_tests": true,
+    "full_http_268_responses": true,
+    "full_fixed_muhash": true,
+    "history_restore_windows": true,
+    "strict_and_signed_restore": true
+  },
+  "server_acceptance_complete": true,
+  "production_mutations": false,
+  "notes": [
+    "Native acceptance uses Go 1.25.5 and frozen inputs; local Go version differs.",
+    "Astra reviewed policy and derived Seq verification standards read-only; no server operations or statistical inputs from the adviser.",
+    "Initial vet invocation used nonexistent package paths; corrected invocation passed.",
+    "No deployment, restart, reset or production data deletion."
+  ],
+  "server_archive_sha256": "d8e5828ee99af4e42bed8ae893b7f32e5ab2bc8e01e80f142264ed6d3ea0a380",
+  "server_independent_verification": "independent-verification.json"
+}

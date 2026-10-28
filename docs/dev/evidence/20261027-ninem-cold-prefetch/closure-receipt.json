@@ -1,0 +1,26 @@
+{
+  "complete": true,
+  "utc": "2026-10-27T13:09:40.568389+00:00",
+  "removed": [
+    "/data/gtron/maintenance/9m-query-20261027-01/final/private-baseline",
+    "/data/gtron/maintenance/9m-query-20261027-01/final/private-candidate"
+  ],
+  "independent_unique_file_count": 8154,
+  "independent_file_logical_bytes": 80987824554,
+  "independent_file_allocated_bytes": 81004523520,
+  "device_available_before": 1447737638912,
+  "device_available_after": 1526829371392,
+  "net_free_delta_is_not_isolated_reclaim_measurement": true,
+  "production_identity": {
+    "pid": "12881",
+    "start_ticks": "4879056747",
+    "exe": "/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron",
+    "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8"
+  },
+  "production_identity_unchanged": true,
+  "preserved_cold_catalogs": [
+    "/data/gtron/maintenance/9m-query-20261027-01/baseline-catalog",
+    "/data/gtron/maintenance/9m-query-20261027-01/full-route/catalog"
+  ],
+  "limits": "Only this task private test cache copies removed. Pinned cold catalogs retained for reproduction; no service action, production database deletion, or latest-state audit."
+}

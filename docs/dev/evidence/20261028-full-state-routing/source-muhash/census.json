@@ -1,0 +1,2075 @@
+{
+  "complete": true,
+  "started_utc": "2026-10-27T23:09:23.761960751Z",
+  "finished_utc": "2026-10-28T01:16:53.176598151Z",
+  "block_num": 45836827,
+  "block_hash": [
+    0,
+    0,
+    0,
+    0,
+    2,
+    187,
+    106,
+    27,
+    203,
+    58,
+    178,
+    225,
+    172,
+    138,
+    243,
+    129,
+    123,
+    236,
+    122,
+    18,
+    31,
+    146,
+    241,
+    65,
+    61,
+    37,
+    82,
+    236,
+    238,
+    240,
+    163,
+    12
+  ],
+  "tx_num": 4240407293,
+  "muhash_root": [
+    75,
+    177,
+    155,
+    122,
+    147,
+    139,
+    166,
+    200,
+    101,
+    130,
+    14,
+    168,
+    111,
+    82,
+    57,
+    35,
+    81,
+    114,
+    248,
+    73,
+    35,
+    195,
+    80,
+    176,
+    76,
+    75,
+    14,
+    183,
+    87,
+    67,
+    182,
+    39
+  ],
+  "muhash_verified": true,
+  "source_rows": [
+    119819707,
+    389068,
+    1036811084
+  ],
+  "source_logical_bytes": [
+    9469854169,
+    19842468,
+    83436438413
+  ],
+  "source_sha256": [
+    "84b831aafbeaa4bbd3b0d9ab2db146269b7536f2d5e008c9ad5cf2ef92f43e4c",
+    "2412beb81b31889783ce2829a2ff16e4b5254efe84a906bed98677285abb3378",
+    "219de968ab7ede3285d34db7925fdb21d73402931adba3637bed28e3533707f4"
+  ],
+  "class_sha256": {
+    "current": "06e27703a9c7047a2dabb04c99c945722a189eb5749fdf84ea3d596bd486252b",
+    "future": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "obsolete": "896ad4fddd4d81c6a6183c0e7a77a28344a03fe34376748413c983de6ad7d4e8"
+  },
+  "total_kv": {
+    "rows": 1036811084,
+    "physical_key_bytes": 51784660955,
+    "wrapped_value_bytes": 31651777458,
+    "payload_bytes": 41053934934,
+    "logical_bytes": 83436438413,
+    "max_payload_bytes": 140237
+  },
+  "classes": {
+    "current": {
+      "rows": 1035279870,
+      "physical_key_bytes": 51683807813,
+      "wrapped_value_bytes": 31639406227,
+      "payload_bytes": 41004222370,
+      "logical_bytes": 83323214040,
+      "max_payload_bytes": 140237
+    },
+    "future": {
+      "rows": 0,
+      "physical_key_bytes": 0,
+      "wrapped_value_bytes": 0,
+      "payload_bytes": 0,
+      "logical_bytes": 0,
+      "max_payload_bytes": 0
+    },
+    "obsolete": {
+      "rows": 1531214,
+      "physical_key_bytes": 100853142,
+      "wrapped_value_bytes": 12371231,
+      "payload_bytes": 49712564,
+      "logical_bytes": 113224373,
+      "max_payload_bytes": 24689
+    }
+  },
+  "domains": {
+    "AccountAsset": {
+      "current": {
+        "rows": 6221992,
+        "physical_key_bytes": 261690193,
+        "wrapped_value_bytes": 12670999,
+        "payload_bytes": 49775936,
+        "logical_bytes": 274361192,
+        "max_payload_bytes": 8
+      },
+      "obsolete": {
+        "rows": 3,
+        "physical_key_bytes": 119,
+        "wrapped_value_bytes": 6,
+        "payload_bytes": 24,
+        "logical_bytes": 125,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountAssetOperationTime": {
+      "current": {
+        "rows": 716,
+        "physical_key_bytes": 27422,
+        "wrapped_value_bytes": 3580,
+        "payload_bytes": 5728,
+        "logical_bytes": 31002,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountAssetOperationTimeV2": {
+      "current": {
+        "rows": 1460,
+        "physical_key_bytes": 59860,
+        "wrapped_value_bytes": 7300,
+        "payload_bytes": 11680,
+        "logical_bytes": 67160,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountAssetV2": {
+      "current": {
+        "rows": 302630622,
+        "physical_key_bytes": 12407855502,
+        "wrapped_value_bytes": 1123298261,
+        "payload_bytes": 2421044976,
+        "logical_bytes": 13531153763,
+        "max_payload_bytes": 8
+      },
+      "obsolete": {
+        "rows": 440,
+        "physical_key_bytes": 18040,
+        "wrapped_value_bytes": 1590,
+        "payload_bytes": 3520,
+        "logical_bytes": 19630,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountFreeAssetNetUsage": {
+      "current": {
+        "rows": 716,
+        "physical_key_bytes": 27422,
+        "wrapped_value_bytes": 1667,
+        "payload_bytes": 5728,
+        "logical_bytes": 29089,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountFreeAssetNetUsageV2": {
+      "current": {
+        "rows": 1460,
+        "physical_key_bytes": 59860,
+        "wrapped_value_bytes": 3899,
+        "payload_bytes": 11680,
+        "logical_bytes": 63759,
+        "max_payload_bytes": 8
+      }
+    },
+    "AccountFrozenBandwidthAux": {
+      "current": {
+        "rows": 400874,
+        "physical_key_bytes": 15233212,
+        "wrapped_value_bytes": 7336369,
+        "payload_bytes": 6935495,
+        "logical_bytes": 22569581,
+        "max_payload_bytes": 21
+      }
+    },
+    "AccountFrozenSupplyAux": {
+      "current": {
+        "rows": 1224,
+        "physical_key_bytes": 46512,
+        "wrapped_value_bytes": 22906,
+        "payload_bytes": 21682,
+        "logical_bytes": 69418,
+        "max_payload_bytes": 22
+      }
+    },
+    "AccountPermissionAux": {
+      "current": {
+        "rows": 232738381,
+        "physical_key_bytes": 8611323375,
+        "wrapped_value_bytes": 14320374229,
+        "payload_bytes": 14087635848,
+        "logical_bytes": 22931697604,
+        "max_payload_bytes": 195
+      },
+      "obsolete": {
+        "rows": 6652,
+        "physical_key_bytes": 246124,
+        "wrapped_value_bytes": 409098,
+        "payload_bytes": 402446,
+        "logical_bytes": 655222,
+        "max_payload_bytes": 77
+      }
+    },
+    "AccountResourceAux": {
+      "current": {
+        "rows": 71836091,
+        "physical_key_bytes": 2514263185,
+        "wrapped_value_bytes": 1733922128,
+        "payload_bytes": 1662086037,
+        "logical_bytes": 4248185313,
+        "max_payload_bytes": 53
+      },
+      "obsolete": {
+        "rows": 1,
+        "physical_key_bytes": 35,
+        "wrapped_value_bytes": 24,
+        "payload_bytes": 23,
+        "logical_bytes": 59,
+        "max_payload_bytes": 23
+      }
+    },
+    "AccountVotesAux": {
+      "current": {
+        "rows": 444426,
+        "physical_key_bytes": 16888188,
+        "wrapped_value_bytes": 14036748,
+        "payload_bytes": 13592322,
+        "logical_bytes": 30924936,
+        "max_payload_bytes": 34
+      }
+    },
+    "ContractABI": {
+      "current": {
+        "rows": 620847,
+        "physical_key_bytes": 22971339,
+        "wrapped_value_bytes": 603348258,
+        "payload_bytes": 602728834,
+        "logical_bytes": 626319597,
+        "max_payload_bytes": 34383
+      },
+      "obsolete": {
+        "rows": 52,
+        "physical_key_bytes": 1924,
+        "wrapped_value_bytes": 86004,
+        "payload_bytes": 85952,
+        "logical_bytes": 87928,
+        "max_payload_bytes": 4917
+      }
+    },
+    "ContractMetadata": {
+      "current": {
+        "rows": 1432770,
+        "physical_key_bytes": 54445260,
+        "wrapped_value_bytes": 2276632204,
+        "payload_bytes": 2275199434,
+        "logical_bytes": 2331077464,
+        "max_payload_bytes": 140237
+      },
+      "obsolete": {
+        "rows": 52,
+        "physical_key_bytes": 1976,
+        "wrapped_value_bytes": 452203,
+        "payload_bytes": 452151,
+        "logical_bytes": 454179,
+        "max_payload_bytes": 24689
+      }
+    },
+    "ContractStorage": {
+      "current": {
+        "rows": 400715122,
+        "physical_key_bytes": 26447198052,
+        "wrapped_value_bytes": 4490689535,
+        "payload_bytes": 12822883904,
+        "logical_bytes": 30937887587,
+        "max_payload_bytes": 32
+      },
+      "obsolete": {
+        "rows": 1524014,
+        "physical_key_bytes": 100584924,
+        "wrapped_value_bytes": 11422306,
+        "payload_bytes": 48768448,
+        "logical_bytes": 112007230,
+        "max_payload_bytes": 32
+      }
+    },
+    "SystemAccountIndex": {
+      "current": {
+        "rows": 43760,
+        "physical_key_bytes": 2011408,
+        "wrapped_value_bytes": 962720,
+        "payload_bytes": 918960,
+        "logical_bytes": 2974128,
+        "max_payload_bytes": 21
+      }
+    },
+    "SystemAsset": {
+      "current": {
+        "rows": 25201,
+        "physical_key_bytes": 1150802,
+        "wrapped_value_bytes": 1905960,
+        "payload_bytes": 1924393,
+        "logical_bytes": 3056762,
+        "max_payload_bytes": 510
+      }
+    },
+    "SystemDelegation": {
+      "current": {
+        "rows": 3386674,
+        "physical_key_bytes": 210935548,
+        "wrapped_value_bytes": 210154085,
+        "payload_bytes": 206767411,
+        "logical_bytes": 421089633,
+        "max_payload_bytes": 2822
+      }
+    },
+    "SystemDynamicProperty": {
+      "current": {
+        "rows": 46,
+        "physical_key_bytes": 2533,
+        "wrapped_value_bytes": 501,
+        "payload_bytes": 670,
+        "logical_bytes": 3034,
+        "max_payload_bytes": 128
+      }
+    },
+    "SystemExchange": {
+      "current": {
+        "rows": 330,
+        "physical_key_bytes": 14190,
+        "wrapped_value_bytes": 23843,
+        "payload_bytes": 23513,
+        "logical_bytes": 38033,
+        "max_payload_bytes": 101
+      }
+    },
+    "SystemForkVote": {
+      "current": {
+        "rows": 15,
+        "physical_key_bytes": 615,
+        "wrapped_value_bytes": 420,
+        "payload_bytes": 405,
+        "logical_bytes": 1035,
+        "max_payload_bytes": 27
+      }
+    },
+    "SystemProposal": {
+      "current": {
+        "rows": 74,
+        "physical_key_bytes": 3186,
+        "wrapped_value_bytes": 73135,
+        "payload_bytes": 73061,
+        "logical_bytes": 76321,
+        "max_payload_bytes": 2650
+      }
+    },
+    "SystemReward": {
+      "current": {
+        "rows": 14774545,
+        "physical_key_bytes": 1117448479,
+        "wrapped_value_bytes": 6843759019,
+        "payload_bytes": 6852397191,
+        "logical_bytes": 7961207498,
+        "max_payload_bytes": 17619
+      }
+    },
+    "SystemShielded": {
+      "current": {
+        "rows": 3,
+        "physical_key_bytes": 163,
+        "wrapped_value_bytes": 49,
+        "payload_bytes": 48,
+        "logical_bytes": 212,
+        "max_payload_bytes": 32
+      }
+    },
+    "SystemWitnessSchedule": {
+      "current": {
+        "rows": 2,
+        "physical_key_bytes": 95,
+        "wrapped_value_bytes": 8536,
+        "payload_bytes": 8534,
+        "logical_bytes": 8631,
+        "max_payload_bytes": 7963
+      }
+    },
+    "WitnessCapsule": {
+      "current": {
+        "rows": 590,
+        "physical_key_bytes": 33841,
+        "wrapped_value_bytes": 31460,
+        "payload_bytes": 32406,
+        "logical_bytes": 65301,
+        "max_payload_bytes": 158
+      }
+    },
+    "WitnessVoteState": {
+      "current": {
+        "rows": 1929,
+        "physical_key_bytes": 117571,
+        "wrapped_value_bytes": 138416,
+        "payload_bytes": 136494,
+        "logical_bytes": 255987,
+        "max_payload_bytes": 2692
+      }
+    }
+  },
+  "payload_sizes": {
+    "1..32": {
+      "current": {
+        "rows": 787543027,
+        "physical_key_bytes": 42034610699,
+        "wrapped_value_bytes": 7393781680,
+        "payload_bytes": 17006334666,
+        "logical_bytes": 49428392379,
+        "max_payload_bytes": 32
+      },
+      "obsolete": {
+        "rows": 1524458,
+        "physical_key_bytes": 100603118,
+        "wrapped_value_bytes": 11423926,
+        "payload_bytes": 48772015,
+        "logical_bytes": 112027044,
+        "max_payload_bytes": 32
+      }
+    },
+    "1025..4096": {
+      "current": {
+        "rows": 2016333,
+        "physical_key_bytes": 135666968,
+        "wrapped_value_bytes": 3774718174,
+        "payload_bytes": 3772701841,
+        "logical_bytes": 3910385142,
+        "max_payload_bytes": 4096
+      },
+      "obsolete": {
+        "rows": 41,
+        "physical_key_bytes": 1532,
+        "wrapped_value_bytes": 104252,
+        "payload_bytes": 104211,
+        "logical_bytes": 105784,
+        "max_payload_bytes": 4017
+      }
+    },
+    "129..1024": {
+      "current": {
+        "rows": 8551880,
+        "physical_key_bytes": 661454885,
+        "wrapped_value_bytes": 4558809319,
+        "payload_bytes": 4550257439,
+        "logical_bytes": 5220264204,
+        "max_payload_bytes": 1024
+      },
+      "obsolete": {
+        "rows": 26,
+        "physical_key_bytes": 967,
+        "wrapped_value_bytes": 14509,
+        "payload_bytes": 14483,
+        "logical_bytes": 15476,
+        "max_payload_bytes": 986
+      }
+    },
+    "33..128": {
+      "current": {
+        "rows": 237005854,
+        "physical_key_bytes": 8843799646,
+        "wrapped_value_bytes": 14564434595,
+        "payload_bytes": 14327428741,
+        "logical_bytes": 23408234241,
+        "max_payload_bytes": 128
+      },
+      "obsolete": {
+        "rows": 6654,
+        "physical_key_bytes": 246198,
+        "wrapped_value_bytes": 409267,
+        "payload_bytes": 402613,
+        "logical_bytes": 655465,
+        "max_payload_bytes": 94
+      }
+    },
+    "4097..65536": {
+      "current": {
+        "rows": 162664,
+        "physical_key_bytes": 8271359,
+        "wrapped_value_bytes": 1338773609,
+        "payload_bytes": 1338610945,
+        "logical_bytes": 1347044968,
+        "max_payload_bytes": 65392
+      },
+      "obsolete": {
+        "rows": 35,
+        "physical_key_bytes": 1327,
+        "wrapped_value_bytes": 419277,
+        "payload_bytes": 419242,
+        "logical_bytes": 420604,
+        "max_payload_bytes": 24689
+      }
+    },
+    "65537..1048576": {
+      "current": {
+        "rows": 112,
+        "physical_key_bytes": 4256,
+        "wrapped_value_bytes": 8888850,
+        "payload_bytes": 8888738,
+        "logical_bytes": 8893106,
+        "max_payload_bytes": 140237
+      }
+    }
+  },
+  "stored_generation_buckets": {
+    "0": {
+      "current": {
+        "rows": 1035274049,
+        "physical_key_bytes": 51683587450,
+        "wrapped_value_bytes": 31639119747,
+        "payload_bytes": 41003935446,
+        "logical_bytes": 83322707197,
+        "max_payload_bytes": 140237
+      },
+      "obsolete": {
+        "rows": 1526865,
+        "physical_key_bytes": 100691537,
+        "wrapped_value_bytes": 12113766,
+        "payload_bytes": 49458532,
+        "logical_bytes": 112805303,
+        "max_payload_bytes": 24689
+      }
+    },
+    "1": {
+      "current": {
+        "rows": 4834,
+        "physical_key_bytes": 183536,
+        "wrapped_value_bytes": 230221,
+        "payload_bytes": 231253,
+        "logical_bytes": 413757,
+        "max_payload_bytes": 77
+      },
+      "obsolete": {
+        "rows": 843,
+        "physical_key_bytes": 31283,
+        "wrapped_value_bytes": 50518,
+        "payload_bytes": 49794,
+        "logical_bytes": 81801,
+        "max_payload_bytes": 77
+      }
+    },
+    "16..255": {
+      "current": {
+        "rows": 44,
+        "physical_key_bytes": 1628,
+        "wrapped_value_bytes": 2706,
+        "payload_bytes": 2662,
+        "logical_bytes": 4334,
+        "max_payload_bytes": 77
+      },
+      "obsolete": {
+        "rows": 1180,
+        "physical_key_bytes": 43820,
+        "wrapped_value_bytes": 70264,
+        "payload_bytes": 69290,
+        "logical_bytes": 114084,
+        "max_payload_bytes": 77
+      }
+    },
+    "2..3": {
+      "current": {
+        "rows": 545,
+        "physical_key_bytes": 20337,
+        "wrapped_value_bytes": 31037,
+        "payload_bytes": 30715,
+        "logical_bytes": 51374,
+        "max_payload_bytes": 77
+      },
+      "obsolete": {
+        "rows": 934,
+        "physical_key_bytes": 34718,
+        "wrapped_value_bytes": 55124,
+        "payload_bytes": 54407,
+        "logical_bytes": 89842,
+        "max_payload_bytes": 77
+      }
+    },
+    "256+": {
+      "current": {
+        "rows": 2,
+        "physical_key_bytes": 74,
+        "wrapped_value_bytes": 123,
+        "payload_bytes": 121,
+        "logical_bytes": 197,
+        "max_payload_bytes": 77
+      },
+      "obsolete": {
+        "rows": 10,
+        "physical_key_bytes": 370,
+        "wrapped_value_bytes": 615,
+        "payload_bytes": 605,
+        "logical_bytes": 985,
+        "max_payload_bytes": 77
+      }
+    },
+    "4..15": {
+      "current": {
+        "rows": 396,
+        "physical_key_bytes": 14788,
+        "wrapped_value_bytes": 22393,
+        "payload_bytes": 22173,
+        "logical_bytes": 37181,
+        "max_payload_bytes": 77
+      },
+      "obsolete": {
+        "rows": 1382,
+        "physical_key_bytes": 51414,
+        "wrapped_value_bytes": 80944,
+        "payload_bytes": 79936,
+        "logical_bytes": 132358,
+        "max_payload_bytes": 77
+      }
+    }
+  },
+  "owners_with_kv": 119450391,
+  "owners_with_obsolete": 1434,
+  "owners_with_future": 0,
+  "owners_without_explicit_generation": 119400051,
+  "inactive_owners_without_account": 1081,
+  "top_obsolete_owners": [
+    {
+      "owner": [
+        65,
+        117,
+        152,
+        34,
+        40,
+        178,
+        71,
+        100,
+        16,
+        80,
+        49,
+        186,
+        247,
+        62,
+        37,
+        236,
+        73,
+        17,
+        80,
+        255,
+        17
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 1333355,
+        "physical_key_bytes": 88000873,
+        "wrapped_value_bytes": 9568947,
+        "payload_bytes": 42691129,
+        "logical_bytes": 97569820,
+        "max_payload_bytes": 19565
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        180,
+        143,
+        241,
+        16,
+        123,
+        73,
+        140,
+        160,
+        50,
+        255,
+        18,
+        201,
+        32,
+        4,
+        188,
+        18,
+        48,
+        207,
+        92,
+        158
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 180942,
+        "physical_key_bytes": 11942064,
+        "wrapped_value_bytes": 1767144,
+        "payload_bytes": 5799472,
+        "logical_bytes": 13709208,
+        "max_payload_bytes": 7757
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        194,
+        74,
+        24,
+        199,
+        249,
+        39,
+        129,
+        218,
+        4,
+        140,
+        5,
+        208,
+        138,
+        138,
+        79,
+        48,
+        19,
+        235,
+        248,
+        110
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 3002,
+        "physical_key_bytes": 197875,
+        "wrapped_value_bytes": 72277,
+        "payload_bytes": 105246,
+        "logical_bytes": 270152,
+        "max_payload_bytes": 8163
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        79,
+        192,
+        190,
+        181,
+        25,
+        197,
+        244,
+        210,
+        201,
+        218,
+        49,
+        231,
+        3,
+        168,
+        116,
+        111,
+        52,
+        139,
+        149,
+        110
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 1463,
+        "physical_key_bytes": 96426,
+        "wrapped_value_bytes": 34603,
+        "payload_bytes": 73924,
+        "logical_bytes": 131029,
+        "max_payload_bytes": 22327
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        74,
+        181,
+        112,
+        100,
+        248,
+        127,
+        228,
+        244,
+        10,
+        137,
+        68,
+        47,
+        216,
+        190,
+        144,
+        97,
+        176,
+        169,
+        222,
+        229
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 1543,
+        "physical_key_bytes": 101781,
+        "wrapped_value_bytes": 28648,
+        "payload_bytes": 68574,
+        "logical_bytes": 130429,
+        "max_payload_bytes": 15793
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        56,
+        81,
+        186,
+        132,
+        96,
+        97,
+        105,
+        44,
+        48,
+        4,
+        33,
+        152,
+        121,
+        64,
+        250,
+        18,
+        131,
+        43,
+        54,
+        90
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 918,
+        "physical_key_bytes": 60356,
+        "wrapped_value_bytes": 13154,
+        "payload_bytes": 37850,
+        "logical_bytes": 73510,
+        "max_payload_bytes": 6574
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        36,
+        165,
+        166,
+        35,
+        79,
+        82,
+        18,
+        172,
+        28,
+        117,
+        148,
+        153,
+        77,
+        246,
+        157,
+        172,
+        5,
+        209,
+        163,
+        180
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 530,
+        "physical_key_bytes": 34898,
+        "wrapped_value_bytes": 32819,
+        "payload_bytes": 34878,
+        "logical_bytes": 67717,
+        "max_payload_bytes": 16267
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        247,
+        35,
+        96,
+        189,
+        45,
+        2,
+        208,
+        143,
+        10,
+        54,
+        63,
+        226,
+        208,
+        52,
+        104,
+        86,
+        148,
+        90,
+        159,
+        149
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 711,
+        "physical_key_bytes": 46844,
+        "wrapped_value_bytes": 16732,
+        "payload_bytes": 35823,
+        "logical_bytes": 63576,
+        "max_payload_bytes": 10414
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        8,
+        92,
+        98,
+        41,
+        242,
+        106,
+        231,
+        49,
+        198,
+        195,
+        217,
+        27,
+        179,
+        184,
+        136,
+        97,
+        118,
+        53,
+        124,
+        16
+      ],
+      "current_generation": 261,
+      "explicit_generation": true,
+      "account_present": false,
+      "obsolete": {
+        "rows": 522,
+        "physical_key_bytes": 19322,
+        "wrapped_value_bytes": 31989,
+        "payload_bytes": 31476,
+        "logical_bytes": 51311,
+        "max_payload_bytes": 77
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        38,
+        153,
+        125,
+        159,
+        139,
+        85,
+        153,
+        203,
+        49,
+        108,
+        39,
+        167,
+        199,
+        100,
+        234,
+        169,
+        106,
+        172,
+        150,
+        41
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 513,
+        "physical_key_bytes": 33801,
+        "wrapped_value_bytes": 7840,
+        "payload_bytes": 20322,
+        "logical_bytes": 41641,
+        "max_payload_bytes": 2894
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        90,
+        158,
+        159,
+        79,
+        197,
+        28,
+        51,
+        22,
+        157,
+        244,
+        168,
+        57,
+        59,
+        199,
+        0,
+        128,
+        240,
+        217,
+        88,
+        227
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 140,
+        "physical_key_bytes": 9183,
+        "wrapped_value_bytes": 32248,
+        "payload_bytes": 32543,
+        "logical_bytes": 41431,
+        "max_payload_bytes": 24689
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        73,
+        90,
+        105,
+        106,
+        96,
+        156,
+        123,
+        126,
+        14,
+        144,
+        20,
+        153,
+        161,
+        238,
+        253,
+        18,
+        211,
+        247,
+        240,
+        238
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 29,
+        "physical_key_bytes": 1832,
+        "wrapped_value_bytes": 27360,
+        "payload_bytes": 27980,
+        "logical_bytes": 29192,
+        "max_payload_bytes": 22592
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        211,
+        29,
+        58,
+        72,
+        7,
+        130,
+        26,
+        98,
+        204,
+        90,
+        115,
+        137,
+        191,
+        213,
+        104,
+        96,
+        165,
+        243,
+        183,
+        252
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 15,
+        "physical_key_bytes": 908,
+        "wrapped_value_bytes": 28145,
+        "payload_bytes": 28321,
+        "logical_bytes": 29053,
+        "max_payload_bytes": 24428
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        94,
+        104,
+        203,
+        21,
+        80,
+        143,
+        139,
+        250,
+        66,
+        242,
+        221,
+        72,
+        233,
+        36,
+        16,
+        89,
+        240,
+        151,
+        10,
+        255
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 56,
+        "physical_key_bytes": 3639,
+        "wrapped_value_bytes": 24044,
+        "payload_bytes": 24948,
+        "logical_bytes": 27683,
+        "max_payload_bytes": 19335
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        56,
+        236,
+        154,
+        229,
+        115,
+        214,
+        248,
+        124,
+        24,
+        34,
+        162,
+        2,
+        115,
+        119,
+        44,
+        173,
+        223,
+        207,
+        177,
+        222
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 85,
+        "physical_key_bytes": 5553,
+        "wrapped_value_bytes": 21597,
+        "payload_bytes": 23856,
+        "logical_bytes": 27150,
+        "max_payload_bytes": 19104
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        140,
+        181,
+        206,
+        100,
+        73,
+        103,
+        94,
+        132,
+        7,
+        182,
+        170,
+        196,
+        46,
+        139,
+        250,
+        100,
+        59,
+        230,
+        38,
+        126
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 117,
+        "physical_key_bytes": 7665,
+        "wrapped_value_bytes": 17128,
+        "payload_bytes": 20408,
+        "logical_bytes": 24793,
+        "max_payload_bytes": 14459
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        255,
+        66,
+        189,
+        172,
+        159,
+        52,
+        187,
+        97,
+        6,
+        62,
+        129,
+        87,
+        131,
+        155,
+        16,
+        92,
+        237,
+        52,
+        84,
+        234
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 247,
+        "physical_key_bytes": 16142,
+        "wrapped_value_bytes": 8256,
+        "payload_bytes": 13207,
+        "logical_bytes": 24398,
+        "max_payload_bytes": 4017
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        120,
+        37,
+        48,
+        193,
+        87,
+        243,
+        181,
+        123,
+        63,
+        203,
+        4,
+        220,
+        94,
+        230,
+        75,
+        80,
+        96,
+        138,
+        190,
+        122
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 45,
+        "physical_key_bytes": 2882,
+        "wrapped_value_bytes": 18925,
+        "payload_bytes": 19129,
+        "logical_bytes": 21807,
+        "max_payload_bytes": 16023
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        181,
+        105,
+        71,
+        138,
+        146,
+        0,
+        57,
+        35,
+        202,
+        187,
+        94,
+        164,
+        95,
+        223,
+        43,
+        161,
+        75,
+        125,
+        156,
+        174
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 15,
+        "physical_key_bytes": 908,
+        "wrapped_value_bytes": 20010,
+        "payload_bytes": 20216,
+        "logical_bytes": 20918,
+        "max_payload_bytes": 16621
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        59,
+        186,
+        183,
+        248,
+        86,
+        194,
+        58,
+        151,
+        31,
+        128,
+        188,
+        160,
+        190,
+        60,
+        221,
+        170,
+        197,
+        58,
+        123,
+        99
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 64,
+        "physical_key_bytes": 4167,
+        "wrapped_value_bytes": 15309,
+        "payload_bytes": 16840,
+        "logical_bytes": 19476,
+        "max_payload_bytes": 11711
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        85,
+        119,
+        2,
+        97,
+        39,
+        204,
+        2,
+        100,
+        26,
+        197,
+        172,
+        122,
+        43,
+        83,
+        253,
+        191,
+        30,
+        148,
+        64,
+        35
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 50,
+        "physical_key_bytes": 3243,
+        "wrapped_value_bytes": 15075,
+        "payload_bytes": 16431,
+        "logical_bytes": 18318,
+        "max_payload_bytes": 12723
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        157,
+        106,
+        144,
+        160,
+        31,
+        155,
+        64,
+        194,
+        25,
+        83,
+        211,
+        130,
+        145,
+        132,
+        194,
+        132,
+        215,
+        130,
+        187,
+        13
+      ],
+      "current_generation": 92,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 188,
+        "physical_key_bytes": 6972,
+        "wrapped_value_bytes": 11331,
+        "payload_bytes": 11164,
+        "logical_bytes": 18303,
+        "max_payload_bytes": 77
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        220,
+        31,
+        20,
+        210,
+        220,
+        87,
+        8,
+        62,
+        175,
+        154,
+        245,
+        155,
+        89,
+        185,
+        44,
+        169,
+        191,
+        19,
+        125,
+        158
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 90,
+        "physical_key_bytes": 5883,
+        "wrapped_value_bytes": 10322,
+        "payload_bytes": 11918,
+        "logical_bytes": 16205,
+        "max_payload_bytes": 7519
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        47,
+        64,
+        124,
+        8,
+        232,
+        34,
+        185,
+        1,
+        254,
+        82,
+        47,
+        140,
+        199,
+        215,
+        230,
+        190,
+        154,
+        210,
+        226,
+        226
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 40,
+        "physical_key_bytes": 2483,
+        "wrapped_value_bytes": 13295,
+        "payload_bytes": 14294,
+        "logical_bytes": 15778,
+        "max_payload_bytes": 9959
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        175,
+        182,
+        35,
+        133,
+        38,
+        86,
+        165,
+        33,
+        14,
+        70,
+        82,
+        16,
+        8,
+        206,
+        104,
+        180,
+        227,
+        69,
+        32,
+        163
+      ],
+      "current_generation": 75,
+      "explicit_generation": true,
+      "account_present": false,
+      "obsolete": {
+        "rows": 156,
+        "physical_key_bytes": 5796,
+        "wrapped_value_bytes": 9246,
+        "payload_bytes": 9123,
+        "logical_bytes": 15042,
+        "max_payload_bytes": 77
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        190,
+        13,
+        242,
+        243,
+        196,
+        164,
+        92,
+        142,
+        154,
+        147,
+        212,
+        139,
+        231,
+        241,
+        95,
+        179,
+        64,
+        246,
+        35,
+        245
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 11,
+        "physical_key_bytes": 594,
+        "wrapped_value_bytes": 14157,
+        "payload_bytes": 14317,
+        "logical_bytes": 14751,
+        "max_payload_bytes": 12012
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        174,
+        216,
+        167,
+        236,
+        132,
+        246,
+        65,
+        82,
+        200,
+        200,
+        207,
+        155,
+        134,
+        98,
+        21,
+        247,
+        130,
+        211,
+        173,
+        238
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 7,
+        "physical_key_bytes": 355,
+        "wrapped_value_bytes": 14260,
+        "payload_bytes": 14337,
+        "logical_bytes": 14615,
+        "max_payload_bytes": 12136
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        222,
+        121,
+        25,
+        51,
+        31,
+        181,
+        95,
+        120,
+        18,
+        96,
+        36,
+        50,
+        243,
+        36,
+        76,
+        117,
+        160,
+        141,
+        29,
+        12
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 14,
+        "physical_key_bytes": 867,
+        "wrapped_value_bytes": 12996,
+        "payload_bytes": 13201,
+        "logical_bytes": 13863,
+        "max_payload_bytes": 11965
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        161,
+        17,
+        153,
+        165,
+        87,
+        177,
+        130,
+        79,
+        58,
+        52,
+        236,
+        242,
+        192,
+        150,
+        55,
+        46,
+        0,
+        253,
+        156,
+        72
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 17,
+        "physical_key_bytes": 1065,
+        "wrapped_value_bytes": 12112,
+        "payload_bytes": 12515,
+        "logical_bytes": 13177,
+        "max_payload_bytes": 9560
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        196,
+        227,
+        112,
+        143,
+        194,
+        247,
+        209,
+        35,
+        47,
+        114,
+        228,
+        210,
+        232,
+        138,
+        167,
+        203,
+        255,
+        245,
+        195,
+        221
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 17,
+        "physical_key_bytes": 1065,
+        "wrapped_value_bytes": 12112,
+        "payload_bytes": 12515,
+        "logical_bytes": 13177,
+        "max_payload_bytes": 9560
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        66,
+        32,
+        68,
+        170,
+        90,
+        192,
+        184,
+        198,
+        31,
+        218,
+        201,
+        226,
+        95,
+        53,
+        104,
+        44,
+        1,
+        196,
+        136,
+        193
+      ],
+      "current_generation": 1,
+      "explicit_generation": true,
+      "account_present": true,
+      "obsolete": {
+        "rows": 8,
+        "physical_key_bytes": 446,
+        "wrapped_value_bytes": 11782,
+        "payload_bytes": 11885,
+        "logical_bytes": 12228,
+        "max_payload_bytes": 10272
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    },
+    {
+      "owner": [
+        65,
+        252,
+        41,
+        229,
+        18,
+        134,
+        254,
+        73,
+        103,
+        7,
+        169,
+        241,
+        72,
+        95,
+        9,
+        120,
+        213,
+        133,
+        221,
+        184,
+        211
+      ],
+      "current_generation": 57,
+      "explicit_generation": true,
+      "account_present": false,
+      "obsolete": {
+        "rows": 118,
+        "physical_key_bytes": 4382,
+        "wrapped_value_bytes": 7026,
+        "payload_bytes": 6929,
+        "logical_bytes": 11408,
+        "max_payload_bytes": 77
+      },
+      "future": {
+        "rows": 0,
+        "physical_key_bytes": 0,
+        "wrapped_value_bytes": 0,
+        "payload_bytes": 0,
+        "logical_bytes": 0,
+        "max_payload_bytes": 0
+      }
+    }
+  ]
+}

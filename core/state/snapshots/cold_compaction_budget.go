@@ -24,6 +24,7 @@ type historyCompactionBudgetState struct {
 	inputCosts           *historyCompactionCostCache
 	outerMetrics         *historyCompactionOuterMetrics
 	routingRetiredCursor retiredMetadataSweepCursor
+	systemRouting        systemRoutingRefreshState
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -192,7 +193,22 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			}
 			r.compactionBudget.routingRetiredCursor = pruned.Next
 		}
-		built, routeErr := refreshSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		built, routeErr := refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		if routeErr != nil {
+			return total, routeErr
+		}
+		if built {
+			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+		}
+		r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
+		built, routeErr = refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		if routeErr != nil {
+			return total, routeErr
+		}
+		if built {
+			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+		}
+		built, routeErr = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
 		if routeErr != nil {
 			return total, routeErr
 		}

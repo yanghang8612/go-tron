@@ -1,0 +1,61 @@
+File: candidate.test
+Build ID: 751d7fabd505ff80ac29b877df913040bfc011dd
+Type: cpu
+Time: 2026-10-27 12:52:06 UTC
+Duration: 41.41s, Total samples = 6.91s (16.69%)
+Active filters:
+   focus=FirstStateDomainChangesContext
+Showing nodes accounting for 4.61s, 66.71% of 6.91s total
+Dropped 123 nodes (cum <= 0.03s)
+Showing top 50 nodes out of 149
+      flat  flat%   sum%        cum   cum%
+     2.79s 40.38% 40.38%      2.79s 40.38%  internal/runtime/syscall.Syscall6
+     0.38s  5.50% 45.88%      0.38s  5.50%  github.com/klauspost/compress/zstd.sequenceDecs_decodeSync_safe_bmi2
+     0.27s  3.91% 49.78%      0.27s  3.91%  crypto/internal/fips140/sha256.blockAVX2
+     0.16s  2.32% 52.10%      0.16s  2.32%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     0.15s  2.17% 54.27%      0.15s  2.17%  runtime.memclrNoHeapPointers
+     0.09s  1.30% 55.57%      0.09s  1.30%  runtime.memmove
+     0.05s  0.72% 56.30%      0.05s  0.72%  cmpbody
+     0.05s  0.72% 57.02%      0.06s  0.87%  github.com/tronprotocol/go-tron/core/state/snapshots.decodeHistoryRoutingFamilySelected
+     0.05s  0.72% 57.74%      0.28s  4.05%  runtime.mallocgcSmallNoscan
+     0.04s  0.58% 58.32%      0.04s  0.58%  runtime.futex
+     0.04s  0.58% 58.90%      0.04s  0.58%  runtime.nextFreeFast (inline)
+     0.03s  0.43% 59.33%      0.03s  0.43%  github.com/klauspost/compress/zstd/internal/xxhash.writeBlocks
+     0.03s  0.43% 59.77%      0.78s 11.29%  github.com/tronprotocol/go-tron/core/state/snapshots.stateDomainChangeBinaryAccessorV6ReadBlock
+     0.03s  0.43% 60.20%      0.10s  1.45%  runtime.exitsyscall
+     0.03s  0.43% 60.64%      0.03s  0.43%  runtime.lock2
+     0.03s  0.43% 61.07%      0.48s  6.95%  runtime.mallocgc
+     0.02s  0.29% 61.36%      0.03s  0.43%  encoding/binary.ReadUvarint
+     0.02s  0.29% 61.65%      2.35s 34.01%  github.com/tronprotocol/go-tron/core/state/snapshots.contextReaderAt.ReadAt
+     0.02s  0.29% 61.94%      0.10s  1.45%  io.ReadAtLeast
+     0.02s  0.29% 62.23%      2.03s 29.38%  os.(*File).ReadAt
+     0.02s  0.29% 62.52%      0.03s  0.43%  runtime.(*unwinder).resolveInternal
+     0.02s  0.29% 62.81%      0.03s  0.43%  runtime.casgstatus
+     0.02s  0.29% 63.10%         2s 28.94%  syscall.pread
+     0.01s  0.14% 63.24%      0.30s  4.34%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.01s  0.14% 63.39%      0.50s  7.24%  github.com/klauspost/compress/zstd.(*frameDec).runDecoder
+     0.01s  0.14% 63.53%      0.03s  0.43%  github.com/klauspost/compress/zstd.(*fseDecoder).readNCount
+     0.01s  0.14% 63.68%      5.19s 75.11%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.01s  0.14% 63.82%      0.41s  5.93%  github.com/tronprotocol/go-tron/core/state/snapshots.decodeHistoryTxFooter
+     0.01s  0.14% 63.97%      4.73s 68.45%  github.com/tronprotocol/go-tron/core/state/snapshots.iterateStateDomainChangeBinarySegmentByAccessorKeysFile
+     0.01s  0.14% 64.11%      1.69s 24.46%  github.com/tronprotocol/go-tron/core/state/snapshots.openHistorySegmentForReadContext
+     0.01s  0.14% 64.25%      1.33s 19.25%  github.com/tronprotocol/go-tron/core/state/snapshots.openStateDomainChangeBinaryAccessorReaderContext
+     0.01s  0.14% 64.40%      0.24s  3.47%  github.com/tronprotocol/go-tron/core/state/snapshots.readCompressedBlockFooterLayoutContext
+     0.01s  0.14% 64.54%      0.27s  3.91%  github.com/tronprotocol/go-tron/core/state/snapshots.readHistoryAccessorDirectoryGroup
+     0.01s  0.14% 64.69%      0.20s  2.89%  github.com/tronprotocol/go-tron/core/state/snapshots.readHistoryAccessorSparseDirectory
+     0.01s  0.14% 64.83%      0.14s  2.03%  github.com/tronprotocol/go-tron/core/state/snapshots.systemHistoryRoutingPairID
+     0.01s  0.14% 64.98%      0.03s  0.43%  github.com/tronprotocol/go-tron/core/state/snapshots.validateSegmentRef
+     0.01s  0.14% 65.12%      0.17s  2.46%  golang.org/x/crypto/blake2b.checkSum
+     0.01s  0.14% 65.27%      0.03s  0.43%  hash/crc32.ChecksumIEEE
+     0.01s  0.14% 65.41%      0.03s  0.43%  hash/crc32.slicingUpdate
+     0.01s  0.14% 65.56%      0.12s  1.74%  os.(*File).Stat
+     0.01s  0.14% 65.70%      0.17s  2.46%  os.open
+     0.01s  0.14% 65.85%      0.77s 11.14%  os.openFileNolog
+     0.01s  0.14% 65.99%      0.18s  2.60%  os.openFileNolog.func1 (inline)
+     0.01s  0.14% 66.14%      0.03s  0.43%  runtime.(*mheap).initSpan
+     0.01s  0.14% 66.28%      0.31s  4.49%  runtime.makeslice
+     0.01s  0.14% 66.43%      0.08s  1.16%  runtime.newobject
+     0.01s  0.14% 66.57%      0.12s  1.74%  syscall.Close
+     0.01s  0.14% 66.71%      2.73s 39.51%  syscall.RawSyscall6
+         0     0% 66.71%      0.05s  0.72%  bufio.(*Reader).Read
+         0     0% 66.71%      0.05s  0.72%  bytes.Compare (inline)

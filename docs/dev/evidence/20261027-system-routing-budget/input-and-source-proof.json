@@ -1,0 +1,73 @@
+{
+  "utc": "2026-10-27T09:36:53.587323+00:00",
+  "original_catalog_sha256": "d288ad01ab3a46369da5b440da3890c3bee4575c3750eb489e67048aaf7d98e7",
+  "fixed_http_manifest_sha256": "39229204d68a8cb527b00178c25d111e15e6fdc25895bb6024c126289eaf0331",
+  "canonical_source_catalog_refs": 149059,
+  "manifests": {
+    "baseline": {
+      "sha256": "d288ad01ab3a46369da5b440da3890c3bee4575c3750eb489e67048aaf7d98e7",
+      "canonical_equal": true,
+      "metadata_frontiers_equal": true,
+      "route": {
+        "rows": 951169,
+        "dataset": "state-domain-change",
+        "kind": "system-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 3006279261,
+        "path": "history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        "size": 66948766,
+        "checksum": "sha256:a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de"
+      },
+      "active_sources": 27893
+    },
+    "candidate": {
+      "sha256": "2cd3824bee57d355bcb4a4b02f502fcc5176ecdd1013df61f41232a209dd05a4",
+      "canonical_equal": true,
+      "metadata_frontiers_equal": true,
+      "route": {
+        "rows": 953569,
+        "dataset": "state-domain-change",
+        "kind": "system-history-routing",
+        "fromTxNum": 1,
+        "toTxNum": 3011016073,
+        "path": "history/system-routing-1-3011016073-1e0bd468f73958cb8a22c7999777ea2ef302da5aa8a6e6ebc1cf7317e9912ff6.route",
+        "size": 67107202,
+        "checksum": "sha256:1e0bd468f73958cb8a22c7999777ea2ef302da5aa8a6e6ebc1cf7317e9912ff6"
+      },
+      "active_sources": 27893
+    }
+  },
+  "source_sha256": {
+    "baseline": {
+      "core/state/snapshots/aggregator.go": "da748638bb45a2d7f3fda4a0462061c1b2b69ae0ae55f50e985e8e74a4056298",
+      "core/state/snapshots/cold_compaction_budget.go": "8c95c7741a91a8c8d84450f2e34da71b22db9b4604a01589169e19deecf58ff3",
+      "core/state/snapshots/domain_registry.go": "3bc8cf32d5187da1a270303ca14ded6ce3ae20e1566a1fd87587b1d11cbc839b",
+      "core/state/snapshots/history_routing_retired.go": "0112eaeb20a52eaa3454b771eb411cdd5e7130cb0115ba0135ce13cecf512fd0",
+      "core/state/snapshots/history_segment.go": "a101fb51d71b20fd676bee5fe2822d460ab3fbd31bf418370f90665060673afd",
+      "core/state/snapshots/history_system_routing.go": "9f151cc197cbffa19754769c714e5b5e783218c2809543b84d0f3f6911159bc9",
+      "core/state/snapshots/manifest.go": "c84185f1be39f4ec35771f945621c101776e64fd48fb74ec3ce15da90b218e5b",
+      "core/state/snapshots/manifest_verify.go": "250202c52b339f44486586009e00181f0f21efb54e995ba9b0fa35f18c539267",
+      "core/state/snapshots/history_small_system_routing.go": "6eafbcd4af750a4997d3eb63ef5345f0020050345c15aca2f6497a617ec2a83d",
+      "core/state/snapshots/zz_offline_budget_test.go": "415f5afe254ffdac31d115643cc91ce5008f5e7902fd3f1d0727bdeaf3af057c",
+      "core/state/snapshots/zz_offline_budget_adapter_test.go": "b099d9672d88ec55a1d5a899691a01ac66b72dbe8194c99de0e3e48e008f8a1c"
+    },
+    "candidate": {
+      "core/state/snapshots/aggregator.go": "da748638bb45a2d7f3fda4a0462061c1b2b69ae0ae55f50e985e8e74a4056298",
+      "core/state/snapshots/cold_compaction_budget.go": "092f533be166eedf480a388d48be21d2a3f0df30dcc9e79c5fe4c63c545b3566",
+      "core/state/snapshots/domain_registry.go": "3bc8cf32d5187da1a270303ca14ded6ce3ae20e1566a1fd87587b1d11cbc839b",
+      "core/state/snapshots/history_routing_retired.go": "0112eaeb20a52eaa3454b771eb411cdd5e7130cb0115ba0135ce13cecf512fd0",
+      "core/state/snapshots/history_segment.go": "a101fb51d71b20fd676bee5fe2822d460ab3fbd31bf418370f90665060673afd",
+      "core/state/snapshots/history_system_routing.go": "572a60b5705a2fa7b4edecf09c8455454cf960cb8faf43060b654ae91c0256c2",
+      "core/state/snapshots/manifest.go": "c84185f1be39f4ec35771f945621c101776e64fd48fb74ec3ce15da90b218e5b",
+      "core/state/snapshots/manifest_verify.go": "250202c52b339f44486586009e00181f0f21efb54e995ba9b0fa35f18c539267",
+      "core/state/snapshots/history_small_system_routing.go": "6eafbcd4af750a4997d3eb63ef5345f0020050345c15aca2f6497a617ec2a83d",
+      "core/state/snapshots/history_system_routing_policy.go": "23d560fd2495ab0bfa7019c1d9e484396346d838ddf1e556cc8a4dccbae5ca3b",
+      "core/state/snapshots/zz_offline_budget_test.go": "415f5afe254ffdac31d115643cc91ce5008f5e7902fd3f1d0727bdeaf3af057c",
+      "core/state/snapshots/zz_offline_budget_adapter_test.go": "8c68bd0eac3fdf0bee98c694355337a3943bb9fd3e4f4f10acd3e5f2e76f84ea",
+      "core/state/snapshots/history_system_routing_policy_test.go": "2d816d543a0e7602fe4edeae349732a4d1a0ae33084b632d0d5b37c901de23fa"
+    }
+  },
+  "scope": "incremental old-membership equality plus new-source dictionary authentication; no new full 217 GB old-dictionary census",
+  "go_version": "go version go1.25.5 linux/amd64",
+  "resource_unit": "CPUQuota=200%, MemoryLimit=6G, Nice=15; GOMAXPROCS=2; HTTP GOMEMLIMIT=3GiB, maintenance=2GiB"
+}

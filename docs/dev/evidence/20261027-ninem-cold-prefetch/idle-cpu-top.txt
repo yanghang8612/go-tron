@@ -1,0 +1,59 @@
+File: gtron
+Build ID: 1ec52a93cf5a6fe792fda0eb3ebbb4fe89c2116d
+Type: cpu
+Time: 2026-10-27 19:25:53 CST
+Duration: 8.10s, Total samples = 38.46s (474.87%)
+Showing nodes accounting for 25.04s, 65.11% of 38.46s total
+Dropped 1727 nodes (cum <= 0.19s)
+Showing top 50 nodes out of 440
+      flat  flat%   sum%        cum   cum%
+     6.36s 16.54% 16.54%      6.37s 16.56%  runtime.cgocall
+     1.88s  4.89% 21.42%      1.88s  4.89%  internal/runtime/syscall.Syscall6
+     1.30s  3.38% 24.80%      1.30s  3.38%  runtime.memmove
+     1.28s  3.33% 28.13%      1.28s  3.33%  runtime.duffcopy
+     1.12s  2.91% 31.05%      1.12s  2.91%  crypto/internal/fips140/sha256.blockAVX2
+     1.09s  2.83% 33.88%      1.09s  2.83%  cmpbody
+     1.08s  2.81% 36.69%      1.28s  3.33%  runtime.findObject
+     0.84s  2.18% 38.87%      0.84s  2.18%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.72s  1.87% 40.74%      2.66s  6.92%  runtime.scanobject
+     0.62s  1.61% 42.36%      0.62s  1.61%  aeshashbody
+     0.56s  1.46% 43.81%      0.56s  1.46%  runtime.memclrNoHeapPointers
+     0.53s  1.38% 45.19%      0.53s  1.38%  memeqbody
+     0.52s  1.35% 46.54%      0.85s  2.21%  github.com/cockroachdb/pebble/sstable.(*blockWriter).storeWithOptionalValuePrefix
+     0.50s  1.30% 47.84%      0.57s  1.48%  github.com/klauspost/compress/zstd.(*doubleFastEncoder).EncodeNoHist
+     0.49s  1.27% 49.12%      0.49s  1.27%  math/big.addMulVVWW
+     0.48s  1.25% 50.36%      0.48s  1.25%  sync/atomic.(*Int32).Add (inline)
+     0.37s  0.96% 51.33%      0.37s  0.96%  github.com/cockroachdb/pebble/bloom.hash
+     0.33s  0.86% 52.18%      0.34s  0.88%  github.com/cockroachdb/pebble/bloom.(*tableFilterWriter).Finish
+     0.31s  0.81% 52.99%      0.33s  0.86%  github.com/cockroachdb/pebble/sstable.(*singleLevelIterator).recordOffset (inline)
+     0.30s  0.78% 53.77%      0.85s  2.21%  runtime.mapaccess2_faststr
+     0.27s   0.7% 54.47%      0.27s   0.7%  runtime.(*gcBits).bitp (inline)
+     0.26s  0.68% 55.15%      0.26s  0.68%  golang.org/x/crypto/chacha20.quarterRound (inline)
+     0.25s  0.65% 55.80%      0.74s  1.92%  math/big.basicMul
+     0.24s  0.62% 56.42%      0.24s  0.62%  runtime.madvise
+     0.22s  0.57% 56.99%      0.41s  1.07%  github.com/cockroachdb/pebble/internal/arenaskl.(*Skiplist).findSpliceForLevel
+     0.22s  0.57% 57.57%      0.36s  0.94%  github.com/cockroachdb/pebble/sstable.(*blockIter).readEntry
+     0.21s  0.55% 58.11%      0.22s  0.57%  github.com/tronprotocol/go-tron/core/blockbuffer.(*layerBloom).mayContainHash
+     0.19s  0.49% 58.61%      2.68s  6.97%  github.com/cockroachdb/pebble/sstable.(*Writer).addPoint
+     0.18s  0.47% 59.07%      0.27s   0.7%  github.com/cockroachdb/pebble.(*mergingIter).findNextEntry
+     0.18s  0.47% 59.54%      0.54s  1.40%  github.com/cockroachdb/pebble/sstable.(*blockIter).Next
+     0.17s  0.44% 59.98%      3.19s  8.29%  github.com/cockroachdb/pebble.(*compactionIter).Next
+     0.17s  0.44% 60.43%      2.59s  6.73%  github.com/cockroachdb/pebble.(*compactionIter).nextInStripeHelper
+     0.15s  0.39% 60.82%      0.47s  1.22%  github.com/cockroachdb/pebble/sstable.(*blockIter).SeekGE
+     0.15s  0.39% 61.21%      0.28s  0.73%  github.com/tronprotocol/go-tron/core/blockbuffer.(*baseReadCacheShard).evictOne
+     0.13s  0.34% 61.54%      1.25s  3.25%  runtime.mallocgc
+     0.12s  0.31% 61.86%      0.28s  0.73%  github.com/cockroachdb/pebble/internal/manifest.(*LevelIterator).SeekGE.func1
+     0.12s  0.31% 62.17%      0.22s  0.57%  internal/runtime/maps.(*Iter).Next
+     0.10s  0.26% 62.43%      0.95s  2.47%  bytes.Compare
+     0.10s  0.26% 62.69%      0.33s  0.86%  github.com/cockroachdb/pebble.(*compactionIter).saveKey
+     0.09s  0.23% 62.92%      2.26s  5.88%  github.com/cockroachdb/pebble.(*compactionIter).iterNext
+     0.09s  0.23% 63.16%      1.86s  4.84%  github.com/cockroachdb/pebble.(*mergingIter).nextEntry
+     0.09s  0.23% 63.39%      0.47s  1.22%  github.com/cockroachdb/pebble/internal/cache.(*shard).Get
+     0.09s  0.23% 63.62%      0.32s  0.83%  github.com/tronprotocol/go-tron/core/blockbuffer.(*predecessorState).walk
+     0.09s  0.23% 63.86%      0.38s  0.99%  golang.org/x/crypto/chacha20.(*Cipher).xorKeyStreamBlocksGeneric
+     0.08s  0.21% 64.07%      0.43s  1.12%  encoding/json.structEncoder.encode
+     0.08s  0.21% 64.27%      6.66s 17.32%  github.com/cockroachdb/pebble.(*DB).runCompaction
+     0.08s  0.21% 64.48%      0.24s  0.62%  github.com/cockroachdb/pebble.(*mergingIterHeap).less
+     0.08s  0.21% 64.69%      0.30s  0.78%  github.com/cockroachdb/pebble.(*splitterGroup).shouldSplitBefore (inline)
+     0.08s  0.21% 64.90%      0.43s  1.12%  github.com/cockroachdb/pebble/bloom.(*tableFilterWriter).AddKey
+     0.08s  0.21% 65.11%      0.37s  0.96%  github.com/cockroachdb/pebble/internal/manifest.(*iterator).seek

@@ -1,0 +1,399 @@
+{
+  "complete": true,
+  "samples": [
+    {
+      "mode": "baseline",
+      "kind": "metadata-scope-first",
+      "n": 1,
+      "seconds_median": 2.388576395,
+      "seconds_range": [
+        2.388576395,
+        2.388576395
+      ],
+      "cpu_seconds_median": 2.995563,
+      "allocated_bytes_median": 1689001712,
+      "num_gc_median": 5,
+      "logical_bytes_median": 579502814,
+      "physical_read_bytes_median": 0,
+      "read_syscalls_median": 70621
+    },
+    {
+      "mode": "baseline",
+      "kind": "metadata-scope-warm",
+      "n": 2,
+      "seconds_median": 1.997298534,
+      "seconds_range": [
+        1.977628391,
+        2.016968677
+      ],
+      "cpu_seconds_median": 2.611576500000001,
+      "allocated_bytes_median": 1518455072.0,
+      "num_gc_median": 4.5,
+      "logical_bytes_median": 579502839.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 70623.0
+    },
+    {
+      "mode": "baseline",
+      "kind": "private-OS-cold",
+      "n": 2,
+      "seconds_median": 45.7638815305,
+      "seconds_range": [
+        44.123834503,
+        47.403928558
+      ],
+      "cpu_seconds_median": 11.1147995,
+      "allocated_bytes_median": 4737855504.0,
+      "num_gc_median": 19.0,
+      "logical_bytes_median": 653361818.0,
+      "physical_read_bytes_median": 1756624896.0,
+      "read_syscalls_median": 87875.0
+    },
+    {
+      "mode": "baseline",
+      "kind": "process-first",
+      "n": 4,
+      "seconds_median": 5.7584320655,
+      "seconds_range": [
+        5.7055339400000005,
+        39.072709864
+      ],
+      "cpu_seconds_median": 7.7260995,
+      "allocated_bytes_median": 4737811928.0,
+      "num_gc_median": 15.0,
+      "logical_bytes_median": 653361817.5,
+      "physical_read_bytes_median": 172032.0,
+      "read_syscalls_median": 87875.0
+    },
+    {
+      "mode": "baseline",
+      "kind": "process-subsequent",
+      "n": 8,
+      "seconds_median": 5.1266348635,
+      "seconds_range": [
+        4.98030575,
+        9.102781545
+      ],
+      "cpu_seconds_median": 6.9369265,
+      "allocated_bytes_median": 4567411488.0,
+      "num_gc_median": 13.0,
+      "logical_bytes_median": 654787384.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 87900.0
+    },
+    {
+      "mode": "baseline",
+      "kind": "subsequent-zero-physical-read",
+      "n": 7,
+      "seconds_median": 5.075332781,
+      "seconds_range": [
+        4.98030575,
+        5.259786518
+      ],
+      "cpu_seconds_median": 6.866688,
+      "allocated_bytes_median": 4567411176,
+      "num_gc_median": 13,
+      "logical_bytes_median": 654787385,
+      "physical_read_bytes_median": 0,
+      "read_syscalls_median": 87900
+    },
+    {
+      "mode": "baseline",
+      "kind": "system-scope-first",
+      "n": 1,
+      "seconds_median": 5.217277878,
+      "seconds_range": [
+        5.217277878,
+        5.217277878
+      ],
+      "cpu_seconds_median": 6.978789,
+      "allocated_bytes_median": 4573230904,
+      "num_gc_median": 14,
+      "logical_bytes_median": 578384717,
+      "physical_read_bytes_median": 0,
+      "read_syscalls_median": 71088
+    },
+    {
+      "mode": "baseline",
+      "kind": "system-scope-warm",
+      "n": 2,
+      "seconds_median": 4.6355578855,
+      "seconds_range": [
+        4.579820323,
+        4.691295448
+      ],
+      "cpu_seconds_median": 6.301563000000001,
+      "allocated_bytes_median": 4402881500.0,
+      "num_gc_median": 12.5,
+      "logical_bytes_median": 579810291.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 71113.5
+    },
+    {
+      "mode": "candidate",
+      "kind": "metadata-scope-first",
+      "n": 1,
+      "seconds_median": 1.562397464,
+      "seconds_range": [
+        1.562397464,
+        1.562397464
+      ],
+      "cpu_seconds_median": 1.770497,
+      "allocated_bytes_median": 817081816,
+      "num_gc_median": 7,
+      "logical_bytes_median": 402896836,
+      "physical_read_bytes_median": 1900544,
+      "read_syscalls_median": 62285
+    },
+    {
+      "mode": "candidate",
+      "kind": "metadata-scope-warm",
+      "n": 2,
+      "seconds_median": 1.184356267,
+      "seconds_range": [
+        1.175104911,
+        1.1936076230000001
+      ],
+      "cpu_seconds_median": 1.3518235,
+      "allocated_bytes_median": 646571364.0,
+      "num_gc_median": 5.5,
+      "logical_bytes_median": 402896836.5,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 62284.0
+    },
+    {
+      "mode": "candidate",
+      "kind": "private-OS-cold",
+      "n": 2,
+      "seconds_median": 33.333996785,
+      "seconds_range": [
+        32.84839555,
+        33.81959802
+      ],
+      "cpu_seconds_median": 3.9570195,
+      "allocated_bytes_median": 831929284.0,
+      "num_gc_median": 7.0,
+      "logical_bytes_median": 407584022.5,
+      "physical_read_bytes_median": 1061451776.0,
+      "read_syscalls_median": 62622.5
+    },
+    {
+      "mode": "candidate",
+      "kind": "process-first",
+      "n": 4,
+      "seconds_median": 1.6991524359999999,
+      "seconds_range": [
+        1.689633835,
+        1.721347279
+      ],
+      "cpu_seconds_median": 1.8925695,
+      "allocated_bytes_median": 831870968.0,
+      "num_gc_median": 7.0,
+      "logical_bytes_median": 407583974.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 62617.5
+    },
+    {
+      "mode": "candidate",
+      "kind": "process-subsequent",
+      "n": 8,
+      "seconds_median": 1.437742101,
+      "seconds_range": [
+        1.381271618,
+        1.488467043
+      ],
+      "cpu_seconds_median": 1.6042275,
+      "allocated_bytes_median": 657332952.0,
+      "num_gc_median": 6.0,
+      "logical_bytes_median": 409009530.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 62640.0
+    },
+    {
+      "mode": "candidate",
+      "kind": "subsequent-zero-physical-read",
+      "n": 7,
+      "seconds_median": 1.448987248,
+      "seconds_range": [
+        1.385582665,
+        1.488467043
+      ],
+      "cpu_seconds_median": 1.6081479999999997,
+      "allocated_bytes_median": 657332176,
+      "num_gc_median": 6,
+      "logical_bytes_median": 409009530,
+      "physical_read_bytes_median": 0,
+      "read_syscalls_median": 62640
+    },
+    {
+      "mode": "candidate",
+      "kind": "system-scope-first",
+      "n": 1,
+      "seconds_median": 0.287297955,
+      "seconds_range": [
+        0.287297955,
+        0.287297955
+      ],
+      "cpu_seconds_median": 0.288161,
+      "allocated_bytes_median": 26768688,
+      "num_gc_median": 0,
+      "logical_bytes_median": 4780325,
+      "physical_read_bytes_median": 0,
+      "read_syscalls_median": 346
+    },
+    {
+      "mode": "candidate",
+      "kind": "system-scope-warm",
+      "n": 2,
+      "seconds_median": 0.278921956,
+      "seconds_range": [
+        0.273555637,
+        0.284288275
+      ],
+      "cpu_seconds_median": 0.29149649999999994,
+      "allocated_bytes_median": 22166188.0,
+      "num_gc_median": 0.5,
+      "logical_bytes_median": 6205859.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 367.0
+    },
+    {
+      "mode": "full",
+      "kind": "metadata-scope-first",
+      "n": 1,
+      "seconds_median": 2.025011345,
+      "seconds_range": [
+        2.025011345,
+        2.025011345
+      ],
+      "cpu_seconds_median": 2.407903,
+      "allocated_bytes_median": 981462600,
+      "num_gc_median": 4,
+      "logical_bytes_median": 402896802,
+      "physical_read_bytes_median": 20480,
+      "read_syscalls_median": 62281
+    },
+    {
+      "mode": "full",
+      "kind": "metadata-scope-warm",
+      "n": 2,
+      "seconds_median": 1.6037284285000002,
+      "seconds_range": [
+        1.5723682650000002,
+        1.635088592
+      ],
+      "cpu_seconds_median": 1.9839320000000003,
+      "allocated_bytes_median": 810997504.0,
+      "num_gc_median": 2.5,
+      "logical_bytes_median": 402896830.5,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 62283.5
+    },
+    {
+      "mode": "full",
+      "kind": "process-first",
+      "n": 4,
+      "seconds_median": 2.3182369355,
+      "seconds_range": [
+        2.25449691,
+        4.185392272
+      ],
+      "cpu_seconds_median": 2.7235365,
+      "allocated_bytes_median": 996273328.0,
+      "num_gc_median": 4.0,
+      "logical_bytes_median": 407583954.0,
+      "physical_read_bytes_median": 2048.0,
+      "read_syscalls_median": 62615.0
+    },
+    {
+      "mode": "full",
+      "kind": "process-subsequent",
+      "n": 8,
+      "seconds_median": 1.7798596265,
+      "seconds_range": [
+        1.720119553,
+        1.867764106
+      ],
+      "cpu_seconds_median": 2.1515865,
+      "allocated_bytes_median": 821766912.0,
+      "num_gc_median": 3.0,
+      "logical_bytes_median": 409009502.5,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 62637.0
+    },
+    {
+      "mode": "full",
+      "kind": "subsequent-zero-physical-read",
+      "n": 8,
+      "seconds_median": 1.7798596265,
+      "seconds_range": [
+        1.720119553,
+        1.867764106
+      ],
+      "cpu_seconds_median": 2.1515865,
+      "allocated_bytes_median": 821766912.0,
+      "num_gc_median": 3.0,
+      "logical_bytes_median": 409009502.5,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 62637.0
+    },
+    {
+      "mode": "full",
+      "kind": "system-scope-first",
+      "n": 1,
+      "seconds_median": 0.272679485,
+      "seconds_range": [
+        0.272679485,
+        0.272679485
+      ],
+      "cpu_seconds_median": 0.27340300000000023,
+      "allocated_bytes_median": 26814128,
+      "num_gc_median": 0,
+      "logical_bytes_median": 4780332,
+      "physical_read_bytes_median": 0,
+      "read_syscalls_median": 346
+    },
+    {
+      "mode": "full",
+      "kind": "system-scope-warm",
+      "n": 2,
+      "seconds_median": 0.2838414615,
+      "seconds_range": [
+        0.269096139,
+        0.298586784
+      ],
+      "cpu_seconds_median": 0.29685700000000015,
+      "allocated_bytes_median": 22143428.0,
+      "num_gc_median": 0.5,
+      "logical_bytes_median": 6205866.0,
+      "physical_read_bytes_median": 0.0,
+      "read_syscalls_median": 367.0
+    }
+  ],
+  "rows_verified": 26,
+  "cold_sources_strictly_verified": 29658,
+  "small_keys": 61,
+  "restore_rows": 22496,
+  "restored_block_ranges": 60,
+  "private_bytes": 80986811849,
+  "product_sha256": {
+    "core/state/snapshots/aggregator.go": "da748638bb45a2d7f3fda4a0462061c1b2b69ae0ae55f50e985e8e74a4056298",
+    "core/state/snapshots/cold_compaction_budget.go": "092f533be166eedf480a388d48be21d2a3f0df30dcc9e79c5fe4c63c545b3566",
+    "core/state/snapshots/domain_registry.go": "3bc8cf32d5187da1a270303ca14ded6ce3ae20e1566a1fd87587b1d11cbc839b",
+    "core/state/snapshots/history_accessor_pages.go": "f30008f60d5e687e7e09b77d1abd3c8bd2dc1b5c13a4efe93425d5d9a08f9bbd",
+    "core/state/snapshots/history_key_oriented_v7.go": "f04690f71383712786ef37b069454bc2f6abf7521497df5a0ed3896526f28851",
+    "core/state/snapshots/history_routing_retired.go": "0112eaeb20a52eaa3454b771eb411cdd5e7130cb0115ba0135ce13cecf512fd0",
+    "core/state/snapshots/history_segment.go": "2e7c83a0dd693ee9156f580607abf9cb72cc8994951a00d8b1019a0d344c94a0",
+    "core/state/snapshots/history_system_routing.go": "17c7262220308263438f4f28facc21a33dad923b21abe8e33d873296bb1368d4",
+    "core/state/snapshots/manifest.go": "c84185f1be39f4ec35771f945621c101776e64fd48fb74ec3ce15da90b218e5b",
+    "core/state/snapshots/manifest_verify.go": "250202c52b339f44486586009e00181f0f21efb54e995ba9b0fa35f18c539267",
+    "core/state/snapshots/history_small_system_routing.go": "5a2d272f281e2f6ea8915daeb5287f8127373261366bf5989a09214653fecedd",
+    "core/state/snapshots/history_small_system_source.go": "90771dad2c2fa8013f63aed24ce83a09a9e71ba6cd1c4d8807bd0fef9a6660b8",
+    "core/state/snapshots/history_system_routing_policy.go": "23d560fd2495ab0bfa7019c1d9e484396346d838ddf1e556cc8a4dccbae5ca3b"
+  },
+  "limits": [
+    "Cold Manager query only; no complete state snapshot / new-old HTTP comparison / latest-state full MuHash recomputation.",
+    "Process-first samples do not imply cold OS cache.",
+    "Small n; no p95 claim; concurrent production load."
+  ]
+}

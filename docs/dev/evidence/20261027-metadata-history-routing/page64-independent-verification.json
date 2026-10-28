@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "sources": 29658,
+  "pages": 464,
+  "bytes": 1201168,
+  "vectors_equal_independently_strict_verified_256_layout": true,
+  "actual_trace_files": 453,
+  "all_actual_reads_covered_by_cold_proof": true
+}

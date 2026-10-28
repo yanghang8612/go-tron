@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-27T04:46:24.968182+00:00",
+  "service": "MainPID=12881\nActiveState=active\n",
+  "pid": 12881,
+  "binary_sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8",
+  "process_start_ticks": "4879056747",
+  "production_mutations": false,
+  "block_rpc": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x2958053"
+  }
+}

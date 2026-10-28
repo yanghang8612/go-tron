@@ -16,6 +16,10 @@ type historyAccessorPages struct {
 	file   *os.File
 	pages  *historyDirectoryPages
 	prefix int
+	// Parsed metadata belongs to this immutable open descriptor only. In
+	// particular, it must never bypass authentication on a subsequent open.
+	framedHeader *stateDomainChangeBinaryAccessorV6Header
+	framedSize   uint64
 }
 
 func newHistoryAccessorPages(ctx context.Context, file *os.File, size uint64) *historyAccessorPages {
@@ -99,5 +103,55 @@ func (r *historyAccessorPages) Close() error {
 	}
 	releaseHistoryDirectoryPages(r.pages)
 	r.pages = nil
+	r.framedHeader = nil
 	return r.file.Close()
+}
+
+// Accessor open, history attachment and a batched lookup all validate the same
+// framed header. V11 validation includes a bounded transaction directory that
+// is often larger than the physical page cache; reuse its validated structure
+// rather than reading and decoding that directory three times in one open.
+func cachedHistoryFramedHeader(r io.ReaderAt, size uint64) (stateDomainChangeBinaryAccessorV6Header, bool, error) {
+	for {
+		switch v := r.(type) {
+		case contextReaderAt:
+			if err := contextError(v.ctx); err != nil {
+				return stateDomainChangeBinaryAccessorV6Header{}, false, err
+			}
+			r = v.r
+		case *historyAccessorPages:
+			v.mu.Lock()
+			defer v.mu.Unlock()
+			if v.pages == nil {
+				return stateDomainChangeBinaryAccessorV6Header{}, false, os.ErrClosed
+			}
+			if err := contextError(v.pages.ctx); err != nil {
+				return stateDomainChangeBinaryAccessorV6Header{}, false, err
+			}
+			if v.framedHeader != nil && v.framedSize == size {
+				return *v.framedHeader, true, nil
+			}
+			return stateDomainChangeBinaryAccessorV6Header{}, false, nil
+		default:
+			return stateDomainChangeBinaryAccessorV6Header{}, false, nil
+		}
+	}
+}
+
+func rememberHistoryFramedHeader(r io.ReaderAt, size uint64, h stateDomainChangeBinaryAccessorV6Header) {
+	for {
+		switch v := r.(type) {
+		case contextReaderAt:
+			r = v.r
+		case *historyAccessorPages:
+			v.mu.Lock()
+			defer v.mu.Unlock()
+			if v.pages != nil {
+				v.framedHeader, v.framedSize = &h, size
+			}
+			return
+		default:
+			return
+		}
+	}
 }

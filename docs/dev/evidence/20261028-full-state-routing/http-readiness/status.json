@@ -1,0 +1,80 @@
+{
+  "complete": true,
+  "production_mutations": false,
+  "performance_samples_excluded": true,
+  "utc": "2026-10-28T00:32:59.329813Z",
+  "stage": "both real HTTP hosts ready; genesis and 341/342 balances and candidate 9M getter verified",
+  "checks": [
+    {
+      "mode": "baseline",
+      "method": "eth_getBalance",
+      "tag": "0x155",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0"
+      }
+    },
+    {
+      "mode": "baseline",
+      "method": "eth_getBalance",
+      "tag": "0x156",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x6b714021d45c37522e100000"
+      }
+    },
+    {
+      "mode": "baseline",
+      "method": "eth_getBalance",
+      "tag": "0x0",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      }
+    },
+    {
+      "mode": "candidate",
+      "method": "eth_getBalance",
+      "tag": "0x155",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0"
+      }
+    },
+    {
+      "mode": "candidate",
+      "method": "eth_getBalance",
+      "tag": "0x156",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x6b714021d45c37522e100000"
+      }
+    },
+    {
+      "mode": "candidate",
+      "method": "eth_getBalance",
+      "tag": "0x0",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x13fe2e171cda1978db8000000"
+      }
+    },
+    {
+      "mode": "candidate",
+      "method": "eth_call",
+      "tag": "0x895440",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "timing_excluded": true
+    }
+  ]
+}

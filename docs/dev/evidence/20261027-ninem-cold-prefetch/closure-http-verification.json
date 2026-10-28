@@ -1,0 +1,94 @@
+{
+  "utc": "2026-10-27T13:11:49.201311+00:00",
+  "seconds": 4.382781333999446,
+  "curl_exit": 0,
+  "stderr": "",
+  "request": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_blockNumber",
+      "params": []
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "eth_getBalance",
+      "params": [
+        "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+        "0x155"
+      ]
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "eth_getBalance",
+      "params": [
+        "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+        "0x156"
+      ]
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "eth_getBalance",
+      "params": [
+        "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "0x0"
+      ]
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "eth_getTransactionByHash",
+      "params": [
+        "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2"
+      ]
+    }
+  ],
+  "verified": true,
+  "height": 44596796,
+  "response": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x2a87e3c"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x0"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x6b714021d45c37522e100000"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x13fe2e171cda1978db8000000"
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": {
+        "blockHash": "0x000000000000015679394f12dae0f584e07bfb226569ad2aa59a8d0c3fbcedb0",
+        "blockNumber": "0x156",
+        "from": "0x71b0af54e0a1182a5e0947d6a64f3b22740ef318",
+        "gas": "0x0",
+        "gasPrice": "0x1",
+        "hash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+        "input": "0x",
+        "nonce": "0x0",
+        "r": "0x0",
+        "s": "0x0",
+        "to": "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+        "transactionIndex": "0x0",
+        "type": "0x0",
+        "v": "0x0",
+        "value": "0x762257bf9b9100"
+      }
+    }
+  ]
+}

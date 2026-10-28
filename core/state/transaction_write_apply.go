@@ -631,8 +631,14 @@ func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 	if s == nil {
 		return fmt.Errorf("apply transaction writes: nil state")
 	}
+	if err := s.Error(); err != nil {
+		return err
+	}
 	orderedKeys, err := s.validateTransactionWriteSetApply(writes, dynProps, raw)
 	if err != nil {
+		return err
+	}
+	if err := s.Error(); err != nil {
 		return err
 	}
 	previousStateRecorder := s.transactionAccess
@@ -660,6 +666,9 @@ func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 		if err := s.applyTransactionWrite(key, value, dynProps, raw); err != nil {
 			return err
 		}
+		if err := s.Error(); err != nil {
+			return err
+		}
 	}
 	for _, key := range orderedKeys {
 		if key.Kind == TransactionAccessAccount {
@@ -668,6 +677,9 @@ func (s *StateDB) applyTransactionWriteSet(writes TransactionWriteSet, dynProps 
 		value := writes[key]
 		recordTransactionWriteApply(recorder, key, value)
 		if err := s.applyTransactionWrite(key, value, dynProps, raw); err != nil {
+			return err
+		}
+		if err := s.Error(); err != nil {
 			return err
 		}
 	}

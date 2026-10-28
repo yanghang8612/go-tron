@@ -1,0 +1,15 @@
+{
+  "canonical_cut_verified": true,
+  "canonical_genesis_verified": true,
+  "cut": 45836827,
+  "cut_block_hash": "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+  "expected_identity": {
+    "chainId": 1,
+    "networkId": 11111,
+    "genesisHash": "00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc"
+  },
+  "genesis": "00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc",
+  "genesis_recipe_present": true,
+  "internal_cut_root_verified": true,
+  "source_manifest_had_chain_identity": false
+}

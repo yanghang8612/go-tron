@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-27T16:26:47.335743+00:00",
+  "pid": "12881",
+  "start_ticks": "4879056747",
+  "exe": "/data/gtron/releases/auto-d11f4a57fa32-936005635809717f/gtron",
+  "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8",
+  "service": "MainPID=12881\nActiveState=active\n",
+  "identity_unchanged": true
+}

@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "purpose": "CPU attribution only, explicitly excluded from comparative timing",
+  "archive_bytes": 135596,
+  "archive_sha256": "8b6b248c9230f5b5a4d2a989e143adb552f6f2106420fa99742d6cbd40501514",
+  "members": 21,
+  "calls": 11,
+  "all_returns_207": true,
+  "original_parser_error": "GOCACHE missing in systemd environment",
+  "recovery": "same original profiles parsed with explicit GOCACHE and GOTOOLCHAIN; original failure receipt retained",
+  "cpu_profile_sha256": "d82763ae89dd5044113f8393d12bbd9c3eaf5fc7a04f827e485f0139c0d155c0"
+}

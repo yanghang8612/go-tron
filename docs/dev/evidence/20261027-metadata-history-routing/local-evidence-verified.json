@@ -1,0 +1,36 @@
+{
+  "utc": "2026-10-27T16:48:23.141368+00:00",
+  "archive": {
+    "file": "/tmp/AAA-gtron-metadata-routing-acceptance-20261027.zip",
+    "bytes": 49450207,
+    "sha256": "093ac35b542220f5c6e6a46c4e6961099e2a43e628fefad3dd299d33a5baf4f7",
+    "members": 777
+  },
+  "independent": {
+    "complete": true,
+    "members": 777,
+    "sources": 29658,
+    "metadata_pages": 116,
+    "metadata_page_bytes": 1190032,
+    "nonempty_metadata_sources": 0,
+    "queries": 141,
+    "non_nil_rows": 39,
+    "restored_full_rows": 22496,
+    "restored_block_ranges": 60,
+    "private_trace_files": {
+      "baseline": 8157,
+      "candidate": 146
+    },
+    "product_files": 20,
+    "samples": 53
+  },
+  "page64": {
+    "complete": true,
+    "sources": 29658,
+    "pages": 464,
+    "bytes": 1201168,
+    "vectors_equal_independently_strict_verified_256_layout": true,
+    "actual_trace_files": 453,
+    "all_actual_reads_covered_by_cold_proof": true
+  }
+}

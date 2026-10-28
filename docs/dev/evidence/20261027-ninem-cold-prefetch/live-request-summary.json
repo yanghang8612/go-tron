@@ -1,0 +1,138 @@
+{
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 9827,
+    "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+  },
+  "curl_timing": {
+    "certs": "",
+    "content_type": "application/json",
+    "conn_id": 0,
+    "errormsg": null,
+    "exitcode": 0,
+    "filename_effective": null,
+    "ftp_entry_path": null,
+    "http_code": 200,
+    "http_connect": 0,
+    "http_version": "1.1",
+    "local_ip": "127.0.0.1",
+    "local_port": 61006,
+    "method": "POST",
+    "num_certs": 0,
+    "num_connects": 1,
+    "num_headers": 5,
+    "num_redirects": 0,
+    "proxy_ssl_verify_result": 0,
+    "proxy_used": 1,
+    "redirect_url": null,
+    "referer": null,
+    "remote_ip": "127.0.0.1",
+    "remote_port": 1088,
+    "response_code": 200,
+    "scheme": "HTTP",
+    "size_download": 106,
+    "size_header": 148,
+    "size_request": 0,
+    "size_upload": 152,
+    "speed_download": 2,
+    "speed_upload": 3,
+    "ssl_verify_result": 0,
+    "time_appconnect": 0.0,
+    "time_connect": 0.000411,
+    "time_namelookup": 0.000116,
+    "time_pretransfer": 0.399901,
+    "time_redirect": 0.0,
+    "time_starttransfer": 47.238706,
+    "time_total": 47.238748,
+    "url": "http://3.12.206.71:6060/gmr/",
+    "url.scheme": "http",
+    "url.user": null,
+    "url.password": null,
+    "url.options": null,
+    "url.host": "3.12.206.71",
+    "url.port": "6060",
+    "url.path": "/gmr/",
+    "url.query": null,
+    "url.fragment": null,
+    "url.zoneid": null,
+    "urle.scheme": "http",
+    "urle.user": null,
+    "urle.password": null,
+    "urle.options": null,
+    "urle.host": "3.12.206.71",
+    "urle.port": "6060",
+    "urle.path": "/gmr/",
+    "urle.query": null,
+    "urle.fragment": null,
+    "urle.zoneid": null,
+    "url_effective": "http://3.12.206.71:6060/gmr/",
+    "urlnum": 0,
+    "xfer_id": 0,
+    "curl_version": "libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.69.0"
+  },
+  "sampling": {
+    "started_utc": "2026-10-27T11:26:39.994054+00:00",
+    "finished_utc": "2026-10-27T11:27:37.999462+00:00",
+    "wall_seconds": 58.005130625002494,
+    "query_exit_code": 0,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 9827,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "samples": [
+      {
+        "name": "query-goroutines-2.txt",
+        "exit": 0,
+        "seconds": 1.3872742499988817,
+        "bytes": 121391,
+        "stderr": ""
+      },
+      {
+        "name": "query-goroutines-8.txt",
+        "exit": 0,
+        "seconds": 1.4018688750002184,
+        "bytes": 141152,
+        "stderr": ""
+      },
+      {
+        "name": "query-goroutines-16.txt",
+        "exit": 0,
+        "seconds": 1.460563333999744,
+        "bytes": 129753,
+        "stderr": ""
+      },
+      {
+        "name": "query-goroutines-28.txt",
+        "exit": 0,
+        "seconds": 1.5762775839975802,
+        "bytes": 135662,
+        "stderr": ""
+      },
+      {
+        "name": "query-goroutines-42.txt",
+        "exit": 0,
+        "seconds": 1.4317420830011542,
+        "bytes": 158914,
+        "stderr": ""
+      },
+      {
+        "name": "query-cpu.pprof",
+        "exit": 0,
+        "seconds": 21.76161004199821,
+        "bytes": 252048,
+        "stderr": ""
+      }
+    ]
+  },
+  "captured_rpc_stack_samples": 5,
+  "all_samples_in_prefetch": true,
+  "phase_timing_limit": "Scheduled stack snapshots do not measure exact phase durations. CPU profile covers only its 20.16s sampling window; no p95 or end-to-end speedup inferred."
+}

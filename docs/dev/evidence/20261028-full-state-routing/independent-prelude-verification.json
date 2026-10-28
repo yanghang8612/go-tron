@@ -1,0 +1,18 @@
+{
+  "complete": true,
+  "phase": "capture/routes/preliminary HTTP correctness only; full MuHash/restore/performance pending",
+  "members": 634,
+  "capture_files": 187854,
+  "copied_files_rehashed_on_server": 716,
+  "stop_to_original_api_seconds": 75.23906250298023,
+  "captured_head": 45836827,
+  "canonical_refs": 169920,
+  "history_pairs": 32036,
+  "metadata_pages": 501,
+  "metadata_bytes": 1297472,
+  "metadata_nonempty_sources": 0,
+  "small_route_refs": 1,
+  "small_keys": 62,
+  "complete_http_smoke_checks": 7,
+  "candidate_product_files": 20
+}

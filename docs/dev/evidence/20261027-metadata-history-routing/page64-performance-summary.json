@@ -1,0 +1,39 @@
+{
+  "baseline-os-cold": {
+    "n": 2,
+    "min_seconds": 42.898439616,
+    "max_seconds": 43.580167332,
+    "medians": {
+      "seconds": 43.239303473999996,
+      "cpu_seconds": 10.7097515,
+      "allocated_bytes": 4737814488.0,
+      "logical_bytes": 653361810.0,
+      "physical_read_bytes": 1747595264.0,
+      "read_syscalls": 87875.0
+    }
+  },
+  "candidate-os-cold": {
+    "n": 2,
+    "min_seconds": 0.650200317,
+    "max_seconds": 0.714840805,
+    "medians": {
+      "seconds": 0.682520561,
+      "cpu_seconds": 0.3023329999999999,
+      "allocated_bytes": 32347952.0,
+      "logical_bytes": 5841528.5,
+      "physical_read_bytes": 14856192.0,
+      "read_syscalls": 756.0
+    }
+  },
+  "candidate-warm-zero-physical": {
+    "n": 2,
+    "medians": {
+      "seconds": 0.27117836650000005,
+      "cpu_seconds": 0.2726020000000001,
+      "allocated_bytes": 27676200.0,
+      "logical_bytes": 7267066.5,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 777.0
+    }
+  }
+}

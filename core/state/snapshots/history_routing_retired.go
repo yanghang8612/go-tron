@@ -36,6 +36,10 @@ func historyRoutingRetiredObject(ref SegmentRef) bool {
 	}
 	prefix := ""
 	switch ref.Kind {
+	case SegmentMetadataHistoryRouting:
+		prefix = "metadata-routing"
+	case SegmentSmallSystemHistoryRouting:
+		prefix = "small-system-routing"
 	case SegmentSystemHistoryRouting:
 		prefix = "system-routing"
 	case SegmentAccountHistoryRouting:
@@ -142,6 +146,12 @@ func pruneRetiredHistoryRoutingContext(ctx context.Context, dir string, cursor r
 		inspected, statErr := f.Stat()
 		closeErr := f.Close()
 		want := systemHistoryRoutingMagic
+		if ref.Kind == SegmentMetadataHistoryRouting {
+			want = metadataRoutingMagic
+		}
+		if ref.Kind == SegmentSmallSystemHistoryRouting {
+			want = smallSystemHistoryRoutingMagic
+		}
 		if ref.Kind == SegmentAccountHistoryRouting {
 			want = accountRoutingMagic
 		}

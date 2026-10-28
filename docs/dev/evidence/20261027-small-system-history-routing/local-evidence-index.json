@@ -1,0 +1,34 @@
+{
+  "independent-verification.json": {
+    "bytes": 13170,
+    "sha256": "268457d6510e92375176ec922292a14dcb08968d1c1c9e0ed1aad0f6000b7b42"
+  },
+  "unpack-evidence.py": {
+    "bytes": 1995,
+    "sha256": "447e04c35bfcd419d1441871fb224ba2b2e10890a7c76ba5cde74182a6858c72"
+  },
+  "final-evidence.tar.xz": {
+    "bytes": 18256264,
+    "sha256": "3dcd9bc0512621e05940953ef9d21d87d09b02193402b5e346291e68b32bd6f6"
+  },
+  "evidence-seal.json": {
+    "bytes": 270,
+    "sha256": "e476166b63abfcc9de920cce3cd98318fe8edb958d612e42963433d3829af209"
+  },
+  "post-transfer-production-identity.json": {
+    "bytes": 357,
+    "sha256": "b7db9e96a48876dee6446cc36f44de9a5a79f805daaab38c654c0ee8b560f0f2"
+  },
+  "local-validation.json": {
+    "bytes": 1997,
+    "sha256": "c0b8cb1aebde3bacd399772548ec30e560f4b37cea18e55196bf16e15d46d5c6"
+  },
+  "system-key-difference.json": {
+    "bytes": 13731,
+    "sha256": "31451e3992d3652b465c000f8aa75fce2f0960fadfc02a0e37669dbe2987b172"
+  },
+  "verify-evidence.py": {
+    "bytes": 11276,
+    "sha256": "8a6d5ef349f35cf922d7e0ec776e21b9bce73c85c15bb6cfa6c11034a8804e3c"
+  }
+}

@@ -268,6 +268,10 @@ type kvChange struct {
 	prevEntry kvEntry
 }
 
+// contractMetadataKVChange keeps SetContract's physical undo/history bytes
+// under the same typed speculative write cell as its materialized protobuf.
+type contractMetadataKVChange struct{ kvChange }
+
 var kvChangePool = sync.Pool{
 	New: func() any { return new(kvChange) },
 }

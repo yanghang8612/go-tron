@@ -993,6 +993,8 @@ func transactionWriteFromJournal(entry journalChange) TransactionWrite {
 		return TransactionWrite{Kind: TransactionWriteCode, Address: change.address}
 	case contractMetaChange:
 		return TransactionWrite{Kind: TransactionWriteContractMetadata, Address: change.address}
+	case contractMetadataKVChange:
+		return TransactionWrite{Kind: TransactionWriteContractMetadata, Address: change.address}
 	case selfDestructChange:
 		return TransactionWrite{Kind: TransactionWriteSelfDestruct, Address: change.address}
 	case kvChange:

@@ -1,0 +1,44 @@
+[
+  {
+    "method": "eth_blockNumber",
+    "params": [],
+    "seconds_network_end_to_end": 0.6812988330057124,
+    "exit": 0,
+    "utc": "2026-10-27T15:58:07.698424+00:00",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x2ae6ec6"
+    }
+  },
+  {
+    "method": "eth_getBalance",
+    "params": [
+      "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "0x155"
+    ],
+    "seconds_network_end_to_end": 0.7727375000031316,
+    "exit": 0,
+    "utc": "2026-10-27T15:58:08.472214+00:00",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x0"
+    }
+  },
+  {
+    "method": "eth_getBalance",
+    "params": [
+      "0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1",
+      "0x156"
+    ],
+    "seconds_network_end_to_end": 0.7497831660002703,
+    "exit": 0,
+    "utc": "2026-10-27T15:58:09.222049+00:00",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x6b714021d45c37522e100000"
+    }
+  }
+]

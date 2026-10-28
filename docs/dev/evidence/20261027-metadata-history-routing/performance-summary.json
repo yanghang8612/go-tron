@@ -1,0 +1,490 @@
+{
+  "baseline-process-first-os-uncontrolled": {
+    "n": 4,
+    "seconds_min": 5.556014759,
+    "seconds_max": 46.962744315,
+    "samples": [
+      [
+        "metadata-v3/repeat-1-0-baseline",
+        0
+      ],
+      [
+        "metadata-v3/repeat-0-5-baseline",
+        0
+      ],
+      [
+        "metadata-v3/repeat-0-0-baseline",
+        0
+      ],
+      [
+        "metadata-v3/repeat-1-5-baseline",
+        0
+      ]
+    ],
+    "medians": {
+      "seconds": 5.9957302245,
+      "cpu_seconds": 7.767593000000001,
+      "allocated_bytes": 4737858396.0,
+      "logical_bytes": 653361815.0,
+      "physical_read_bytes": 1081344.0,
+      "read_syscalls": 87875.0,
+      "num_gc": 15.0
+    }
+  },
+  "baseline-subsequent": {
+    "n": 8,
+    "seconds_min": 5.019670962,
+    "seconds_max": 45.883196744,
+    "samples": [
+      [
+        "metadata-v3/repeat-1-0-baseline",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-0-baseline",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-5-baseline",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-5-baseline",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-0-baseline",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-0-baseline",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-5-baseline",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-5-baseline",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 5.197060216,
+      "cpu_seconds": 7.098646500000001,
+      "allocated_bytes": 4567497220.0,
+      "logical_bytes": 654787397.0,
+      "physical_read_bytes": 2048.0,
+      "read_syscalls": 87901.5,
+      "num_gc": 13.0
+    }
+  },
+  "baseline-subsequent-zero-physical": {
+    "n": 4,
+    "seconds_min": 5.019670962,
+    "seconds_max": 5.233316015,
+    "samples": [
+      [
+        "metadata-v3/repeat-1-0-baseline",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-0-baseline",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-5-baseline",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-5-baseline",
+        1
+      ]
+    ],
+    "medians": {
+      "seconds": 5.139705709999999,
+      "cpu_seconds": 7.035341,
+      "allocated_bytes": 4567449868.0,
+      "logical_bytes": 654787400.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 87902.0,
+      "num_gc": 13.0
+    }
+  },
+  "baseline-metadata": {
+    "n": 2,
+    "seconds_min": 2.037561014,
+    "seconds_max": 2.057987253,
+    "samples": [
+      [
+        "metadata-v3/metadata-baseline",
+        1
+      ],
+      [
+        "metadata-v3/metadata-baseline",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 2.0477741335,
+      "cpu_seconds": 2.6181785,
+      "allocated_bytes": 1518519564.0,
+      "logical_bytes": 579502847.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 70624.0,
+      "num_gc": 4.5
+    }
+  },
+  "baseline-os-cold": {
+    "n": 2,
+    "seconds_min": 41.331530842,
+    "seconds_max": 62.065785547,
+    "samples": [
+      [
+        "metadata-cold-v3/revalidated-os-cold-3-baseline",
+        0
+      ],
+      [
+        "metadata-cold-v3/revalidated-os-cold-0-baseline",
+        0
+      ]
+    ],
+    "medians": {
+      "seconds": 51.6986581945,
+      "cpu_seconds": 10.8607385,
+      "allocated_bytes": 4737843428.0,
+      "logical_bytes": 653361818.5,
+      "physical_read_bytes": 1760677888.0,
+      "read_syscalls": 87875.0,
+      "num_gc": 19.0
+    }
+  },
+  "previous-process-first-os-uncontrolled": {
+    "n": 4,
+    "seconds_min": 1.7144011350000001,
+    "seconds_max": 5.801660579,
+    "samples": [
+      [
+        "metadata-v3/repeat-0-4-previous",
+        0
+      ],
+      [
+        "metadata-v3/repeat-1-1-previous",
+        0
+      ],
+      [
+        "metadata-v3/repeat-1-4-previous",
+        0
+      ],
+      [
+        "metadata-v3/repeat-0-1-previous",
+        0
+      ]
+    ],
+    "medians": {
+      "seconds": 1.8551273025,
+      "cpu_seconds": 2.0019745,
+      "allocated_bytes": 831853396.0,
+      "logical_bytes": 407583983.0,
+      "physical_read_bytes": 2361344.0,
+      "read_syscalls": 62618.5,
+      "num_gc": 7.0
+    }
+  },
+  "previous-subsequent": {
+    "n": 8,
+    "seconds_min": 1.36317768,
+    "seconds_max": 1.562461446,
+    "samples": [
+      [
+        "metadata-v3/repeat-0-4-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-4-previous",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-1-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-1-previous",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-4-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-4-previous",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-1-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-1-previous",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 1.4023379905,
+      "cpu_seconds": 1.5603535,
+      "allocated_bytes": 657307912.0,
+      "logical_bytes": 409009527.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 62639.5,
+      "num_gc": 5.0
+    }
+  },
+  "previous-subsequent-zero-physical": {
+    "n": 8,
+    "seconds_min": 1.36317768,
+    "seconds_max": 1.562461446,
+    "samples": [
+      [
+        "metadata-v3/repeat-0-4-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-4-previous",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-1-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-1-previous",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-4-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-4-previous",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-1-previous",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-1-previous",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 1.4023379905,
+      "cpu_seconds": 1.5603535,
+      "allocated_bytes": 657307912.0,
+      "logical_bytes": 409009527.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 62639.5,
+      "num_gc": 5.0
+    }
+  },
+  "previous-metadata": {
+    "n": 2,
+    "seconds_min": 1.175036687,
+    "seconds_max": 1.207426597,
+    "samples": [
+      [
+        "metadata-v3/metadata-previous",
+        1
+      ],
+      [
+        "metadata-v3/metadata-previous",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 1.191231642,
+      "cpu_seconds": 1.3640324999999998,
+      "allocated_bytes": 646556424.0,
+      "logical_bytes": 402896829.5,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 62283.0,
+      "num_gc": 5.5
+    }
+  },
+  "candidate-process-first-os-uncontrolled": {
+    "n": 4,
+    "seconds_min": 0.250057766,
+    "seconds_max": 0.427574776,
+    "samples": [
+      [
+        "metadata-v3/repeat-0-2-candidate",
+        0
+      ],
+      [
+        "metadata-v3/repeat-0-3-candidate",
+        0
+      ],
+      [
+        "metadata-v3/repeat-1-2-candidate",
+        0
+      ],
+      [
+        "metadata-v3/repeat-1-3-candidate",
+        0
+      ]
+    ],
+    "medians": {
+      "seconds": 0.2716766225,
+      "cpu_seconds": 0.2724775,
+      "allocated_bytes": 32269000.0,
+      "logical_bytes": 5836823.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 449.0,
+      "num_gc": 0.0
+    }
+  },
+  "candidate-subsequent": {
+    "n": 8,
+    "seconds_min": 0.250414674,
+    "seconds_max": 0.28243566,
+    "samples": [
+      [
+        "metadata-v3/repeat-0-2-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-2-candidate",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-3-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-3-candidate",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-2-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-2-candidate",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-3-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-3-candidate",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 0.25662466650000004,
+      "cpu_seconds": 0.25736000000000003,
+      "allocated_bytes": 27597200.0,
+      "logical_bytes": 7262356.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 470.0,
+      "num_gc": 0.0
+    }
+  },
+  "candidate-subsequent-zero-physical": {
+    "n": 8,
+    "seconds_min": 0.250414674,
+    "seconds_max": 0.28243566,
+    "samples": [
+      [
+        "metadata-v3/repeat-0-2-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-2-candidate",
+        2
+      ],
+      [
+        "metadata-v3/repeat-0-3-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-0-3-candidate",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-2-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-2-candidate",
+        2
+      ],
+      [
+        "metadata-v3/repeat-1-3-candidate",
+        1
+      ],
+      [
+        "metadata-v3/repeat-1-3-candidate",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 0.25662466650000004,
+      "cpu_seconds": 0.25736000000000003,
+      "allocated_bytes": 27597200.0,
+      "logical_bytes": 7262356.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 470.0,
+      "num_gc": 0.0
+    }
+  },
+  "candidate-metadata": {
+    "n": 2,
+    "seconds_min": 0.093416134,
+    "seconds_max": 0.099379591,
+    "samples": [
+      [
+        "metadata-v3/metadata-candidate",
+        1
+      ],
+      [
+        "metadata-v3/metadata-candidate",
+        2
+      ]
+    ],
+    "medians": {
+      "seconds": 0.0963978625,
+      "cpu_seconds": 0.0967275,
+      "allocated_bytes": 16769960.0,
+      "logical_bytes": 1056610.0,
+      "physical_read_bytes": 0.0,
+      "read_syscalls": 105.0,
+      "num_gc": 0.0
+    }
+  },
+  "candidate-os-cold": {
+    "n": 2,
+    "seconds_min": 0.495313647,
+    "seconds_max": 0.498194121,
+    "samples": [
+      [
+        "metadata-cold-v3/revalidated-os-cold-1-candidate",
+        0
+      ],
+      [
+        "metadata-cold-v3/revalidated-os-cold-2-candidate",
+        0
+      ]
+    ],
+    "medians": {
+      "seconds": 0.496753884,
+      "cpu_seconds": 0.28347350000000004,
+      "allocated_bytes": 32269032.0,
+      "logical_bytes": 5836824.5,
+      "physical_read_bytes": 14442496.0,
+      "read_syscalls": 449.0,
+      "num_gc": 0.0
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "files": 187854,
+  "linked_files": 187138,
+  "copied_files_rehashed": 716,
+  "linked_bytes": 1483933358003,
+  "copied_bytes": 1851195475,
+  "inventory_sha256": "dd59242f0fc6d27f12d848e6fb99cb772bb004a12f84662cbca314702f1992c7",
+  "scope": "every captured file inode/size and every privately copied mutable file SHA256; immutable payloads not fully rehashed here",
+  "utc": "2026-10-28T00:36:06.307647Z"
+}

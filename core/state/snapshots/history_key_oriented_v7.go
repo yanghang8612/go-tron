@@ -47,6 +47,9 @@ type stateDomainChangeBinaryAccessorV7PostingDirectory struct {
 }
 
 func decodeStateDomainChangeBinaryAccessorV7Header(r io.ReaderAt, fileSize uint64) (stateDomainChangeBinaryAccessorV6Header, error) {
+	if h, ok, err := cachedHistoryFramedHeader(r, fileSize); ok || err != nil {
+		return h, err
+	}
 	if fileSize > math.MaxInt64 {
 		return stateDomainChangeBinaryAccessorV6Header{}, errors.New("snapshots: accessor size exceeds int64")
 	}
@@ -116,6 +119,7 @@ func decodeStateDomainChangeBinaryAccessorV7Header(r io.ReaderAt, fileSize uint6
 	if overflow || total != fileSize {
 		return h, errors.New("snapshots: invalid state-domain-change V7 accessor length")
 	}
+	rememberHistoryFramedHeader(r, fileSize, h)
 	return h, nil
 }
 

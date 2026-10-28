@@ -105,6 +105,11 @@ func (s *StateDB) collectDomainChangesSince(mark int, txNum uint64) ([]*rawdb.St
 	if s == nil || !s.changeSet.enabled || s.changeSet.captureAtCommit {
 		return nil, nil
 	}
+	if txNum == s.changeSet.endTxNum {
+		if err := s.stageFinalContractABIHistory(); err != nil {
+			return nil, err
+		}
+	}
 	if mark < 0 {
 		mark = 0
 	}
@@ -165,6 +170,8 @@ func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb
 			s.collectKVJournalTouch(kvs, &e)
 		case *kvChange:
 			s.collectKVJournalTouch(kvs, e)
+		case contractMetadataKVChange:
+			s.collectKVJournalTouch(kvs, &e.kvChange)
 		case *storageChange:
 			id := string(e.address.Bytes()) + string(e.key.Bytes())
 			if _, ok := storages[id]; ok {

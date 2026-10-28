@@ -1,0 +1,29 @@
+{
+  "baseline_source": "d11f4a57fa327c468294ee133ae8a78ac9fe0dda",
+  "go_version": "go version go1.27.3 darwin/arm64",
+  "product_files": {
+    "core/state/snapshots/aggregator.go": "da748638bb45a2d7f3fda4a0462061c1b2b69ae0ae55f50e985e8e74a4056298",
+    "core/state/snapshots/cold_compaction_budget.go": "8c95c7741a91a8c8d84450f2e34da71b22db9b4604a01589169e19deecf58ff3",
+    "core/state/snapshots/domain_registry.go": "3bc8cf32d5187da1a270303ca14ded6ce3ae20e1566a1fd87587b1d11cbc839b",
+    "core/state/snapshots/history_routing_retired.go": "0112eaeb20a52eaa3454b771eb411cdd5e7130cb0115ba0135ce13cecf512fd0",
+    "core/state/snapshots/history_segment.go": "a101fb51d71b20fd676bee5fe2822d460ab3fbd31bf418370f90665060673afd",
+    "core/state/snapshots/history_system_routing.go": "9f151cc197cbffa19754769c714e5b5e783218c2809543b84d0f3f6911159bc9",
+    "core/state/snapshots/manifest.go": "c84185f1be39f4ec35771f945621c101776e64fd48fb74ec3ce15da90b218e5b",
+    "core/state/snapshots/manifest_verify.go": "250202c52b339f44486586009e00181f0f21efb54e995ba9b0fa35f18c539267",
+    "core/state/snapshots/history_small_system_routing.go": "6eafbcd4af750a4997d3eb63ef5345f0020050345c15aca2f6497a617ec2a83d"
+  },
+  "final_test_sha256": "178a97bf01123e975edb323a40211430ff4b8bc5a06a6b7efebd5f4fd5ad918d",
+  "checks": {
+    "snapshots_full": "PASS 149.229s",
+    "core_history_snapshot_muhash": "PASS 176.727s",
+    "state_history_snapshot_muhash": "PASS 1.494s",
+    "rawdb_history_snapshot_muhash": "PASS 19.201s",
+    "routing_race": "PASS 13.023s",
+    "rotated_replacement_tail_race": "PASS 3.200s",
+    "strict_and_signed_snapshot_restore_with_muhash": "PASS 1.963s",
+    "vet_snapshots": "PASS",
+    "gtron_build": "PASS",
+    "mixed_storage_metadata_system_v1_v2_and_signed_restore_race": "PASS 3.183s"
+  },
+  "scope": "Product source unchanged since native packet; tests were extended locally after native packet creation. Native final full HTTP and full-state MuHash evidence recorded separately."
+}

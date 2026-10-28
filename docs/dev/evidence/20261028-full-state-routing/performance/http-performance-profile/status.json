@@ -1,0 +1,10 @@
+{
+  "complete": true,
+  "stage": "profile complete",
+  "production_mutations": false,
+  "timing_samples_excluded": true,
+  "utc": "2026-10-28T04:30:52.500465+00:00",
+  "calls": 12,
+  "all_returns_207": true,
+  "cache": "fresh process with OS cache uncontrolled, profiling excluded from performance comparison"
+}

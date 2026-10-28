@@ -233,3 +233,109 @@ func TestHistoryAccessorPagesCompressedSourceLifetimeAndValidation(t *testing.T)
 		t.Fatal("failed compressed open retained pages")
 	}
 }
+
+func TestHistoryFramedHeaderDescriptorLifetime(t *testing.T) {
+	data := buildStateDomainChangeV7AccessorBytes(t, 2048)
+	path := filepath.Join(t.TempDir(), "accessor.kv")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	open := func(ctx context.Context) *historyAccessorPages {
+		t.Helper()
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return newHistoryAccessorPages(ctx, f, uint64(len(data)))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := open(ctx)
+	h, err := decodeStateDomainChangeBinaryAccessorV7Header(r, uint64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Evict the physical prefix. Parsed metadata, rather than just a warm
+	// physical page, must survive repeated validation on this descriptor.
+	for i := 0; i < historyDirectoryPageCount; i++ {
+		off := int64(len(data) - historyDirectoryPageSize - i*historyDirectoryPageSize)
+		if off < 128 {
+			break
+		}
+		if _, err := r.ReadAt(make([]byte, 4096), off); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe := &historyPageProbe{data: data, fail: true}
+	r.pages.source = probe
+	for i := 0; i < 3; i++ {
+		got, err := decodeStateDomainChangeBinaryAccessorV7Header(contextReaderAt{ctx: ctx, r: r}, uint64(len(data)))
+		if err != nil || got.dictionaryDigest != h.dictionaryDigest || got.recordCount != h.recordCount {
+			t.Fatal("same descriptor", got, err)
+		}
+	}
+	if probe.calls != 0 {
+		t.Fatal("validated header was physically reread", probe.calls)
+	}
+	if _, err := decodeStateDomainChangeBinaryAccessorV7Header(r, uint64(len(data)-1)); err == nil {
+		t.Fatal("cached header accepted a different file size")
+	}
+	outer, cancelOuter := context.WithCancel(context.Background())
+	cancelOuter()
+	if _, err := decodeStateDomainChangeBinaryAccessorV7Header(contextReaderAt{ctx: outer, r: r}, uint64(len(data))); !errors.Is(err, context.Canceled) {
+		t.Fatal("outer cancellation bypassed", err)
+	}
+	cancel()
+	if _, err := decodeStateDomainChangeBinaryAccessorV7Header(r, uint64(len(data))); !errors.Is(err, context.Canceled) {
+		t.Fatal("descriptor cancellation bypassed", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if r.framedHeader != nil {
+		t.Fatal("parsed metadata survived close")
+	}
+	if _, err := decodeStateDomainChangeBinaryAccessorV7Header(r, uint64(len(data))); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("closed descriptor", err)
+	}
+	data[0] ^= 1
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fresh := open(context.Background())
+	defer fresh.Close()
+	if _, err := decodeStateDomainChangeBinaryAccessorV7Header(fresh, uint64(len(data))); err == nil {
+		t.Fatal("new descriptor accepted changed physical header")
+	}
+	if fresh.framedHeader != nil {
+		t.Fatal("failed validation cached metadata")
+	}
+}
+
+func TestHistoryFramedHeaderConcurrentReads(t *testing.T) {
+	data := buildStateDomainChangeV7AccessorBytes(t, 512)
+	path := filepath.Join(t.TempDir(), "accessor.kv")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newHistoryAccessorPages(context.Background(), f, uint64(len(data)))
+	defer r.Close()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 8; j++ {
+				h, err := decodeStateDomainChangeBinaryAccessorV7Header(r, uint64(len(data)))
+				if err != nil || h.keyCount != 512 {
+					t.Error(h.keyCount, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}

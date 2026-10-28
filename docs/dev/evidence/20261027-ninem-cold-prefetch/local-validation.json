@@ -1,0 +1,30 @@
+{
+  "base_revision": "d11f4a57fa327c468294ee133ae8a78ac9fe0dda",
+  "product_sha256": {
+    "core/state/snapshots/aggregator.go": "da748638bb45a2d7f3fda4a0462061c1b2b69ae0ae55f50e985e8e74a4056298",
+    "core/state/snapshots/cold_compaction_budget.go": "092f533be166eedf480a388d48be21d2a3f0df30dcc9e79c5fe4c63c545b3566",
+    "core/state/snapshots/domain_registry.go": "3bc8cf32d5187da1a270303ca14ded6ce3ae20e1566a1fd87587b1d11cbc839b",
+    "core/state/snapshots/history_accessor_pages.go": "f30008f60d5e687e7e09b77d1abd3c8bd2dc1b5c13a4efe93425d5d9a08f9bbd",
+    "core/state/snapshots/history_key_oriented_v7.go": "f04690f71383712786ef37b069454bc2f6abf7521497df5a0ed3896526f28851",
+    "core/state/snapshots/history_routing_retired.go": "0112eaeb20a52eaa3454b771eb411cdd5e7130cb0115ba0135ce13cecf512fd0",
+    "core/state/snapshots/history_segment.go": "2e7c83a0dd693ee9156f580607abf9cb72cc8994951a00d8b1019a0d344c94a0",
+    "core/state/snapshots/history_system_routing.go": "17c7262220308263438f4f28facc21a33dad923b21abe8e33d873296bb1368d4",
+    "core/state/snapshots/manifest.go": "c84185f1be39f4ec35771f945621c101776e64fd48fb74ec3ce15da90b218e5b",
+    "core/state/snapshots/manifest_verify.go": "250202c52b339f44486586009e00181f0f21efb54e995ba9b0fa35f18c539267",
+    "core/state/snapshots/history_small_system_routing.go": "5a2d272f281e2f6ea8915daeb5287f8127373261366bf5989a09214653fecedd",
+    "core/state/snapshots/history_small_system_source.go": "90771dad2c2fa8013f63aed24ce83a09a9e71ba6cd1c4d8807bd0fef9a6660b8",
+    "core/state/snapshots/history_system_routing_policy.go": "23d560fd2495ab0bfa7019c1d9e484396346d838ddf1e556cc8a4dccbae5ca3b"
+  },
+  "source_archive_bytes": 75192,
+  "source_archive_sha256": "85c91a824819ad21e9fda6710820d2b88e34bc8137efde8cfa105bfae7858b63",
+  "local_checks": {
+    "local-snapshots-final.log": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t274.790s\n",
+    "local-race-final.log": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t60.948s\n",
+    "local-integration-final.log": "ok  \tgithub.com/tronprotocol/go-tron/core/state\t2.924s\nok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t52.263s\nok  \tgithub.com/tronprotocol/go-tron/core\t237.986s\nok  \tgithub.com/tronprotocol/go-tron/internal/jsonrpc\t0.910s\n",
+    "local-vet-final.log": "",
+    "local-build-final.log": ""
+  },
+  "build_succeeded": true,
+  "candidate_binary_sha256": "aa1a746bd90cbdf64c7aaacb21cc3858f684c9e29aca763f53fd3742c464d6ab",
+  "production_action": "none"
+}

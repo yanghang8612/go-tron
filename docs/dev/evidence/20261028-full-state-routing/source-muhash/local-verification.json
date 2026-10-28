@@ -1,0 +1,23 @@
+{
+  "complete": true,
+  "scope": "native full source fold receipt and shared source code; local metadata/normalized-state digest consistency, not a second local billion-row fold",
+  "archive_bytes": 16563,
+  "archive_sha256": "f0f1fa3d8110a9d5d82403eeed9b9d6b30a7aed8a7a54f0e201da0e5b1aa3887",
+  "members": 9,
+  "source_rows": [
+    119819707,
+    389068,
+    1036811084
+  ],
+  "total_source_rows": 1157019859,
+  "source_logical_bytes": [
+    9469854169,
+    19842468,
+    83436438413
+  ],
+  "seconds_native_full_fold": 7649.416672431,
+  "head": 45836827,
+  "tx": 4240407293,
+  "root": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627",
+  "normalized_state_sha256": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+}

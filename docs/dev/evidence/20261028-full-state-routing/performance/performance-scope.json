@@ -1,0 +1,7 @@
+{
+  "full_source_muhash_verified": true,
+  "full_snapshot_restore_verified": false,
+  "full_snapshot_restore_deferred_by_user_priority": true,
+  "production_restart_after_capture": false,
+  "cache_labels": "fresh-process OS cache uncontrolled vs process-warm; targeted private-file cold separate"
+}

@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-28T04:33:24.759845Z",
+  "pid": 30916,
+  "active": "active",
+  "sha256": "936005635809717f01c5661ef0d1f8519e61cb2d5e511f69e8c3d88fe16882b8",
+  "height_before": 46233696,
+  "height_after": 46233777,
+  "height_advancing": true,
+  "original_identity_unchanged": true,
+  "provenance": "Observed JSON from own JSS terminal; original production-performance-final.json retained on server. This compact transcription is separate from the sealed performance archive."
+}

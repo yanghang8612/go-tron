@@ -3353,22 +3353,73 @@ func (s *StateDB) GetContractMetadataBytes(addr tcommon.Address) ([]byte, bool, 
 // SetContract stores contract metadata at addr.
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
 	obj := s.getOrCreateAccountForField(addr, TransactionAccountFieldExistence)
-	// Clone prevMeta so the journal holds a snapshot of the pre-mutation state.
-	// Callers often mutate the pointer returned by GetContract in-place and then
-	// call SetContract with the same pointer; without cloning, prevMeta would
-	// already reflect the mutation and RevertToSnapshot would be a no-op.
+	// Physical KV undo below owns the authoritative before-image, even if a
+	// caller already mutated GetContract's materialized pointer.
 	var prevMeta *contractpb.SmartContract
 	if obj.contractMeta != nil {
 		prevMeta = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
+	}
+	var encoded []byte
+	if contract != nil {
+		var err error
+		encoded, err = statecodec.Marshal(contract)
+		if err != nil {
+			s.recordStateError("marshal contract metadata", err)
+			return
+		}
+	}
+	if err := s.stageContractMetadataJournal(obj, kvdomains.ContractMetadata, contractMetaKVKey, encoded, contract == nil); err != nil {
+		s.recordStateError("stage contract metadata", err)
+		return
 	}
 	s.journal.append(contractMetaChange{
 		address:  addr,
 		prevMeta: prevMeta,
 	})
-	obj.contractMeta = contract
+	obj.contractMeta = nil
+	if contract != nil {
+		// Later caller mutations must not change Commit's value after history
+		// has already captured this setter's bytes.
+		obj.contractMeta = proto.Clone(contract).(*contractpb.SmartContract)
+	}
 	obj.contractMetaDirty = true
 	obj.invalidateStorageKeyLayout()
 	obj.markDirty()
+}
+
+func (s *StateDB) stageContractMetadataJournal(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool) error {
+	mk := s.kvCompositeKeyString(domain, key)
+	previous, dirty := obj.kvDirty[mk]
+	// Capture rooted bytes before the transaction flush. GetContract's mutable
+	// protobuf pointer is not a reliable before-image.
+	changed, err := s.stageAccountKVCommit(obj, domain, key, value, deleted)
+	if err != nil || !changed {
+		return err
+	}
+	change := kvChange{address: obj.address, mapKey: mk, hadEntry: dirty, prevEntry: previous}
+	if domain == kvdomains.ContractMetadata {
+		s.journal.append(contractMetadataKVChange{change})
+	} else {
+		// ABI is an independent cell with its own speculative post-image.
+		s.journal.append(change)
+	}
+	invalidateAccountKVMaterialization(obj, domain)
+	return nil
+}
+
+func (s *StateDB) stageFinalContractABIHistory() error {
+	// Preserve the existing deferred ABI cleanup: nil followed by non-nil
+	// metadata must leave ABI untouched. Only block-final nil deletes it.
+	for addr := range s.dirtyObjects {
+		obj := s.stateObjects[addr]
+		if obj == nil || obj.deleted || obj.selfDestructed || !obj.contractMetaDirty || obj.contractMeta != nil {
+			continue
+		}
+		if err := s.stageContractMetadataJournal(obj, kvdomains.ContractABI, contractABIKVKey, nil, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadContractState loads the per-contract dynamic-energy runtime state.

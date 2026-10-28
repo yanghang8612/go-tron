@@ -1,0 +1,21 @@
+{
+  "utc": "2026-10-27T16:54:06.181257+00:00",
+  "removed_roots": [
+    "/data/gtron/maintenance/9m-query-20261027-01/metadata-cold-v3/baseline",
+    "/data/gtron/maintenance/9m-query-20261027-01/metadata-cold-v3/candidate",
+    "/data/gtron/maintenance/9m-query-20261027-01/metadata-page64/catalog"
+  ],
+  "private_inode_count": 8738,
+  "private_logical_bytes": 81032086701,
+  "private_allocated_bytes": 81049739264,
+  "production_mutations": false,
+  "retained_fixed_catalog": "/data/gtron/maintenance/9m-query-20261027-01/baseline-catalog",
+  "retained_candidate_catalog": "/data/gtron/maintenance/9m-query-20261027-01/metadata-v3/catalog",
+  "archive_seal": {
+    "file": "/tmp/AAA-gtron-metadata-routing-acceptance-20261027.zip",
+    "bytes": 49450207,
+    "sha256": "093ac35b542220f5c6e6a46c4e6961099e2a43e628fefad3dd299d33a5baf4f7",
+    "members": 777
+  },
+  "layout64_allocated_bytes": 1900544
+}

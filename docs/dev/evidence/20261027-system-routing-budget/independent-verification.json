@@ -1,0 +1,16 @@
+{
+  "verified": true,
+  "internal_hardlinks_resolved_to_copies": 3,
+  "members": 483,
+  "http_requests": 252,
+  "extra_http_requests": 16,
+  "cold_cache_residency_proofs": 32,
+  "private_read_files": 2255,
+  "muhash_source_rows": 144903091,
+  "muhash_root": "8fbf149684146a59b1650b318a768f0edbae0c8c1c3ceb2c5c610129c10f76a5",
+  "history_restored_rows": 22496,
+  "baseline_route_seconds": 508.927171889,
+  "candidate_route_seconds": 358.587786407,
+  "baseline_route_cpu_seconds": 616.3486360000002,
+  "candidate_route_cpu_seconds": 421.81237300000004
+}

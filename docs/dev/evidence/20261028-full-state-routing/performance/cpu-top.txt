@@ -1,0 +1,49 @@
+File: candidate-http-final.test
+Build ID: d4c32da0708379f836528103faf3211d23580aee
+Type: cpu
+Time: 2026-10-28 04:30:20 UTC
+Duration: 30s, Total samples = 24.80s (82.67%)
+Showing nodes accounting for 21.49s, 86.65% of 24.80s total
+Dropped 418 nodes (cum <= 0.12s)
+Showing top 40 nodes out of 193
+      flat  flat%   sum%        cum   cum%
+     3.84s 15.48% 15.48%      3.84s 15.48%  crypto/internal/fips140/sha256.blockAVX2
+     3.53s 14.23% 29.72%      3.78s 15.24%  github.com/golang/snappy.decode
+     1.70s  6.85% 36.57%      1.70s  6.85%  runtime.duffcopy
+     1.18s  4.76% 41.33%      2.18s  8.79%  github.com/ethereum/go-ethereum/rlp.Split
+     0.86s  3.47% 44.80%         1s  4.03%  github.com/ethereum/go-ethereum/rlp.readKind
+     0.82s  3.31% 48.10%      0.82s  3.31%  runtime.memmove
+     0.79s  3.19% 51.29%      0.79s  3.19%  golang.org/x/crypto/blake2b.hashBlocksAVX2
+     0.71s  2.86% 54.15%      2.54s 10.24%  github.com/ethereum/go-ethereum/rlp.SplitString
+     0.68s  2.74% 56.90%      0.68s  2.74%  aeshashbody
+     0.62s  2.50% 59.40%      8.67s 34.96%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+     0.57s  2.30% 61.69%      4.54s 18.31%  github.com/tronprotocol/go-tron/core/rawdb.decodeBorrowedStateDomainChangeRow
+     0.52s  2.10% 63.79%      2.28s  9.19%  github.com/ethereum/go-ethereum/rlp.SplitUint64
+     0.49s  1.98% 65.77%      0.78s  3.15%  github.com/tronprotocol/go-tron/core/state/snapshots.decodeHistoryRoutingFamilySelected
+     0.47s  1.90% 67.66%      0.47s  1.90%  memeqbody
+     0.36s  1.45% 69.11%      2.64s 10.65%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeUint
+     0.34s  1.37% 70.48%      0.34s  1.37%  cmpbody
+     0.34s  1.37% 71.85%      0.34s  1.37%  runtime.memclrNoHeapPointers
+     0.33s  1.33% 73.19%      0.89s  3.59%  github.com/tronprotocol/go-tron/core/rawdb.iterateStateHistorySelectedOwnersTail.func3
+     0.31s  1.25% 74.44%      0.31s  1.25%  github.com/ethereum/go-ethereum/rlp.readSize
+     0.31s  1.25% 75.69%      0.31s  1.25%  internal/runtime/syscall.Syscall6
+     0.26s  1.05% 76.73%      0.26s  1.05%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.24s  0.97% 77.70%      0.90s  3.63%  runtime.mapaccess1_faststr
+     0.22s  0.89% 78.59%      0.85s  3.43%  github.com/tronprotocol/go-tron/core/rawdb.splitBorrowedStateDomainChangeString
+     0.20s  0.81% 79.40%      1.56s  6.29%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).latestSegmentRef
+     0.19s  0.77% 80.16%      3.67s 14.80%  github.com/tronprotocol/go-tron/core/rawdb.iterateHistoryOwnerSpans
+     0.17s  0.69% 80.85%      4.16s 16.77%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.16s  0.65% 81.49%      8.83s 35.60%  github.com/tronprotocol/go-tron/core/rawdb.iterateMaterializedStateHistoryBlock
+     0.14s  0.56% 82.06%      0.18s  0.73%  context.(*cancelCtx).Err
+     0.14s  0.56% 82.62%      0.14s  0.56%  sync/atomic.(*Int32).Add (inline)
+     0.13s  0.52% 83.15%      0.17s  0.69%  runtime.findObject
+     0.12s  0.48% 83.63%      0.43s  1.73%  github.com/tronprotocol/go-tron/core/rawdb.decodeHistoryOwnerSpansInto
+     0.12s  0.48% 84.11%      0.37s  1.49%  runtime.scanobject
+     0.09s  0.36% 84.48%      0.96s  3.87%  github.com/tronprotocol/go-tron/core/state/snapshots.(*systemHistoryRouting).mayContain
+     0.08s  0.32% 84.80%      0.34s  1.37%  github.com/tronprotocol/go-tron/core/state/snapshots.(*ChainFreezerVerificationCache).snapshotPersistent
+     0.08s  0.32% 85.12%      0.27s  1.09%  github.com/tronprotocol/go-tron/core/state/snapshots.smallSystemHistoryRoutingQuery (inline)
+     0.08s  0.32% 85.44%      0.15s   0.6%  internal/runtime/maps.(*Map).getWithoutKeySmallFastStr
+     0.08s  0.32% 85.77%      0.29s  1.17%  runtime.mallocgcSmallNoscan
+     0.08s  0.32% 86.09%      0.18s  0.73%  runtime.mallocgcSmallScanNoHeader
+     0.07s  0.28% 86.37%      0.24s  0.97%  github.com/tronprotocol/go-tron/core/state/snapshots.findManifestRef.func1 (inline)
+     0.07s  0.28% 86.65%      0.30s  1.21%  runtime.mapaccess1

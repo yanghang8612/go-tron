@@ -1,13 +1,17 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 type transactionVersionedStorageKey struct {
@@ -93,6 +97,13 @@ func (s *StateDB) hydrateTransactionVersionedAccount(addr tcommon.Address, obj *
 	if obj == nil || obj.account == nil {
 		return obj
 	}
+	if !obj.contractMetaDirty {
+		if _, dirty := lookupKVEntry(obj.kvDirty, kvdomains.ContractMetadata, contractMetaKVKey); !dirty {
+			// Clean materializations may come from a prewarmed older boundary.
+			// Local dirty metadata keeps precedence over the versioned prefix.
+			invalidateAccountKVMaterialization(obj, kvdomains.ContractMetadata)
+		}
+	}
 
 	overlaid := false
 	for _, field := range [...]TransactionAccountField{
@@ -160,9 +171,37 @@ func (s *StateDB) readTransactionVersionedAccountKV(owner tcommon.Address, domai
 	if s == nil || s.transactionVersionedReader == nil {
 		return nil, false, false
 	}
-	value, _, ok := s.readTransactionVersionedValue(TransactionAccessKey{
+	value, writer, ok := s.readTransactionVersionedValue(TransactionAccessKey{
 		Kind: TransactionAccessAccountKV, Address: owner, KVDomain: domain, LogicalKey: string(key),
 	})
+	if domain == kvdomains.ContractMetadata && bytes.Equal(key, contractMetaKVKey) {
+		// Both aliases affect the selected value, including an absent typed
+		// version. Direct rooted-KV callers must carry that OCC dependency too.
+		s.recordContractMetadataRead(owner)
+		// Speculative metadata is published under its typed cell as protobuf,
+		// while rooted KV/cache/history consumers require native state bytes.
+		typed, typedWriter, typedOK := s.readTransactionVersionedValue(TransactionAccessKey{Kind: TransactionAccessContractMetadata, Address: owner})
+		if typedOK && ok && typedWriter == writer {
+			s.setError(fmt.Errorf("conflicting transaction-versioned contract metadata aliases %s from writer %d", owner.Hex(), writer))
+			return nil, false, true
+		}
+		if typedOK && (!ok || typedWriter > writer) {
+			if !typed.Exists {
+				return nil, false, true
+			}
+			var metadata contractpb.SmartContract
+			if err := proto.Unmarshal(typed.Value, &metadata); err != nil {
+				s.setError(fmt.Errorf("decode transaction-versioned contract metadata %s: %w", owner.Hex(), err))
+				return nil, false, true
+			}
+			encoded, err := statecodec.Marshal(&metadata)
+			if err != nil {
+				s.setError(fmt.Errorf("encode transaction-versioned contract metadata %s: %w", owner.Hex(), err))
+				return nil, false, true
+			}
+			return encoded, true, true
+		}
+	}
 	if !ok {
 		return nil, false, false
 	}

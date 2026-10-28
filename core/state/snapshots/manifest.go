@@ -31,8 +31,10 @@ const (
 	SegmentHistory  SegmentKind = "history"
 	SegmentInverted SegmentKind = "inverted"
 	// Exact routing for small singleton system namespaces; never canonical state.
-	SegmentSystemHistoryRouting  SegmentKind = "system-history-routing"
-	SegmentAccountHistoryRouting SegmentKind = "account-history-routing"
+	SegmentSystemHistoryRouting      SegmentKind = "system-history-routing"
+	SegmentSmallSystemHistoryRouting SegmentKind = "small-system-history-routing"
+	SegmentMetadataHistoryRouting    SegmentKind = "metadata-history-routing"
+	SegmentAccountHistoryRouting     SegmentKind = "account-history-routing"
 	// SegmentChainFreezer is a block-numbered chain-freezer snapshot family.
 	// SegmentRef.FromTxNum/ToTxNum carry freezer block numbers for this kind.
 	SegmentChainFreezer SegmentKind = "chain-freezer"
@@ -330,6 +332,7 @@ func (m *Manifest) validate(ordered bool) error {
 	// the number of cold segments and competes with import on every load.
 	seenPath := make(map[string]*SegmentRef, len(m.Segments))
 	var systemRoutingCount int
+	var smallSystemRoutingCount int
 	var accountRoutingCount int
 	// Overlap validation needs only bounds, not owned copies of every path,
 	// checksum and other identity field. Full refs are still checked below and
@@ -341,6 +344,12 @@ func (m *Manifest) validate(ordered bool) error {
 	}
 	for i := range m.Segments {
 		seg := &m.Segments[i]
+		if seg.Kind == SegmentSmallSystemHistoryRouting {
+			smallSystemRoutingCount++
+			if smallSystemRoutingCount > 1 {
+				return errors.New("snapshots: multiple small system history routing segments")
+			}
+		}
 		if seg.Kind == SegmentSystemHistoryRouting {
 			systemRoutingCount++
 			if systemRoutingCount > 1 {
@@ -709,7 +718,7 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
 	}

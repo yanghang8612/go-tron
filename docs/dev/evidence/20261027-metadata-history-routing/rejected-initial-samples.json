@@ -1,0 +1,53 @@
+{
+  "reason": "initial successful-open parser omitted unfinished open attempts; cold coverage incomplete",
+  "original_private_files": 8153,
+  "corrected_private_files": 8157,
+  "excluded_samples": [
+    "os-cold-0-baseline",
+    "os-cold-1-candidate",
+    "os-cold-2-candidate",
+    "os-cold-3-baseline"
+  ],
+  "corrected_files": [
+    {
+      "path": "history/state-domain-change-3273764918-3273859945-38f0c6fb329307e0.seg",
+      "bytes": 7117453,
+      "sha256": "38f0c6fb329307e004c773d5228e89a5778046519155aa1ecdc59633d41e3ffa",
+      "source_dev": 66304,
+      "source_ino": 98046788,
+      "private_dev": 66304,
+      "private_ino": 98174346,
+      "coverage_correction": true
+    },
+    {
+      "path": "history/state-domain-change-3301903592-3302045257-cc7b357a48b9bf28.seg",
+      "bytes": 9855576,
+      "sha256": "cc7b357a48b9bf28f95877bfb1c80c53fc71ab7cc347aeac7aa8b977f7b76ffb",
+      "source_dev": 66304,
+      "source_ino": 94640465,
+      "private_dev": 66304,
+      "private_ino": 98174436,
+      "coverage_correction": true
+    },
+    {
+      "path": "history/state-domain-change-3525784965-3526021304-7d376a69ac5195dd.seg",
+      "bytes": 15831703,
+      "sha256": "7d376a69ac5195ddef0120195fdc7ff114301bcc5b7df5c61f7e019a17862d3a",
+      "source_dev": 66304,
+      "source_ino": 94641152,
+      "private_dev": 66304,
+      "private_ino": 98174440,
+      "coverage_correction": true
+    },
+    {
+      "path": "history/state-domain-change-3610780622-3610973405-5e4a67ab1ed41957.kv",
+      "bytes": 9066215,
+      "sha256": "1d56c615979d09debd75cceeebc258e31a170c2053aaad8c5a6f106a7f47687e",
+      "source_dev": 66304,
+      "source_ino": 94640746,
+      "private_dev": 66304,
+      "private_ino": 98174822,
+      "coverage_correction": true
+    }
+  ]
+}

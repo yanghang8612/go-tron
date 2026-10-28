@@ -1,0 +1,344 @@
+[
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff954",
+    "n": 2,
+    "median_ms": 212.4946340918541,
+    "min_ms": 204.92393523454666,
+    "max_ms": 220.06533294916153
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff955",
+    "n": 2,
+    "median_ms": 212.37600594758987,
+    "min_ms": 205.02176880836487,
+    "max_ms": 219.73024308681488
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x4c4b40",
+    "n": 2,
+    "median_ms": 242.0145832002163,
+    "min_ms": 216.93477034568787,
+    "max_ms": 267.0943960547447
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x895440",
+    "n": 2,
+    "median_ms": 163.00415620207787,
+    "min_ms": 162.89343684911728,
+    "max_ms": 163.11487555503845
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb453d0",
+    "n": 2,
+    "median_ms": 78.8189172744751,
+    "min_ms": 78.42199504375458,
+    "max_ms": 79.21583950519562
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb454cf",
+    "n": 2,
+    "median_ms": 28.351284563541412,
+    "min_ms": 27.545154094696045,
+    "max_ms": 29.15741503238678
+  },
+  {
+    "mode": "baseline",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "latest",
+    "n": 2,
+    "median_ms": 8.241608738899231,
+    "min_ms": 6.4708516001701355,
+    "max_ms": 10.012365877628326
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff954",
+    "n": 4,
+    "median_ms": 910.887535661459,
+    "min_ms": 854.0554493665695,
+    "max_ms": 916.1612093448639
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff955",
+    "n": 4,
+    "median_ms": 911.5941599011421,
+    "min_ms": 889.6672129631042,
+    "max_ms": 914.9801358580589
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x4c4b40",
+    "n": 4,
+    "median_ms": 875.579547137022,
+    "min_ms": 855.5134832859039,
+    "max_ms": 937.8857165575027
+  },
+  {
+    "mode": "baseline",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x895440",
+    "n": 4,
+    "median_ms": 831.0386389493942,
+    "min_ms": 768.6700597405434,
+    "max_ms": 834.7866982221603
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x2ff954",
+    "n": 8,
+    "median_ms": 171.21106386184692,
+    "min_ms": 169.64616626501083,
+    "max_ms": 193.91044974327087
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x2ff955",
+    "n": 8,
+    "median_ms": 183.57117474079132,
+    "min_ms": 170.38797587156296,
+    "max_ms": 215.2455672621727
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x4c4b40",
+    "n": 8,
+    "median_ms": 159.89023074507713,
+    "min_ms": 155.7283028960228,
+    "max_ms": 174.70944672822952
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0x895440",
+    "n": 8,
+    "median_ms": 129.56802546977997,
+    "min_ms": 125.21606683731079,
+    "max_ms": 143.3628499507904
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0xb453d0",
+    "n": 8,
+    "median_ms": 70.60043141245842,
+    "min_ms": 69.14079189300537,
+    "max_ms": 75.59627294540405
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "0xb454cf",
+    "n": 8,
+    "median_ms": 23.94958585500717,
+    "min_ms": 23.348793387413025,
+    "max_ms": 27.368701994419098
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm",
+    "tag": "latest",
+    "n": 8,
+    "median_ms": 1.3503506779670715,
+    "min_ms": 1.2422800064086914,
+    "max_ms": 3.041587769985199
+  },
+  {
+    "mode": "baseline",
+    "cache": "warm-with-routing-maintenance",
+    "tag": "0x895440",
+    "n": 24,
+    "median_ms": 140.22332057356834,
+    "min_ms": 127.04312056303024,
+    "max_ms": 225.3144159913063
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff954",
+    "n": 2,
+    "median_ms": 212.5859335064888,
+    "min_ms": 207.49977231025696,
+    "max_ms": 217.67209470272064
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x2ff955",
+    "n": 2,
+    "median_ms": 204.65195924043655,
+    "min_ms": 202.4206593632698,
+    "max_ms": 206.8832591176033
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x4c4b40",
+    "n": 2,
+    "median_ms": 202.86350324749947,
+    "min_ms": 194.28737461566925,
+    "max_ms": 211.43963187932968
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0x895440",
+    "n": 2,
+    "median_ms": 192.49486178159714,
+    "min_ms": 162.23358362913132,
+    "max_ms": 222.75613993406296
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb453d0",
+    "n": 2,
+    "median_ms": 84.07516404986382,
+    "min_ms": 81.34504407644272,
+    "max_ms": 86.80528402328491
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "0xb454cf",
+    "n": 2,
+    "median_ms": 34.28751230239868,
+    "min_ms": 29.283754527568817,
+    "max_ms": 39.291270077228546
+  },
+  {
+    "mode": "candidate",
+    "cache": "fresh-process-os-uncontrolled",
+    "tag": "latest",
+    "n": 2,
+    "median_ms": 8.279241621494293,
+    "min_ms": 8.06494802236557,
+    "max_ms": 8.493535220623016
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff954",
+    "n": 4,
+    "median_ms": 902.220007032156,
+    "min_ms": 826.3560831546783,
+    "max_ms": 925.7203042507172
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x2ff955",
+    "n": 4,
+    "median_ms": 940.4913634061813,
+    "min_ms": 833.5365355014801,
+    "max_ms": 1060.4503229260445
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x4c4b40",
+    "n": 4,
+    "median_ms": 881.3785761594772,
+    "min_ms": 824.6165588498116,
+    "max_ms": 905.542254447937
+  },
+  {
+    "mode": "candidate",
+    "cache": "private-os-cold-fresh-process",
+    "tag": "0x895440",
+    "n": 4,
+    "median_ms": 832.8159004449844,
+    "min_ms": 774.0372642874718,
+    "max_ms": 858.75104367733
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x2ff954",
+    "n": 8,
+    "median_ms": 174.67228695750237,
+    "min_ms": 168.61797124147415,
+    "max_ms": 187.04628199338913
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x2ff955",
+    "n": 8,
+    "median_ms": 170.6017069518566,
+    "min_ms": 167.9234653711319,
+    "max_ms": 186.58514320850372
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x4c4b40",
+    "n": 8,
+    "median_ms": 155.5655188858509,
+    "min_ms": 154.62549030780792,
+    "max_ms": 171.75353318452835
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0x895440",
+    "n": 8,
+    "median_ms": 126.9754096865654,
+    "min_ms": 123.82833659648895,
+    "max_ms": 135.760597884655
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0xb453d0",
+    "n": 8,
+    "median_ms": 70.88688388466835,
+    "min_ms": 68.40263307094574,
+    "max_ms": 93.32826733589172
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "0xb454cf",
+    "n": 8,
+    "median_ms": 23.768875747919083,
+    "min_ms": 22.521592676639557,
+    "max_ms": 31.43436461687088
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm",
+    "tag": "latest",
+    "n": 8,
+    "median_ms": 1.3481192290782928,
+    "min_ms": 1.1842995882034302,
+    "max_ms": 3.1031370162963867
+  },
+  {
+    "mode": "candidate",
+    "cache": "warm-with-routing-maintenance",
+    "tag": "0x895440",
+    "n": 24,
+    "median_ms": 131.93929567933083,
+    "min_ms": 123.7044706940651,
+    "max_ms": 172.1959188580513
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "unit": "CPUQuotaPerSecUSec=2s\nMemoryLimit=8589934592\nNice=19\n",
+  "gomaxprocs": 2,
+  "gomemlimit": "4GiB",
+  "hot_cache_mib": 512,
+  "history_cache_mib": 512,
+  "baseline_sha256": "c75f25d13670796d2f20f8f735a0b8da05a7838862632d2daddbce1086faeaeb",
+  "candidate_sha256": "45d629b31c752d9f3020d25b833b569114d6d46e0c57bea65bb737f9972574b6",
+  "scope": "complete loopback HTTP; fresh-process OS cache uncontrolled and same-process repeat; no strace in timing"
+}
