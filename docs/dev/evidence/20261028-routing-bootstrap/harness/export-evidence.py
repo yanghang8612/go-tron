@@ -12,7 +12,8 @@ assert git('merge-base',s['source'],parent).decode().strip()==s['source']
 assert all(p.startswith('docs/') for p in git('diff','--name-only',s['source'],parent).decode().splitlines())
 git('read-tree',parent);files={}
 paths=[R/n for n in ['candidate-status.json','candidate-requests.json','native-focused.log','candidate-build-http.log','candidate-status-link-failure.json'] if (R/n).is_file()]
-for folder in ['current-maintenance','candidate-maintenance','baseline','current-partial','candidate-partial','candidate-bootstrap','candidate-complete','current-partial-reverse']:
+folders=set(['current-maintenance','candidate-maintenance','baseline','candidate-bootstrap'])|{x['case'] for x in json.loads((R/'candidate-requests.json').read_text())}
+for folder in sorted(folders):
  p=R/folder
  if p.is_dir():paths.extend(q for q in p.iterdir() if q.is_file() and q.suffix in ['.json','.jsonl','.log','.pprof','.txt'])
 for p in sorted(set(paths)):
