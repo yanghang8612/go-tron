@@ -1,7 +1,7 @@
 import pathlib,json,subprocess,os,time,datetime,urllib.request,signal,traceback,hashlib,shutil,tarfile,sys
 R=pathlib.Path('/data/gtron/maintenance/routing-bootstrap-20261028-01');A=pathlib.Path('/data/gtron/maintenance/full-state-acceptance-20261028-01');REPO='/data/gtron/go-tron';SOURCE=sys.argv[1];BASE='3e456e757cc452347781a167b7c175e317ee6b8d';s={'complete':False,'source':SOURCE,'base':BASE,'production_mutations':False,'stage':'prepare isolated source archives'};requests=[]
 def save():s['utc']=datetime.datetime.utcnow().isoformat()+'Z';(R/'candidate-status.json').write_text(json.dumps(s,indent=2))
-def git(*args):return subprocess.check_output(['git','-c','safe.directory='+REPO,'-C',REPO]+list(args))
+def git(*args):return subprocess.check_output(['git','-c','safe.directory='+REPO]+list(args),cwd=REPO)
 def identity():
  v=dict(x.split('=',1) for x in subprocess.check_output(['systemctl','show','gtron','-p','MainPID','-p','ActiveState','-p','ExecMainStartTimestamp']).decode().splitlines());v['exe']=os.readlink('/proc/'+v['MainPID']+'/exe');return v
 E=dict(os.environ,GOCACHE='/data/gtron/deploy-cache/go-build',GOPATH='/root/go',GOMODCACHE='/root/go/pkg/mod',GOTOOLCHAIN='local',CGO_ENABLED='1',CC='/opt/rh/devtoolset-11/root/usr/bin/gcc',CXX='/opt/rh/devtoolset-11/root/usr/bin/g++',GOMAXPROCS='2',GOMEMLIMIT='4GiB',GTRON_SNAPSHOT_MANIFEST_CACHE_BUDGET_BYTES='536870912',GTRON_PEBBLE_BOUNDED_POINT_READ='get',GTRON_ZKSNARK_PARAMS='/data/gtron/params')
@@ -9,7 +9,7 @@ def command(args,src,log,timeout=300):
  with log.open('wb') as f:subprocess.check_call(args,cwd=str(src),env=E,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
 def archive_source(name,sha):
  src=R/name;src.mkdir(exist_ok=False);top=[x for x in git('ls-tree','--name-only',sha).decode().splitlines() if x not in ['docs']];p=R/(name+'.tar')
- with p.open('wb') as f:subprocess.check_call(['git','-c','safe.directory='+REPO,'-C',REPO,'archive',sha,'--']+top,stdout=f)
+ with p.open('wb') as f:subprocess.check_call(['git','-c','safe.directory='+REPO,'archive',sha,'--']+top,stdout=f,cwd=REPO)
  with tarfile.open(str(p)) as t:t.extractall(str(src))
  fixture=git('show',SOURCE+':docs/dev/evidence/20261028-routing-bootstrap/harness/offline_build_test.go.txt');(src/'core/state/snapshots/offline_bootstrap_build_test.go').write_bytes(fixture)
  # The complete HTTP host is the unchanged fixed-cut harness used previously.
