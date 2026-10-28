@@ -1,0 +1,47 @@
+// Injected only into an isolated native diagnostic source archive.
+package snapshots
+
+import (
+ "encoding/hex"
+ "encoding/json"
+ "os"
+ "strconv"
+ "strings"
+ "sync"
+ "time"
+ "github.com/tronprotocol/go-tron/core/rawdb"
+)
+
+var diagnosticHistoryWrite sync.Mutex
+type diagnosticHistoryBatch struct {
+ started time.Time
+ file string
+ from,to uint64
+ queries []map[string]any
+ before map[string]uint64
+ candidates,submissions,keys int
+}
+func diagnosticHistoryIO() map[string]uint64 {
+ data,e:=os.ReadFile("/proc/self/io");if e!=nil {panic(e)}
+ out:=make(map[string]uint64)
+ for _,line:=range strings.Split(string(data),"\n") {p:=strings.SplitN(line,":",2);if len(p)!=2 {continue};n,e:=strconv.ParseUint(strings.TrimSpace(p[1]),10,64);if e!=nil {panic(e)};out[p[0]]=n}
+ return out
+}
+func beginDiagnosticHistoryBatch(from,to uint64,queries []StateHistoryQuery) *diagnosticHistoryBatch {
+ b:=&diagnosticHistoryBatch{started:time.Now(),file:os.Getenv("GTRON_DIAGNOSTIC_HISTORY_BATCH"),from:from,to:to}
+ if b.file=="" {return b}
+ b.before=diagnosticHistoryIO()
+ for _,q:=range queries {b.queries=append(b.queries,map[string]any{"flat":q.FlatDomain,"owner":hex.EncodeToString(q.Owner[:]),"generation":q.Generation,"domain":q.Domain,"key":hex.EncodeToString(q.Key)})}
+ return b
+}
+func (b *diagnosticHistoryBatch) finish(rows []*rawdb.StateDomainChange) {
+ if b.file=="" {return}
+ after:=diagnosticHistoryIO();delta:=make(map[string]uint64)
+ for k,v:=range b.before {delta[k]=after[k]-v}
+ var matches []map[string]any
+ for i,r:=range rows {if r!=nil {matches=append(matches,map[string]any{"query":i,"tx":r.TxNum,"seq":r.Seq,"block":r.BlockNum})}}
+ result:=map[string]any{"from":b.from,"to":b.to,"queries":b.queries,"matches":matches,"seconds":time.Since(b.started).Seconds(),"io_delta":delta,"candidate_sources":b.candidates,"submitted_sources":b.submissions,"submitted_keys":b.keys}
+ diagnosticHistoryWrite.Lock();defer diagnosticHistoryWrite.Unlock()
+ f,e:=os.OpenFile(b.file,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0644);if e!=nil {panic(e)}
+ e=json.NewEncoder(f).Encode(result);if e!=nil {panic(e)};if e=f.Close();e!=nil {panic(e)}
+}
