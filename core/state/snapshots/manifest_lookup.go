@@ -3,6 +3,7 @@ package snapshots
 import (
 	"slices"
 	"sort"
+	"sync"
 )
 
 // Only Manager-owned immutable manifests and function-local read views carry
@@ -13,8 +14,10 @@ import (
 const manifestLookupMaxReferences = 1 << 20
 
 type manifestLookup struct {
-	paths   []uint32
-	freezer []uint32 // same descending range order as chainFreezerRefs
+	paths       []uint32
+	freezer     []uint32 // same descending range order as chainFreezerRefs
+	historyOnce sync.Once
+	history     *historySourceTable
 }
 
 // manifestLookupView borrows m.Segments. The caller must keep that slice

@@ -559,6 +559,14 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			}
 		}
 	}
+	planning := make([]historyCandidateQuery, len(entries))
+	for i, entry := range entries {
+		planning[i] = historyCandidateQuery{entry.query, entry.lookup, entry.accountBound, entry.accountBoundFound}
+	}
+	candidates, err := historyCandidates(ctx, m.dir, manifest, fromTxNum, toTxNum, planning, routing, smallRouting, accountRouting, metadataRouting)
+	if err != nil {
+		return nil, err
+	}
 	consider := func(lookup []byte, change *rawdb.StateDomainChange) (bool, error) {
 		entry := byLookup[string(lookup)]
 		if entry == nil {
@@ -591,7 +599,8 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		}
 		return nil
 	}
-	for _, ref := range manifest.Segments {
+	for _, source := range candidates {
+		ref := manifest.Segments[source.row]
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -611,7 +620,10 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		pairFound := false
 		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || !broadLoaded {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
-				id := systemHistoryRoutingPairID(ref, accessor)
+				id := source.id
+				if !source.paired {
+					id = systemHistoryRoutingPairID(ref, accessor)
+				}
 				pairID = id
 				pairFound = true
 				for _, entry := range entries {
