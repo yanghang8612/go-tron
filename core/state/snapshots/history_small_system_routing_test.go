@@ -375,7 +375,16 @@ func TestSmallSystemHistoryRoutingCompleteDoesNotLoadBroadRoute(t *testing.T) {
 	}
 	for _, install := range []bool{false, true} {
 		if install {
-			m = addSmallRoutingFixture(t, dir, m, 64)
+			// Build the independent small proof without consulting the
+			// intentionally unavailable broad object used by this read test.
+			input := *m
+			input.Segments = nil
+			for _, ref := range m.Segments {
+				if ref.Kind != SegmentSystemHistoryRouting {
+					input.Segments = append(input.Segments, ref)
+				}
+			}
+			m = addSmallRoutingFixture(t, dir, &input, 64)
 		}
 		reader, err := OpenPinnedManager(dir, m)
 		if err != nil {
@@ -666,9 +675,7 @@ func TestSmallSystemHistoryRoutingUnsupportedSourcesDoNotStarveTail(t *testing.T
 	if err := PublishManifest(dir, m); err != nil {
 		t.Fatal(err)
 	}
-	if built, err := refreshSmallSystemHistoryRoutingContext(context.Background(), dir, false); err != nil || built {
-		t.Fatalf("first unsupported batch: %v %v", built, err)
-	}
+	// The larger bounded batch reaches the supported tail on its first pass.
 	if built, err := refreshSmallSystemHistoryRoutingContext(context.Background(), dir, false); err != nil || !built {
 		t.Fatalf("supported tail starved: %v %v", built, err)
 	}

@@ -119,3 +119,34 @@ func TestHistoryDirectoryCoalescingRetainsCRCAndBounds(t *testing.T) {
 		t.Fatal("page cache bypassed directory CRC")
 	}
 }
+
+func TestHistoryAccessorKeySearchReusesOnlyItsOwnDecodedFences(t *testing.T) {
+	data := buildStateDomainChangeV7AccessorBytes(t, 2048)
+	h, err := decodeStateDomainChangeBinaryAccessorV7Header(bytes.NewReader(data), uint64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &historyPageProbe{data: data}
+	search := historyAccessorKeySearch{r: source, h: h}
+	first, err := stateDomainChangeBinaryAccessorV6ReadBlockDirectoryEntry(bytes.NewReader(data), h, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		got, index, found, err := search.find(first.firstKey)
+		if err != nil || !found || index != 0 || !bytes.Equal(got.firstKey, first.firstKey) {
+			t.Fatal(index, found, err)
+		}
+	}
+	cachedReads := source.calls
+	if cachedReads > 2 {
+		t.Fatal("batch reparsed its small directory", cachedReads)
+	}
+	// A new descriptor/search must validate the current bytes independently.
+	bad := append([]byte(nil), data...)
+	bad[h.headerSize+h.blockCount*8+3] ^= 1
+	fresh := historyAccessorKeySearch{r: bytes.NewReader(bad), h: h}
+	if _, _, _, err := fresh.find(first.firstKey); err == nil {
+		t.Fatal("fresh search reused old parsed fences")
+	}
+}

@@ -281,9 +281,7 @@ func TestMetadataHistoryRoutingUnsupportedSourcesDoNotStarveTail(t *testing.T) {
 	if err := PublishManifest(dir, m); err != nil {
 		t.Fatal(err)
 	}
-	if built, err := refreshMetadataHistoryRoutingContext(context.Background(), dir, false); built || err != nil {
-		t.Fatal("unsupported batch", built, err)
-	}
+	// One page-sized pass can skip the old 64-source unsupported prefix.
 	if built, err := refreshMetadataHistoryRoutingContext(context.Background(), dir, false); !built || err != nil {
 		t.Fatal("supported tail starved", built, err)
 	}

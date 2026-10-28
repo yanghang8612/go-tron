@@ -202,25 +202,9 @@ func readSystemHistoryRoutingSelected(ctx context.Context, dir string, ref Segme
 	if err := validateSegmentRef(ref); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(filepath.Join(dir, ref.Path))
+	data, digest, err := readSystemHistoryRoutingBytes(ctx, dir, ref)
 	if err != nil {
 		return nil, err
-	}
-	defer f.Close()
-	stat, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if stat.Size() != int64(ref.Size) {
-		return nil, errors.New("snapshots: system history routing size mismatch")
-	}
-	data := make([]byte, ref.Size)
-	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, data); err != nil {
-		return nil, err
-	}
-	digest := sha256.Sum256(data)
-	if fmt.Sprintf("sha256:%x", digest) != ref.Checksum {
-		return nil, errors.New("snapshots: system history routing checksum mismatch")
 	}
 	sharedSystemHistoryRouting.Lock()
 	cached := sharedSystemHistoryRouting.value
@@ -248,6 +232,40 @@ func readSystemHistoryRoutingSelected(ctx context.Context, dir string, ref Segme
 	return decoded, nil
 }
 
+// Authenticate the current open object before any shared decoded hit.
+func readSystemHistoryRoutingBytes(ctx context.Context, dir string, ref SegmentRef) ([]byte, [32]byte, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, [32]byte{}, err
+	}
+	if ref.Kind != SegmentSystemHistoryRouting || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < systemHistoryRoutingHeaderSize || ref.Size > systemHistoryRoutingMaxBytes {
+		return nil, [32]byte{}, errors.New("snapshots: invalid system history routing reference")
+	}
+	if err := validateSegmentRef(ref); err != nil {
+		return nil, [32]byte{}, err
+	}
+	f, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		return nil, [32]byte{}, err
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, [32]byte{}, err
+	}
+	if stat.Size() != int64(ref.Size) {
+		return nil, [32]byte{}, errors.New("snapshots: system history routing size mismatch")
+	}
+	data := make([]byte, ref.Size)
+	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, data); err != nil {
+		return nil, [32]byte{}, err
+	}
+	digest := sha256.Sum256(data)
+	if fmt.Sprintf("sha256:%x", digest) != ref.Checksum {
+		return nil, [32]byte{}, errors.New("snapshots: system history routing checksum mismatch")
+	}
+	return data, digest, contextError(ctx)
+}
+
 func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRouting, error) {
 	return decodeHistoryRoutingFamily(context.Background(), data, ref, false)
 }
@@ -257,6 +275,12 @@ func decodeHistoryRoutingFamily(ctx context.Context, data []byte, ref SegmentRef
 }
 
 func decodeHistoryRoutingFamilySelected(ctx context.Context, data []byte, ref SegmentRef, small bool, wanted map[string]bool) (*systemHistoryRouting, error) {
+	return walkHistoryRoutingFamily(ctx, data, ref, small, wanted, nil)
+}
+
+// A visitor receives only structurally validated memberships. Empty wanted
+// retains no rows; the bounded bootstrap visitor consumes only its two families.
+func walkHistoryRoutingFamily(ctx context.Context, data []byte, ref SegmentRef, small bool, wanted map[string]bool, visit func([]byte, byte, []byte) error) (*systemHistoryRouting, error) {
 	bad := errors.New("snapshots: invalid system history routing encoding")
 	magic, maxKeys := systemHistoryRoutingMagic, systemHistoryRoutingMaxKeys
 	if small {
@@ -359,6 +383,11 @@ func decodeHistoryRoutingFamilySelected(ctx context.Context, data []byte, ref Se
 		}
 		if !validKey || previous != nil && bytes.Compare(previous, key) >= 0 {
 			return nil, bad
+		}
+		if visit != nil {
+			if err := visit(key, mode, payload); err != nil {
+				return nil, err
+			}
 		}
 		if wanted == nil || wanted[string(key)] {
 			// The encoded length separates the mode tag and payload. Own only

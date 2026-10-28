@@ -25,6 +25,7 @@ type historyCompactionBudgetState struct {
 	outerMetrics         *historyCompactionOuterMetrics
 	routingRetiredCursor retiredMetadataSweepCursor
 	systemRouting        systemRoutingRefreshState
+	preferMetadata       bool
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -193,21 +194,28 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			}
 			r.compactionBudget.routingRetiredCursor = pruned.Next
 		}
-		built, routeErr := refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy)
-		if routeErr != nil {
-			return total, routeErr
+		// Alternate the two lightweight families. Returning after every
+		// successful small batch used to starve metadata until all sources
+		// were covered, leaving expensive query fallback for hours.
+		small := func() (bool, error) { return refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
+		metadata := func() (bool, error) { return refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
+		families := []func() (bool, error){small, metadata}
+		if r.compactionBudget.preferMetadata {
+			families[0], families[1] = families[1], families[0]
 		}
-		if built {
-			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+		for _, refresh := range families {
+			built, routeErr := refresh()
+			if routeErr != nil {
+				return total, routeErr
+			}
+			if built {
+				r.compactionBudget.preferMetadata = !r.compactionBudget.preferMetadata
+				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+			}
 		}
 		r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
-		built, routeErr = refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy)
-		if routeErr != nil {
-			return total, routeErr
-		}
-		if built {
-			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
-		}
+		var built bool
+		var routeErr error
 		built, routeErr = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
 		if routeErr != nil {
 			return total, routeErr

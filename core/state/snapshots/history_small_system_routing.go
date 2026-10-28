@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -186,7 +187,16 @@ func BuildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, mani
 	return buildSmallSystemHistoryRoutingContext(ctx, dir, manifest, maxNew, 0, nil)
 }
 
+type smallSystemRoutingWorkLimit struct {
+	bytes    uint64
+	duration time.Duration
+}
+
 func buildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew, start int, next *int) (ref SegmentRef, built bool, err error) {
+	return buildSmallSystemHistoryRoutingWithBudget(ctx, dir, manifest, maxNew, start, next, smallSystemRoutingWorkLimit{})
+}
+
+func buildSmallSystemHistoryRoutingWithBudget(ctx context.Context, dir string, manifest *Manifest, maxNew, start int, next *int, work smallSystemRoutingWorkLimit) (ref SegmentRef, built bool, err error) {
 	if manifest == nil || maxNew < 1 {
 		return ref, false, nil
 	}
@@ -199,6 +209,15 @@ func buildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, mani
 		return ref, false, err
 	}
 	manifest = manifestLookupView(manifest)
+	// Reuse complete exact-pair proofs from the old authenticated broad route.
+	// Range is only a cheap admission hint; membership authority uses pairID.
+	var bootstrap *historyRoutingBootstrap
+	if historyRoutingBootstrapNeeded(manifest, old) {
+		bootstrap, err = loadHistoryRoutingBootstrap(ctx, dir, manifest)
+		if err != nil {
+			return ref, false, err
+		}
+	}
 	type pair struct {
 		from, to uint64
 		id       [32]byte
@@ -206,8 +225,12 @@ func buildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, mani
 	var pairs []pair
 	rows := make(map[string][]uint32)
 	oldToNew := make(map[int]int)
+	seedToNew := make(map[int]int)
 	// Charge source identities/maps, key maps and append capacity conservatively.
 	charged, newSources, attempted := 0, 0, 0
+	var readBytes uint64
+	started := time.Now()
+	workExhausted := false
 	add := func(key string, column int) error {
 		cols := rows[key]
 		if len(cols) > 0 && cols[len(cols)-1] == uint32(column) {
@@ -246,12 +269,20 @@ func buildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, mani
 		if old != nil {
 			oldColumn, covered = old.columns[id]
 		}
+		seedColumn, seedCovered := 0, false
+		if !covered && bootstrap != nil {
+			seedColumn, seedCovered = bootstrap.columns[id]
+		}
 		var keys []string
-		if !covered {
-			if attempted >= maxNew {
+		if !covered && !seedCovered {
+			if attempted > 0 && (work.bytes > 0 && (readBytes >= work.bytes || a.Size > work.bytes-readBytes) || work.duration > 0 && time.Since(started) >= work.duration) {
+				workExhausted = true
+			}
+			if workExhausted || attempted >= maxNew {
 				continue
 			}
 			attempted++
+			readBytes += a.Size
 			if next != nil {
 				*next = (index + 1) % len(manifest.Segments)
 			}
@@ -273,6 +304,11 @@ func buildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, mani
 			oldToNew[oldColumn] = column
 			continue
 		}
+		if seedCovered {
+			seedToNew[seedColumn] = column
+			newSources++
+			continue
+		}
 		for _, key := range keys {
 			if err = add(key, column); err != nil {
 				return ref, false, nil
@@ -282,6 +318,27 @@ func buildSmallSystemHistoryRoutingContext(ctx context.Context, dir string, mani
 	}
 	if newSources == 0 {
 		return ref, false, nil
+	}
+	if bootstrap != nil {
+		for key, members := range bootstrap.small {
+			if err = contextError(ctx); err != nil {
+				return ref, false, err
+			}
+			var addErr error
+			systemHistoryMembersIterate(members, func(prior int) {
+				if addErr == nil {
+					if column, ok := seedToNew[prior]; ok {
+						addErr = add(key, column)
+					}
+				}
+			})
+			if addErr != nil {
+				if errors.Is(addErr, errSystemHistoryRoutingBudget) {
+					return ref, false, nil
+				}
+				return ref, false, addErr
+			}
+		}
 	}
 	if old != nil {
 		for key, members := range old.keys {
@@ -513,7 +570,7 @@ func refreshSmallSystemHistoryRoutingContext(ctx context.Context, dir string, bu
 	}
 	smallSystemRoutingRefreshCursor.Unlock()
 	next := start
-	ref, built, err := buildSmallSystemHistoryRoutingContext(ctx, dir, manifest, systemHistoryRoutingMaxNewSources, start, &next)
+	ref, built, err := buildSmallSystemHistoryRoutingWithBudget(ctx, dir, manifest, 256, start, &next, smallSystemRoutingWorkLimit{bytes: 128 << 20, duration: 2 * time.Second})
 	if err == nil {
 		smallSystemRoutingRefreshCursor.Lock()
 		smallSystemRoutingRefreshCursor.dir, smallSystemRoutingRefreshCursor.start = dir, next

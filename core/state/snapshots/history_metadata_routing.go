@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -187,6 +188,10 @@ func BuildMetadataHistoryRoutingContext(ctx context.Context, dir string, manifes
 }
 
 func buildMetadataHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int, startTx uint64, nextTx *uint64) (SegmentRef, bool, error) {
+	return buildMetadataHistoryRoutingWithBudget(ctx, dir, manifest, maxNew, startTx, nextTx, smallSystemRoutingWorkLimit{})
+}
+
+func buildMetadataHistoryRoutingWithBudget(ctx context.Context, dir string, manifest *Manifest, maxNew int, startTx uint64, nextTx *uint64, work smallSystemRoutingWorkLimit) (SegmentRef, bool, error) {
 	if manifest == nil || maxNew < 1 {
 		return SegmentRef{}, false, nil
 	}
@@ -196,6 +201,11 @@ func buildMetadataHistoryRoutingContext(ctx context.Context, dir string, manifes
 	rows := make(map[[32]byte]metadataSourceFilter)
 	var from, to uint64
 	attempts := 0
+	var bootstrap *historyRoutingBootstrap
+	bootstrapLoaded := false
+	var readBytes uint64
+	readSources := 0
+	started := time.Now()
 	if nextTx != nil {
 		*nextTx = 0
 	}
@@ -224,7 +234,30 @@ func buildMetadataHistoryRoutingContext(ctx context.Context, dir string, manifes
 			}
 			continue
 		}
-		row, err := metadataHistorySourceFilter(ctx, dir, h, a)
+		if !bootstrapLoaded {
+			bootstrap, err = loadHistoryRoutingBootstrap(ctx, dir, manifest)
+			if err != nil {
+				return SegmentRef{}, false, err
+			}
+			bootstrapLoaded = true
+		}
+		var row metadataSourceFilter
+		seeded := false
+		if bootstrap != nil {
+			if column, ok := bootstrap.columns[id]; ok && !bootstrap.metadataNonempty[column] {
+				seeded = true
+			}
+		}
+		if !seeded {
+			// Page capacity is not a heavy-I/O budget. Zero-I/O broad
+			// migrations can fill a page; uncached dictionaries remain bounded.
+			if readSources > 0 && (work.bytes > 0 && (readBytes >= work.bytes || a.Size > work.bytes-readBytes) || work.duration > 0 && time.Since(started) >= work.duration) {
+				break
+			}
+			readSources++
+			readBytes += a.Size
+			row, err = metadataHistorySourceFilter(ctx, dir, h, a)
+		}
 		attempts++
 		if nextTx != nil && h.ToTxNum != ^uint64(0) {
 			*nextTx = h.ToTxNum + 1
@@ -383,7 +416,7 @@ func refreshMetadataHistoryRoutingContext(ctx context.Context, dir string, busy 
 	}
 	metadataRoutingRefreshCursor.Unlock()
 	next := start
-	ref, built, err := buildMetadataHistoryRoutingContext(ctx, dir, m, systemHistoryRoutingMaxNewSources, start, &next)
+	ref, built, err := buildMetadataHistoryRoutingWithBudget(ctx, dir, m, metadataRoutingPageSources, start, &next, smallSystemRoutingWorkLimit{bytes: 128 << 20, duration: 2 * time.Second})
 	if err == nil {
 		metadataRoutingRefreshCursor.Lock()
 		metadataRoutingRefreshCursor.dir, metadataRoutingRefreshCursor.nextTx = dir, next

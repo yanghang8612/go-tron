@@ -243,26 +243,54 @@ func readHistoryAccessorDirectoryGroup(r io.ReaderAt, h stateDomainChangeBinaryA
 	}
 	return blocks, nil
 }
+
+// This search belongs to one open descriptor and one batch. Reuse decoded
+// fences as well as physical pages; a batch of neighboring dynamic-property
+// keys otherwise decodes the same sparse directory and group for every key.
+type historyAccessorKeySearch struct {
+	r                         io.ReaderAt
+	h                         stateDomainChangeBinaryAccessorV6Header
+	smallLoaded, sparseLoaded bool
+	small                     []stateDomainChangeBinaryAccessorV6Block
+	groups                    []historyAccessorSparseGroup
+	groupLoaded               bool
+	groupIndex                uint64
+	group                     []stateDomainChangeBinaryAccessorV6Block
+}
+
 func findHistoryAccessorKeyBlock(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, key []byte) (stateDomainChangeBinaryAccessorV6Block, uint64, bool, error) {
+	return (&historyAccessorKeySearch{r: r, h: h}).find(key)
+}
+
+func (s *historyAccessorKeySearch) find(key []byte) (stateDomainChangeBinaryAccessorV6Block, uint64, bool, error) {
+	r, h := s.r, s.h
 	var zero stateDomainChangeBinaryAccessorV6Block
 	if h.blockCount == 0 {
 		return zero, 0, false, nil
 	}
 	if h.blockCount <= historyAccessorSparseStride && h.blockDirLen <= historyAccessorDirectoryReadLimit {
-		blocks, err := readSmallHistoryAccessorDirectory(r, h)
-		if err != nil {
-			return zero, 0, false, err
+		if !s.smallLoaded {
+			blocks, err := readSmallHistoryAccessorDirectory(r, h)
+			if err != nil {
+				return zero, 0, false, err
+			}
+			s.small, s.smallLoaded = blocks, true
 		}
+		blocks := s.small
 		at := sort.Search(len(blocks), func(i int) bool { return bytes.Compare(blocks[i].firstKey, key) > 0 }) - 1
 		if at < 0 {
 			return zero, 0, false, nil
 		}
 		return blocks[at], uint64(at), true, nil
 	}
-	groups, err := readHistoryAccessorSparseDirectory(r, h)
-	if err != nil {
-		return zero, 0, false, err
+	if !s.sparseLoaded {
+		groups, err := readHistoryAccessorSparseDirectory(r, h)
+		if err != nil {
+			return zero, 0, false, err
+		}
+		s.groups, s.sparseLoaded = groups, true
 	}
+	groups := s.groups
 	if len(groups) > 0 {
 		at := sort.Search(len(groups), func(i int) bool { return bytes.Compare(groups[i].key, key) > 0 }) - 1
 		if at < 0 {
@@ -270,10 +298,14 @@ func findHistoryAccessorKeyBlock(r io.ReaderAt, h stateDomainChangeBinaryAccesso
 		}
 		g := groups[at]
 		if g.length <= historyAccessorDirectoryReadLimit {
-			blocks, e := readHistoryAccessorDirectoryGroup(r, h, g)
-			if e != nil {
-				return zero, 0, false, e
+			if !s.groupLoaded || s.groupIndex != g.index {
+				blocks, e := readHistoryAccessorDirectoryGroup(r, h, g)
+				if e != nil {
+					return zero, 0, false, e
+				}
+				s.group, s.groupIndex, s.groupLoaded = blocks, g.index, true
 			}
+			blocks := s.group
 			at := sort.Search(len(blocks), func(i int) bool { return bytes.Compare(blocks[i].firstKey, key) > 0 }) - 1
 			if at < 0 {
 				return zero, 0, false, errors.New("snapshots: sparse directory does not cover key")

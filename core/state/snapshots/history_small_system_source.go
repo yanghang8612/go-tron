@@ -20,6 +20,7 @@ import (
 // physical authentication with a file identity or CRC. Strict import separately
 // walks the entire dictionary and compares the exact resulting memberships.
 func iterateSmallSystemRoutingDictionaryKeys(ctx context.Context, r io.ReaderAt, size uint64, h stateDomainChangeBinaryAccessorV6Header, visit func([]byte) error) error {
+	search := historyAccessorKeySearch{r: r, h: h}
 	var records []stateDomainChangeBinaryAccessorV6Record
 	var cached uint64
 	have := false
@@ -47,7 +48,7 @@ func iterateSmallSystemRoutingDictionaryKeys(ctx context.Context, r io.ReaderAt,
 		if h.blockCount == 0 {
 			return nil, nil
 		}
-		_, index, _, err := findHistoryAccessorKeyBlock(r, h, key)
+		_, index, _, err := search.find(key)
 		if err != nil {
 			return nil, err
 		}
@@ -68,7 +69,7 @@ func iterateSmallSystemRoutingDictionaryKeys(ctx context.Context, r io.ReaderAt,
 		if h.blockCount == 0 {
 			return nil
 		}
-		_, index, _, err := findHistoryAccessorKeyBlock(r, h, key)
+		_, index, _, err := search.find(key)
 		if err != nil {
 			return err
 		}

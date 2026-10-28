@@ -1,0 +1,100 @@
+package snapshots
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"testing"
+	"time"
+)
+
+func TestOfflineRoutingBootstrapBuild(t *testing.T) {
+	dir := os.Getenv("GTRON_BOOTSTRAP_SNAPSHOTS")
+	out := os.Getenv("GTRON_BOOTSTRAP_OUTPUT")
+	if dir == "" {
+		t.Skip("offline")
+	}
+	ctx := context.Background()
+	original, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		Family          string  `json:"family"`
+		Seconds         float64 `json:"seconds"`
+		Built           bool    `json:"built"`
+		SmallSources    int     `json:"small_sources"`
+		MetadataSources uint64  `json:"metadata_sources"`
+		Allocated       uint64  `json:"allocated_bytes"`
+		GC              uint32  `json:"gc"`
+	}
+	var rows []row
+	// The current production policy always returns after a successful small
+	// refresh; call both explicitly so their own per-pass costs can be compared.
+	for pass := 0; pass < 3; pass++ {
+		for _, family := range []string{"small", "metadata"} {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			started := time.Now()
+			var built bool
+			if family == "small" {
+				built, err = refreshSmallSystemHistoryRoutingContext(ctx, dir, false)
+			} else {
+				built, err = refreshMetadataHistoryRoutingContext(ctx, dir, false)
+			}
+			if err != nil {
+				t.Fatal(family, err)
+			}
+			elapsed := time.Since(started).Seconds()
+			runtime.ReadMemStats(&after)
+			m, err := LoadProductionManifest(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(original.Progress, m.Progress) {
+				t.Fatal("canonical progress changed")
+			}
+			small, err := loadSmallSystemHistoryRouting(ctx, dir, m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := row{Family: family, Seconds: elapsed, Built: built, Allocated: after.TotalAlloc - before.TotalAlloc, GC: after.NumGC - before.NumGC}
+			if small != nil {
+				r.SmallSources = len(small.sources)
+			}
+			for _, ref := range m.Segments {
+				if ref.Kind == SegmentMetadataHistoryRouting {
+					r.MetadataSources += ref.Rows
+				}
+			}
+			rows = append(rows, r)
+			raw, _ := json.MarshalIndent(rows, "", "  ")
+			if err := os.WriteFile(filepath.Join(out, "build-passes.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Canonical segment identities and frontiers must remain identical. Auxiliary
+	// rows are the only allowed additions/replacements; no database traversal.
+	final, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := func(m *Manifest) map[string]SegmentRef {
+		ret := make(map[string]SegmentRef)
+		for _, ref := range m.Segments {
+			switch ref.Kind {
+			case SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting:
+				continue
+			}
+			ret[ref.Path] = ref
+		}
+		return ret
+	}
+	if !reflect.DeepEqual(canonical(original), canonical(final)) {
+		t.Fatal("canonical cold files changed")
+	}
+}

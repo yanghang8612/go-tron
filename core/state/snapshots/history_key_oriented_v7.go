@@ -852,13 +852,14 @@ func iterateStateDomainChangeBinarySegmentByAccessorV7KeysContext(ctx context.Co
 		offsets = newHistoryAccessorOffsetResolver(accessor, h)
 	}
 	recordBlocks := make(map[uint64][]stateDomainChangeBinaryAccessorV6Record)
+	search := historyAccessorKeySearch{r: pages, h: h}
 	for _, lookupKey := range keys {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var blockIndex uint64
 		if isHistoryInlineAccessor(h.version) {
-			block, index, found, err := findHistoryAccessorKeyBlock(pages, h, lookupKey)
+			block, index, found, err := search.find(lookupKey)
 			if err != nil {
 				return err
 			}
