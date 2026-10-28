@@ -1,0 +1,44 @@
+{
+  "source": "4466dca6ceeb3477d7f25e0f989aff44f33a66c3",
+  "checks": {
+    "query-planning-frame-focused": {
+      "bytes": 120,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t4.037s\nok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t4.213s\n"
+    },
+    "query-planning-frame-race": {
+      "bytes": 120,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t1.772s\nok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t2.010s\n"
+    },
+    "query-planning-frame-bench": {
+      "bytes": 393,
+      "text": "goos: darwin\ngoarch: arm64\npkg: github.com/tronprotocol/go-tron/core/rawdb\ncpu: Apple M1 Max\nBenchmarkStateChangePostingFrameDecoding/owning-10         \t 1172139\t      1072 ns/op\t    2048 B/op\t       1 allocs/op\nBenchmarkStateChangePostingFrameDecoding/query-scratch-10  \t 2184639\t       562.3 ns/op\t       0 B/op\t       0 allocs/op\nPASS\nok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t5.595s\n"
+    },
+    "query-plan-scope-focused": {
+      "bytes": 176,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t3.269s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t0.925s\nok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t14.818s\n"
+    },
+    "query-plan-scope-race": {
+      "bytes": 121,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t19.548s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t4.426s\n"
+    },
+    "query-plan-scope-vet": {
+      "bytes": 0,
+      "text": ""
+    },
+    "query-short-window-race": {
+      "bytes": 110,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t4.964s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t3.888s\n"
+    },
+    "query-scope-dominant-race": {
+      "bytes": 65,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t3.607s\n"
+    },
+    "query-plan-final-vet": {
+      "bytes": 0,
+      "text": ""
+    }
+  },
+  "full_muhash_repeated": false,
+  "full_restore_repeated": false,
+  "final_source": "a99fe47dd37441592f7a5bf38100a1715db57bcf"
+}

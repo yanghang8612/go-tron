@@ -1,0 +1,12 @@
+{
+  "archive_bytes": 227470,
+  "sha256": "9bac86ac8d9cc8afccda7139ce6b2d7ca05e28131377e9fb6974239e4cc6ee81",
+  "members_verified": 38,
+  "source": "a99fe47dd37441592f7a5bf38100a1715db57bcf",
+  "formal_http_requests": 36,
+  "all_http_returns_match": true,
+  "all_ready_head_tx_root_match": true,
+  "cold_dispatch_history_pages_zero": true,
+  "actual_cold_reads_all_covered": true,
+  "production_identity_unchanged": true
+}

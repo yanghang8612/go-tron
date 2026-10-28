@@ -1,0 +1,804 @@
+{
+  "source": "a99fe47dd37441592f7a5bf38100a1715db57bcf",
+  "baseline_product_source": "9a9de233c9fd4def2acca00fdf22f6b26aa5cc76",
+  "formal_requests": 36,
+  "all_returns_match": true,
+  "production_before": {
+    "MainPID": "16604",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 10:01:31 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-4486cfb61fc3-1f59d76211d1b810/gtron"
+  },
+  "production_after": {
+    "MainPID": "16604",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 10:01:31 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-4486cfb61fc3-1f59d76211d1b810/gtron"
+  },
+  "requests": [
+    {
+      "case": "before-indexed-1",
+      "height": 9000000,
+      "repeat": 0,
+      "cache": "fresh-process-os-cache-uncontrolled",
+      "seconds_loopback_http": 2.767237737774849,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 1.2621840000000004,
+      "alloc_bytes": 233009320,
+      "read_bytes": 131276800,
+      "read_syscalls": 3938,
+      "rchar": 97687734
+    },
+    {
+      "case": "before-indexed-1",
+      "height": 9000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.0422885939478874,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 1.3027249999999997,
+      "alloc_bytes": 203291056,
+      "read_bytes": 0,
+      "read_syscalls": 1989,
+      "rchar": 90098557
+    },
+    {
+      "case": "before-indexed-1",
+      "height": 9000000,
+      "repeat": 2,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.8863036409020424,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.9224040000000002,
+      "alloc_bytes": 203288328,
+      "read_bytes": 0,
+      "read_syscalls": 1989,
+      "rchar": 90098557
+    },
+    {
+      "case": "before-indexed-1",
+      "height": 35000000,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 16.957839615643024,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 6.615694999999999,
+      "alloc_bytes": 1278562456,
+      "read_bytes": 1368936448,
+      "read_syscalls": 94865,
+      "rchar": 639517679
+    },
+    {
+      "case": "before-indexed-1",
+      "height": 35000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.5121288895606995,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.304075000000001,
+      "alloc_bytes": 1104408952,
+      "read_bytes": 0,
+      "read_syscalls": 94522,
+      "rchar": 639153515
+    },
+    {
+      "case": "before-indexed-1",
+      "height": 45836826,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.4638201892375946,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 1.244838999999999,
+      "alloc_bytes": 794189608,
+      "read_bytes": 94318592,
+      "read_syscalls": 27027,
+      "rchar": 25668159
+    },
+    {
+      "case": "before-indexed-1",
+      "height": 45836826,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.0107292458415031,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 1.1517669999999995,
+      "alloc_bytes": 793942096,
+      "read_bytes": 0,
+      "read_syscalls": 2,
+      "rchar": 122
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 9000000,
+      "repeat": 0,
+      "cache": "fresh-process-os-cache-uncontrolled",
+      "seconds_loopback_http": 1.5610773786902428,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.8630640000000005,
+      "alloc_bytes": 231994752,
+      "read_bytes": 15548416,
+      "read_syscalls": 3937,
+      "rchar": 96594664
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 9000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.647631399333477,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.6857360000000003,
+      "alloc_bytes": 202553216,
+      "read_bytes": 0,
+      "read_syscalls": 1988,
+      "rchar": 89005487
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 9000000,
+      "repeat": 2,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.6208818405866623,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.6542340000000006,
+      "alloc_bytes": 202544504,
+      "read_bytes": 0,
+      "read_syscalls": 1988,
+      "rchar": 89005487
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 35000000,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.8727670833468437,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.818256999999999,
+      "alloc_bytes": 1277764480,
+      "read_bytes": 3031040,
+      "read_syscalls": 94864,
+      "rchar": 638424609
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 35000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.414112463593483,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.1966329999999985,
+      "alloc_bytes": 1103677728,
+      "read_bytes": 0,
+      "read_syscalls": 94521,
+      "rchar": 638060445
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 45836826,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.27728476375341415,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 0.24273699999999998,
+      "alloc_bytes": 42341784,
+      "read_bytes": 2801664,
+      "read_syscalls": 44,
+      "rchar": 2682461
+    },
+    {
+      "case": "final-indexed-1",
+      "height": 45836826,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.2180565521121025,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 0.21748199999999862,
+      "alloc_bytes": 42212904,
+      "read_bytes": 0,
+      "read_syscalls": 2,
+      "rchar": 122
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 9000000,
+      "repeat": 0,
+      "cache": "fresh-process-os-cache-uncontrolled",
+      "seconds_loopback_http": 0.7333406433463097,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 15,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.7652449999999993,
+      "alloc_bytes": 231526640,
+      "read_bytes": 0,
+      "read_syscalls": 3937,
+      "rchar": 96594662
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 9000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.6886116936802864,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.8626589999999998,
+      "alloc_bytes": 203049408,
+      "read_bytes": 0,
+      "read_syscalls": 1988,
+      "rchar": 89005486
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 9000000,
+      "repeat": 2,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.5445159897208214,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 17,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.5759410000000003,
+      "alloc_bytes": 202548936,
+      "read_bytes": 0,
+      "read_syscalls": 1988,
+      "rchar": 89005486
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 35000000,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.6481361836194992,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.651287999999999,
+      "alloc_bytes": 1277751376,
+      "read_bytes": 0,
+      "read_syscalls": 94864,
+      "rchar": 638424608
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 35000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.3402988240122795,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 19,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.1198759999999996,
+      "alloc_bytes": 1103747720,
+      "read_bytes": 0,
+      "read_syscalls": 94521,
+      "rchar": 638060444
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 45836826,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.20786228775978088,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 0.20731700000000153,
+      "alloc_bytes": 42335032,
+      "read_bytes": 0,
+      "read_syscalls": 44,
+      "rchar": 2682460
+    },
+    {
+      "case": "final-indexed-2",
+      "height": 45836826,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.2008596807718277,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 0.20016999999999818,
+      "alloc_bytes": 42210104,
+      "read_bytes": 0,
+      "read_syscalls": 2,
+      "rchar": 121
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 9000000,
+      "repeat": 0,
+      "cache": "fresh-process-os-cache-uncontrolled",
+      "seconds_loopback_http": 1.0488590002059937,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 1.08045,
+      "alloc_bytes": 232267480,
+      "read_bytes": 16384,
+      "read_syscalls": 3938,
+      "rchar": 97687729
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 9000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.8988528028130531,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 23,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 1.035368,
+      "alloc_bytes": 203273432,
+      "read_bytes": 0,
+      "read_syscalls": 1989,
+      "rchar": 90098554
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 9000000,
+      "repeat": 2,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.8687434941530228,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 24,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "cpu_seconds": 0.9003140000000007,
+      "alloc_bytes": 203279384,
+      "read_bytes": 0,
+      "read_syscalls": 1989,
+      "rchar": 90098554
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 35000000,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.6592476963996887,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 25,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.632428,
+      "alloc_bytes": 1278561080,
+      "read_bytes": 0,
+      "read_syscalls": 94865,
+      "rchar": 639517676
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 35000000,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.4495214968919754,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 26,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 2.180268999999999,
+      "alloc_bytes": 1104464744,
+      "read_bytes": 2945024,
+      "read_syscalls": 94522,
+      "rchar": 639153512
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 45836826,
+      "repeat": 0,
+      "cache": "process-warm",
+      "seconds_loopback_http": 1.4573681578040123,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 27,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 1.4400589999999998,
+      "alloc_bytes": 794212216,
+      "read_bytes": 102248448,
+      "read_syscalls": 27026,
+      "rchar": 25668151
+    },
+    {
+      "case": "before-indexed-2",
+      "height": 45836826,
+      "repeat": 1,
+      "cache": "process-warm",
+      "seconds_loopback_http": 0.9197006151080132,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 28,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "cpu_seconds": 0.9205640000000006,
+      "alloc_bytes": 793876872,
+      "read_bytes": 0,
+      "read_syscalls": 2,
+      "rchar": 120
+    },
+    {
+      "case": "cold-0-before-indexed",
+      "cache": "private-cold-history-pages-zero-at-dispatch",
+      "seconds_loopback_http": 1.420415572822094,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 29,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 1.1450090000000008,
+      "alloc_bytes": 233023048,
+      "read_bytes": 109563904,
+      "read_syscalls": 3938,
+      "rchar": 97687729,
+      "actual_files": 636
+    },
+    {
+      "case": "cold-0-before-indexed",
+      "cache": "second-call-process-warm",
+      "seconds_loopback_http": 0.8651352226734161,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 30,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 0.8980809999999995,
+      "alloc_bytes": 203280224,
+      "read_bytes": 0,
+      "read_syscalls": 1989,
+      "rchar": 90098555
+    },
+    {
+      "case": "cold-1-final-indexed",
+      "cache": "private-cold-history-pages-zero-at-dispatch",
+      "seconds_loopback_http": 1.218577854335308,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 0.8759459999999999,
+      "alloc_bytes": 232282480,
+      "read_bytes": 109551616,
+      "read_syscalls": 3937,
+      "rchar": 96594659,
+      "actual_files": 636
+    },
+    {
+      "case": "cold-1-final-indexed",
+      "cache": "second-call-process-warm",
+      "seconds_loopback_http": 0.607383631169796,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 32,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 0.6400340000000009,
+      "alloc_bytes": 202559152,
+      "read_bytes": 0,
+      "read_syscalls": 1988,
+      "rchar": 89005485
+    },
+    {
+      "case": "cold-2-final-indexed",
+      "cache": "private-cold-history-pages-zero-at-dispatch",
+      "seconds_loopback_http": 1.1604212075471878,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 0.8496429999999995,
+      "alloc_bytes": 232288320,
+      "read_bytes": 109551616,
+      "read_syscalls": 3937,
+      "rchar": 96594652,
+      "actual_files": 636
+    },
+    {
+      "case": "cold-2-final-indexed",
+      "cache": "second-call-process-warm",
+      "seconds_loopback_http": 0.6101433113217354,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 34,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 0.7503609999999998,
+      "alloc_bytes": 202579496,
+      "read_bytes": 0,
+      "read_syscalls": 1988,
+      "rchar": 89005485
+    },
+    {
+      "case": "cold-3-before-indexed",
+      "cache": "private-cold-history-pages-zero-at-dispatch",
+      "seconds_loopback_http": 1.3708557859063148,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 35,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 1.1243670000000003,
+      "alloc_bytes": 233026520,
+      "read_bytes": 109551616,
+      "read_syscalls": 3938,
+      "rchar": 97687722,
+      "actual_files": 636
+    },
+    {
+      "case": "cold-3-before-indexed",
+      "cache": "second-call-process-warm",
+      "seconds_loopback_http": 0.8755491524934769,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 36,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+      },
+      "height": 9000000,
+      "cpu_seconds": 0.9091890000000005,
+      "alloc_bytes": 203274960,
+      "read_bytes": 0,
+      "read_syscalls": 1989,
+      "rchar": 90098555
+    }
+  ],
+  "groups": [
+    {
+      "version": "before-indexed",
+      "cache": "private-cold-history-pages-zero-at-dispatch",
+      "height": 9000000,
+      "n": 2,
+      "seconds": [
+        1.420415572822094,
+        1.3708557859063148
+      ],
+      "median_seconds_loopback_http": 1.3956356793642044,
+      "median_cpu_seconds": 1.1346880000000006,
+      "median_alloc_bytes": 233024784.0,
+      "median_read_bytes": 109557760.0,
+      "median_read_syscalls": 3938.0,
+      "median_rchar": 97687725.5,
+      "files": [
+        636,
+        636
+      ]
+    },
+    {
+      "version": "before-indexed",
+      "cache": "second-call-process-warm",
+      "height": 9000000,
+      "n": 2,
+      "seconds": [
+        0.8651352226734161,
+        0.8755491524934769
+      ],
+      "median_seconds_loopback_http": 0.8703421875834465,
+      "median_cpu_seconds": 0.903635,
+      "median_alloc_bytes": 203277592.0,
+      "median_read_bytes": 0.0,
+      "median_read_syscalls": 1989.0,
+      "median_rchar": 90098555.0
+    },
+    {
+      "version": "before-indexed",
+      "cache": "process-warm",
+      "height": 9000000,
+      "n": 4,
+      "seconds": [
+        1.0422885939478874,
+        0.8863036409020424,
+        0.8988528028130531,
+        0.8687434941530228
+      ],
+      "median_seconds_loopback_http": 0.8925782218575478,
+      "median_cpu_seconds": 0.9788860000000001,
+      "median_alloc_bytes": 203283856.0,
+      "median_read_bytes": 0.0,
+      "median_read_syscalls": 1989.0,
+      "median_rchar": 90098555.5
+    },
+    {
+      "version": "before-indexed",
+      "cache": "process-warm",
+      "height": 35000000,
+      "n": 2,
+      "seconds": [
+        1.5121288895606995,
+        1.6592476963996887
+      ],
+      "median_seconds_loopback_http": 1.585688292980194,
+      "median_cpu_seconds": 2.4682515000000005,
+      "median_alloc_bytes": 1191485016.0,
+      "median_read_bytes": 0.0,
+      "median_read_syscalls": 94693.5,
+      "median_rchar": 639335595.5
+    },
+    {
+      "version": "before-indexed",
+      "cache": "process-warm",
+      "height": 45836826,
+      "n": 2,
+      "seconds": [
+        1.0107292458415031,
+        0.9197006151080132
+      ],
+      "median_seconds_loopback_http": 0.9652149304747581,
+      "median_cpu_seconds": 1.0361655,
+      "median_alloc_bytes": 793909484.0,
+      "median_read_bytes": 0.0,
+      "median_read_syscalls": 2.0,
+      "median_rchar": 121.0
+    },
+    {
+      "version": "final-indexed",
+      "cache": "private-cold-history-pages-zero-at-dispatch",
+      "height": 9000000,
+      "n": 2,
+      "seconds": [
+        1.218577854335308,
+        1.1604212075471878
+      ],
+      "median_seconds_loopback_http": 1.189499530941248,
+      "median_cpu_seconds": 0.8627944999999997,
+      "median_alloc_bytes": 232285400.0,
+      "median_read_bytes": 109551616.0,
+      "median_read_syscalls": 3937.0,
+      "median_rchar": 96594655.5,
+      "files": [
+        636,
+        636
+      ]
+    },
+    {
+      "version": "final-indexed",
+      "cache": "second-call-process-warm",
+      "height": 9000000,
+      "n": 2,
+      "seconds": [
+        0.607383631169796,
+        0.6101433113217354
+      ],
+      "median_seconds_loopback_http": 0.6087634712457657,
+      "median_cpu_seconds": 0.6951975000000004,
+      "median_alloc_bytes": 202569324.0,
+      "median_read_bytes": 0.0,
+      "median_read_syscalls": 1988.0,
+      "median_rchar": 89005485.0
+    },
+    {
+      "version": "final-indexed",
+      "cache": "process-warm",
+      "height": 9000000,
+      "n": 4,
+      "seconds": [
+        0.647631399333477,
+        0.6208818405866623,
+        0.6886116936802864,
+        0.5445159897208214
+      ],
+      "median_seconds_loopback_http": 0.6342566199600697,
+      "median_cpu_seconds": 0.6699850000000005,
+      "median_alloc_bytes": 202551076.0,
+      "median_read_bytes": 0.0,
+      "median_read_syscalls": 1988.0,
+      "median_rchar": 89005486.5
+    },
+    {
+      "version": "final-indexed",
+      "cache": "process-warm",
+      "height": 35000000,
+      "n": 3,
+      "seconds": [
+        1.414112463593483,
+        1.6481361836194992,
+        1.3402988240122795
+      ],
+      "median_seconds_loopback_http": 1.414112463593483,
+      "median_cpu_seconds": 2.1966329999999985,
+      "median_alloc_bytes": 1103747720,
+      "median_read_bytes": 0,
+      "median_read_syscalls": 94521,
+      "median_rchar": 638060445
+    },
+    {
+      "version": "final-indexed",
+      "cache": "process-warm",
+      "height": 45836826,
+      "n": 3,
+      "seconds": [
+        0.2180565521121025,
+        0.20786228775978088,
+        0.2008596807718277
+      ],
+      "median_seconds_loopback_http": 0.20786228775978088,
+      "median_cpu_seconds": 0.20731700000000153,
+      "median_alloc_bytes": 42212904,
+      "median_read_bytes": 0,
+      "median_read_syscalls": 2,
+      "median_rchar": 122
+    }
+  ]
+}

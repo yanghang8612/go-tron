@@ -1,0 +1,175 @@
+[
+  {
+    "version": "before-indexed",
+    "cache": "private-cold-history-pages-zero-at-dispatch",
+    "height": 9000000,
+    "n": 2,
+    "seconds": [
+      1.4790247231721878,
+      1.4732931032776833
+    ],
+    "median_seconds_loopback_http": 1.4761589132249355,
+    "median_cpu_seconds": 1.2128919999999996,
+    "median_alloc_bytes": 233016020.0,
+    "median_read_bytes": 109557760.0,
+    "median_read_syscalls": 3938.0,
+    "median_rchar": 97687728.5,
+    "files": [
+      636,
+      636
+    ]
+  },
+  {
+    "version": "before-indexed",
+    "cache": "second-call-process-warm",
+    "height": 9000000,
+    "n": 2,
+    "seconds": [
+      0.9770751670002937,
+      0.9282739460468292
+    ],
+    "median_seconds_loopback_http": 0.9526745565235615,
+    "median_cpu_seconds": 1.0384295000000008,
+    "median_alloc_bytes": 203292316.0,
+    "median_read_bytes": 0.0,
+    "median_read_syscalls": 1989.0,
+    "median_rchar": 90098555.0
+  },
+  {
+    "version": "before-indexed",
+    "cache": "process-warm",
+    "height": 9000000,
+    "n": 4,
+    "seconds": [
+      0.8700361400842667,
+      0.9775375425815582,
+      0.9221811220049858,
+      1.0843082889914513
+    ],
+    "median_seconds_loopback_http": 0.949859332293272,
+    "median_cpu_seconds": 0.9833325000000013,
+    "median_alloc_bytes": 203276724.0,
+    "median_read_bytes": 0.0,
+    "median_read_syscalls": 1989.0,
+    "median_rchar": 90098555.0
+  },
+  {
+    "version": "before-indexed",
+    "cache": "process-warm",
+    "height": 35000000,
+    "n": 3,
+    "seconds": [
+      1.6390425786376,
+      1.796827033162117,
+      1.506785199046135
+    ],
+    "median_seconds_loopback_http": 1.6390425786376,
+    "median_cpu_seconds": 2.4310430000000025,
+    "median_alloc_bytes": 1104434344,
+    "median_read_bytes": 0,
+    "median_read_syscalls": 94523,
+    "median_rchar": 639153515
+  },
+  {
+    "version": "before-indexed",
+    "cache": "process-warm",
+    "height": 45836826,
+    "n": 3,
+    "seconds": [
+      0.9579652473330498,
+      1.2296823114156723,
+      1.0101053640246391
+    ],
+    "median_seconds_loopback_http": 1.0101053640246391,
+    "median_cpu_seconds": 1.1596730000000015,
+    "median_alloc_bytes": 793941800,
+    "median_read_bytes": 0,
+    "median_read_syscalls": 3,
+    "median_rchar": 122
+  },
+  {
+    "version": "final-indexed",
+    "cache": "private-cold-history-pages-zero-at-dispatch",
+    "height": 9000000,
+    "n": 2,
+    "seconds": [
+      1.168163999915123,
+      1.199722707271576
+    ],
+    "median_seconds_loopback_http": 1.1839433535933495,
+    "median_cpu_seconds": 0.9846104999999996,
+    "median_alloc_bytes": 232293268.0,
+    "median_read_bytes": 109551616.0,
+    "median_read_syscalls": 3937.0,
+    "median_rchar": 96594652.0,
+    "files": [
+      636,
+      636
+    ]
+  },
+  {
+    "version": "final-indexed",
+    "cache": "second-call-process-warm",
+    "height": 9000000,
+    "n": 2,
+    "seconds": [
+      0.6142861098051071,
+      0.574288085103035
+    ],
+    "median_seconds_loopback_http": 0.594287097454071,
+    "median_cpu_seconds": 0.6229620000000002,
+    "median_alloc_bytes": 202559816.0,
+    "median_read_bytes": 215040.0,
+    "median_read_syscalls": 1988.0,
+    "median_rchar": 89005485.0
+  },
+  {
+    "version": "final-indexed",
+    "cache": "process-warm",
+    "height": 9000000,
+    "n": 4,
+    "seconds": [
+      0.6319748759269714,
+      0.6339871510863304,
+      0.6236136257648468,
+      0.6390663087368011
+    ],
+    "median_seconds_loopback_http": 0.6329810135066509,
+    "median_cpu_seconds": 0.6660304999999989,
+    "median_alloc_bytes": 202592652.0,
+    "median_read_bytes": 0.0,
+    "median_read_syscalls": 1988.0,
+    "median_rchar": 89005486.0
+  },
+  {
+    "version": "final-indexed",
+    "cache": "process-warm",
+    "height": 35000000,
+    "n": 1,
+    "seconds": [
+      1.4169517755508423
+    ],
+    "median_seconds_loopback_http": 1.4169517755508423,
+    "median_cpu_seconds": 2.2513650000000016,
+    "median_alloc_bytes": 1103797888,
+    "median_read_bytes": 0,
+    "median_read_syscalls": 94521,
+    "median_rchar": 638060443
+  },
+  {
+    "version": "final-indexed",
+    "cache": "process-warm",
+    "height": 45836826,
+    "n": 2,
+    "seconds": [
+      0.7719763815402985,
+      0.8222859129309654
+    ],
+    "median_seconds_loopback_http": 0.7971311472356319,
+    "median_cpu_seconds": 0.7988359999999997,
+    "median_alloc_bytes": 43368612.0,
+    "median_read_bytes": 0.0,
+    "median_read_syscalls": 2.0,
+    "median_rchar": 121.0
+  }
+]

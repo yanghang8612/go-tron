@@ -123,3 +123,9 @@ Sapling 原生构建和 HTTP 返回值逐项对照。遵循性能优先要求，
 证据中 post-run-assessment 的固定说明文字将外部发布范围写得过宽；其计算字段
 `external_production_identity_changed=false` 及原始 before/after 回执才是依据，
 本地独立复核回执已明确纠正：切换发生在轮次之间。
+
+
+后续精确统计补充（同日 query-plan-scope 试验）：本文“完整路由”是指轻量系统
+路由覆盖全部固定冷源；通用 ContractStorage 大路由仍只有 25,600 个源 ID、
+Tx 上界 3,006,279,261，不能解读成全部业务路由完整。详见
+`history-query-plan-scope-20261028.md` 的单对象全量组成统计。

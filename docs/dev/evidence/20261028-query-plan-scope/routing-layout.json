@@ -1,0 +1,49 @@
+{
+  "cold_sources": 32036,
+  "cold_max_tx": 4063356397,
+  "routes": [
+    {
+      "rows": 62,
+      "dataset": "state-domain-change",
+      "kind": "small-system-history-routing",
+      "fromTxNum": 1,
+      "toTxNum": 4063356397,
+      "path": "history/small-system-routing-1-4063356397-9ae3099faf7ab650b2bf96f65baff68499b9d3ddb98f94cb3bd0ece9e5170351.route",
+      "size": 1093070,
+      "checksum": "sha256:9ae3099faf7ab650b2bf96f65baff68499b9d3ddb98f94cb3bd0ece9e5170351",
+      "sources": 32036
+    },
+    {
+      "rows": 951169,
+      "dataset": "state-domain-change",
+      "kind": "system-history-routing",
+      "fromTxNum": 1,
+      "toTxNum": 3006279261,
+      "path": "history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+      "size": 66948766,
+      "checksum": "sha256:a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de",
+      "sources": 25600
+    }
+  ],
+  "broad_bytes": 66948766,
+  "broad_budget_bytes": 67108864,
+  "broad_header_and_source_bytes": 819240,
+  "families": {
+    "system-and-other": {
+      "rows": 59,
+      "bytes": 56058,
+      "payload_bytes": 52820,
+      "dense_rows": 14,
+      "sparse_rows": 45
+    },
+    "ContractStorage-prefix": {
+      "rows": 951110,
+      "bytes": 66073468,
+      "payload_bytes": 29931288,
+      "dense_rows": 3527,
+      "sparse_rows": 947583
+    }
+  },
+  "input_bytes_authenticated": true,
+  "database_scan": false
+}
