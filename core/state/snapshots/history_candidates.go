@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"context"
+	"sort"
 
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -62,6 +63,85 @@ type historyCandidateQuery struct {
 	lookup       []byte
 	accountBound uint64
 	accountFound bool
+}
+
+const historyCandidatePlanBytes = 16 << 20
+
+type historyCandidateCursor struct {
+	lookup []byte
+	rows   []uint32
+	pos    int
+}
+
+type historyCandidatePlan struct {
+	table    *historySourceTable
+	cursors  []historyCandidateCursor
+	fallback []historySource
+	pos      int
+}
+
+func newHistoryCandidatePlan(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader) (*historyCandidatePlan, error) {
+	p := &historyCandidatePlan{table: manifestHistorySources(m)}
+	used := 0
+	if p.table != nil && len(queries) <= 256 {
+		for _, q := range queries {
+			candidates, err := historyCandidates(ctx, dir, m, from, to, []historyCandidateQuery{q}, broad, small, account, metadata)
+			if err != nil {
+				return nil, err
+			}
+			used += len(candidates)*4 + len(q.lookup) + 64
+			if used > historyCandidatePlanBytes {
+				p.cursors = nil
+				break
+			}
+			cursor := historyCandidateCursor{lookup: q.lookup, rows: make([]uint32, len(candidates))}
+			for i, candidate := range candidates {
+				cursor.rows[i] = candidate.row
+			}
+			p.cursors = append(p.cursors, cursor)
+		}
+		if len(p.cursors) == len(queries) {
+			return p, nil
+		}
+	}
+	var err error
+	p.fallback, err = historyCandidates(ctx, dir, m, from, to, queries, broad, small, account, metadata)
+	return p, err
+}
+
+// Merge only still-unresolved key cursors. A key changed in every source must
+// stop contributing candidates immediately after its first authoritative hit;
+// a static union would keep walking the entire catalog for a different absent key.
+func (p *historyCandidatePlan) next(active func([]byte) bool) (historySource, bool) {
+	if p.fallback != nil {
+		if p.pos == len(p.fallback) {
+			return historySource{}, false
+		}
+		s := p.fallback[p.pos]
+		p.pos++
+		return s, true
+	}
+	row, found := uint32(0), false
+	for i := range p.cursors {
+		c := &p.cursors[i]
+		if c.pos == len(c.rows) || !active(c.lookup) {
+			continue
+		}
+		if !found || c.rows[c.pos] < row {
+			row, found = c.rows[c.pos], true
+		}
+	}
+	if !found {
+		return historySource{}, false
+	}
+	for i := range p.cursors {
+		c := &p.cursors[i]
+		if c.pos < len(c.rows) && c.rows[c.pos] == row {
+			c.pos++
+		}
+	}
+	i := sort.Search(len(p.table.sources), func(i int) bool { return p.table.sources[i].row >= row })
+	return p.table.sources[i], true
 }
 
 // Compile inverted memberships into a union of possible sources. Uncovered,

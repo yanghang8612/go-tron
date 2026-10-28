@@ -57,6 +57,28 @@ func TestHistoryCandidatesJumpNegativeAndRetainUnknownReplacement(t *testing.T) 
 	if e != nil || len(rows) != 2 {
 		t.Fatalf("unsupported family incorrectly negative: %d %v", len(rows), e)
 	}
+	// A frequently changing key must disappear from the merge after it has
+	// been resolved. Keeping a static union would still visit all n sources
+	// while the separate absent key waited for range completion.
+	missing := q
+	missing.Key = []byte("never-present")
+	missingKey := stateDomainChangeBinaryAccessorLookupKey(missing.FlatDomain, missing.Owner, missing.Generation, missing.Domain, missing.Key)
+	route.columns[tab.sources[4000].id] = 4000
+	all := make([]byte, 1+(n+7)/8)
+	for i := range n {
+		all[1+i/8] |= 1 << uint(i%8)
+	}
+	route.keys[string(key)] = all
+	plan, e := newHistoryCandidatePlan(context.Background(), "", m, 1, n, []historyCandidateQuery{{query: q, lookup: key}, {query: missing, lookup: missingKey}}, nil, route, nil, newMetadataHistoryRoutingReader(m))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if first, ok := plan.next(func([]byte) bool { return true }); !ok || first.row != 0 {
+		t.Fatalf("first candidate: %+v %v", first, ok)
+	}
+	if extra, ok := plan.next(func(k []byte) bool { return string(k) != string(key) }); ok {
+		t.Fatalf("resolved key left a spurious candidate: %+v", extra)
+	}
 }
 
 func TestHistoryCandidatesPartialCompleteAndReplacedManifestParity(t *testing.T) {

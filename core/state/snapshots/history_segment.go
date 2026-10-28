@@ -563,7 +563,7 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 	for i, entry := range entries {
 		planning[i] = historyCandidateQuery{entry.query, entry.lookup, entry.accountBound, entry.accountBoundFound}
 	}
-	candidates, err := historyCandidates(ctx, m.dir, manifest, fromTxNum, toTxNum, planning, routing, smallRouting, accountRouting, metadataRouting)
+	candidatePlan, err := newHistoryCandidatePlan(ctx, m.dir, manifest, fromTxNum, toTxNum, planning, routing, smallRouting, accountRouting, metadataRouting)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +599,7 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		}
 		return nil
 	}
-	for _, source := range candidates {
+	for source, more := candidatePlan.next(active); more; source, more = candidatePlan.next(active) {
 		ref := manifest.Segments[source.row]
 		if err := ctx.Err(); err != nil {
 			return nil, err
