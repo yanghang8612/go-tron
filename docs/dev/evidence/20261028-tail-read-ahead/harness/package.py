@@ -5,7 +5,7 @@ for root in [R,R/'cold',R/'random']:
 identity=dict(x.split('=',1) for x in subprocess.check_output(['systemctl','show','gtron','-p','MainPID','-p','ActiveState','-p','ExecMainStartTimestamp']).decode().splitlines());identity['exe']=os.readlink('/proc/'+identity['MainPID']+'/exe');assert identity==s['production_after']
 (R/'final-identity.json').write_text(json.dumps(identity,indent=2))
 paths=[]
-for root in [R,R/'cold',R/'random',R/'random-failed-no-http']:
+for root in [R,R/'cold',R/'random']+[p for p in R.iterdir() if p.is_dir() and p.name.startswith('random-failed')]:
  if not root.exists():continue
  paths.extend(p for p in root.iterdir() if p.is_file() and p.suffix in ['.json','.jsonl','.log','.py'])
  for folder in root.iterdir():
