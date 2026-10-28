@@ -1,0 +1,4 @@
+=== RUN   TestOfflineFullEthCallHTTP
+    offline_full_http_test.go:62: symbolic link datadir is not supported
+--- FAIL: TestOfflineFullEthCallHTTP (1.43s)
+FAIL

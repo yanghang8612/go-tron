@@ -1,0 +1,56 @@
+[
+  {
+    "family": "small",
+    "seconds": 1.52475922,
+    "built": true,
+    "small_sources": 64,
+    "metadata_sources": 0,
+    "allocated_bytes": 359708760,
+    "gc": 2
+  },
+  {
+    "family": "metadata",
+    "seconds": 1.027500769,
+    "built": true,
+    "small_sources": 64,
+    "metadata_sources": 64,
+    "allocated_bytes": 326824400,
+    "gc": 1
+  },
+  {
+    "family": "small",
+    "seconds": 2.046611953,
+    "built": true,
+    "small_sources": 128,
+    "metadata_sources": 64,
+    "allocated_bytes": 370665488,
+    "gc": 1
+  },
+  {
+    "family": "metadata",
+    "seconds": 2.267044862,
+    "built": true,
+    "small_sources": 128,
+    "metadata_sources": 128,
+    "allocated_bytes": 1026786472,
+    "gc": 6
+  },
+  {
+    "family": "small",
+    "seconds": 1.9707220269999999,
+    "built": true,
+    "small_sources": 192,
+    "metadata_sources": 128,
+    "allocated_bytes": 236973664,
+    "gc": 1
+  },
+  {
+    "family": "metadata",
+    "seconds": 2.581895357,
+    "built": true,
+    "small_sources": 192,
+    "metadata_sources": 192,
+    "allocated_bytes": 1185007544,
+    "gc": 7
+  }
+]

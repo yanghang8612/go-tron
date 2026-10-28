@@ -1,0 +1,82 @@
+[
+  {
+    "height": 9000000,
+    "cache": "fresh-process-os-uncontrolled",
+    "seconds_loopback_http": 75.45315843075514,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "height": 9000000,
+    "cache": "process-warm",
+    "seconds_loopback_http": 12.073558032512665,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "height": 9000000,
+    "cache": "process-warm",
+    "seconds_loopback_http": 9.315390206873417,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "height": 35000000,
+    "cache": "process-warm",
+    "seconds_loopback_http": 11.549970470368862,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "height": 35000000,
+    "cache": "process-warm",
+    "seconds_loopback_http": 10.857107944786549,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "height": 45836826,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.29144249856472015,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "height": 45836826,
+    "cache": "process-warm",
+    "seconds_loopback_http": 0.22495223581790924,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "height": 9000000,
+    "cache": "profile-not-formal-timing",
+    "seconds_loopback_http": 9.22219993174076,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  }
+]

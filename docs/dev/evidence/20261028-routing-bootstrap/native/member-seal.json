@@ -1,0 +1,134 @@
+{
+  "utc": "2026-10-28T06:32:15.892931Z",
+  "tested_source": "beeb4e70c2fca7ea82b67627093d3e99a4daca48",
+  "files": {
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/cpu-top.txt": {
+      "bytes": 124,
+      "sha256": "13b87143b31255e321a4d0eec9fa6aab162097a8768a5bfbd9cca3499cc28f87"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/cpu.pprof": {
+      "bytes": 39576,
+      "sha256": "324034cbc51d06c5938768eb247acd8360315ea6cdbd5c9086792722301c1d8e"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/host.log": {
+      "bytes": 622,
+      "sha256": "7247972835ac7d1465b4d08995b804d44c31b98664d3c8f757d478b460fd126e"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/ready.json": {
+      "bytes": 384,
+      "sha256": "91319f7fb9bd9ffa58f99a6e2f9f2ca419a33c53667ff919764d1f7e530a7517"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/requests.json": {
+      "bytes": 2098,
+      "sha256": "abaa8b164692a3d44d8ca6bd792799133dc94b38742a952120d3dc3f5883d05d"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/server-requests.jsonl": {
+      "bytes": 7949,
+      "sha256": "e157ce1aed54cf1d9bcfd2b040ec28274637a60d7659e89f9a8f13c2c67278fd"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/baseline/status.json": {
+      "bytes": 891,
+      "sha256": "e44ff20f6e52cfc4ccaf869dfb591ef90bd7ceaca2bd596a1847ee1640dc648f"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-bootstrap/host.log": {
+      "bytes": 160,
+      "sha256": "e9cf4bf55cf31e2195fdffaa0f9c149a0d5f93ccda85fa53523a4da886b9cbfc"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-bootstrap-fixed/host.log": {
+      "bytes": 611,
+      "sha256": "27e44d87df826e3cacbdcfb362b5aeda2623b35ec1f4faacd105747c5f7f5495"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-bootstrap-fixed/ready.json": {
+      "bytes": 384,
+      "sha256": "81fdc9d609090c297badbd07449f51ff3b7316ef49c68b0e094db82d719f3a23"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-bootstrap-fixed/server-requests.jsonl": {
+      "bytes": 7000,
+      "sha256": "fa66334b08b6a4cb56e8cd533a39423111c2a3dd17838924f96ce002549726f9"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-build-http.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-complete/host.log": {
+      "bytes": 609,
+      "sha256": "cdd594a3bc27291dea1a59553b205000fe24ab5718e6ef954db34661afc0ee5c"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-complete/ready.json": {
+      "bytes": 383,
+      "sha256": "9d187d9827e7d38154d15e7b20bb2d96d630e8553ea7ebc96d37a46112fe0032"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-complete/server-requests.jsonl": {
+      "bytes": 6901,
+      "sha256": "f1e0c45ddc146c70ae3c5ec218694718458b0087168d2e759347abc2f59297d5"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-maintenance/build-passes.json": {
+      "bytes": 1115,
+      "sha256": "caf7f3c17c71120cfb06795f2220b502e87b43d5e1de775cfb180d1b83e17341"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-maintenance/build.log": {
+      "bytes": 99,
+      "sha256": "66402fed746234a08d8fba2de92df8d8db930473c7ff8d25ffe840dbfb8eb082"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-partial/host.log": {
+      "bytes": 609,
+      "sha256": "69384f81914e200045bb9db1a636e0711bbd78a0c2a29426d8ea1a6325916557"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-partial/ready.json": {
+      "bytes": 383,
+      "sha256": "cb0efd04539ea63dbcd0ed8362b6c5148c7cfbbe1c4d806fef7844716be68c17"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-partial/server-requests.jsonl": {
+      "bytes": 6950,
+      "sha256": "8a25013e35e942ad6f24732a2c2f25e90a6f658375100693f83dfc9261b49324"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-requests.json": {
+      "bytes": 9758,
+      "sha256": "1de8cdf0971c01fac64f88b936eeba9f7c7b241796009eecf8f4b6c5d6b3aea6"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-status-link-failure.json": {
+      "bytes": 1367,
+      "sha256": "4f1c842aebbc153285d61c1682ef0677c8518032df85ffcd66c19b19d98868c3"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/candidate-status.json": {
+      "bytes": 774,
+      "sha256": "250e0701d17c6aa2a1e3d1f52637f039722a80f975282b1058d44eecb6ce9aa2"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-maintenance/build-passes.json": {
+      "bytes": 1093,
+      "sha256": "824179f31e1571f5522d42b3197305c04650243a97beb3a61b864a018ea4376c"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-maintenance/build.log": {
+      "bytes": 100,
+      "sha256": "413cf918df7d12065e9f424f7286afe76aa4a974a0a4de751dedc330cb4bafd4"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-partial/host.log": {
+      "bytes": 621,
+      "sha256": "e6fbea2dde670f890ae422a453ef7240c2490c2da2a398c7cf9d04a1cb4768fb"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-partial/ready.json": {
+      "bytes": 383,
+      "sha256": "d7fe13331c0b9c353316a25d93274f85a5be42a8243d2fe4a1cf0d67d527e83c"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-partial/server-requests.jsonl": {
+      "bytes": 6934,
+      "sha256": "95ae4e140a1a27ea31c792876a51c79893fcc2431ad7a4db17f5a6835967aee8"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-partial-reverse/host.log": {
+      "bytes": 621,
+      "sha256": "5d5a4f68005be9efcbaed4c4bb2e5c5c52fe943f1bfc8c26e349ed2a11f11459"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-partial-reverse/ready.json": {
+      "bytes": 384,
+      "sha256": "451a6d7ce9491c6c42ca92f35e48f4f0e148014ccd2fcb59cacb7f4282220323"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/current-partial-reverse/server-requests.jsonl": {
+      "bytes": 2980,
+      "sha256": "7387aafd3ac7a23fc6a9575d5291958618ddb44e190a662c855cd552d686c110"
+    },
+    "docs/dev/evidence/20261028-routing-bootstrap/native/native-focused.log": {
+      "bytes": 65,
+      "sha256": "ae6fb0b4b6d3b3142dd2377aa0a8e824865e8f834eca6c8849dc4390988fc2d9"
+    }
+  }
+}

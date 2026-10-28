@@ -1,0 +1,15 @@
+{
+  "complete": false,
+  "source": "99423eaf16fd4bc87f31e2c17ec55228361ffc02",
+  "base": "3e456e757cc452347781a167b7c175e317ee6b8d",
+  "production_mutations": false,
+  "stage": "failed",
+  "utc": "2026-10-28T06:06:43.793184Z",
+  "production_before": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "error": "Traceback (most recent call last):\n  File \"/data/gtron/maintenance/routing-bootstrap-20261028-01/native-validation.py\", line 53, in <module>\n    s['stage']='compile candidate full HTTP';save();command(['/data/go/bin/go','test','-tags=sapling','-c','./core','-o',str(R/'candidate-http.test')],candidate,R/'candidate-build-http.log')\n  File \"/data/gtron/maintenance/routing-bootstrap-20261028-01/native-validation.py\", line 9, in command\n    with log.open('wb') as f:subprocess.check_call(args,cwd=str(src),env=E,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 311, in check_call\n    raise CalledProcessError(retcode, cmd)\nsubprocess.CalledProcessError: Command '['/data/go/bin/go', 'test', '-tags=sapling', '-c', './core', '-o', '/data/gtron/maintenance/routing-bootstrap-20261028-01/candidate-http.test']' returned non-zero exit status 1.\n"
+}

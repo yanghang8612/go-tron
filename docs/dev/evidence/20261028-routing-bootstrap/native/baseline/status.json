@@ -1,0 +1,7 @@
+{
+  "complete": false,
+  "stage": "failed",
+  "production_mutations": false,
+  "utc": "2026-10-28T05:50:12.600336Z",
+  "error": "Traceback (most recent call last):\n  File \"/data/gtron/maintenance/routing-bootstrap-20261028-01/baseline.py\", line 26, in <module>\n    with (B/'cpu-top.txt').open('wb') as f:subprocess.check_call(['/data/go/bin/go','tool','pprof','-top','-nodecount=30',exe,str(B/'cpu.pprof')],stdout=f,stderr=subprocess.STDOUT,timeout=60)\n  File \"/usr/lib64/python3.6/subprocess.py\", line 311, in check_call\n    raise CalledProcessError(retcode, cmd)\nsubprocess.CalledProcessError: Command '['/data/go/bin/go', 'tool', 'pprof', '-top', '-nodecount=30', '/data/gtron/maintenance/history-routing-rollout-20261028-01/bootstrap-offline/bootstrap-http.test', '/data/gtron/maintenance/routing-bootstrap-20261028-01/baseline/cpu.pprof']' returned non-zero exit status 1.\n"
+}

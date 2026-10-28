@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-28T06:45:07.893068+00:00",
+  "archive": "AAA-gtron-routing-bootstrap-final-20261028-01.zip",
+  "bytes": 66829,
+  "sha256": "0cbc87f7f333a3d68f27ceec365cbe46149bb86fb835ae39cde49091d709191f",
+  "sealed_members_verified": 32,
+  "formal_requests_independently_joined_by_id": 31,
+  "returns_match": true,
+  "fixed_head_tx_root_match": true,
+  "production_before_after_match": true,
+  "source_transport": "feature branch; server archives exact commit, no master checkout change",
+  "evidence_transport": "SFTP archive from separate Git index; server Git push lacked credentials and failed; no credential changes or production mutation"
+}
