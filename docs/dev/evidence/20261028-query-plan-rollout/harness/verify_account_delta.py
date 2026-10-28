@@ -78,13 +78,32 @@ for height in [9000000,10000000,15000000,20000000]:
     for repeat in [0,1]:
         qs=[q for q in cold_rows if q['height']==height and q['repeat']==repeat];assert len(qs)==2
         grouped.append(dict(family='private-account-index-cold',height=height,repeat=repeat,seconds=[q['seconds_loopback_http'] for q in qs],rchar=[q['io_delta']['rchar'] for q in qs],syscr=[q['io_delta']['syscr'] for q in qs],read_bytes=[q['io_delta']['read_bytes'] for q in qs]))
+ab_status=read('code-ab/candidate-status.json');assert ab_status['complete'] and not ab_status['production_mutations'] and ab_status['candidate_source']==s['source'] and ab_status['base_source']=='69d74ae09d953a40a65b98b0a43eb22d115e7f70'
+assert ab_status['production_before']==ab_status['production_after']==s['production_after']
+ab_rows=[]
+for q in read('code-ab/requests.json'):
+    assert int(q['response']['result'],16)==expected[q['height']]
+    root='code-ab/'+q['case'];ready=read(root+'/ready.json');assert ready['read_only'] and tuple(ready[k] for k in ['head','head_hash','head_tx','root'])==head
+    server=[json.loads(x) for x in z.read(root+'/server-requests.jsonl').decode().splitlines()]
+    r,=[r for r in server if str(r['id'])==str(q['response']['id'])]
+    assert r['method']=='eth_call' and r['params'][1]==hex(q['height'])
+    ab_rows.append(dict(q,io_delta=delta(r['io_before'],r['io_after'])))
+assert len(ab_rows)==40
+for tag in ['before','candidate']:
+    for height in expected:
+        for repeat in [0,1]:
+            qs=[q for q in ab_rows if q['case'].startswith(tag+'-') and q['height']==height and q['repeat']==repeat];assert len(qs)==2
+            grouped.append(dict(family='code-'+tag,height=height,repeat=repeat,seconds=[q['seconds_loopback_http'] for q in qs],rchar=[q['io_delta']['rchar'] for q in qs],syscr=[q['io_delta']['syscr'] for q in qs],read_bytes=[q['io_delta']['read_bytes'] for q in qs]))
 build_io=[delta(p['io_before'],p['io_after']) for p in build['passes']]
 summary=dict(complete=True,source=s['source'],production_identity=s['production_after'],http_returns=len(all_rows),head=head,tables=tables,build_seconds=build['seconds'],source_reads=1521,build_io={k:sum(x[k] for x in build_io) for k in build_io[0]},consolidation_seconds=compact['seconds'],consolidation_passes=len(compact['passes']),canonical_refs_and_frontiers_unchanged=True,archive=dict(bytes=archive.stat().st_size,sha256=hashlib.sha256(archive.read_bytes()).hexdigest()),scope='actual builder/publication and full HTTP; authenticated metadata roots/exact IDs; no repeated full state/table scan; shared OS cache uncontrolled; Runner admission incomplete')
 summary['private_account_index_cold_returns']=len(cold_rows)
+summary['compiled_version_comparison_returns']=len(ab_rows)
+summary['base_source']=ab_status['base_source'];summary['binary_sha256']=ab_status['binary_sha256']
 summary['cold_scope']='only copied account delta inodes: zero resident pages at dispatch; canonical and other auxiliary caches uncontrolled'
 for name,value in [('verification.json',summary),('grouped-http.json',grouped),('verified-requests.json',all_rows)]:
     (out/name).write_text(json.dumps(value,indent=2)+'\n')
 (out/'verified-private-cold-requests.json').write_text(json.dumps(cold_rows,indent=2)+'\n')
+(out/'verified-code-ab-requests.json').write_text(json.dumps(ab_rows,indent=2)+'\n')
 for name in z.namelist():
     if name.endswith(('.json','.jsonl','.log')) and not name.startswith('metadata/'):
         p=out/'native'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(z.read(name))

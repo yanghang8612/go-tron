@@ -40,6 +40,13 @@ for directory,dirs,names in os.walk(str(cold)):
         if p.is_file() and not p.is_symlink() and p.suffix in ['.json','.jsonl','.log','.txt']:
             files['private-index-cold/'+str(p.relative_to(cold))]=p
 target=pathlib.Path('/tmp/AAA-gtron-account-delta-20261029-01.zip')
+ab=r.parent/'account-delta-code-ab';assert json.loads((ab/'candidate-status.json').read_text())['complete']
+for directory,dirs,names in os.walk(str(ab)):
+    for name in names:
+        p=pathlib.Path(directory)/name
+        if p.is_file() and not p.is_symlink() and p.suffix in ['.json','.jsonl','.log','.txt']:
+            files['code-ab/'+str(p.relative_to(ab))]=p
+target=pathlib.Path('/tmp/AAA-gtron-account-delta-20261029-final.zip')
 with zipfile.ZipFile(str(target),'w',zipfile.ZIP_DEFLATED) as z:
     for name,p in sorted(files.items()):z.write(str(p),name)
     for name,data in sorted(blobs.items()):z.writestr(name,data)
