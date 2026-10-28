@@ -401,6 +401,10 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 			if err := checkAccountHistoryRoutingContext(ctx, dir, manifest, ref); err != nil {
 				return nil, err
 			}
+		} else if ref.Kind == SegmentStorageHistoryRouting {
+			if err := checkStorageHistoryRoutingContext(ctx, dir, manifest, ref); err != nil {
+				return report, err
+			}
 		} else if ref.Kind == SegmentMetadataHistoryRouting {
 			if err := checkMetadataHistoryRoutingContext(ctx, dir, manifest, ref); err != nil {
 				return report, err

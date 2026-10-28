@@ -444,6 +444,10 @@ type StateHistoryQuery struct {
 }
 
 func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum, toTxNum uint64, queries []StateHistoryQuery) ([]*rawdb.StateDomainChange, error) {
+	return m.firstStateDomainChangesContext(ctx, fromTxNum, toTxNum, queries, nil)
+}
+
+func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum, toTxNum uint64, queries []StateHistoryQuery, storageRouting *storageHistoryRoutingReader) ([]*rawdb.StateDomainChange, error) {
 	out := make([]*rawdb.StateDomainChange, len(queries))
 	if ctx == nil {
 		ctx = context.Background()
@@ -516,6 +520,9 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		return err
 	}
 	metadataRouting := newMetadataHistoryRoutingReader(manifest)
+	if storageRouting == nil {
+		storageRouting = newStorageHistoryRoutingReader(manifest)
+	}
 	for _, entry := range entries {
 		if systemHistoryRoutingQuery(entry.query) && !smallSystemHistoryRoutingQuery(entry.query) && entry.query.Domain != kvdomains.ContractMetadata {
 			if err := loadBroad(); err != nil {
@@ -618,7 +625,7 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		metadataCovered := false
 		var pairID [32]byte
 		pairFound := false
-		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || !broadLoaded {
+		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || len(storageRouting.refs) > 0 || !broadLoaded {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
 				id := source.id
 				if !source.paired {
@@ -687,11 +694,29 @@ func (m *Manager) FirstStateDomainChangesContext(ctx context.Context, fromTxNum,
 					}
 				}
 			}
-			if entry.first == nil && !(covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup)) {
-				lookupKeys = append(lookupKeys, entry.lookup)
+			if covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup) {
+				continue
 			}
+			if pairFound && contractStorageHistoryRoutingKey(entry.lookup) {
+				filter, covered, err := storageRouting.source(ctx, m.dir, ref, pairID)
+				if err != nil {
+					return nil, err
+				}
+				if covered && !filter.mayContain(entry.lookup) {
+					continue
+				}
+			}
+			lookupKeys = append(lookupKeys, entry.lookup)
 		}
 		if len(lookupKeys) == 0 {
+			// A queued earlier hit must become visible even if every later
+			// source is filtered out. Otherwise the queue never reaches its
+			// window and a first hit can still open every tail routing page.
+			if len(reads.queue) > 0 {
+				if err := reads.consume(active, consider); err != nil {
+					return nil, err
+				}
+			}
 			// A negative route covers this pair only. Later uncovered segments
 			// still require authoritative reads; never terminate the whole range.
 			allFound := true

@@ -34,6 +34,7 @@ const (
 	SegmentSystemHistoryRouting      SegmentKind = "system-history-routing"
 	SegmentSmallSystemHistoryRouting SegmentKind = "small-system-history-routing"
 	SegmentMetadataHistoryRouting    SegmentKind = "metadata-history-routing"
+	SegmentStorageHistoryRouting     SegmentKind = "storage-history-routing"
 	SegmentAccountHistoryRouting     SegmentKind = "account-history-routing"
 	// SegmentChainFreezer is a block-numbered chain-freezer snapshot family.
 	// SegmentRef.FromTxNum/ToTxNum carry freezer block numbers for this kind.
@@ -718,7 +719,7 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentStorageHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
 	}

@@ -1,0 +1,40 @@
+package snapshots
+
+import (
+ "bytes"
+ "context"
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "testing"
+ "time"
+)
+
+func TestOfflineStorageRoutingBuild(t *testing.T) {
+ dir,out:=os.Getenv("GTRON_STORAGE_BUILD_INPUT"),os.Getenv("GTRON_STORAGE_BUILD_OUTPUT")
+ if dir=="" {t.Skip("offline only")}
+ before,e:=os.ReadFile(filepath.Join(dir,ManifestFile));if e!=nil {t.Fatal(e)}
+ m,e:=LoadProductionManifest(dir);if e!=nil {t.Fatal(e)}
+ start,last:=uint64(0),uint64(0)
+ for _,r:=range m.Segments {if r.Kind==SegmentSystemHistoryRouting {start=r.ToTxNum+1};if r.Kind==SegmentHistory&&r.normalizedDataset()==SegmentDatasetStateDomainChange {last=max(last,r.ToTxNum)}}
+ initial:=start;began:=time.Now();var refs []SegmentRef;var passes []map[string]any
+ historyReadLeaseGate.RLock();defer historyReadLeaseGate.RUnlock()
+ for pass:=0;pass<4096&&start<=last;pass++ {
+  next:=start;beg:=time.Now();ref,built,err:=buildStorageHistoryRoutingContext(context.Background(),dir,m,64,start,&next,smallSystemRoutingWorkLimit{bytes:128<<20,duration:2*time.Second});if err!=nil {t.Fatal(err)}
+  if built {refs=append(refs,ref)}
+  passes=append(passes,map[string]any{"pass":pass,"from_cursor":start,"next_cursor":next,"built":built,"output":ref,"seconds":time.Since(beg).Seconds()})
+  b,_:=json.MarshalIndent(map[string]any{"complete":false,"passes":passes,"seconds":time.Since(began).Seconds()},"","  ");if err:=os.WriteFile(filepath.Join(out,"build-progress.json"),b,0644);err!=nil {t.Fatal(err)}
+  if next==0 {break};if next<=start {t.Fatal("cursor did not advance",start,next)};start=next
+ }
+ if start<=last {t.Fatal("build did not cover cursor range",start,last)}
+ after,e:=os.ReadFile(filepath.Join(dir,ManifestFile));if e!=nil||!bytes.Equal(before,after) {t.Fatal("private build input changed before publication",e)}
+ // This fixed-copy bulk experiment has one writer and checks its immutable
+ // parent immediately before one publication. Runtime per-page publication
+ // retains the separate locked comparison helper and its conflict tests.
+ if len(refs)==0 {t.Fatal("no storage page output")}
+ m,e=NewAggregator(dir).Integrate(m.VisibleTxStart,m.VisibleTxEnd,refs);if e!=nil {t.Fatal(e)}
+ current:=manifestHistorySources(manifestLookupView(m));covered:=make(map[[32]byte]bool);totalBytes:=uint64(0)
+ for _,ref:=range refs {rows,err:=readStorageHistoryRouting(context.Background(),dir,ref);if err!=nil {t.Fatal(err)};totalBytes+=ref.Size;for id:=range rows {if _,ok:=current.byID[id];ok {covered[id]=true}}}
+ b,_:=json.MarshalIndent(map[string]any{"complete":true,"initial_cursor":initial,"last_history_tx":last,"passes":passes,"output_pages":len(refs),"output_bytes":totalBytes,"exact_current_pairs":len(covered),"seconds":time.Since(began).Seconds(),"canonical_data_mutations":false,"bulk_private_publication":true},"","  ")
+ if e=os.WriteFile(filepath.Join(out,"build.json"),b,0644);e!=nil {t.Fatal(e)}
+}

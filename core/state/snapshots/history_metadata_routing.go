@@ -494,6 +494,10 @@ func refreshMetadataHistoryRoutingContext(ctx context.Context, dir string, busy 
 }
 
 func metadataHistoryRoutingInputs(m *Manifest, from, to uint64) map[SegmentRef]struct{} {
+	return pagedHistoryRoutingInputs(m, from, to, SegmentMetadataHistoryRouting)
+}
+
+func pagedHistoryRoutingInputs(m *Manifest, from, to uint64, kind SegmentKind) map[SegmentRef]struct{} {
 	refs := make(map[SegmentRef]struct{})
 	if m == nil {
 		return refs
@@ -504,7 +508,7 @@ func metadataHistoryRoutingInputs(m *Manifest, from, to uint64) map[SegmentRef]s
 		if ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.ToTxNum < from || ref.FromTxNum > to {
 			continue
 		}
-		if ref.Kind == SegmentMetadataHistoryRouting {
+		if ref.Kind == kind {
 			refs[ref] = struct{}{}
 		} else if ref.Kind == SegmentHistory {
 			refs[ref] = struct{}{}
@@ -520,7 +524,14 @@ func metadataHistoryRoutingInputs(m *Manifest, from, to uint64) map[SegmentRef]s
 // The lease protects old files, while this lock/check protects against another
 // publisher replacing a page or canonical pair after its proofs were copied.
 func publishMetadataHistoryRoutingContext(ctx context.Context, dir string, parent *Manifest, ref SegmentRef) (*Manifest, error) {
-	expected := metadataHistoryRoutingInputs(parent, ref.FromTxNum, ref.ToTxNum)
+	return publishPagedHistoryRoutingContext(ctx, dir, parent, ref, SegmentMetadataHistoryRouting)
+}
+
+func publishPagedHistoryRoutingContext(ctx context.Context, dir string, parent *Manifest, ref SegmentRef, kind SegmentKind) (*Manifest, error) {
+	if ref.Kind != kind || kind != SegmentMetadataHistoryRouting && kind != SegmentStorageHistoryRouting {
+		return nil, errors.New("snapshots: mismatched paged history routing kind")
+	}
+	expected := pagedHistoryRoutingInputs(parent, ref.FromTxNum, ref.ToTxNum, kind)
 	manifestPublicationMu.Lock()
 	defer manifestPublicationMu.Unlock()
 	if err := contextError(ctx); err != nil {
@@ -530,7 +541,7 @@ func publishMetadataHistoryRoutingContext(ctx context.Context, dir string, paren
 	if err != nil {
 		return nil, err
 	}
-	current := metadataHistoryRoutingInputs(manifestLookupView(latest), ref.FromTxNum, ref.ToTxNum)
+	current := pagedHistoryRoutingInputs(manifestLookupView(latest), ref.FromTxNum, ref.ToTxNum, kind)
 	if len(current) != len(expected) {
 		return nil, errMetadataRoutingRefreshConflict
 	}
