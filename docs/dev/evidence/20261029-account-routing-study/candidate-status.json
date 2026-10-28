@@ -1,0 +1,20 @@
+{
+  "complete": true,
+  "stage": "account distribution study complete",
+  "source": "b88a5650273b6b4ca5e02b4d00201ff44e4fe7ba",
+  "production_mutations": false,
+  "index_outputs": false,
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T17:25:41.516727Z",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  }
+}

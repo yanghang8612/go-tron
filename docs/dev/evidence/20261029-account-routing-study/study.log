@@ -1,0 +1,4 @@
+=== RUN   TestOfflineAccountRoutingDistribution
+--- PASS: TestOfflineAccountRoutingDistribution (306.89s)
+PASS
+ok  	github.com/tronprotocol/go-tron/core/state/snapshots	306.998s

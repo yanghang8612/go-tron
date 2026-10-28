@@ -1,0 +1,188 @@
+{
+  "complete": true,
+  "gateway": "http://3.12.206.71:6060/gmr/",
+  "proxy": "socks5h://127.0.0.1:1088",
+  "cache": "uncontrolled production caches; this process has previous 9M/35M queries; no eviction",
+  "requests": [
+    {
+      "height": 10000000,
+      "repeat": 0,
+      "utc": "2026-10-28T17:15:44.985904+00:00",
+      "request_cache": "first sample of this height in this run",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+      },
+      "uint256": 213,
+      "http_status": 200,
+      "connect_seconds": 0.000421,
+      "pretransfer_seconds": 0.377934,
+      "ttfb_seconds": 23.65194,
+      "total_seconds": 23.651981,
+      "response_bytes": 103
+    },
+    {
+      "height": 10000000,
+      "repeat": 1,
+      "utc": "2026-10-28T17:16:08.651649+00:00",
+      "request_cache": "immediate repeat",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+      },
+      "uint256": 213,
+      "http_status": 200,
+      "connect_seconds": 0.000384,
+      "pretransfer_seconds": 0.347302,
+      "ttfb_seconds": 7.307122,
+      "total_seconds": 7.3072,
+      "response_bytes": 103
+    },
+    {
+      "height": 10000000,
+      "repeat": 2,
+      "utc": "2026-10-28T17:16:15.973632+00:00",
+      "request_cache": "immediate repeat",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+      },
+      "uint256": 213,
+      "http_status": 200,
+      "connect_seconds": 0.000449,
+      "pretransfer_seconds": 0.392122,
+      "ttfb_seconds": 2.989661,
+      "total_seconds": 2.989723,
+      "response_bytes": 103
+    },
+    {
+      "height": 15000000,
+      "repeat": 0,
+      "utc": "2026-10-28T17:16:18.981393+00:00",
+      "request_cache": "first sample of this height in this run",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+      },
+      "uint256": 238,
+      "http_status": 200,
+      "connect_seconds": 0.000633,
+      "pretransfer_seconds": 0.375741,
+      "ttfb_seconds": 2.763383,
+      "total_seconds": 2.763493,
+      "response_bytes": 103
+    },
+    {
+      "height": 15000000,
+      "repeat": 1,
+      "utc": "2026-10-28T17:16:21.768635+00:00",
+      "request_cache": "immediate repeat",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+      },
+      "uint256": 238,
+      "http_status": 200,
+      "connect_seconds": 0.00044,
+      "pretransfer_seconds": 0.369422,
+      "ttfb_seconds": 2.83344,
+      "total_seconds": 2.833459,
+      "response_bytes": 103
+    },
+    {
+      "height": 15000000,
+      "repeat": 2,
+      "utc": "2026-10-28T17:16:24.620289+00:00",
+      "request_cache": "immediate repeat",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+      },
+      "uint256": 238,
+      "http_status": 200,
+      "connect_seconds": 0.000356,
+      "pretransfer_seconds": 0.34435,
+      "ttfb_seconds": 2.769947,
+      "total_seconds": 2.770055,
+      "response_bytes": 103
+    },
+    {
+      "height": 20000000,
+      "repeat": 0,
+      "utc": "2026-10-28T17:16:27.405401+00:00",
+      "request_cache": "first sample of this height in this run",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "uint256": 249,
+      "http_status": 200,
+      "connect_seconds": 0.000354,
+      "pretransfer_seconds": 0.336976,
+      "ttfb_seconds": 4.843875,
+      "total_seconds": 4.843954,
+      "response_bytes": 103
+    },
+    {
+      "height": 20000000,
+      "repeat": 1,
+      "utc": "2026-10-28T17:16:32.263399+00:00",
+      "request_cache": "immediate repeat",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "uint256": 249,
+      "http_status": 200,
+      "connect_seconds": 0.00035,
+      "pretransfer_seconds": 0.370237,
+      "ttfb_seconds": 3.511197,
+      "total_seconds": 3.511225,
+      "response_bytes": 103
+    },
+    {
+      "height": 20000000,
+      "repeat": 2,
+      "utc": "2026-10-28T17:16:35.790406+00:00",
+      "request_cache": "immediate repeat",
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+      },
+      "uint256": 249,
+      "http_status": 200,
+      "connect_seconds": 0.000318,
+      "pretransfer_seconds": 0.335238,
+      "ttfb_seconds": 3.282449,
+      "total_seconds": 3.282896,
+      "response_bytes": 103
+    }
+  ],
+  "identity_before": {
+    "utc": "2026-10-28T17:15:44.188492+00:00",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "head_before": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "0x2d6f06b"
+  },
+  "head_after": {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": "0x2d6f3ff"
+  },
+  "identity_after": {
+    "utc": "2026-10-28T17:16:40.586949+00:00",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  }
+}

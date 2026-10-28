@@ -1,0 +1,277 @@
+{
+  "complete": true,
+  "source": "b88a5650273b6b4ca5e02b4d00201ff44e4fe7ba",
+  "sources": 1521,
+  "seconds": 305.063609784,
+  "production_identity": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "unsupported": 0,
+  "hash_budget_excluded": 0,
+  "account_keys": 179761510,
+  "generation_keys": 13033,
+  "key_count_min": 26523,
+  "key_count_median": 113075,
+  "key_count_p90": 174849,
+  "key_count_max": 251785,
+  "projected_bloom_total_bytes": 525860864,
+  "projected_delta_exact_groups": 0,
+  "projected_delta_total_file_bytes": 0,
+  "projected_delta_actual_batch_read_bytes": 0,
+  "delta_incomplete_groups": 24,
+  "study_io_totals": {
+    "rchar": 33256174472,
+    "wchar": 872,
+    "syscr": 4511163,
+    "syscw": 109,
+    "read_bytes": 12866572288,
+    "write_bytes": 0,
+    "cancelled_write_bytes": 0
+  },
+  "targets": [
+    {
+      "query": {
+        "actual_http_batch": true,
+        "bound": 0,
+        "flat": 1,
+        "found": false,
+        "owner": "41fffffffffffffffffffffffffffffffffffffffe"
+      },
+      "present_sources": 0,
+      "existing_route_skips": 1521,
+      "unresolved_sources": 0,
+      "projected_bloom_negative_sources": 0,
+      "projected_bloom_false_positive_sources": 1,
+      "filter_bytes_for_unresolved_valid_sources": 0
+    },
+    {
+      "query": {
+        "actual_http_batch": true,
+        "bound": 20418041,
+        "flat": 1,
+        "found": true,
+        "owner": "41a4997124a328a4615eab437cede31da47a31b375"
+      },
+      "present_sources": 0,
+      "existing_route_skips": 0,
+      "unresolved_sources": 1521,
+      "projected_bloom_negative_sources": 1520,
+      "projected_bloom_false_positive_sources": 1,
+      "filter_bytes_for_unresolved_valid_sources": 525860864
+    },
+    {
+      "query": {
+        "actual_http_batch": false,
+        "bound": 0,
+        "flat": 3,
+        "found": false,
+        "owner": "41fffffffffffffffffffffffffffffffffffffffe"
+      },
+      "present_sources": 0,
+      "existing_route_skips": 1521,
+      "unresolved_sources": 0,
+      "projected_bloom_negative_sources": 0,
+      "projected_bloom_false_positive_sources": 0,
+      "filter_bytes_for_unresolved_valid_sources": 0
+    },
+    {
+      "query": {
+        "actual_http_batch": false,
+        "bound": 0,
+        "flat": 3,
+        "found": false,
+        "owner": "41a4997124a328a4615eab437cede31da47a31b375"
+      },
+      "present_sources": 0,
+      "existing_route_skips": 0,
+      "unresolved_sources": 1521,
+      "projected_bloom_negative_sources": 1521,
+      "projected_bloom_false_positive_sources": 0,
+      "filter_bytes_for_unresolved_valid_sources": 525860864
+    }
+  ],
+  "archive": {
+    "bytes": 13933840,
+    "sha256": "803e1ed63c4974e1cfba75d54e121e0dffe05e5502069113718f07352d8705cd"
+  },
+  "scope": "native authenticated key counts and membership; local identity/coverage/formula checks; projections only, no built-index HTTP claim",
+  "total_dictionary_keys": 349838119,
+  "canonical_and_other_auxiliary_refs_match_prior_fixed_copy": true,
+  "parent_archive_sha256": "c57b2b0012dfa5cae5a3f7c77250d19902014f8a93c866a51fcb13003fdbdd98",
+  "projected_delta_all_group_file_bytes_lower_bound": 1412914008,
+  "projected_delta_all_group_file_bytes_upper_bound": 5291231853,
+  "projected_delta_all_group_two_key_read_bytes_upper_bound": 1323117,
+  "projected_delta_group_bounds": [
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7890053,
+      "root_metadata_upper_bound": 40643,
+      "file_upper_bound": 232222403,
+      "actual_two_key_batch_read_upper_bound": 57091
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7220276,
+      "root_metadata_upper_bound": 37410,
+      "file_upper_bound": 212513314,
+      "actual_two_key_batch_read_upper_bound": 53858
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7055369,
+      "root_metadata_upper_bound": 36562,
+      "file_upper_bound": 207658706,
+      "actual_two_key_batch_read_upper_bound": 53010
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7391330,
+      "root_metadata_upper_bound": 38205,
+      "file_upper_bound": 217543997,
+      "actual_two_key_batch_read_upper_bound": 54653
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 6945315,
+      "root_metadata_upper_bound": 36032,
+      "file_upper_bound": 204418240,
+      "actual_two_key_batch_read_upper_bound": 52480
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 8279566,
+      "root_metadata_upper_bound": 42551,
+      "file_upper_bound": 243689015,
+      "actual_two_key_batch_read_upper_bound": 58999
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7465051,
+      "root_metadata_upper_bound": 38576,
+      "file_upper_bound": 219715248,
+      "actual_two_key_batch_read_upper_bound": 55024
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7012070,
+      "root_metadata_upper_bound": 36350,
+      "file_upper_bound": 206380542,
+      "actual_two_key_batch_read_upper_bound": 52798
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 6442056,
+      "root_metadata_upper_bound": 33594,
+      "file_upper_bound": 189608762,
+      "actual_two_key_batch_read_upper_bound": 50042
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 5569701,
+      "root_metadata_upper_bound": 29354,
+      "file_upper_bound": 163934890,
+      "actual_two_key_batch_read_upper_bound": 45802
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 5211161,
+      "root_metadata_upper_bound": 27552,
+      "file_upper_bound": 153377696,
+      "actual_two_key_batch_read_upper_bound": 44000
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 8311061,
+      "root_metadata_upper_bound": 42710,
+      "file_upper_bound": 244614870,
+      "actual_two_key_batch_read_upper_bound": 59158
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 10324820,
+      "root_metadata_upper_bound": 52515,
+      "file_upper_bound": 303881507,
+      "actual_two_key_batch_read_upper_bound": 68963
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 9055202,
+      "root_metadata_upper_bound": 46367,
+      "file_upper_bound": 266519839,
+      "actual_two_key_batch_read_upper_bound": 62815
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7925864,
+      "root_metadata_upper_bound": 40855,
+      "file_upper_bound": 233279383,
+      "actual_two_key_batch_read_upper_bound": 57303
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 8876547,
+      "root_metadata_upper_bound": 45466,
+      "file_upper_bound": 261259674,
+      "actual_two_key_batch_read_upper_bound": 61914
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7333275,
+      "root_metadata_upper_bound": 37940,
+      "file_upper_bound": 215839796,
+      "actual_two_key_batch_read_upper_bound": 54388
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7849142,
+      "root_metadata_upper_bound": 40431,
+      "file_upper_bound": 231017967,
+      "actual_two_key_batch_read_upper_bound": 56879
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 6923441,
+      "root_metadata_upper_bound": 35926,
+      "file_upper_bound": 203775062,
+      "actual_two_key_batch_read_upper_bound": 52374
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7450816,
+      "root_metadata_upper_bound": 38523,
+      "file_upper_bound": 219297403,
+      "actual_two_key_batch_read_upper_bound": 54971
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 8413680,
+      "root_metadata_upper_bound": 43187,
+      "file_upper_bound": 247634099,
+      "actual_two_key_batch_read_upper_bound": 59635
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7300605,
+      "root_metadata_upper_bound": 37781,
+      "file_upper_bound": 214877077,
+      "actual_two_key_batch_read_upper_bound": 54229
+    },
+    {
+      "sources": 64,
+      "unique_key_upper_bound": 7545204,
+      "root_metadata_upper_bound": 38947,
+      "file_upper_bound": 222074915,
+      "actual_two_key_batch_read_upper_bound": 55395
+    },
+    {
+      "sources": 49,
+      "unique_key_upper_bound": 5982938,
+      "root_metadata_upper_bound": 30888,
+      "file_upper_bound": 176097448,
+      "actual_two_key_batch_read_upper_bound": 47336
+    }
+  ]
+}
