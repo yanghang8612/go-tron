@@ -21,7 +21,7 @@ try:
   assert response['result']==values.setdefault(height,response['result'])
   if height==9000000:assert int(response['result'],16)==207
  timeline={x.name:{'ready_utc':datetime.datetime.utcfromtimestamp((x/'ready.json').stat().st_mtime).isoformat()+'Z','last_request_utc':datetime.datetime.utcfromtimestamp((x/'server-requests.jsonl').stat().st_mtime).isoformat()+'Z'} for x in (P/'block-cache-final').iterdir() if x.is_dir() and (x/'ready.json').exists()}
- (P/'block-cache-final/post-run-assessment.json').write_text(json.dumps({'requests':len(rows),'all_returns_match':True,'diagnostic_status_preserved':True,'external_production_identity_changed':diagnostic.get('production_before')!=diagnostic.get('production_after'),'admitted_to_selected_results':False,'reason':'bounded block cache did not remove the near-HEAD regression; production changed during this diagnostic; use earlier stable-identity 9a9de matched experiment','case_timeline':timeline},indent=2))
+ (P/'block-cache-final/post-run-assessment.json').write_text(json.dumps({'requests':len(rows),'all_returns_match':True,'diagnostic_status_preserved':True,'external_production_identity_changed':diagnostic.get('production_before')!=diagnostic.get('production_after'),'admitted_to_selected_results':False,'reason':'bounded block cache did not remove the near-HEAD regression; production background differs between phases; use separately grouped stable-identity 9a9de matched experiment','case_timeline':timeline},indent=2))
  s['production_before']=identity();s['stage']='selected reader CPU profile outside admitted timings';save()
  exe=P/'final/http.test';fixed=P/'final/indexed-input'
  with host('selected-reader-cpu',exe,fixed) as ready:

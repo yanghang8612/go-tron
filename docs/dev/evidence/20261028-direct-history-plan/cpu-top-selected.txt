@@ -1,0 +1,66 @@
+File: http.test
+Build ID: 109c8871b0408455bfb0edb7af4fbc0b68848b70
+Type: cpu
+Time: 2026-10-28 10:02:26 UTC
+Duration: 15.18s, Total samples = 15.27s (100.60%)
+Active filters:
+   tagfocus=rpc=eth_call
+Showing nodes accounting for 6.04s, 39.55% of 15.27s total
+Dropped 222 nodes (cum <= 0.08s)
+Showing top 55 nodes out of 168
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/core.(*TronBackend).CallAtContext
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/core.(*TronBackend).TriggerConstantContractAtContext
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/jsonrpc.(*EthAPI).Call
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*callback).call
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCall
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleCallMsg
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleMsg.func1.1
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).handleNonBatchCall
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).runMethod
+         0     0%     0%     12.75s 83.50%  github.com/tronprotocol/go-tron/internal/rpc.(*handler).startCallProc.func1
+         0     0%     0%     12.75s 83.50%  reflect.Value.Call
+         0     0%     0%     12.75s 83.50%  reflect.Value.call
+         0     0%     0%     12.33s 80.75%  github.com/tronprotocol/go-tron/core.(*TronBackend).triggerConstantContractAtRoot
+     0.01s 0.065% 0.065%     10.06s 65.88%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext
+         0     0% 0.065%      6.31s 41.32%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).PrefetchExecutionAt
+         0     0% 0.065%      6.11s 40.01%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).prefetchFirst
+     0.02s  0.13%   0.2%      5.69s 37.26%  github.com/tronprotocol/go-tron/core/state/snapshots.newHistoryCandidatePlan
+     0.16s  1.05%  1.24%      5.67s 37.13%  github.com/tronprotocol/go-tron/core/state/snapshots.historyCandidates
+     0.19s  1.24%  2.49%      5.03s 32.94%  github.com/tronprotocol/go-tron/core/state/snapshots.historyCandidates.func2
+     0.52s  3.41%  5.89%      4.28s 28.03%  runtime.mapaccess2
+         0     0%  5.89%      4.05s 26.52%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateKVAsOf
+         0     0%  5.89%      4.05s 26.52%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateKVAsOfTxNum
+         0     0%  5.89%      4.05s 26.52%  github.com/tronprotocol/go-tron/core/state.(*StateDB).readAccountKVLatest
+         0     0%  5.89%      4.05s 26.52%  github.com/tronprotocol/go-tron/core/state.historicalLatestView.KVLatest
+         0     0%  5.89%      4.02s 26.33%  github.com/tronprotocol/go-tron/vm.(*TVM).Call
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).firstStateDomainChangeByKey
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).firstStateDomainChangeByKeyUncached
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state.(*StateDB).GetState (inline)
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state.(*StateDB).GetStateWithExist
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state.(*StateDB).getAccountKVForDecodingFromObject
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state.(*StateDB).readAccountKVLatestForDecoding
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesByKeysContext
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/vm.(*Interpreter).Run
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/vm.(*Interpreter).runBaseEnergy
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/vm.(*TVM).runContract
+         0     0%  5.89%      4.01s 26.26%  github.com/tronprotocol/go-tron/vm.opSload
+         0     0%  5.89%      3.94s 25.80%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).FirstStateDomainChangesContext.func1
+     0.03s   0.2%  6.09%      3.94s 25.80%  github.com/tronprotocol/go-tron/core/state/snapshots.loadSystemHistoryRoutingForKeys
+         0     0%  6.09%      3.91s 25.61%  github.com/tronprotocol/go-tron/core/state/snapshots.readSystemHistoryRoutingSelected
+         0     0%  6.09%      3.06s 20.04%  github.com/tronprotocol/go-tron/core/state/snapshots.readSystemHistoryRoutingBytes
+         0     0%  6.09%      3.02s 19.78%  crypto/internal/fips140/sha256.(*Digest).Write
+         0     0%  6.09%      3.02s 19.78%  crypto/internal/fips140/sha256.block
+     3.02s 19.78% 25.87%      3.02s 19.78%  crypto/internal/fips140/sha256.blockAVX2
+         0     0% 25.87%      3.02s 19.78%  crypto/sha256.Sum256
+     2.09s 13.69% 39.55%      2.09s 13.69%  runtime.duffcopy
+         0     0% 39.55%      1.98s 12.97%  github.com/tronprotocol/go-tron/core/state.coldFallbackStateLatestReader.KVLatest
+         0     0% 39.55%      1.96s 12.84%  github.com/tronprotocol/go-tron/core.(*TronBackend).dynamicPropertiesFromStateStrict
+         0     0% 39.55%      1.96s 12.84%  github.com/tronprotocol/go-tron/core.(*TronBackend).executionDynamicPropertiesStrict
+         0     0% 39.55%      1.96s 12.84%  github.com/tronprotocol/go-tron/core/state.(*StateDB).GetAccountKVBatch
+         0     0% 39.55%      1.96s 12.84%  github.com/tronprotocol/go-tron/core/state.(*StateDB).SystemKVGetBatch (inline)
+         0     0% 39.55%      1.96s 12.84%  github.com/tronprotocol/go-tron/core/state.LoadDynamicPropertiesStrict
+         0     0% 39.55%      1.96s 12.84%  github.com/tronprotocol/go-tron/core/state.loadDynamicPropertiesFromDerivedStoreStrict
+         0     0% 39.55%      1.95s 12.77%  github.com/tronprotocol/go-tron/core/state.(*PersistentHistoryReader).readStateKVBatchAsOf
+         0     0% 39.55%      1.95s 12.77%  github.com/tronprotocol/go-tron/core/state.historicalLatestView.KVLatestBatch
+         0     0% 39.55%      1.91s 12.51%  github.com/tronprotocol/go-tron/core/state/snapshots.(*Manager).GetKVLatest

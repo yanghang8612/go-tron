@@ -29,11 +29,10 @@ The preliminary block-aligned index ablation is not admitted: 256 is a count of
 key occurrences per frame, not a block-alignment rule. Final data appends from
 the exact previous frontier plus one, with no overlapping rebuild.
 
-The hot-only prefetch trial did not remove the near-HEAD regression and is
-reverted. Instead retain canonical repaired block rows within one pinned
-request, bounded to 16 MiB, 32,768 rows and 64 admitted/rejected blocks. Decode
-through the existing owning/authenticated source and clone callback rows.
-Preserve terminal error ordering, callback early stop and cancellation; oversized
-blocks bypass admission after one failed attempt. This adds no persistent format
-or cross-request cache. Compare this final variant against the previous reader
-on exactly the corrected auxiliary input before drawing a latency conclusion.
+The hot-only prefetch and bounded canonical-block request cache were measured
+as separate trials. Neither removed the indexed near-HEAD regression; both are
+reverted. Keep the direct candidate cursors and raw candidate grouping only.
+The selected matched measurements use product source 9a9de233 on the corrected
+auxiliary data. External production rollouts occurred between phases, with stable identity inside
+each phase. Do not merge those backgrounds; exclude the ineffective cache trial
+from the selected performance conclusion.

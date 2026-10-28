@@ -1,0 +1,15 @@
+{
+  "archive_bytes": 3685235,
+  "archive_sha256": "20fc9dbede3635b22270ba0f32578deeae029074155e4277b7e4e06711f745b8",
+  "sealed_members": 220,
+  "all_member_sizes_and_checksums_match": true,
+  "selected_phase": "final",
+  "selected_product_source": "9a9de233c9fd4def2acca00fdf22f6b26aa5cc76",
+  "excluded_extra_phase": "block-cache-final",
+  "reason": "No near-HEAD gain; production background differs between experiment phases, with stable identity within each phase.",
+  "production_identity_correction": "Original diagnostic status proves PID 13633 before and after; selected final phase PID 20471 before and after. The static reason string in post-run-assessment is overbroad; its computed external_production_identity_changed=false and raw statuses are authoritative.",
+  "formal_http_requests": 43,
+  "all_admitted_http_returns_match": true,
+  "all_cold_dispatch_residencies_zero": true,
+  "all_actual_cold_reads_covered": true
+}

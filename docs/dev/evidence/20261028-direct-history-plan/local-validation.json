@@ -1,0 +1,45 @@
+{
+  "checks": {
+    "focused": {
+      "bytes": 66,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t25.889s\n"
+    },
+    "cursor": {
+      "bytes": 66,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t17.184s\n"
+    },
+    "cursor-race": {
+      "bytes": 65,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/state/snapshots\t2.266s\n"
+    },
+    "final-batch-race": {
+      "bytes": 110,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t3.055s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t2.731s\n"
+    },
+    "hot-prefetch-race": {
+      "bytes": 55,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/state\t2.854s\n"
+    },
+    "all-final-vet": {
+      "bytes": 0,
+      "text": ""
+    },
+    "block-cache": {
+      "bytes": 110,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t0.891s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t0.680s\n"
+    },
+    "block-cache-race": {
+      "bytes": 110,
+      "text": "ok  \tgithub.com/tronprotocol/go-tron/core/rawdb\t2.755s\nok  \tgithub.com/tronprotocol/go-tron/core/state\t1.969s\n"
+    },
+    "block-cache-vet": {
+      "bytes": 0,
+      "text": ""
+    }
+  },
+  "full_muhash_repeated": false,
+  "full_snapshot_restore_repeated": false,
+  "production_changed": false,
+  "final_product_source": "b55b52ea3535c7f2dc76e1d5875165f0caca95da",
+  "reverted_hot_prefetch_trial": true
+}
