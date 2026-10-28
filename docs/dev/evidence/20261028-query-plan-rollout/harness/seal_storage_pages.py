@@ -2,8 +2,9 @@ import pathlib,json,hashlib,zipfile,os
 root=pathlib.Path('/data/gtron/maintenance/first-cold-followup-20261028-01')
 assert json.loads((root/'storage-pages/candidate-status.json').read_text())['complete']
 assert json.loads((root/'storage-observe/candidate-status.json').read_text())['complete']
+assert json.loads((root/'storage-index-cold/candidate-status.json').read_text())['complete']
 files={}
-for family in ['storage-trace','storage-prefix-sample','storage-pages','storage-observe']:
+for family in ['storage-trace','storage-prefix-sample','storage-pages','storage-observe','storage-index-cold']:
  for directory,dirs,names in os.walk(str(root/family)):
   dirs[:]=[d for d in dirs if not d.startswith(('source-','input-'))]
   for name in names:

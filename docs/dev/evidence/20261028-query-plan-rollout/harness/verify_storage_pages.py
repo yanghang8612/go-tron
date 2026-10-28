@@ -22,7 +22,7 @@ z, old = zipfile.ZipFile(archive), zipfile.ZipFile(parent_archive)
 assert z.testzip() is None and len(z.namelist()) == seal['members']
 read = lambda name: json.loads(z.read(name))
 expected = {9000000: 207, 10000000: 213, 11000000: 220, 15000000: 238, 20000000: 249}
-statuses = {p: read(p+'/candidate-status.json') for p in ['storage-trace', 'storage-prefix-sample', 'storage-pages', 'storage-observe']}
+statuses = {p: read(p+'/candidate-status.json') for p in ['storage-trace', 'storage-prefix-sample', 'storage-pages', 'storage-observe', 'storage-index-cold']}
 for s in statuses.values():
     assert s['complete'] and s['production_before'] == s['production_after']
     assert not s['production_mutations']
@@ -33,7 +33,7 @@ def io(value):
     return {k: int(v) for k, v in (line.split(':') for line in value.splitlines())}
 def cpu(value):
     return sum(value[k]['Sec']+value[k]['Usec']/1e6 for k in ['Utime', 'Stime'])
-for phase, count in [('storage-pages', 60), ('storage-observe', 8), ('storage-trace', 4)]:
+for phase, count in [('storage-pages', 60), ('storage-observe', 8), ('storage-trace', 4), ('storage-index-cold', 8)]:
     requests = read(phase+'/requests.json')
     assert len(requests) == count
     for q in requests:
@@ -113,6 +113,18 @@ assert set(filters) == wanted
 assert len(filters) == build['exact_current_pairs'] == 6436
 assert len(refs) == build['output_pages'] and sum(page_sizes) == build['output_bytes']
 
+private = read('storage-index-cold/private-proof.json')
+private_paths = {p['path'] for p in private}
+assert len(private_paths) == len(refs) and sum(p['bytes'] for p in private) == sum(page_sizes)
+assert all((p['source_dev'], p['source_ino']) != (p['private_dev'], p['private_ino']) for p in private)
+for i in range(4):
+    resident = read('storage-index-cold/private-storage-cold-'+str(i)+'/dispatch-residency.json')
+    assert {p['path'] for p in resident} == private_paths
+    assert all(p['resident_pages'] == 0 for p in resident)
+for q in read('storage-index-cold/requests.json'):
+    assert not q['overflow']
+    assert {p for p in q['paths'] if '/storage-routing-' in p} == private_paths
+
 batches = [json.loads(line) for line in z.read('storage-trace/batches.jsonl').decode().splitlines()]
 storage_batches = [b for b in batches if b.get('queries') and b['queries'][0]['domain'] == 256]
 assert len(storage_batches) == 4
@@ -154,7 +166,7 @@ for q in read('storage-observe/requests.json'):
     paths = q['paths']; assert len(paths) == len(set(paths))
     observations.append(dict(case=q['case'], repeat=q['repeat'], distinct_accessed_files=len(paths),
                              by_suffix=dict(collections.Counter(pathlib.PurePosixPath(p).suffix for p in paths))))
-verification = dict(archive=seal, correct_primary_http_returns=60, correct_diagnostic_http_returns=12,
+verification = dict(archive=seal, correct_primary_http_returns=60, correct_diagnostic_http_returns=20,
                     head=head, production_identity=statuses['storage-pages']['production_after'],
                     canonical_refs_unchanged=True, authenticated_storage_pages=len(refs),
                     authenticated_storage_bytes=sum(page_sizes), exact_current_pairs=len(filters),
@@ -162,6 +174,7 @@ verification = dict(archive=seal, correct_primary_http_returns=60, correct_diagn
                     sample=sample_facts, target_prefix_possible_sources=len(possible),
                     build_seconds=build['seconds'], build_passes=len(build['passes']),
                     cache='fresh processes; shared OS caches uncontrolled; no eviction',
+                    auxiliary_cold_scope='four processes, only the 421 new storage pages on private inodes zero resident at dispatch; canonical and other routing caches uncontrolled',
                     file_observation_scope='distinct accessed paths, not an open or syscall count')
 for name, value in [('verification.json', verification), ('grouped-http.json', groups), ('verified-requests.json', rows), ('file-access-summary.json', observations), ('storage-batches.json', storage_batches)]:
     (output/name).write_text(json.dumps(value, indent=2)+'\n')
