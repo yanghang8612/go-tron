@@ -16,6 +16,21 @@ try:
   assert time.monotonic()<until
   time.sleep(2)
  dest=W/'cold/private-input';readset=set(json.loads((W/'cold/readset.json').read_text()));libc=ctypes.CDLL(None,use_errno=True)
+ with host('discovery-window32',R/'candidate-http.test',partial) as ready:
+  observer=Observer(partial)
+  try:call(ready,'discovery-window32','discovery-excluded')
+  finally:seen=observer.close()
+ extra=sorted(seen-readset);assert sum((partial/rel).stat().st_size for rel in extra)<512<<20
+ proof=[]
+ for rel in extra:
+  source=partial/rel;st=source.stat();target=(dest/rel).with_name((dest/rel).name+'.window-private')
+  with source.open('rb',buffering=0) as src,target.open('xb',buffering=0) as out:
+   n=0
+   for b in iter(lambda:src.read(8<<20),b''):n+=out.write(b)
+   os.fsync(out.fileno())
+  after=source.stat();actual=target.stat();assert n==st.st_size==actual.st_size and (after.st_dev,after.st_ino,after.st_mtime_ns)==(st.st_dev,st.st_ino,st.st_mtime_ns);assert (actual.st_dev,actual.st_ino)!=(st.st_dev,st.st_ino)
+  os.replace(str(target),str(dest/rel));proof.append({'path':rel,'bytes':st.st_size,'source_dev':st.st_dev,'source_ino':st.st_ino,'private_dev':actual.st_dev,'private_ino':actual.st_ino})
+ readset.update(seen);dump('readset.json',sorted(readset));dump('additional-private-proof.json',proof);s.update(extra_private_files=len(extra),extra_private_bytes=sum(p['bytes'] for p in proof));save()
  for index,(version,exe) in enumerate([('window32',R/'candidate-http.test'),('window8',W/'random/candidate-http.test'),('window32',R/'candidate-http.test')]):
   name='cold-%d-%s'%(index,version);s['stage']=name;save()
   with host(name,exe,dest) as ready:
