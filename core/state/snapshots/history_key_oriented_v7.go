@@ -701,6 +701,30 @@ func (c *stateDomainChangeBinaryAccessorV7PostingCursor) Next() (uint32, stateDo
 }
 
 func iterateStateDomainChangeBinarySegmentByAccessorV7Record(segment io.ReaderAt, segmentSize uint64, accessor io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header, record stateDomainChangeBinaryAccessorV6Record, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error), shared ...*historyAccessorOffsetResolver) error {
+	// Inline entries already contain the authenticated full tuple. They do not
+	// depend on transaction/offset pages; in particular, translating TxBounds
+	// here would read and decode unrelated V11 pages for every singleton.
+	if record.inline {
+		if !isHistoryInlineAccessor(h.version) || record.postings != 1 || fromTxNum > toTxNum {
+			return errors.New("snapshots: invalid inline posting/range")
+		}
+		p := record.inlinePosting
+		if p.txNum < h.fromTxNum || p.txNum > h.toTxNum || uint64(p.recordIndex) >= h.recordCount {
+			return errors.New("snapshots: inline posting outside segment bounds")
+		}
+		if p.txNum < fromTxNum || p.txNum > toTxNum {
+			return nil
+		}
+		change, _, err := readStateDomainChangeBinaryRecordAtBoundedIndex(segment, p.offset, segmentSize, uint64(p.recordIndex))
+		if err != nil {
+			return err
+		}
+		if change.TxNum != p.txNum || !bytes.Equal(stateDomainChangeBinaryAccessorKey(change), record.key) {
+			return errors.New("snapshots: inline accessor posting does not match history record")
+		}
+		_, err = fn(change)
+		return err
+	}
 	var resolver *historyAccessorOffsetResolver
 	if isHistoryOffsetAccessor(h.version) {
 		if len(shared) > 0 {

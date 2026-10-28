@@ -357,6 +357,9 @@ func stateDomainChangeBinaryAccessorV6ReadBlockDirectory(r io.ReaderAt, h stateD
 }
 
 func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, h stateDomainChangeBinaryAccessorV6Header, block stateDomainChangeBinaryAccessorV6Block, firstKeyID uint32) ([]stateDomainChangeBinaryAccessorV6Record, error) {
+	if block.keyCount == 0 || block.keyCount > stateDomainChangeBinaryAccessorV6BlockKeys {
+		return nil, errors.New("snapshots: invalid accessor key block count")
+	}
 	keyStart := h.headerSize + h.blockDirLen
 	postingStart := keyStart + h.keyDataLen
 	storedLen := uint64(block.dataLen &^ stateDomainChangeBinaryAccessorV6StoredRaw)
@@ -405,21 +408,28 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 	}
 	br := bytes.NewReader(decoded)
 	records := make([]stateDomainChangeBinaryAccessorV6Record, 0, block.keyCount)
-	var previous []byte
+	// Retain suffixes in the checked decoded page until all expanded lengths
+	// are known. One exact arena then replaces an allocation for every key.
+	var prefixes [stateDomainChangeBinaryAccessorV6BlockKeys]uint16
+	var previousLen uint64
+	keyBytes := 0
 	for i := uint32(0); i < block.keyCount; i++ {
 		prefix, err := binary.ReadUvarint(br)
-		if err != nil || prefix > uint64(len(previous)) {
+		if err != nil || prefix > previousLen {
 			return nil, errors.New("snapshots: invalid V6 accessor key prefix")
 		}
 		suffix, err := binary.ReadUvarint(br)
 		if err != nil || suffix > uint64(br.Len()) || prefix+suffix > math.MaxUint16 {
 			return nil, errors.New("snapshots: invalid V6 accessor key suffix")
 		}
-		key := make([]byte, prefix+suffix)
-		copy(key, previous[:prefix])
-		if _, err := io.ReadFull(br, key[prefix:]); err != nil {
+		at := len(decoded) - br.Len()
+		key := decoded[at : at+int(suffix) : at+int(suffix)]
+		if _, err := br.Seek(int64(suffix), io.SeekCurrent); err != nil {
 			return nil, err
 		}
+		prefixes[i] = uint16(prefix)
+		previousLen = prefix + suffix
+		keyBytes += int(previousLen)
 		var rec stateDomainChangeBinaryAccessorV6Record
 		if isHistoryInlineAccessor(h.version) {
 			rec, err = readStateDomainChangeAccessorV8Meta(br, h)
@@ -449,18 +459,30 @@ func stateDomainChangeBinaryAccessorV6ReadBlock(r io.ReaderAt, fileSize uint64, 
 			rec.postingOff, rec.postings = postingOff, uint32(postingCount)
 		}
 
+		rec.key, rec.keyID = key, firstKeyID+i
+		records = append(records, rec)
+	}
+	if br.Len() != 0 {
+		return nil, errors.New("snapshots: V6 accessor key block trailing bytes")
+	}
+	keyArena := make([]byte, keyBytes)
+	keyAt := 0
+	var previous []byte
+	for i := range records {
+		prefix := int(prefixes[i])
+		suffix := records[i].key
+		end := keyAt + prefix + len(suffix)
+		key := keyArena[keyAt:end:end]
+		copy(key, previous[:prefix])
+		copy(key[prefix:], suffix)
 		if i == 0 && !compactOwners && !bytes.Equal(key, block.firstKey) {
 			return nil, errors.New("snapshots: V6 accessor first key mismatch")
 		}
 		if i > 0 && bytes.Compare(previous, key) >= 0 {
 			return nil, errors.New("snapshots: V6 accessor keys not sorted")
 		}
-		rec.key, rec.keyID = key, firstKeyID+i
-		records = append(records, rec)
-		previous = key
-	}
-	if br.Len() != 0 {
-		return nil, errors.New("snapshots: V6 accessor key block trailing bytes")
+		records[i].key = key
+		previous, keyAt = key, end
 	}
 	if compactOwners {
 		if err := resolveHistoryOwnerKeys(r, h, records); err != nil {

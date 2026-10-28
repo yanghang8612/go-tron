@@ -106,7 +106,7 @@ type historyAccessorOffsetResolver struct {
 }
 
 func newHistoryAccessorOffsetResolver(r io.ReaderAt, h stateDomainChangeBinaryAccessorV6Header) *historyAccessorOffsetResolver {
-	return &historyAccessorOffsetResolver{r: r, h: h, pages: make(map[uint64][]uint64)}
+	return &historyAccessorOffsetResolver{r: r, h: h}
 }
 
 func (r *historyAccessorOffsetResolver) Offset(ordinal uint32) (uint64, error) {
@@ -135,6 +135,9 @@ func (r *historyAccessorOffsetResolver) Offset(ordinal uint32) (uint64, error) {
 		if len(r.order) == historyOffsetCachePages {
 			delete(r.pages, r.order[0])
 			r.order = r.order[1:]
+		}
+		if r.pages == nil {
+			r.pages = make(map[uint64][]uint64)
 		}
 		r.pages[page] = values
 		r.order = append(r.order, page)
