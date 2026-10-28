@@ -44,6 +44,8 @@ func historyRoutingRetiredObject(ref SegmentRef) bool {
 		prefix = "small-system-routing"
 	case SegmentSystemHistoryRouting:
 		prefix = "system-routing"
+	case SegmentAccountHistoryRoutingDelta:
+		prefix = "account-routing-delta"
 	case SegmentAccountHistoryRouting:
 		prefix = "account-routing"
 	default:
@@ -157,7 +159,7 @@ func pruneRetiredHistoryRoutingContext(ctx context.Context, dir string, cursor r
 		if ref.Kind == SegmentSmallSystemHistoryRouting {
 			want = smallSystemHistoryRoutingMagic
 		}
-		if ref.Kind == SegmentAccountHistoryRouting {
+		if isAccountRoutingKind(ref.Kind) {
 			want = accountRoutingMagic
 		}
 		if readErr != nil || statErr != nil || closeErr != nil || !os.SameFile(before, inspected) || !bytes.Equal(magic[:], want[:]) {

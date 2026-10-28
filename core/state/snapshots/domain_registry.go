@@ -559,7 +559,7 @@ func (cfg DomainCfg) AllowsKind(kind SegmentKind) bool {
 		return cfg.HasHistory
 	case SegmentInverted:
 		return cfg.HasHistoryInvertedIndex
-	case SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentStorageHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting:
+	case SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentStorageHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentAccountHistoryRoutingDelta:
 		return cfg.Dataset == SegmentDatasetStateDomainChange
 	default:
 		return false
@@ -705,7 +705,7 @@ func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
 	if ref.Kind == SegmentMetadataHistoryRouting {
 		return true, CheckMetadataHistoryRouting(dir, ref)
 	}
-	if ref.Kind == SegmentAccountHistoryRouting {
+	if isAccountRoutingKind(ref.Kind) {
 		return true, CheckAccountHistoryRouting(dir, ref)
 	}
 	if ref.Kind == SegmentSmallSystemHistoryRouting {

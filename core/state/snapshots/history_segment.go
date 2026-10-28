@@ -566,6 +566,13 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			}
 		}
 	}
+	deltaKeys := make([][]byte, 0, len(entries))
+	for _, entry := range entries {
+		if accountRoutingQuery(entry.query) {
+			deltaKeys = append(deltaKeys, entry.lookup)
+		}
+	}
+	accountDeltas := newAccountDeltaHistoryReader(manifest, fromTxNum, toTxNum, deltaKeys)
 	planning := make([]historyCandidateQuery, len(entries))
 	for i, entry := range entries {
 		planning[i] = historyCandidateQuery{entry.query, entry.lookup, entry.accountBound, entry.accountBoundFound}
@@ -625,7 +632,7 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		metadataCovered := false
 		var pairID [32]byte
 		pairFound := false
-		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || len(storageRouting.refs) > 0 || !broadLoaded {
+		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || len(storageRouting.refs) > 0 || len(accountDeltas.refs) > 0 || !broadLoaded {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
 				id := source.id
 				if !source.paired {
@@ -696,6 +703,15 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 			}
 			if covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup) {
 				continue
+			}
+			if pairFound && accountRoutingQuery(entry.query) {
+				skip, deltaErr := accountDeltas.maySkip(ctx, m.dir, ref, pairID, entry.lookup, fromTxNum)
+				if deltaErr != nil {
+					return nil, deltaErr
+				}
+				if skip {
+					continue
+				}
 			}
 			if pairFound && contractStorageHistoryRoutingKey(entry.lookup) {
 				filter, covered, err := storageRouting.source(ctx, m.dir, ref, pairID)

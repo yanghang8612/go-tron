@@ -1,0 +1,163 @@
+package snapshots
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+)
+
+func TestOfflineAccountDeltaBuild(t *testing.T) {
+	dir, out := os.Getenv("GTRON_ACCOUNT_DELTA_INPUT"), os.Getenv("GTRON_ACCOUNT_DELTA_OUTPUT")
+	if dir == "" {
+		t.Skip("offline only")
+	}
+	historyReadLeaseGate.RLock()
+	defer historyReadLeaseGate.RUnlock()
+	m, e := LoadProductionManifest(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	m = manifestLookupView(m)
+	original := cloneManifest(m)
+	stable := func(m *Manifest) []byte {
+		var refs []SegmentRef
+		for _, r := range m.Segments {
+			if r.Kind != SegmentAccountHistoryRoutingDelta {
+				refs = append(refs, r)
+			}
+		}
+		b, _ := json.Marshal(refs)
+		return b
+	}
+	canonical := stable(m)
+	covered, e := accountRoutingCoveredForBuild(context.Background(), dir, m)
+	if e != nil {
+		t.Fatal(e)
+	}
+	missing := make(map[[32]byte]bool)
+	sources := manifestHistorySources(m)
+	for _, s := range sources.sources {
+		if _, ok := covered[s.id]; !ok {
+			missing[s.id] = true
+		}
+	}
+	if len(missing) != 1521 {
+		t.Fatal("wrong fixed account gap", len(missing))
+	}
+	var passes []map[string]any
+	var refs []SegmentRef
+	newIDs := make(map[[32]byte]bool)
+	start := uint64(0)
+	totalReads := 0
+	began := time.Now()
+	for pass := 0; pass < 1024; pass++ {
+		beforeIO, _ := os.ReadFile("/proc/self/io")
+		at := time.Now()
+		ref, built, stats, e := buildAccountRoutingDelta(context.Background(), dir, m, 64, start, smallSystemRoutingWorkLimit{bytes: 128 << 20, duration: 2 * time.Second})
+		if e != nil {
+			t.Fatal(e)
+		}
+		totalReads += stats.sourceReads
+		if built {
+			m, e = publishAccountHistoryDelta(context.Background(), dir, m, ref, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			reader, e := openAccountHistoryRouting(context.Background(), dir, ref)
+			if e != nil {
+				t.Fatal(e)
+			}
+			for id := range reader.metadata.covered {
+				if !missing[id] || newIDs[id] {
+					t.Fatal("duplicate or unrelated account proof", hex.EncodeToString(id[:]))
+				}
+				newIDs[id] = true
+			}
+			reader.Close()
+			refs = append(refs, ref)
+		}
+		afterIO, _ := os.ReadFile("/proc/self/io")
+		row := map[string]any{"pass": pass, "built": built, "ref": ref, "seconds_build_publish": time.Since(at).Seconds(), "source_reads": stats.sourceReads, "sources": stats.sources, "attempted": stats.attempted, "unsupported": stats.unsupported, "input_bytes": stats.inputBytes, "dictionary_keys": stats.dictionaryKeys, "next_tx": stats.nextTx, "eof": stats.eof, "new_exact_proofs": len(newIDs), "io_before": string(beforeIO), "io_after": string(afterIO)}
+		passes = append(passes, row)
+		b, _ := json.MarshalIndent(map[string]any{"complete": false, "passes": passes, "seconds": time.Since(began).Seconds()}, "", "  ")
+		if e = os.WriteFile(filepath.Join(out, "build-progress.json"), b, 0644); e != nil {
+			t.Fatal(e)
+		}
+		if !bytes.Equal(canonical, stable(m)) || !reflect.DeepEqual(original.Progress, m.Progress) {
+			t.Fatal("delta changed canonical refs/progress")
+		}
+		if stats.eof && len(newIDs) == len(missing) {
+			break
+		}
+		if !built && stats.eof {
+			t.Fatal("fixed gap not covered", row)
+		}
+		start = stats.nextTx
+	}
+	if len(newIDs) != 1521 || totalReads != 1521 {
+		t.Fatal("wrong source coverage or repeated dictionary work", len(newIDs), totalReads)
+	}
+	result := map[string]any{"complete": true, "seconds": time.Since(began).Seconds(), "source_reads": totalReads, "new_exact_proofs": len(newIDs), "refs": refs, "passes": passes, "canonical_refs_unchanged": true, "frontiers_unchanged": true, "mode": "bounded builder plus explicit private publication; Runner admission not tested"}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	if e = os.WriteFile(filepath.Join(out, "build-result.json"), b, 0644); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestOfflineAccountDeltaConsolidate(t *testing.T) {
+	dir, out := os.Getenv("GTRON_ACCOUNT_DELTA_INPUT"), os.Getenv("GTRON_ACCOUNT_DELTA_OUTPUT")
+	if dir == "" {
+		t.Skip("offline only")
+	}
+	historyReadLeaseGate.RLock()
+	defer historyReadLeaseGate.RUnlock()
+	m, e := LoadProductionManifest(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	base := accountRoutingRef
+	beforeBase, _ := base(m, 0, ^uint64(0))
+	var passes []map[string]any
+	began := time.Now()
+	for i := 0; i < 256; i++ {
+		count := 0
+		for _, r := range m.Segments {
+			if r.Kind == SegmentAccountHistoryRoutingDelta {
+				count++
+			}
+		}
+		if count <= 64 {
+			break
+		}
+		beforeIO, _ := os.ReadFile("/proc/self/io")
+		at := time.Now()
+		ref, inputs, built, e := compactAccountRoutingDeltas(context.Background(), dir, m, 128<<20)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if !built {
+			break
+		}
+		m, e = publishAccountHistoryDelta(context.Background(), dir, m, ref, inputs)
+		if e != nil {
+			t.Fatal(e)
+		}
+		afterIO, _ := os.ReadFile("/proc/self/io")
+		passes = append(passes, map[string]any{"output": ref, "inputs": inputs, "before_objects": count, "seconds": time.Since(at).Seconds(), "io_before": string(beforeIO), "io_after": string(afterIO)})
+	}
+	afterBase, _ := base(m, 0, ^uint64(0))
+	if beforeBase != afterBase {
+		t.Fatal("delta consolidation rewrote base")
+	}
+	result := map[string]any{"complete": true, "seconds": time.Since(began).Seconds(), "passes": passes}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	if e = os.WriteFile(filepath.Join(out, "consolidation-result.json"), b, 0644); e != nil {
+		t.Fatal(e)
+	}
+}

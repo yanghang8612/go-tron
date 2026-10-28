@@ -988,6 +988,12 @@ func aggregateLatestPath(base string, opts AggregatorBuildOptions, ext string) s
 }
 
 func segmentOverlapsAnyFamily(ref SegmentRef, refs []SegmentRef) bool {
+	// Delta envelopes may overlap. Only explicit input replacement can retire
+	// their independent exact-pair proofs, never generic range integration.
+	if ref.Kind == SegmentAccountHistoryRoutingDelta {
+		return false
+	}
+
 	for _, candidate := range refs {
 		if ref.normalizedDataset() != candidate.normalizedDataset() || ref.Domain != candidate.Domain {
 			continue

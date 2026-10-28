@@ -31,11 +31,12 @@ const (
 	SegmentHistory  SegmentKind = "history"
 	SegmentInverted SegmentKind = "inverted"
 	// Exact routing for small singleton system namespaces; never canonical state.
-	SegmentSystemHistoryRouting      SegmentKind = "system-history-routing"
-	SegmentSmallSystemHistoryRouting SegmentKind = "small-system-history-routing"
-	SegmentMetadataHistoryRouting    SegmentKind = "metadata-history-routing"
-	SegmentStorageHistoryRouting     SegmentKind = "storage-history-routing"
-	SegmentAccountHistoryRouting     SegmentKind = "account-history-routing"
+	SegmentSystemHistoryRouting       SegmentKind = "system-history-routing"
+	SegmentSmallSystemHistoryRouting  SegmentKind = "small-system-history-routing"
+	SegmentMetadataHistoryRouting     SegmentKind = "metadata-history-routing"
+	SegmentStorageHistoryRouting      SegmentKind = "storage-history-routing"
+	SegmentAccountHistoryRouting      SegmentKind = "account-history-routing"
+	SegmentAccountHistoryRoutingDelta SegmentKind = "account-history-routing-delta"
 	// SegmentChainFreezer is a block-numbered chain-freezer snapshot family.
 	// SegmentRef.FromTxNum/ToTxNum carry freezer block numbers for this kind.
 	SegmentChainFreezer SegmentKind = "chain-freezer"
@@ -387,13 +388,16 @@ func (m *Manifest) validate(ordered bool) error {
 		// malformed individual identities still fail before range overlap.
 		for i := 1; i < len(m.Segments); i++ {
 			prior, next := &m.Segments[i-1], &m.Segments[i]
-			if prior.normalizedDataset() == next.normalizedDataset() && prior.Domain == next.Domain && prior.Kind == next.Kind && next.FromTxNum <= prior.ToTxNum {
+			if next.Kind != SegmentAccountHistoryRoutingDelta && prior.normalizedDataset() == next.normalizedDataset() && prior.Domain == next.Domain && prior.Kind == next.Kind && next.FromTxNum <= prior.ToTxNum {
 				return fmt.Errorf("snapshots: overlapping %s segments for domain %#04x: [%d,%d] and [%d,%d]",
 					next.Kind, uint16(next.Domain), prior.FromTxNum, prior.ToTxNum, next.FromTxNum, next.ToTxNum)
 			}
 		}
 	}
 	for family, segments := range byFamily {
+		if family.kind == SegmentAccountHistoryRoutingDelta {
+			continue
+		}
 		sort.Slice(segments, func(i, j int) bool {
 			if segments[i].from == segments[j].from {
 				return segments[i].to < segments[j].to
@@ -719,14 +723,14 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentStorageHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentStorageHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentAccountHistoryRoutingDelta, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
 	}
-	if seg.LookupRoot != "" && seg.Kind != SegmentAccountHistoryRouting {
+	if seg.LookupRoot != "" && !isAccountRoutingKind(seg.Kind) {
 		return errors.New("snapshots: unexpected lookup root on canonical segment")
 	}
-	if seg.Kind == SegmentAccountHistoryRouting {
+	if isAccountRoutingKind(seg.Kind) {
 		if digest, ok := snapshotChecksumDigest(seg.LookupRoot); !ok || len(digest) != 64 || seg.LookupRoot != "sha256:"+digest {
 			return errors.New("snapshots: account history routing requires a SHA256 metadata root")
 		}

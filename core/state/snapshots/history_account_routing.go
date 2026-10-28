@@ -85,11 +85,17 @@ func accountRoutingRef(manifest *Manifest, from, to uint64) (SegmentRef, bool) {
 	return SegmentRef{}, false
 }
 
-func openAccountHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (reader *accountHistoryRoutingReader, err error) {
+func openAccountHistoryRouting(ctx context.Context, dir string, ref SegmentRef) (*accountHistoryRoutingReader, error) {
+	return openAccountHistoryRoutingBudget(ctx, dir, ref, accountRoutingMaxMetadataBytes+64, ^uint64(0), nil)
+}
+
+// Budgets are checked before allocating/reading metadata. The first header is
+// counted as a separate read; deltas never displace the base metadata cache.
+func openAccountHistoryRoutingBudget(ctx context.Context, dir string, ref SegmentRef, metadataBudget, residentBudget uint64, attemptedReadBytes *uint64) (reader *accountHistoryRoutingReader, err error) {
 	if err = contextError(ctx); err != nil {
 		return nil, err
 	}
-	if ref.Kind != SegmentAccountHistoryRouting || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < accountRoutingHeaderBytes || ref.Size > accountRoutingMaxFileBytes || ref.LookupRoot == "" {
+	if !isAccountRoutingKind(ref.Kind) || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < accountRoutingHeaderBytes || ref.Size > accountRoutingMaxFileBytes || ref.LookupRoot == "" {
 		return nil, errAccountRoutingCorrupt
 	}
 	if err = validateSegmentRef(ref); err != nil {
@@ -113,6 +119,9 @@ func openAccountHistoryRouting(ctx context.Context, dir string, ref SegmentRef) 
 	}
 	var header [accountRoutingHeaderBytes]byte
 	r := contextReaderAt{ctx: ctx, r: f}
+	if attemptedReadBytes != nil {
+		*attemptedReadBytes += accountRoutingHeaderBytes
+	}
 	if _, err = r.ReadAt(header[:], 0); err != nil {
 		return nil, err
 	}
@@ -120,7 +129,16 @@ func openAccountHistoryRouting(ctx context.Context, dir string, ref SegmentRef) 
 	if err != nil {
 		return nil, err
 	}
+	if h.metadataBytes()+64 > metadataBudget || h.metadataBytes()+uint64(h.sources)*128 > residentBudget {
+		return nil, errSystemHistoryRoutingBudget
+	}
+	if ref.Kind == SegmentAccountHistoryRoutingDelta && (h.rows > accountDeltaMaxRows || h.fileBytes() > accountDeltaMaxFileBytes) {
+		return nil, errAccountRoutingCorrupt
+	}
 	raw := make([]byte, h.metadataBytes())
+	if attemptedReadBytes != nil {
+		*attemptedReadBytes += h.metadataBytes()
+	}
 	if _, err = r.ReadAt(raw, 0); err != nil {
 		return nil, err
 	}
@@ -133,7 +151,7 @@ func openAccountHistoryRouting(ctx context.Context, dir string, ref SegmentRef) 
 	}
 	sharedAccountRoutingMetadata.Lock()
 	meta := sharedAccountRoutingMetadata.value
-	if sharedAccountRoutingMetadata.digest != digest {
+	if ref.Kind != SegmentAccountHistoryRouting || sharedAccountRoutingMetadata.digest != digest {
 		meta = nil
 	}
 	sharedAccountRoutingMetadata.Unlock()
@@ -144,7 +162,7 @@ func openAccountHistoryRouting(ctx context.Context, dir string, ref SegmentRef) 
 		}
 		// Only immutable metadata is retained. Current metadata bytes are read
 		// and hashed again on every open; data/inner-directory pages are local.
-		if len(raw)+len(meta.covered)*128 <= systemHistoryRoutingMaxBytes {
+		if ref.Kind == SegmentAccountHistoryRouting && len(raw)+len(meta.covered)*128 <= systemHistoryRoutingMaxBytes {
 			sharedAccountRoutingMetadata.Lock()
 			sharedAccountRoutingMetadata.digest = digest
 			sharedAccountRoutingMetadata.value = meta
@@ -660,6 +678,13 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 	if added == 0 {
 		return ref, false, nil
 	}
+	return writeAccountRoutingTable(ctx, dir, SegmentAccountHistoryRouting, ids, from, to, collector, old)
+}
+
+func writeAccountRoutingTable(ctx context.Context, dir string, kind SegmentKind, ids [][32]byte, from, to uint64, collector *etl.Collector, old *accountHistoryRoutingReader) (ref SegmentRef, built bool, err error) {
+	if !isAccountRoutingKind(kind) || len(ids) == 0 || len(ids) > systemHistoryRoutingMaxSources || kind == SegmentAccountHistoryRoutingDelta && old != nil {
+		return ref, false, errAccountRoutingCorrupt
+	}
 	if err = os.MkdirAll(filepath.Join(dir, "history"), 0755); err != nil {
 		return ref, false, err
 	}
@@ -688,7 +713,8 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 		return ref, false, err
 	}
 	h := accountRoutingHeader{sources: uint32(len(ids)), rows: w.rows, pages: w.pages, directories: w.dirPages, from: from, to: to}
-	if h.metadataBytes() > accountRoutingMaxMetadataBytes || h.fileBytes() > accountRoutingMaxFileBytes {
+	if h.metadataBytes() > accountRoutingMaxMetadataBytes || h.fileBytes() > accountRoutingMaxFileBytes ||
+		kind == SegmentAccountHistoryRoutingDelta && (h.rows > accountDeltaMaxRows || h.fileBytes() > accountDeltaMaxFileBytes) {
 		return ref, false, nil
 	}
 	metadata := make([]byte, accountRoutingHeaderBytes)
@@ -705,7 +731,7 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 	}
 	metadata = append(metadata, w.roots...)
 	root := sha256.Sum256(metadata)
-	ref = SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentAccountHistoryRouting, Rows: h.rows, FromTxNum: from, ToTxNum: to, Size: h.fileBytes(), LookupRoot: fmt.Sprintf("sha256:%x", root)}
+	ref = SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: kind, Rows: h.rows, FromTxNum: from, ToTxNum: to, Size: h.fileBytes(), LookupRoot: fmt.Sprintf("sha256:%x", root)}
 	if _, err = decodeAccountRoutingHeader(metadata[:accountRoutingHeaderBytes], ref); err != nil {
 		return SegmentRef{}, false, err
 	}
@@ -741,7 +767,11 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 		return ref, false, err
 	}
 	ref.Checksum = fmt.Sprintf("sha256:%x", hash.Sum(nil))
-	ref.Path = fmt.Sprintf("history/account-routing-%d-%d-%x.route", from, to, hash.Sum(nil))
+	prefix := "account-routing"
+	if kind == SegmentAccountHistoryRoutingDelta {
+		prefix = "account-routing-delta"
+	}
+	ref.Path = fmt.Sprintf("history/%s-%d-%d-%x.route", prefix, from, to, hash.Sum(nil))
 	if err = os.Rename(name, filepath.Join(dir, ref.Path)); err != nil {
 		return ref, false, err
 	}
