@@ -8,14 +8,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-const historyReadAheadWindow = 32
+const historyReadAheadWindow = 8
 const historyReadAheadResultBytes = 1 << 20
 
 // Bound active descriptor pairs across requests as well as within a request.
 var historyReadAheadAdmission = make(chan struct{}, historyReadAheadWindow)
 var errHistoryReadAheadResultBudget = errors.New("snapshots: speculative history result budget")
-
-type historyPointReadKey struct{}
 
 type historyReadAheadRow struct {
 	key    []byte

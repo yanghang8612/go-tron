@@ -2937,7 +2937,6 @@ func iterateStateDomainChangeBinarySegmentByAccessorKeysFile(ctx context.Context
 	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
 		return err
 	}
-	ctx = context.WithValue(ctx, historyPointReadKey{}, true)
 	segmentFile, segmentSize, _, err := openHistorySegmentForReadContext(ctx, dir, ref, cbCacheBlocks, false)
 	if err != nil {
 		return err
@@ -3974,7 +3973,6 @@ func openHistorySegmentForReadContext(ctx context.Context, dir string, ref Segme
 	if err != nil {
 		return nil, 0, stateDomainChangeBinaryHeader{}, err
 	}
-	adviseHistoryPointReads(ctx, file)
 	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
@@ -4179,7 +4177,6 @@ func openStateDomainChangeBinaryAccessorReaderContext(ctx context.Context, dir s
 	if err != nil {
 		return nil, stateDomainChangeBinaryHeader{}, 0, err
 	}
-	adviseHistoryPointReads(ctx, file)
 	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
