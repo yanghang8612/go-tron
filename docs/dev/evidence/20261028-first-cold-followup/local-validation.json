@@ -1,0 +1,18 @@
+{
+  "source": "c63491daa1873b25a62a181a529d7f897334db76",
+  "snapshots_package": {
+    "command": "go test ./core/state/snapshots -count=1 -timeout=300s",
+    "passed": true,
+    "seconds": 235.497
+  },
+  "routing_race": {
+    "command": "go test -race ./core/state/snapshots -run 'TestMetadataHistoryRouting|TestHistoryRoutingBootstrapMaintenance' -count=1 -timeout=180s",
+    "passed": true,
+    "seconds": 67.482
+  },
+  "vet": {
+    "command": "go vet ./core/state/snapshots ./core/state ./core/rawdb ./core ./cmd/gtron",
+    "passed": true
+  },
+  "post_validation_change": "public function documentation comment only"
+}

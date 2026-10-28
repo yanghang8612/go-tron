@@ -1,0 +1,882 @@
+[
+  {
+    "phase": "account-gap-ablation",
+    "height": 9000000,
+    "family": "gaps",
+    "repeat": 0,
+    "times": [
+      4.554532669484615,
+      0.9428137838840485
+    ],
+    "rchar": [
+      215365218,
+      215365212
+    ],
+    "read_syscalls": [
+      26100,
+      26101
+    ],
+    "read_bytes": [
+      309780480,
+      32768
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 9000000,
+    "family": "gaps",
+    "repeat": 1,
+    "times": [
+      0.885071150958538,
+      0.7740154936909676
+    ],
+    "rchar": [
+      207776041,
+      207776037
+    ],
+    "read_syscalls": [
+      24151,
+      24151
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 9000000,
+    "family": "original",
+    "repeat": 0,
+    "times": [
+      0.8732198104262352,
+      0.6942061185836792
+    ],
+    "rchar": [
+      96590566,
+      96590556
+    ],
+    "read_syscalls": [
+      3936,
+      3936
+    ],
+    "read_bytes": [
+      4513792,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 9000000,
+    "family": "original",
+    "repeat": 1,
+    "times": [
+      0.5759989097714424,
+      0.5519819334149361
+    ],
+    "rchar": [
+      89001390,
+      89001381
+    ],
+    "read_syscalls": [
+      1987,
+      1987
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 10000000,
+    "family": "gaps",
+    "repeat": 0,
+    "times": [
+      0.9006991684436798,
+      0.6807403787970543
+    ],
+    "rchar": [
+      206191358,
+      206191354
+    ],
+    "read_syscalls": [
+      24110,
+      24110
+    ],
+    "read_bytes": [
+      16719872,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 10000000,
+    "family": "gaps",
+    "repeat": 1,
+    "times": [
+      0.7470900639891624,
+      0.6955366879701614
+    ],
+    "rchar": [
+      207703218,
+      207703214
+    ],
+    "read_syscalls": [
+      24123,
+      24122
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 10000000,
+    "family": "original",
+    "repeat": 0,
+    "times": [
+      0.57090924680233,
+      0.5691095441579819
+    ],
+    "rchar": [
+      87416707,
+      87416698
+    ],
+    "read_syscalls": [
+      1946,
+      1946
+    ],
+    "read_bytes": [
+      20480,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 10000000,
+    "family": "original",
+    "repeat": 1,
+    "times": [
+      0.5778544321656227,
+      0.6040723845362663
+    ],
+    "rchar": [
+      88928567,
+      88928558
+    ],
+    "read_syscalls": [
+      1958,
+      1958
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 11000000,
+    "family": "gaps",
+    "repeat": 0,
+    "times": [
+      0.747272364795208,
+      0.8543634787201881
+    ],
+    "rchar": [
+      204313218,
+      204313209
+    ],
+    "read_syscalls": [
+      23971,
+      23970
+    ],
+    "read_bytes": [
+      10555392,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 11000000,
+    "family": "gaps",
+    "repeat": 1,
+    "times": [
+      0.8143278807401657,
+      0.6819156035780907
+    ],
+    "rchar": [
+      205269644,
+      205269640
+    ],
+    "read_syscalls": [
+      23967,
+      23967
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 11000000,
+    "family": "original",
+    "repeat": 0,
+    "times": [
+      0.6351411193609238,
+      0.5811351761221886
+    ],
+    "rchar": [
+      85538561,
+      85538552
+    ],
+    "read_syscalls": [
+      1806,
+      1806
+    ],
+    "read_bytes": [
+      12288,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 11000000,
+    "family": "original",
+    "repeat": 1,
+    "times": [
+      0.6143136546015739,
+      0.5513616055250168
+    ],
+    "rchar": [
+      86494992,
+      86494983
+    ],
+    "read_syscalls": [
+      1803,
+      1803
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 15000000,
+    "family": "gaps",
+    "repeat": 0,
+    "times": [
+      0.8288417086005211,
+      0.68972959369421
+    ],
+    "rchar": [
+      205814182,
+      205814178
+    ],
+    "read_syscalls": [
+      24185,
+      24185
+    ],
+    "read_bytes": [
+      28905472,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 15000000,
+    "family": "gaps",
+    "repeat": 1,
+    "times": [
+      0.6791776344180107,
+      0.7163333743810654
+    ],
+    "rchar": [
+      208852306,
+      208852302
+    ],
+    "read_syscalls": [
+      24123,
+      24123
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 15000000,
+    "family": "original",
+    "repeat": 0,
+    "times": [
+      0.7778774350881577,
+      0.5741549432277679
+    ],
+    "rchar": [
+      87039530,
+      87039521
+    ],
+    "read_syscalls": [
+      2021,
+      2021
+    ],
+    "read_bytes": [
+      57344,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 15000000,
+    "family": "original",
+    "repeat": 1,
+    "times": [
+      0.5484075024724007,
+      0.5438912138342857
+    ],
+    "rchar": [
+      90077654,
+      90077645
+    ],
+    "read_syscalls": [
+      1959,
+      1959
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 20000000,
+    "family": "gaps",
+    "repeat": 0,
+    "times": [
+      12.230841383337975,
+      1.634028121829033
+    ],
+    "rchar": [
+      759072242,
+      759072238
+    ],
+    "read_syscalls": [
+      117022,
+      117023
+    ],
+    "read_bytes": [
+      1325793280,
+      36864
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 20000000,
+    "family": "gaps",
+    "repeat": 1,
+    "times": [
+      1.4766921326518059,
+      1.428716517984867
+    ],
+    "rchar": [
+      760266708,
+      760266704
+    ],
+    "read_syscalls": [
+      117003,
+      117003
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 20000000,
+    "family": "original",
+    "repeat": 0,
+    "times": [
+      1.675729677081108,
+      1.4064850732684135
+    ],
+    "rchar": [
+      640297590,
+      640297581
+    ],
+    "read_syscalls": [
+      94858,
+      94858
+    ],
+    "read_bytes": [
+      1859584,
+      0
+    ]
+  },
+  {
+    "phase": "account-gap-ablation",
+    "height": 20000000,
+    "family": "original",
+    "repeat": 1,
+    "times": [
+      1.278830498456955,
+      1.2100549042224884
+    ],
+    "rchar": [
+      641492057,
+      641492048
+    ],
+    "read_syscalls": [
+      94839,
+      94839
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 9000000,
+    "family": "base",
+    "repeat": 0,
+    "times": [
+      2.5335867777466774,
+      1.3827991038560867
+    ],
+    "rchar": [
+      109383489,
+      109383487
+    ],
+    "read_syscalls": [
+      5633,
+      5633
+    ],
+    "read_bytes": [
+      92135424,
+      3788800
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 9000000,
+    "family": "base",
+    "repeat": 1,
+    "times": [
+      0.6900629103183746,
+      0.6709415540099144
+    ],
+    "rchar": [
+      101794313,
+      101794312
+    ],
+    "read_syscalls": [
+      3685,
+      3684
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 9000000,
+    "family": "candidate",
+    "repeat": 0,
+    "times": [
+      1.6554765328764915,
+      0.8336726129055023
+    ],
+    "rchar": [
+      96590567,
+      96590565
+    ],
+    "read_syscalls": [
+      3936,
+      3936
+    ],
+    "read_bytes": [
+      17899520,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 9000000,
+    "family": "candidate",
+    "repeat": 1,
+    "times": [
+      0.6185532286763191,
+      0.5742869153618813
+    ],
+    "rchar": [
+      89001391,
+      89001389
+    ],
+    "read_syscalls": [
+      1987,
+      1987
+    ],
+    "read_bytes": [
+      8679424,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 10000000,
+    "family": "base",
+    "repeat": 0,
+    "times": [
+      0.7905815541744232,
+      0.7609670907258987
+    ],
+    "rchar": [
+      100209630,
+      100209629
+    ],
+    "read_syscalls": [
+      3643,
+      3644
+    ],
+    "read_bytes": [
+      16846848,
+      135168
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 10000000,
+    "family": "base",
+    "repeat": 1,
+    "times": [
+      0.7193749994039536,
+      0.6809911727905273
+    ],
+    "rchar": [
+      101721490,
+      101721489
+    ],
+    "read_syscalls": [
+      3655,
+      3655
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 10000000,
+    "family": "candidate",
+    "repeat": 0,
+    "times": [
+      0.5911161005496979,
+      0.5390670374035835
+    ],
+    "rchar": [
+      87416708,
+      87416706
+    ],
+    "read_syscalls": [
+      1946,
+      1946
+    ],
+    "read_bytes": [
+      524288,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 10000000,
+    "family": "candidate",
+    "repeat": 1,
+    "times": [
+      0.6349077001214027,
+      0.5990052446722984
+    ],
+    "rchar": [
+      88928568,
+      88928566
+    ],
+    "read_syscalls": [
+      1958,
+      1958
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 11000000,
+    "family": "base",
+    "repeat": 0,
+    "times": [
+      0.8386946395039558,
+      0.6492458656430244
+    ],
+    "rchar": [
+      98331489,
+      98331483
+    ],
+    "read_syscalls": [
+      3504,
+      3503
+    ],
+    "read_bytes": [
+      10637312,
+      90112
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 11000000,
+    "family": "base",
+    "repeat": 1,
+    "times": [
+      0.656322292983532,
+      0.6323679313063622
+    ],
+    "rchar": [
+      99287915,
+      99287914
+    ],
+    "read_syscalls": [
+      3500,
+      3500
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 11000000,
+    "family": "candidate",
+    "repeat": 0,
+    "times": [
+      0.6771954521536827,
+      0.6130485013127327
+    ],
+    "rchar": [
+      85538562,
+      85538560
+    ],
+    "read_syscalls": [
+      1806,
+      1806
+    ],
+    "read_bytes": [
+      1339392,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 11000000,
+    "family": "candidate",
+    "repeat": 1,
+    "times": [
+      0.5337574630975723,
+      0.6170168817043304
+    ],
+    "rchar": [
+      86494993,
+      86494991
+    ],
+    "read_syscalls": [
+      1803,
+      1803
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 15000000,
+    "family": "base",
+    "repeat": 0,
+    "times": [
+      0.8764265552163124,
+      0.6527716740965843
+    ],
+    "rchar": [
+      99832453,
+      99832452
+    ],
+    "read_syscalls": [
+      3718,
+      3718
+    ],
+    "read_bytes": [
+      29020160,
+      286720
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 15000000,
+    "family": "base",
+    "repeat": 1,
+    "times": [
+      0.6661548614501953,
+      0.7143417447805405
+    ],
+    "rchar": [
+      102870577,
+      102870576
+    ],
+    "read_syscalls": [
+      3657,
+      3656
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 15000000,
+    "family": "candidate",
+    "repeat": 0,
+    "times": [
+      0.6242543235421181,
+      0.6506337672472
+    ],
+    "rchar": [
+      87039531,
+      87039529
+    ],
+    "read_syscalls": [
+      2021,
+      2021
+    ],
+    "read_bytes": [
+      831488,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 15000000,
+    "family": "candidate",
+    "repeat": 1,
+    "times": [
+      0.5470587834715843,
+      0.537118174135685
+    ],
+    "rchar": [
+      90077655,
+      90077653
+    ],
+    "read_syscalls": [
+      1959,
+      1959
+    ],
+    "read_bytes": [
+      1949696,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 20000000,
+    "family": "base",
+    "repeat": 0,
+    "times": [
+      13.915510825812817,
+      2.7392167150974274
+    ],
+    "rchar": [
+      653090513,
+      653090512
+    ],
+    "read_syscalls": [
+      96555,
+      96555
+    ],
+    "read_bytes": [
+      1315442688,
+      9654272
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 20000000,
+    "family": "base",
+    "repeat": 1,
+    "times": [
+      1.4310973808169365,
+      1.322630099952221
+    ],
+    "rchar": [
+      654284980,
+      654284979
+    ],
+    "read_syscalls": [
+      96536,
+      96536
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 20000000,
+    "family": "candidate",
+    "repeat": 0,
+    "times": [
+      2.530970811843872,
+      1.4744375422596931
+    ],
+    "rchar": [
+      640297591,
+      640297589
+    ],
+    "read_syscalls": [
+      94858,
+      94858
+    ],
+    "read_bytes": [
+      82513920,
+      0
+    ]
+  },
+  {
+    "phase": "metadata-repair-ablation",
+    "height": 20000000,
+    "family": "candidate",
+    "repeat": 1,
+    "times": [
+      1.3375510573387146,
+      1.2837237939238548
+    ],
+    "rchar": [
+      641492058,
+      641492056
+    ],
+    "read_syscalls": [
+      94839,
+      94839
+    ],
+    "read_bytes": [
+      0,
+      0
+    ]
+  }
+]

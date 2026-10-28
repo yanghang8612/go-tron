@@ -1,0 +1,914 @@
+[
+  {
+    "built": true,
+    "covered_after": 31926,
+    "covered_before": 31988,
+    "from_cursor": 3006279262,
+    "next_cursor": 3007727950,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3007646463,
+      "toTxNum": 3007727949,
+      "path": "history/metadata-routing-3007646463-3007727949-c0c78b96b93d52a68964fc1df83fdbbf884cc60d5f3f75af80d7351b4a12ac02.route",
+      "size": 72,
+      "checksum": "sha256:c0c78b96b93d52a68964fc1df83fdbbf884cc60d5f3f75af80d7351b4a12ac02"
+    },
+    "pass": 0,
+    "seconds_build_publish": 1.090706196
+  },
+  {
+    "built": true,
+    "covered_after": 31927,
+    "covered_before": 31926,
+    "from_cursor": 3007727950,
+    "next_cursor": 3007799068,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3007727950,
+      "toTxNum": 3007799067,
+      "path": "history/metadata-routing-3007727950-3007799067-4d63454853cc7a0ebb760e752c5492457b96b310589109b356de4ba61f4f2c1e.route",
+      "size": 72,
+      "checksum": "sha256:4d63454853cc7a0ebb760e752c5492457b96b310589109b356de4ba61f4f2c1e"
+    },
+    "pass": 1,
+    "seconds_build_publish": 0.951914046
+  },
+  {
+    "built": true,
+    "covered_after": 31928,
+    "covered_before": 31927,
+    "from_cursor": 3007799068,
+    "next_cursor": 3007843239,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3007799068,
+      "toTxNum": 3007843238,
+      "path": "history/metadata-routing-3007799068-3007843238-be9dc81adbe08ba566b33ec89176cfa1c512948e216eef16f4f880bb7c0e623e.route",
+      "size": 72,
+      "checksum": "sha256:be9dc81adbe08ba566b33ec89176cfa1c512948e216eef16f4f880bb7c0e623e"
+    },
+    "pass": 2,
+    "seconds_build_publish": 0.992371783
+  },
+  {
+    "built": true,
+    "covered_after": 31929,
+    "covered_before": 31928,
+    "from_cursor": 3007843239,
+    "next_cursor": 3007889655,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3007843239,
+      "toTxNum": 3007889654,
+      "path": "history/metadata-routing-3007843239-3007889654-8b7bba8a8ecc4e760ea65b173ec3f29fae2ce03c93a9ead455ea11b73752d4f4.route",
+      "size": 72,
+      "checksum": "sha256:8b7bba8a8ecc4e760ea65b173ec3f29fae2ce03c93a9ead455ea11b73752d4f4"
+    },
+    "pass": 3,
+    "seconds_build_publish": 0.875211385
+  },
+  {
+    "built": true,
+    "covered_after": 31930,
+    "covered_before": 31929,
+    "from_cursor": 3007889655,
+    "next_cursor": 3007942275,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3007889655,
+      "toTxNum": 3007942274,
+      "path": "history/metadata-routing-3007889655-3007942274-259934df7afcde4b29c0179bb68ba6c3277b0ff589e392b7ef492b9bc30eaf9c.route",
+      "size": 72,
+      "checksum": "sha256:259934df7afcde4b29c0179bb68ba6c3277b0ff589e392b7ef492b9bc30eaf9c"
+    },
+    "pass": 4,
+    "seconds_build_publish": 0.998440034
+  },
+  {
+    "built": true,
+    "covered_after": 31931,
+    "covered_before": 31930,
+    "from_cursor": 3007942275,
+    "next_cursor": 3008008102,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3007942275,
+      "toTxNum": 3008008101,
+      "path": "history/metadata-routing-3007942275-3008008101-528c41287063acf30ab2fc00eb735c82ae1fa912f27d426b968d47c1d249aa73.route",
+      "size": 72,
+      "checksum": "sha256:528c41287063acf30ab2fc00eb735c82ae1fa912f27d426b968d47c1d249aa73"
+    },
+    "pass": 5,
+    "seconds_build_publish": 1.015281077
+  },
+  {
+    "built": true,
+    "covered_after": 31932,
+    "covered_before": 31931,
+    "from_cursor": 3008008102,
+    "next_cursor": 3008090440,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008008102,
+      "toTxNum": 3008090439,
+      "path": "history/metadata-routing-3008008102-3008090439-c469c70a64d2e4bd1228f814f043b9a32e18b9a5d4a98c44e24d8e4948deed77.route",
+      "size": 72,
+      "checksum": "sha256:c469c70a64d2e4bd1228f814f043b9a32e18b9a5d4a98c44e24d8e4948deed77"
+    },
+    "pass": 6,
+    "seconds_build_publish": 0.967528976
+  },
+  {
+    "built": true,
+    "covered_after": 31933,
+    "covered_before": 31932,
+    "from_cursor": 3008090440,
+    "next_cursor": 3008193419,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008090440,
+      "toTxNum": 3008193418,
+      "path": "history/metadata-routing-3008090440-3008193418-ba0cc72f501058a9d0019e3c300eff08aa7fce34ec883d66ac4dab8cfccfe6c4.route",
+      "size": 72,
+      "checksum": "sha256:ba0cc72f501058a9d0019e3c300eff08aa7fce34ec883d66ac4dab8cfccfe6c4"
+    },
+    "pass": 7,
+    "seconds_build_publish": 1.009263371
+  },
+  {
+    "built": true,
+    "covered_after": 31934,
+    "covered_before": 31933,
+    "from_cursor": 3008193419,
+    "next_cursor": 3008322202,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008193419,
+      "toTxNum": 3008322201,
+      "path": "history/metadata-routing-3008193419-3008322201-4cb96e9bad2e1587067ef700245d504667ca391fb01ac569edc0552933a61507.route",
+      "size": 72,
+      "checksum": "sha256:4cb96e9bad2e1587067ef700245d504667ca391fb01ac569edc0552933a61507"
+    },
+    "pass": 8,
+    "seconds_build_publish": 0.97480827
+  },
+  {
+    "built": true,
+    "covered_after": 31935,
+    "covered_before": 31934,
+    "from_cursor": 3008322202,
+    "next_cursor": 3008461119,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008322202,
+      "toTxNum": 3008461118,
+      "path": "history/metadata-routing-3008322202-3008461118-05a6c6da028aa6302fcbd94a1e42b8ac9416702a3d403bb2610f23aa463b691a.route",
+      "size": 72,
+      "checksum": "sha256:05a6c6da028aa6302fcbd94a1e42b8ac9416702a3d403bb2610f23aa463b691a"
+    },
+    "pass": 9,
+    "seconds_build_publish": 1.036927377
+  },
+  {
+    "built": true,
+    "covered_after": 31936,
+    "covered_before": 31935,
+    "from_cursor": 3008461119,
+    "next_cursor": 3008600264,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008461119,
+      "toTxNum": 3008600263,
+      "path": "history/metadata-routing-3008461119-3008600263-31f6040ee7403a39bde182aae54ccd99248aff35d872eadd0fd56778bdae5de7.route",
+      "size": 72,
+      "checksum": "sha256:31f6040ee7403a39bde182aae54ccd99248aff35d872eadd0fd56778bdae5de7"
+    },
+    "pass": 10,
+    "seconds_build_publish": 0.962584817
+  },
+  {
+    "built": true,
+    "covered_after": 31937,
+    "covered_before": 31936,
+    "from_cursor": 3008600264,
+    "next_cursor": 3008737631,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008600264,
+      "toTxNum": 3008737630,
+      "path": "history/metadata-routing-3008600264-3008737630-32a5697392ac8afd32f21972a225d21eb84e4c102874a5f7cb747c13dfdf7b3e.route",
+      "size": 72,
+      "checksum": "sha256:32a5697392ac8afd32f21972a225d21eb84e4c102874a5f7cb747c13dfdf7b3e"
+    },
+    "pass": 11,
+    "seconds_build_publish": 0.988133922
+  },
+  {
+    "built": true,
+    "covered_after": 31938,
+    "covered_before": 31937,
+    "from_cursor": 3008737631,
+    "next_cursor": 3008866351,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008737631,
+      "toTxNum": 3008866350,
+      "path": "history/metadata-routing-3008737631-3008866350-3b0363ae9372c41855c274f4a62cd0ee63df4f5520da8689aea47785d98cb47f.route",
+      "size": 72,
+      "checksum": "sha256:3b0363ae9372c41855c274f4a62cd0ee63df4f5520da8689aea47785d98cb47f"
+    },
+    "pass": 12,
+    "seconds_build_publish": 1.000890276
+  },
+  {
+    "built": true,
+    "covered_after": 31939,
+    "covered_before": 31938,
+    "from_cursor": 3008866351,
+    "next_cursor": 3009000196,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3008866351,
+      "toTxNum": 3009000195,
+      "path": "history/metadata-routing-3008866351-3009000195-adc258c81dd8aa14a461d95bcfe569ea4e9dc79e602665440694de650e13118f.route",
+      "size": 72,
+      "checksum": "sha256:adc258c81dd8aa14a461d95bcfe569ea4e9dc79e602665440694de650e13118f"
+    },
+    "pass": 13,
+    "seconds_build_publish": 0.99389307
+  },
+  {
+    "built": true,
+    "covered_after": 31940,
+    "covered_before": 31939,
+    "from_cursor": 3009000196,
+    "next_cursor": 3009143109,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009000196,
+      "toTxNum": 3009143108,
+      "path": "history/metadata-routing-3009000196-3009143108-ff66479a51581c048018a300194e08abf4030fe4f04fb7f51b4d714aebd5502d.route",
+      "size": 72,
+      "checksum": "sha256:ff66479a51581c048018a300194e08abf4030fe4f04fb7f51b4d714aebd5502d"
+    },
+    "pass": 14,
+    "seconds_build_publish": 1.001539797
+  },
+  {
+    "built": true,
+    "covered_after": 31941,
+    "covered_before": 31940,
+    "from_cursor": 3009143109,
+    "next_cursor": 3009282318,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009143109,
+      "toTxNum": 3009282317,
+      "path": "history/metadata-routing-3009143109-3009282317-1783c34c976bbea41ee352ae3eb076d99f018486a91a96a756b5e0d511b98f4e.route",
+      "size": 72,
+      "checksum": "sha256:1783c34c976bbea41ee352ae3eb076d99f018486a91a96a756b5e0d511b98f4e"
+    },
+    "pass": 15,
+    "seconds_build_publish": 0.981360405
+  },
+  {
+    "built": true,
+    "covered_after": 31942,
+    "covered_before": 31941,
+    "from_cursor": 3009282318,
+    "next_cursor": 3009456371,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009282318,
+      "toTxNum": 3009456370,
+      "path": "history/metadata-routing-3009282318-3009456370-558691df9b877d32439c92efae7067af74ceae17e22cf70ba19c019817dde500.route",
+      "size": 72,
+      "checksum": "sha256:558691df9b877d32439c92efae7067af74ceae17e22cf70ba19c019817dde500"
+    },
+    "pass": 16,
+    "seconds_build_publish": 1.060693501
+  },
+  {
+    "built": true,
+    "covered_after": 31943,
+    "covered_before": 31942,
+    "from_cursor": 3009456371,
+    "next_cursor": 3009582411,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009456371,
+      "toTxNum": 3009582410,
+      "path": "history/metadata-routing-3009456371-3009582410-43e268edd7e4dd507db98ee1cc36c07a985f8e56aa431574433f07c5c92c8e13.route",
+      "size": 72,
+      "checksum": "sha256:43e268edd7e4dd507db98ee1cc36c07a985f8e56aa431574433f07c5c92c8e13"
+    },
+    "pass": 17,
+    "seconds_build_publish": 0.99604831
+  },
+  {
+    "built": true,
+    "covered_after": 31944,
+    "covered_before": 31943,
+    "from_cursor": 3009582411,
+    "next_cursor": 3009708238,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009582411,
+      "toTxNum": 3009708237,
+      "path": "history/metadata-routing-3009582411-3009708237-a2c88f5f9dd468c6ff5a4265aa9723ca49bbedbcf5e9a81514b8dff17fc5f0a8.route",
+      "size": 72,
+      "checksum": "sha256:a2c88f5f9dd468c6ff5a4265aa9723ca49bbedbcf5e9a81514b8dff17fc5f0a8"
+    },
+    "pass": 18,
+    "seconds_build_publish": 0.978452601
+  },
+  {
+    "built": true,
+    "covered_after": 31945,
+    "covered_before": 31944,
+    "from_cursor": 3009708238,
+    "next_cursor": 3009865669,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009708238,
+      "toTxNum": 3009865668,
+      "path": "history/metadata-routing-3009708238-3009865668-72a7d463b4ef4ab1f17cd16ef54debe596f74ae0c1fc684be234a16f0b1360b8.route",
+      "size": 72,
+      "checksum": "sha256:72a7d463b4ef4ab1f17cd16ef54debe596f74ae0c1fc684be234a16f0b1360b8"
+    },
+    "pass": 19,
+    "seconds_build_publish": 1.039774459
+  },
+  {
+    "built": true,
+    "covered_after": 31946,
+    "covered_before": 31945,
+    "from_cursor": 3009865669,
+    "next_cursor": 3010047361,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3009865669,
+      "toTxNum": 3010047360,
+      "path": "history/metadata-routing-3009865669-3010047360-d148b7f3591ff746fd4df7aba544e12affc468453cb77f994dc8a1e336b97ae0.route",
+      "size": 72,
+      "checksum": "sha256:d148b7f3591ff746fd4df7aba544e12affc468453cb77f994dc8a1e336b97ae0"
+    },
+    "pass": 20,
+    "seconds_build_publish": 0.928589325
+  },
+  {
+    "built": true,
+    "covered_after": 31947,
+    "covered_before": 31946,
+    "from_cursor": 3010047361,
+    "next_cursor": 3010223278,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010047361,
+      "toTxNum": 3010223277,
+      "path": "history/metadata-routing-3010047361-3010223277-c0e93015255d376480805a933c0231471e0aa393fc329707a797b5777fe5471f.route",
+      "size": 72,
+      "checksum": "sha256:c0e93015255d376480805a933c0231471e0aa393fc329707a797b5777fe5471f"
+    },
+    "pass": 21,
+    "seconds_build_publish": 1.090055018
+  },
+  {
+    "built": true,
+    "covered_after": 31948,
+    "covered_before": 31947,
+    "from_cursor": 3010223278,
+    "next_cursor": 3010334626,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010223278,
+      "toTxNum": 3010334625,
+      "path": "history/metadata-routing-3010223278-3010334625-cfda5a09efe327559c55f98f8b27bf04e3d45c96239b414738bcdc796fdf2749.route",
+      "size": 72,
+      "checksum": "sha256:cfda5a09efe327559c55f98f8b27bf04e3d45c96239b414738bcdc796fdf2749"
+    },
+    "pass": 22,
+    "seconds_build_publish": 0.937783568
+  },
+  {
+    "built": true,
+    "covered_after": 31949,
+    "covered_before": 31948,
+    "from_cursor": 3010334626,
+    "next_cursor": 3010394721,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010334626,
+      "toTxNum": 3010394720,
+      "path": "history/metadata-routing-3010334626-3010394720-bec6e79892d24c75676adc27351566e05bb6ba9e0755dc657fe5a45bd9eb5c94.route",
+      "size": 72,
+      "checksum": "sha256:bec6e79892d24c75676adc27351566e05bb6ba9e0755dc657fe5a45bd9eb5c94"
+    },
+    "pass": 23,
+    "seconds_build_publish": 1.016193018
+  },
+  {
+    "built": true,
+    "covered_after": 31950,
+    "covered_before": 31949,
+    "from_cursor": 3010394721,
+    "next_cursor": 3010461473,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010394721,
+      "toTxNum": 3010461472,
+      "path": "history/metadata-routing-3010394721-3010461472-a263d23e894f1fd70eaec45632bf75702445a91dbf29cfee0037cdc10ba6be01.route",
+      "size": 72,
+      "checksum": "sha256:a263d23e894f1fd70eaec45632bf75702445a91dbf29cfee0037cdc10ba6be01"
+    },
+    "pass": 24,
+    "seconds_build_publish": 1.018863268
+  },
+  {
+    "built": true,
+    "covered_after": 31951,
+    "covered_before": 31950,
+    "from_cursor": 3010461473,
+    "next_cursor": 3010535994,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010461473,
+      "toTxNum": 3010535993,
+      "path": "history/metadata-routing-3010461473-3010535993-8b7b7a0dc635c5dbd60aeb2a8cd15d9385bc1ceb61c9260f6210ce63c5ee6de2.route",
+      "size": 72,
+      "checksum": "sha256:8b7b7a0dc635c5dbd60aeb2a8cd15d9385bc1ceb61c9260f6210ce63c5ee6de2"
+    },
+    "pass": 25,
+    "seconds_build_publish": 1.011278819
+  },
+  {
+    "built": true,
+    "covered_after": 31952,
+    "covered_before": 31951,
+    "from_cursor": 3010535994,
+    "next_cursor": 3010624864,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010535994,
+      "toTxNum": 3010624863,
+      "path": "history/metadata-routing-3010535994-3010624863-835abf8487ff90f19f5f6e11e3071546e46dfa0ff85f014a914313ee454bab76.route",
+      "size": 72,
+      "checksum": "sha256:835abf8487ff90f19f5f6e11e3071546e46dfa0ff85f014a914313ee454bab76"
+    },
+    "pass": 26,
+    "seconds_build_publish": 1.042948085
+  },
+  {
+    "built": true,
+    "covered_after": 31953,
+    "covered_before": 31952,
+    "from_cursor": 3010624864,
+    "next_cursor": 3010732483,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010624864,
+      "toTxNum": 3010732482,
+      "path": "history/metadata-routing-3010624864-3010732482-6d6e83365de7e8453332a4d0a8877cbd396cd74c1f70de4373e6c9f441389ccb.route",
+      "size": 72,
+      "checksum": "sha256:6d6e83365de7e8453332a4d0a8877cbd396cd74c1f70de4373e6c9f441389ccb"
+    },
+    "pass": 27,
+    "seconds_build_publish": 1.02205906
+  },
+  {
+    "built": true,
+    "covered_after": 31954,
+    "covered_before": 31953,
+    "from_cursor": 3010732483,
+    "next_cursor": 3010867414,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010732483,
+      "toTxNum": 3010867413,
+      "path": "history/metadata-routing-3010732483-3010867413-ac266a9d15ebb6432fc29bc799ca7f26785a1472e220bff1c8b02151f73071e0.route",
+      "size": 72,
+      "checksum": "sha256:ac266a9d15ebb6432fc29bc799ca7f26785a1472e220bff1c8b02151f73071e0"
+    },
+    "pass": 28,
+    "seconds_build_publish": 1.017032572
+  },
+  {
+    "built": true,
+    "covered_after": 31955,
+    "covered_before": 31954,
+    "from_cursor": 3010867414,
+    "next_cursor": 3011016074,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3010867414,
+      "toTxNum": 3011016073,
+      "path": "history/metadata-routing-3010867414-3011016073-589616f4984487c3eec7bdf57f854ed994a78e9c8ba9c127932ec308852182e9.route",
+      "size": 72,
+      "checksum": "sha256:589616f4984487c3eec7bdf57f854ed994a78e9c8ba9c127932ec308852182e9"
+    },
+    "pass": 29,
+    "seconds_build_publish": 0.988313447
+  },
+  {
+    "built": true,
+    "covered_after": 31956,
+    "covered_before": 31955,
+    "from_cursor": 3011016074,
+    "next_cursor": 3011109877,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011016074,
+      "toTxNum": 3011109876,
+      "path": "history/metadata-routing-3011016074-3011109876-96ba6a063445265c720456c655f107202487de3bb10e7ef2be22b466fb86023e.route",
+      "size": 72,
+      "checksum": "sha256:96ba6a063445265c720456c655f107202487de3bb10e7ef2be22b466fb86023e"
+    },
+    "pass": 30,
+    "seconds_build_publish": 1.005495665
+  },
+  {
+    "built": true,
+    "covered_after": 31957,
+    "covered_before": 31956,
+    "from_cursor": 3011109877,
+    "next_cursor": 3011212403,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011109877,
+      "toTxNum": 3011212402,
+      "path": "history/metadata-routing-3011109877-3011212402-78329c4a7ee5a53d9677a9a181fa74b66ea87c754ce7d23a874d54d2d25c007b.route",
+      "size": 72,
+      "checksum": "sha256:78329c4a7ee5a53d9677a9a181fa74b66ea87c754ce7d23a874d54d2d25c007b"
+    },
+    "pass": 31,
+    "seconds_build_publish": 0.97705221
+  },
+  {
+    "built": true,
+    "covered_after": 31958,
+    "covered_before": 31957,
+    "from_cursor": 3011212403,
+    "next_cursor": 3011313230,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011212403,
+      "toTxNum": 3011313229,
+      "path": "history/metadata-routing-3011212403-3011313229-5eef263cf629820bf90dcc6833a79aa08ff468a90852e089b4e9385e5ab6f754.route",
+      "size": 72,
+      "checksum": "sha256:5eef263cf629820bf90dcc6833a79aa08ff468a90852e089b4e9385e5ab6f754"
+    },
+    "pass": 32,
+    "seconds_build_publish": 1.036145124
+  },
+  {
+    "built": true,
+    "covered_after": 31959,
+    "covered_before": 31958,
+    "from_cursor": 3011313230,
+    "next_cursor": 3011439367,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011313230,
+      "toTxNum": 3011439366,
+      "path": "history/metadata-routing-3011313230-3011439366-72a505f243c3338ccca6ff2ada65a09b423a0024e834878cc73467152a9504e2.route",
+      "size": 72,
+      "checksum": "sha256:72a505f243c3338ccca6ff2ada65a09b423a0024e834878cc73467152a9504e2"
+    },
+    "pass": 33,
+    "seconds_build_publish": 0.935397672
+  },
+  {
+    "built": true,
+    "covered_after": 31960,
+    "covered_before": 31959,
+    "from_cursor": 3011439367,
+    "next_cursor": 3011580307,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011439367,
+      "toTxNum": 3011580306,
+      "path": "history/metadata-routing-3011439367-3011580306-4880187330cbfba05471d6827b519e1cc84f41f5a1ade5453d1d35b7e78c3e05.route",
+      "size": 72,
+      "checksum": "sha256:4880187330cbfba05471d6827b519e1cc84f41f5a1ade5453d1d35b7e78c3e05"
+    },
+    "pass": 34,
+    "seconds_build_publish": 1.047979854
+  },
+  {
+    "built": true,
+    "covered_after": 31961,
+    "covered_before": 31960,
+    "from_cursor": 3011580307,
+    "next_cursor": 3011756510,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011580307,
+      "toTxNum": 3011756509,
+      "path": "history/metadata-routing-3011580307-3011756509-2c7c2c32918b8d561ba9edfa22e7bc71ba0776b566c19f1d7dfa8eaf9fb58cbe.route",
+      "size": 72,
+      "checksum": "sha256:2c7c2c32918b8d561ba9edfa22e7bc71ba0776b566c19f1d7dfa8eaf9fb58cbe"
+    },
+    "pass": 35,
+    "seconds_build_publish": 1.00873932
+  },
+  {
+    "built": true,
+    "covered_after": 31962,
+    "covered_before": 31961,
+    "from_cursor": 3011756510,
+    "next_cursor": 3011883833,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011756510,
+      "toTxNum": 3011883832,
+      "path": "history/metadata-routing-3011756510-3011883832-663e5bb041e35cc7def099d723724335d4a8f6cb9d6860a3a5212d1da69ab171.route",
+      "size": 72,
+      "checksum": "sha256:663e5bb041e35cc7def099d723724335d4a8f6cb9d6860a3a5212d1da69ab171"
+    },
+    "pass": 36,
+    "seconds_build_publish": 1.046097682
+  },
+  {
+    "built": true,
+    "covered_after": 31963,
+    "covered_before": 31962,
+    "from_cursor": 3011883833,
+    "next_cursor": 3012012925,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3011883833,
+      "toTxNum": 3012012924,
+      "path": "history/metadata-routing-3011883833-3012012924-9d7d2598a65978a606aa8eca213f677c78c70b275f5c4b0b98fa9c59457c4961.route",
+      "size": 72,
+      "checksum": "sha256:9d7d2598a65978a606aa8eca213f677c78c70b275f5c4b0b98fa9c59457c4961"
+    },
+    "pass": 37,
+    "seconds_build_publish": 1.005345828
+  },
+  {
+    "built": true,
+    "covered_after": 31964,
+    "covered_before": 31963,
+    "from_cursor": 3012012925,
+    "next_cursor": 3012144533,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3012012925,
+      "toTxNum": 3012144532,
+      "path": "history/metadata-routing-3012012925-3012144532-f6684295adef309c4bfa31379e26e0aac51e48ec78ea949b1f208e878d4cee30.route",
+      "size": 72,
+      "checksum": "sha256:f6684295adef309c4bfa31379e26e0aac51e48ec78ea949b1f208e878d4cee30"
+    },
+    "pass": 38,
+    "seconds_build_publish": 1.01585623
+  },
+  {
+    "built": true,
+    "covered_after": 31965,
+    "covered_before": 31964,
+    "from_cursor": 3012144533,
+    "next_cursor": 3012225731,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3012144533,
+      "toTxNum": 3012225730,
+      "path": "history/metadata-routing-3012144533-3012225730-b6609ae01e9c72722d9fedc79ceb0dd074adfdd0bc4e2918f93b65df1b6b786a.route",
+      "size": 72,
+      "checksum": "sha256:b6609ae01e9c72722d9fedc79ceb0dd074adfdd0bc4e2918f93b65df1b6b786a"
+    },
+    "pass": 39,
+    "seconds_build_publish": 1.058840771
+  },
+  {
+    "built": true,
+    "covered_after": 31966,
+    "covered_before": 31965,
+    "from_cursor": 3012225731,
+    "next_cursor": 3012319411,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3012225731,
+      "toTxNum": 3012319410,
+      "path": "history/metadata-routing-3012225731-3012319410-f6aec43ab67632d34ef0950d0b8e7ba23c4c7ffb6820371af12c1d810a8651fb.route",
+      "size": 72,
+      "checksum": "sha256:f6aec43ab67632d34ef0950d0b8e7ba23c4c7ffb6820371af12c1d810a8651fb"
+    },
+    "pass": 40,
+    "seconds_build_publish": 1.07956968
+  },
+  {
+    "built": true,
+    "covered_after": 31967,
+    "covered_before": 31966,
+    "from_cursor": 3012319411,
+    "next_cursor": 3012436535,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3012319411,
+      "toTxNum": 3012436534,
+      "path": "history/metadata-routing-3012319411-3012436534-cde8ab877ecea39e210ffecaae79c265f971f904592738f1e3f62ae5cc682d6b.route",
+      "size": 72,
+      "checksum": "sha256:cde8ab877ecea39e210ffecaae79c265f971f904592738f1e3f62ae5cc682d6b"
+    },
+    "pass": 41,
+    "seconds_build_publish": 1.02413509
+  },
+  {
+    "built": true,
+    "covered_after": 31968,
+    "covered_before": 31967,
+    "from_cursor": 3012436535,
+    "next_cursor": 3012583034,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3012436535,
+      "toTxNum": 3012583033,
+      "path": "history/metadata-routing-3012436535-3012583033-d56a509db20e5a083118c66a4210894157df14ac8d293667b291c4931666a799.route",
+      "size": 72,
+      "checksum": "sha256:d56a509db20e5a083118c66a4210894157df14ac8d293667b291c4931666a799"
+    },
+    "pass": 42,
+    "seconds_build_publish": 1.093572603
+  },
+  {
+    "built": true,
+    "covered_after": 31969,
+    "covered_before": 31968,
+    "from_cursor": 3012583034,
+    "next_cursor": 3012766235,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3012583034,
+      "toTxNum": 3012766234,
+      "path": "history/metadata-routing-3012583034-3012766234-06f219038ff4ac0a76f010d8450ca4a75160a128020f35495a0d9c8e4e1a2428.route",
+      "size": 72,
+      "checksum": "sha256:06f219038ff4ac0a76f010d8450ca4a75160a128020f35495a0d9c8e4e1a2428"
+    },
+    "pass": 43,
+    "seconds_build_publish": 1.043858995
+  },
+  {
+    "built": true,
+    "covered_after": 31907,
+    "covered_before": 31969,
+    "from_cursor": 3012766235,
+    "next_cursor": 3017450880,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3017348885,
+      "toTxNum": 3017450879,
+      "path": "history/metadata-routing-3017348885-3017450879-2b651dd224ca41fbe020ae47cd005de0f6078eaab1e341230e8be144740ed9e8.route",
+      "size": 72,
+      "checksum": "sha256:2b651dd224ca41fbe020ae47cd005de0f6078eaab1e341230e8be144740ed9e8"
+    },
+    "pass": 44,
+    "seconds_build_publish": 1.036460424
+  },
+  {
+    "built": true,
+    "covered_after": 31908,
+    "covered_before": 31907,
+    "from_cursor": 3017450880,
+    "next_cursor": 3017569607,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3017450880,
+      "toTxNum": 3017569606,
+      "path": "history/metadata-routing-3017450880-3017569606-6bc167a0af3e0b1bfa81e07e1c8afd3d78e3f93701ca5f7d34231b499a8ad194.route",
+      "size": 72,
+      "checksum": "sha256:6bc167a0af3e0b1bfa81e07e1c8afd3d78e3f93701ca5f7d34231b499a8ad194"
+    },
+    "pass": 45,
+    "seconds_build_publish": 0.952102687
+  },
+  {
+    "built": true,
+    "covered_after": 31909,
+    "covered_before": 31908,
+    "from_cursor": 3017569607,
+    "next_cursor": 3017691359,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3017569607,
+      "toTxNum": 3017691358,
+      "path": "history/metadata-routing-3017569607-3017691358-8886e20bdd7f46dab2d550f06d29097a851794fe8dcb5b919d49990c3c0b5845.route",
+      "size": 72,
+      "checksum": "sha256:8886e20bdd7f46dab2d550f06d29097a851794fe8dcb5b919d49990c3c0b5845"
+    },
+    "pass": 46,
+    "seconds_build_publish": 1.142259848
+  },
+  {
+    "built": true,
+    "covered_after": 31910,
+    "covered_before": 31909,
+    "from_cursor": 3017691359,
+    "next_cursor": 3017750167,
+    "output": {
+      "rows": 1,
+      "dataset": "state-domain-change",
+      "kind": "metadata-history-routing",
+      "fromTxNum": 3017691359,
+      "toTxNum": 3017750166,
+      "path": "history/metadata-routing-3017691359-3017750166-881343fbe29e843eee22df52fa616ba570488d3c43fdccaff7b37baaf8ac5419.route",
+      "size": 72,
+      "checksum": "sha256:881343fbe29e843eee22df52fa616ba570488d3c43fdccaff7b37baaf8ac5419"
+    },
+    "pass": 47,
+    "seconds_build_publish": 0.960223727
+  }
+]

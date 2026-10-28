@@ -1,0 +1,19 @@
+{
+  "built": true,
+  "input_manifest_generation": 40810,
+  "io_after": "rchar: 7783607741\nwchar: 6978267627\nsyscr: 1035022\nsyscw: 107733\nread_bytes: 4583010304\nwrite_bytes: 6978293760\ncancelled_write_bytes: 0\n",
+  "io_before": "rchar: 49605304\nwchar: 0\nsyscr: 26\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n",
+  "manifest_published": false,
+  "output_ref": {
+    "rows": 115456774,
+    "dataset": "state-domain-change",
+    "kind": "account-history-routing",
+    "fromTxNum": 1,
+    "toTxNum": 3799285494,
+    "path": "history/account-routing-1-3799285494-d4e2c6d670b0d7e806d8e6054002397ca1894988ffc5f3333216254083a55eec.route",
+    "size": 3399083207,
+    "checksum": "sha256:d4e2c6d670b0d7e806d8e6054002397ca1894988ffc5f3333216254083a55eec",
+    "lookupRoot": "sha256:d9e4553e7fc6c6316082b431b09f68ff46ffc3130aba01e5b2574b0b6cc816b4"
+  },
+  "seconds": 58.528628463
+}

@@ -32,7 +32,8 @@ Test real manifest publications while higher-priority families still have debt,
 as well as continuous producer fairness and errors/no-work admission.
 
 This scheduler fix is not the final query optimization. Existing account refresh
-rewrites a 352 MB / 11.97 million-key base for at most 64 new source dictionaries.
+rewrites a multi-gigabyte base for at most 64 new source dictionaries. The fixed
+copy has 115,456,774 rows and a 3,399,129,767-byte base.
 Next evaluate bounded delta account tables with per-object, per-query proofs and
 explicit atomic replacement on delta compaction. Do not collapse those proofs to
 one max bound if that discards useful per-object absence. Limit total metadata,
@@ -47,7 +48,7 @@ The unindexed hot-tail phase remains an independent required optimization.
 ## Measured update: metadata replacement loses valid coverage
 
 The 64-source account refresh on the private fixed copy took 58.53 seconds and
-wrote about 698 MB, so do not deploy the initial fair-admission prototype with
+wrote 6,978,293,760 physical bytes, so do not deploy the initial fair-admission prototype with
 the existing global-table builder. Its tests/review remain as experiment evidence;
 the product scheduler is restored pending bounded delta work.
 

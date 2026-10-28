@@ -1,0 +1,50 @@
+{
+  "utc": "2026-10-28T14:37:53.781925Z",
+  "root": "/data/gtron/main/datadir/gtron/state-snapshots",
+  "manifest_sha256": "9e42df69d566fa3b03640678c4495559f40c51baf48c4dbe30ff31449d5d73f8",
+  "manifest_generation": 44230,
+  "history_sources": 34578,
+  "routes": [
+    {
+      "kind": "account-history-routing",
+      "path": "history/account-routing-1-4236395726-27178983076ca646fa543a228975cf63b4c36ee09adc194b6347b069f294503a.route",
+      "advertised_sources": 33022,
+      "exact_current_pairs": 32958,
+      "uncovered_current_pairs": 1620,
+      "authenticated_source_table": true,
+      "covered_tx_min": 1,
+      "covered_tx_max": 4236395726
+    },
+    {
+      "kind": "small-system-history-routing",
+      "path": "history/small-system-routing-1-4511822659-990532944003714fa91401175fd727842c32b82fed16b2441a2e255c189730d1.route",
+      "advertised_sources": 34506,
+      "exact_current_pairs": 34506,
+      "uncovered_current_pairs": 72,
+      "authenticated_source_table": true,
+      "covered_tx_min": 1,
+      "covered_tx_max": 4511822659
+    },
+    {
+      "kind": "system-history-routing",
+      "path": "history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+      "advertised_sources": 25600,
+      "exact_current_pairs": 25536,
+      "uncovered_current_pairs": 9042,
+      "authenticated_source_table": true,
+      "covered_tx_min": 1,
+      "covered_tx_max": 3006279261
+    },
+    {
+      "kind": "metadata-history-routing",
+      "objects": 229,
+      "advertised_sources": 24227,
+      "exact_current_pairs": 24191,
+      "uncovered_current_pairs": 10387,
+      "authenticated_source_table": true,
+      "nonempty_filter_rows": 0,
+      "filter_rows_with_at_least_half_bits_set": 0
+    }
+  ],
+  "scan_is_read_only": true
+}

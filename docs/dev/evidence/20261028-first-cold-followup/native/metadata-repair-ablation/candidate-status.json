@@ -1,0 +1,25 @@
+{
+  "complete": true,
+  "stage": "metadata coverage repair maintenance and HTTP complete",
+  "source": "c63491daa1873b25a62a181a529d7f897334db76",
+  "base": "52aea62ef56799b7e6c1365293123dd029286935",
+  "production_mutations": false,
+  "canonical_data_mutations": false,
+  "cache": "fresh HTTP processes; shared OS caches uncontrolled; no eviction",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T15:16:38.547824Z",
+  "hole_pages": 48,
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true,
+  "requests": 40
+}

@@ -1,0 +1,45 @@
+{
+  "archive_bytes": 42113144,
+  "sha256": "c57b2b0012dfa5cae5a3f7c77250d19902014f8a93c866a51fcb13003fdbdd98",
+  "zip_members": 1605,
+  "correct_http_returns": 80,
+  "head_identity": [
+    45836827,
+    "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    4240407293,
+    "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+  ],
+  "catalogs": {
+    "fixed-original": {
+      "sources": 32036,
+      "exact_current_metadata_coverage": 32036,
+      "metadata_objects": 501
+    },
+    "metadata-base": {
+      "sources": 32036,
+      "exact_current_metadata_coverage": 31910,
+      "metadata_objects": 547
+    },
+    "metadata-candidate": {
+      "sources": 32036,
+      "exact_current_metadata_coverage": 32036,
+      "metadata_objects": 501
+    }
+  },
+  "maintenance": {
+    "base": {
+      "passes": 48,
+      "covered_before": 31988,
+      "covered_after": 31910,
+      "total_build_publish_seconds": 48.458073263
+    },
+    "candidate": {
+      "passes": 48,
+      "covered_before": 31988,
+      "covered_after": 32036,
+      "total_build_publish_seconds": 55.640666456
+    }
+  },
+  "canonical_segment_refs_identical": true,
+  "cache": "shared OS caches uncontrolled; fresh HTTP processes; no eviction"
+}

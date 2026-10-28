@@ -1,0 +1,49 @@
+{
+  "complete": true,
+  "stage": "account coverage ablation complete",
+  "source": "52aea62ef56799b7e6c1365293123dd029286935",
+  "production_mutations": false,
+  "canonical_data_mutations": false,
+  "cache": "fresh processes; shared OS file caches uncontrolled; no eviction",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-28T14:35:51.926175Z",
+  "original_account_uncovered": 31,
+  "ablation_account_uncovered": 1521,
+  "removed_proof_sources": 1490,
+  "canonical_root_unchanged": true,
+  "source_route": {
+    "rows": 115456774,
+    "dataset": "state-domain-change",
+    "kind": "account-history-routing",
+    "fromTxNum": 1,
+    "toTxNum": 4060208141,
+    "path": "history/account-routing-1-4060208141-d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa.route",
+    "size": 3399129767,
+    "checksum": "sha256:d0b45c1b1426ed947944e1015f91e51daf425df993da2ace5b5877005288dfaa",
+    "lookupRoot": "sha256:07f0fcdc5bc60b4c437d3d788aca80b01c31e8c7f0671ef1e9731f04c089ecba"
+  },
+  "derived_route": {
+    "rows": 115456774,
+    "dataset": "state-domain-change",
+    "kind": "account-history-routing",
+    "fromTxNum": 1,
+    "toTxNum": 4060208141,
+    "path": "history/account-gap-ablation.route",
+    "size": 3399082087,
+    "checksum": "sha256:cfb023331e4e1d2afeda76a4afdb35dd42f87872d34fb187ecd68e1e829b2b8c",
+    "lookupRoot": "sha256:a447bd791b10b29aafbac91a735b0cec5929d9f2dc2b2b1c21fec7d1a2742585"
+  },
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "all_returns_match": true,
+  "requests": 40
+}
