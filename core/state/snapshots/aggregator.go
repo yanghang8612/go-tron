@@ -564,6 +564,12 @@ func (a *Aggregator) integrateWithManifest(visibleStart, visibleEnd uint64, refs
 }
 
 func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, refs []SegmentRef, old *Manifest) (*Manifest, error) {
+	return a.integrateWithManifestPublisher(visibleStart, visibleEnd, refs, old, PublishManifest)
+}
+
+// A caller already holding manifestPublicationMu can supply the locked
+// publisher after checking its exact auxiliary replacement inputs.
+func (a *Aggregator) integrateWithManifestPublisher(visibleStart, visibleEnd uint64, refs []SegmentRef, old *Manifest, publish func(string, *Manifest) error) (*Manifest, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
@@ -660,7 +666,7 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 	manifest.Progress = mergeProgress(progress, progressFromRefs(refs, visibleEnd))
 	manifest.Retired = dedupeSegmentRefsInPlace(retired)
 
-	if err := PublishManifest(a.dir, manifest); err != nil {
+	if err := publish(a.dir, manifest); err != nil {
 		return nil, err
 	}
 	return manifest, nil

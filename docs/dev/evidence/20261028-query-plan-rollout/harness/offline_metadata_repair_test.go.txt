@@ -1,0 +1,32 @@
+package snapshots
+
+import (
+ "context"
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "strconv"
+ "testing"
+ "time"
+)
+
+func TestOfflineMetadataProofRepair(t *testing.T) {
+ dir, output := os.Getenv("GTRON_META_ABLATION_INPUT"), os.Getenv("GTRON_META_ABLATION_OUTPUT")
+ if dir=="" { t.Skip("offline only") }
+ passes,err:=strconv.Atoi(os.Getenv("GTRON_META_ABLATION_PASSES"));if err!=nil {t.Fatal(err)}
+ cursor,err:=strconv.ParseUint(os.Getenv("GTRON_META_ABLATION_START"),10,64);if err!=nil {t.Fatal(err)}
+ var records []map[string]any
+ coverage:=func(m *Manifest) int {
+  current:=manifestHistorySources(manifestLookupView(m));seen:=make(map[[32]byte]bool)
+  for _,r:=range m.Segments {if r.Kind!=SegmentMetadataHistoryRouting {continue};rows,e:=readMetadataHistoryRouting(context.Background(),dir,r);if e!=nil {t.Fatal(e)};for id:=range rows {if _,ok:=current.byID[id];ok {seen[id]=true}}}
+  return len(seen)
+ }
+ for pass:=0;pass<passes;pass++ {
+  m,e:=LoadProductionManifest(dir);if e!=nil {t.Fatal(e)};before:=coverage(m);start:=time.Now();next:=cursor
+  ref,built,e:=buildMetadataHistoryRoutingContext(context.Background(),dir,m,1,cursor,&next);if e!=nil {t.Fatal(e)}
+  if built {m,e=NewAggregator(dir).Integrate(m.VisibleTxStart,m.VisibleTxEnd,[]SegmentRef{ref});if e!=nil {t.Fatal(e)}}
+  seconds:=time.Since(start).Seconds();records=append(records,map[string]any{"pass":pass,"from_cursor":cursor,"next_cursor":next,"built":built,"output":ref,"seconds_build_publish":seconds,"covered_before":before,"covered_after":coverage(m)})
+  b,_:=json.MarshalIndent(records,"","  ");if e=os.WriteFile(filepath.Join(output,"maintenance.json"),b,0644);e!=nil {t.Fatal(e)}
+  cursor=next
+ }
+}

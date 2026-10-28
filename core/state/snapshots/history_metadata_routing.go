@@ -24,6 +24,7 @@ const metadataRoutingHeaderBytes = 32
 const metadataRoutingMaxPageBytes = metadataRoutingHeaderBytes + metadataRoutingPageSources*(40+metadataRoutingBloomBytes)
 
 var metadataRoutingMagic = [8]byte{'G', 'T', 'M', 'E', 'T', 'R', '0', '1'}
+var errMetadataRoutingRefreshConflict = errors.New("snapshots: metadata routing inputs changed during build")
 
 var metadataRoutingRefreshCursor struct {
 	sync.Mutex
@@ -234,6 +235,18 @@ func buildMetadataHistoryRoutingWithBudget(ctx context.Context, dir string, mani
 			}
 			continue
 		}
+		// Integrate retires every old page whose range intersects the new
+		// object. Repairing one pair inside a page must carry forward its other
+		// current proofs; otherwise a one-source repair can erase 255 proofs.
+		firstOverlap := sort.Search(len(reader.refs), func(i int) bool { return reader.refs[i].ToTxNum >= h.FromTxNum })
+		lastOverlap := firstOverlap
+		for lastOverlap < len(reader.refs) && reader.refs[lastOverlap].FromTxNum <= h.ToTxNum {
+			lastOverlap++
+		}
+		overlaps := reader.refs[firstOverlap:lastOverlap]
+		if len(rows) > 0 && len(overlaps) > 0 {
+			break // Finish this independent page before repairing an old one.
+		}
 		if !bootstrapLoaded {
 			bootstrap, err = loadHistoryRoutingBootstrap(ctx, dir, manifest)
 			if err != nil {
@@ -273,6 +286,18 @@ func buildMetadataHistoryRoutingWithBudget(ctx context.Context, dir string, mani
 		if err != nil {
 			return SegmentRef{}, false, err
 		}
+		if len(overlaps) > 0 {
+			ref, built, err := repairMetadataHistoryRoutingPage(ctx, dir, manifest, overlaps, h, id, row)
+			if err != nil || built {
+				return ref, built, err
+			}
+			// A split/merge may require multiple output pages. Do not publish
+			// a smaller proof set merely to satisfy the single-page API cap.
+			if attempts >= min(maxNew, metadataRoutingPageSources) {
+				break
+			}
+			continue
+		}
 		if len(rows) == 0 {
 			from = h.FromTxNum
 		}
@@ -284,6 +309,43 @@ func buildMetadataHistoryRoutingWithBudget(ctx context.Context, dir string, mani
 	}
 	if len(rows) == 0 {
 		return SegmentRef{}, false, nil
+	}
+	return writeMetadataHistoryRoutingPage(ctx, dir, from, to, rows)
+}
+
+func repairMetadataHistoryRoutingPage(ctx context.Context, dir string, manifest *Manifest, overlaps []SegmentRef, history SegmentRef, id [32]byte, row metadataSourceFilter) (SegmentRef, bool, error) {
+	if err := contextError(ctx); err != nil {
+		return SegmentRef{}, false, err
+	}
+	current := manifestHistorySources(manifest)
+	if current == nil {
+		return SegmentRef{}, false, nil // Unknown identity must not inherit a proof.
+	}
+	rows := map[[32]byte]metadataSourceFilter{id: row}
+	from, to := history.FromTxNum, history.ToTxNum
+	for _, ref := range overlaps {
+		old, err := readMetadataHistoryRouting(ctx, dir, ref)
+		if err != nil {
+			return SegmentRef{}, false, err
+		}
+		for priorID, filter := range old {
+			if err := contextError(ctx); err != nil {
+				return SegmentRef{}, false, err
+			}
+			i, active := current.byID[priorID]
+			if !active {
+				continue
+			}
+			source := manifest.Segments[current.sources[i].row]
+			if source.FromTxNum < ref.FromTxNum || source.ToTxNum > ref.ToTxNum {
+				continue // This page could not prove that source covered before.
+			}
+			rows[priorID] = filter
+			if len(rows) > metadataRoutingPageSources {
+				return SegmentRef{}, false, nil
+			}
+			from, to = min(from, source.FromTxNum), max(to, source.ToTxNum)
+		}
 	}
 	return writeMetadataHistoryRoutingPage(ctx, dir, from, to, rows)
 }
@@ -425,6 +487,58 @@ func refreshMetadataHistoryRoutingContext(ctx context.Context, dir string, busy 
 	if err != nil || !built {
 		return false, err
 	}
-	_, err = NewAggregator(dir).Integrate(m.VisibleTxStart, m.VisibleTxEnd, []SegmentRef{ref})
+	_, err = publishMetadataHistoryRoutingContext(ctx, dir, m, ref)
+	if errors.Is(err, errMetadataRoutingRefreshConflict) {
+		return false, nil // Retry from a fresh manifest; keep the completed file.
+	}
 	return err == nil, err
+}
+
+func metadataHistoryRoutingInputs(m *Manifest, from, to uint64) map[SegmentRef]struct{} {
+	refs := make(map[SegmentRef]struct{})
+	if m == nil {
+		return refs
+	}
+	m = manifestLookupView(m)
+	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	for _, ref := range m.Segments {
+		if ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.ToTxNum < from || ref.FromTxNum > to {
+			continue
+		}
+		if ref.Kind == SegmentMetadataHistoryRouting {
+			refs[ref] = struct{}{}
+		} else if ref.Kind == SegmentHistory {
+			refs[ref] = struct{}{}
+			if accessor, ok := cfg.HistoryAccessorRef(m, ref); ok {
+				refs[accessor] = struct{}{}
+			}
+		}
+	}
+	return refs
+}
+
+// The caller holds the history read lease from build through publication.
+// The lease protects old files, while this lock/check protects against another
+// publisher replacing a page or canonical pair after its proofs were copied.
+func publishMetadataHistoryRoutingContext(ctx context.Context, dir string, parent *Manifest, ref SegmentRef) (*Manifest, error) {
+	expected := metadataHistoryRoutingInputs(parent, ref.FromTxNum, ref.ToTxNum)
+	manifestPublicationMu.Lock()
+	defer manifestPublicationMu.Unlock()
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	latest, err := loadProductionManifestReadOnly(dir)
+	if err != nil {
+		return nil, err
+	}
+	current := metadataHistoryRoutingInputs(manifestLookupView(latest), ref.FromTxNum, ref.ToTxNum)
+	if len(current) != len(expected) {
+		return nil, errMetadataRoutingRefreshConflict
+	}
+	for input := range expected {
+		if _, ok := current[input]; !ok {
+			return nil, errMetadataRoutingRefreshConflict
+		}
+	}
+	return NewAggregator(dir).integrateWithManifestPublisher(latest.VisibleTxStart, latest.VisibleTxEnd, []SegmentRef{ref}, latest, publishManifestLocked)
 }

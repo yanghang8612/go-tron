@@ -218,6 +218,20 @@ func TestMetadataHistoryRoutingCancelledAndReplacedSource(t *testing.T) {
 		}
 		if i == 0 {
 			m = addMetadataRouting(t, dir, m, 1)
+			// Replacing one pair must not discard the other still-valid
+			// proofs from the overlapping page that Integrate retires.
+			reader := newMetadataHistoryRoutingReader(m)
+			cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+			for _, history := range m.Segments {
+				if history.Kind != SegmentHistory || history.normalizedDataset() != SegmentDatasetStateDomainChange {
+					continue
+				}
+				accessor, _ := cfg.HistoryAccessorRef(m, history)
+				_, covered, err := reader.source(context.Background(), dir, history, systemHistoryRoutingPairID(history, accessor))
+				if err != nil || !covered {
+					t.Fatalf("repair discarded unchanged source %s: covered=%v err=%v", history.Path, covered, err)
+				}
+			}
 		}
 	}
 }

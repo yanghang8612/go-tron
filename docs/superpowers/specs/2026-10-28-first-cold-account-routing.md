@@ -43,3 +43,32 @@ unknown, stale, unqueried or budget-excluded objects never prove absence.
 Prioritize fixed-copy performance and identical results. Do not repeat full-state
 MuHash scans or whole-node restore loops for this read/scheduling iteration.
 The unindexed hot-tail phase remains an independent required optimization.
+
+## Measured update: metadata replacement loses valid coverage
+
+The 64-source account refresh on the private fixed copy took 58.53 seconds and
+wrote about 698 MB, so do not deploy the initial fair-admission prototype with
+the existing global-table builder. Its tests/review remain as experiment evidence;
+the product scheduler is restored pending bounded delta work.
+
+A new exact census found 10,387 metadata sources unknown out of 34,578, despite
+229 active metadata objects. The fixed copy has 32,036 metadata proofs (500
+64-source pages plus one 36-source page). A new failing test proves that repairing
+one replacement pair currently retires an overlapping page without preserving
+the other valid proofs. This mechanism can amplify a small number of replacements
+into large gaps; the census alone does not attribute every historical gap to it.
+
+Repair must authenticate every range-intersecting metadata page, retain filters
+only for current exact pairs within the old page's bounds, and include both the
+preserved pairs and new pair in the output range. Preserve proofs before startTx.
+If one output cannot hold the union, defer it and advance the cursor; never
+truncate the union to meet the 256-row cap. Finish any independent new page before
+entering repair, and finish a successful repair immediately. Keep ordinary
+retirement/read leases. Publication must reject a changed overlapping metadata
+set under the publication lock before using a stale repair view.
+
+Measure old/new actual maintenance with identical synthetic one-ID holes in
+private metadata pages on the fixed copy, then full HTTP at 9M/10M/11M/15M/20M.
+Use the real refresh cursor, since always restarting from the first missing
+source would mask the repeated coverage-loss mechanism. Canonical input bytes,
+HEAD, Tx and MuHash stay fixed. No production publication or restart.
