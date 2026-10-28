@@ -8,9 +8,21 @@ E=dict(os.environ,GOCACHE='/data/gtron/deploy-cache/go-build',GOPATH='/root/go',
 def command(args,src,log,timeout=300):
  with log.open('wb') as f:subprocess.check_call(args,cwd=str(src),env=E,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
 def archive_source(name,sha):
- src=R/name;src.mkdir(exist_ok=False);top=[x for x in git('ls-tree','--name-only',sha).decode().splitlines() if x not in ['docs']];p=R/(name+'.tar')
- with p.open('wb') as f:subprocess.check_call(['git','-c','safe.directory='+REPO,'archive',sha,'--']+top,stdout=f,cwd=REPO)
- with tarfile.open(str(p)) as t:t.extractall(str(src))
+ src=R/name
+ if not src.exists():
+  src.mkdir();top=[x for x in git('ls-tree','--name-only',sha).decode().splitlines() if x not in ['docs']];p=R/(name+'.tar')
+  with p.open('wb') as f:subprocess.check_call(['git','-c','safe.directory='+REPO,'archive',sha,'--']+top,stdout=f,cwd=REPO)
+  with tarfile.open(str(p)) as t:t.extractall(str(src))
+ # Git archives intentionally omit ignored native build outputs. Reuse the
+ # exact already-tested Sapling static library; do not rebuild Rust or params.
+ relative='third_party/librustzcash/target/release/librustzcash.a'
+ lib=A/'source-candidate'/relative;dest=src/relative
+ assert lib.is_file(),str(lib)
+ if not dest.exists():dest.parent.mkdir(parents=True,exist_ok=True);os.link(str(lib),str(dest))
+ assert dest.stat().st_size==lib.stat().st_size
+ for name_ in git('diff','--name-only',BASE,sha).decode().splitlines():
+  if name_.startswith('core/state/snapshots/'):
+   assert (src/name_).read_bytes()==git('show',sha+':'+name_),name_
  fixture=git('show',SOURCE+':docs/dev/evidence/20261028-routing-bootstrap/harness/offline_build_test.go.txt');(src/'core/state/snapshots/offline_bootstrap_build_test.go').write_bytes(fixture)
  # The complete HTTP host is the unchanged fixed-cut harness used previously.
  host=A/'source-candidate/core/offline_full_http_test.go'
@@ -49,7 +61,8 @@ try:
  current=archive_source('source-current',BASE);candidate=archive_source('source-candidate',SOURCE)
  s['stage']='native source and proof tests';save();command(['/data/go/bin/go','test','-tags=sapling','./core/state/snapshots','-run','Test(HistoryRoutingBootstrap|HistoryAccessorKeySearch|SmallSystemHistoryRouting|MetadataHistoryRouting|SystemHistoryRoutingSelected)','-count=1','-timeout=180s'],candidate,R/'native-focused.log',240)
  for name,src in [('current',current),('candidate',candidate)]:
-  s['stage']='compile '+name+' snapshots';save();command(['/data/go/bin/go','test','-tags=sapling','-c','./core/state/snapshots','-o',str(R/(name+'-snapshots.test'))],src,R/(name+'-build-snapshots.log'))
+  s['stage']='compile '+name+' snapshots';save()
+  if not (R/(name+'-snapshots.test')).exists():command(['/data/go/bin/go','test','-tags=sapling','-c','./core/state/snapshots','-o',str(R/(name+'-snapshots.test'))],src,R/(name+'-build-snapshots.log'))
  s['stage']='compile candidate full HTTP';save();command(['/data/go/bin/go','test','-tags=sapling','-c','./core','-o',str(R/'candidate-http.test')],candidate,R/'candidate-build-http.log')
  s['stage']='bounded three-pass maintenance comparison';save()
  for name in ['current','candidate']:
