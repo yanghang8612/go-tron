@@ -116,6 +116,12 @@ func encodeStateChangePosting(blocks []uint64) ([]byte, error) {
 }
 
 func decodeStateChangePosting(firstBlock uint64, value []byte) ([]uint64, error) {
+	return decodeStateChangePostingInto(firstBlock, value, nil)
+}
+
+// Read-only seeks reuse one bounded frame buffer. The owning decoder above
+// keeps its existing result ownership for writers, pruning and restoration.
+func decodeStateChangePostingInto(firstBlock uint64, value []byte, dst []uint64) ([]uint64, error) {
 	if len(value) < 2 || value[0] != stateChangePostingValueVersion {
 		return nil, fmt.Errorf("rawdb: malformed state change posting version/length %d", len(value))
 	}
@@ -123,7 +129,10 @@ func decodeStateChangePosting(firstBlock uint64, value []byte) ([]uint64, error)
 	if n <= 0 || count == 0 || count > uint64(StateChangePostingFrameRows) {
 		return nil, errors.New("rawdb: malformed state change posting count")
 	}
-	blocks := make([]uint64, count)
+	if cap(dst) < int(count) {
+		dst = make([]uint64, count)
+	}
+	blocks := dst[:count]
 	blocks[0] = firstBlock
 	off := 1 + n
 	for i := 1; i < len(blocks); i++ {
@@ -253,6 +262,7 @@ func iterateStateChangePostingCandidatesContext(ctx context.Context, db ethdb.It
 	prefix := stateChangePostingHashPrefix(hash)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()
+	var scratch [StateChangePostingFrameRows]uint64
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -268,7 +278,10 @@ func iterateStateChangePostingCandidatesContext(ctx context.Context, db ethdb.It
 			continue
 		}
 		first := binary.BigEndian.Uint64(key[len(prefix):])
-		blocks, err := decodeStateChangePosting(first, it.Value())
+		if first > toBlock {
+			break
+		}
+		blocks, err := decodeStateChangePostingInto(first, it.Value(), scratch[:0])
 		if err != nil {
 			return err
 		}

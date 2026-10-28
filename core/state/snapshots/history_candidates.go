@@ -80,12 +80,23 @@ type historyCandidatePlan struct {
 	pos      int
 }
 
+// Coverage and the route-column -> manifest-row translation do not depend on
+// the requested key. Compile them once for the whole batch, after authenticating
+// this request's route. A new plan never borrows another request's proof.
+type historyCandidateRoute struct {
+	unknown []uint32
+	rows    []uint32 // table index + 1; zero is outside/unknown
+}
+
+type historyCandidateRoutes map[*systemHistoryRouting]*historyCandidateRoute
+
 func newHistoryCandidatePlan(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader) (*historyCandidatePlan, error) {
 	p := &historyCandidatePlan{table: manifestHistorySources(m)}
+	routes := make(historyCandidateRoutes, 2)
 	used := 0
 	if p.table != nil && len(queries) <= 256 {
 		for _, q := range queries {
-			candidates, err := historyCandidates(ctx, dir, m, from, to, []historyCandidateQuery{q}, broad, small, account, metadata)
+			candidates, err := historyCandidatesWithRoutes(ctx, dir, m, from, to, []historyCandidateQuery{q}, broad, small, account, metadata, routes)
 			if err != nil {
 				return nil, err
 			}
@@ -105,7 +116,7 @@ func newHistoryCandidatePlan(ctx context.Context, dir string, m *Manifest, from,
 		}
 	}
 	var err error
-	p.fallback, err = historyCandidates(ctx, dir, m, from, to, queries, broad, small, account, metadata)
+	p.fallback, err = historyCandidatesWithRoutes(ctx, dir, m, from, to, queries, broad, small, account, metadata, routes)
 	return p, err
 }
 
@@ -149,6 +160,10 @@ func (p *historyCandidatePlan) next(active func([]byte) bool) (historySource, bo
 // The authoritative loop below still authenticates files and resolves rows in
 // manifest order; a candidate is never an answer.
 func historyCandidates(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader) ([]historySource, error) {
+	return historyCandidatesWithRoutes(ctx, dir, m, from, to, queries, broad, small, account, metadata, make(historyCandidateRoutes, 2))
+}
+
+func historyCandidatesWithRoutes(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader, routes historyCandidateRoutes) ([]historySource, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -166,7 +181,6 @@ func historyCandidates(ctx context.Context, dir string, m *Manifest, from, to ui
 	inside := func(i int) bool { h := m.Segments[t.sources[i].row]; return h.ToTxNum >= from && h.FromTxNum <= to }
 	// Build unknown columns once per authenticated route, rather than doing a
 	// source membership lookup for every key at every manifest row.
-	unknown := make(map[*systemHistoryRouting][]uint32, 2)
 	addRoute := func(r *systemHistoryRouting, key []byte) bool {
 		if r == nil || contractStorageHistoryRoutingKey(key) && !r.storagePrefixes {
 			return false
@@ -175,26 +189,30 @@ func historyCandidates(ctx context.Context, dir string, m *Manifest, from, to ui
 		if r.selection != nil && !r.selection[string(key)] {
 			return false
 		}
-		rows, ok := unknown[r]
+		compiled, ok := routes[r]
 		if !ok {
+			compiled = &historyCandidateRoute{rows: make([]uint32, len(r.sources))}
 			for i, s := range t.sources {
 				if !inside(i) {
 					continue
 				}
-				if _, covered := r.columns[s.id]; !s.paired || !covered {
-					rows = append(rows, uint32(i))
+				column, covered := r.columns[s.id]
+				if !s.paired || !covered || column < 0 || column >= len(r.sources) || r.sources[column] != s.id {
+					compiled.unknown = append(compiled.unknown, uint32(i))
+				} else {
+					compiled.rows[column] = uint32(i + 1)
 				}
 			}
-			unknown[r] = rows
+			routes[r] = compiled
 		}
-		for _, i := range rows {
+		for _, i := range compiled.unknown {
 			possible[i] = true
 		}
 		members := r.keys[string(key)]
 		if len(members) > 0 {
 			systemHistoryMembersIterate(members, func(column int) {
-				if i, ok := t.byID[r.sources[column]]; ok && inside(int(i)) {
-					possible[i] = true
+				if i := compiled.rows[column]; i != 0 {
+					possible[i-1] = true
 				}
 			})
 		}

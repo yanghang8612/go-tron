@@ -36,3 +36,24 @@ The selected matched measurements use product source 9a9de233 on the corrected
 auxiliary data. External production rollouts occurred between phases, with stable identity inside
 each phase. Do not merge those backgrounds; exclude the ineffective cache trial
 from the selected performance conclusion.
+
+
+## Follow-up: plan compilation, request images and bounded frame decoding
+
+Reuse the exact corrected fixed input without rebuilding any auxiliary index.
+Compile window coverage and column-to-manifest translations once for each
+already authenticated route within a mixed batch; key cursors remain separate.
+
+One PersistentHistoryReader may retain at most 64 MiB / 8 exact route images.
+A fresh constructor or SetContext starts a fresh scope. Each image is owned and
+checksum-authenticated before admission; all later decoders validate structure
+and full query identity as before. Independent/unscoped requests still read and
+hash current physical bytes. No errors or partial reads are memoized. A scoped
+image represents one pinned request, not a cross-request file-integrity cache.
+
+Reuse a stack-bounded 256-item posting decode buffer in read-only candidate
+walks. Preserve overlapping frames, varint validation, candidate order and
+canonical row validation; only stop before frames starting beyond toBlock.
+Do not assume a 256-block width or a non-overlapping predecessor-frame layout.
+Verify matched HTTP latency, return values, CPU and allocated bytes on the same
+input before considering the previous near-HEAD regression resolved.

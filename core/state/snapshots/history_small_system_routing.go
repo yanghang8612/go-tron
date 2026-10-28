@@ -134,25 +134,9 @@ func readSmallSystemHistoryRouting(ctx context.Context, dir string, ref SegmentR
 	if err := validateSegmentRef(ref); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(filepath.Join(dir, ref.Path))
+	data, digest, err := readSystemHistoryRoutingBytes(ctx, dir, ref)
 	if err != nil {
 		return nil, err
-	}
-	defer f.Close()
-	stat, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if stat.Size() != int64(ref.Size) {
-		return nil, errors.New("snapshots: system history routing size mismatch")
-	}
-	data := make([]byte, ref.Size)
-	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, data); err != nil {
-		return nil, err
-	}
-	digest := sha256.Sum256(data)
-	if fmt.Sprintf("sha256:%x", digest) != ref.Checksum {
-		return nil, errors.New("snapshots: system history routing checksum mismatch")
 	}
 	sharedSmallSystemHistoryRouting.Lock()
 	cached := sharedSmallSystemHistoryRouting.value

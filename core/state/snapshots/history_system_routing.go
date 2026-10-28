@@ -237,11 +237,16 @@ func readSystemHistoryRoutingBytes(ctx context.Context, dir string, ref SegmentR
 	if err := contextError(ctx); err != nil {
 		return nil, [32]byte{}, err
 	}
-	if ref.Kind != SegmentSystemHistoryRouting || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < systemHistoryRoutingHeaderSize || ref.Size > systemHistoryRoutingMaxBytes {
+	if (ref.Kind != SegmentSystemHistoryRouting && ref.Kind != SegmentSmallSystemHistoryRouting) || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < systemHistoryRoutingHeaderSize || ref.Size > systemHistoryRoutingMaxBytes {
 		return nil, [32]byte{}, errors.New("snapshots: invalid system history routing reference")
 	}
 	if err := validateSegmentRef(ref); err != nil {
 		return nil, [32]byte{}, err
+	}
+	scope := routingReadScope(ctx)
+	key := historyRoutingReadKey{dir: dir, ref: ref}
+	if image, ok := scope.get(key); ok {
+		return image.data, image.digest, contextError(ctx)
 	}
 	f, err := os.Open(filepath.Join(dir, ref.Path))
 	if err != nil {
@@ -263,7 +268,11 @@ func readSystemHistoryRoutingBytes(ctx context.Context, dir string, ref SegmentR
 	if fmt.Sprintf("sha256:%x", digest) != ref.Checksum {
 		return nil, [32]byte{}, errors.New("snapshots: system history routing checksum mismatch")
 	}
-	return data, digest, contextError(ctx)
+	if err := contextError(ctx); err != nil {
+		return nil, [32]byte{}, err
+	}
+	scope.put(key, historyRoutingReadImage{data: data, digest: digest})
+	return data, digest, nil
 }
 
 func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRouting, error) {

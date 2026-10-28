@@ -356,7 +356,7 @@ func NewPersistentHistoryReaderWithColdHistory(db readerDB, live LiveAccountRead
 		latest:          newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry()),
 		cache:           make(map[reqCacheKey]any),
 		txRanges:        make(map[uint64]stateTxRangeCacheEntry),
-		ctx:             context.Background(),
+		ctx:             snapshots.WithHistoryRoutingReadScope(context.Background()),
 	}
 }
 
@@ -370,7 +370,7 @@ func (r *PersistentHistoryReader) SetContext(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	r.ctx = ctx
+	r.ctx = snapshots.WithHistoryRoutingReadScope(ctx)
 }
 
 func (r *PersistentHistoryReader) contextError() error {

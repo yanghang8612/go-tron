@@ -109,3 +109,53 @@ func TestHistoryCandidatesPartialCompleteAndReplacedManifestParity(t *testing.T)
 		}
 	}
 }
+
+func TestHistoryCandidateCompiledRouteColumnsAndWindow(t *testing.T) {
+	m := manifestLookupView(&Manifest{Segments: make([]SegmentRef, 6)})
+	tab := &historySourceTable{byID: make(map[[32]byte]uint32)}
+	route := &systemHistoryRouting{columns: make(map[[32]byte]int), keys: make(map[string][]byte), sources: make([][32]byte, 6)}
+	for i := range 6 {
+		m.Segments[i] = SegmentRef{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: uint64(i + 1), ToTxNum: uint64(i + 1)}
+		id := [32]byte{byte(i + 1)}
+		tab.sources = append(tab.sources, historySource{row: uint32(i), id: id, paired: true})
+		tab.byID[id] = uint32(i)
+		column := 5 - i
+		route.sources[column] = id
+		route.columns[id] = column
+	}
+	m.lookup.historyOnce.Do(func() { m.lookup.history = tab })
+	var queries []historyCandidateQuery
+	for i := range 3 {
+		q := StateHistoryQuery{FlatDomain: rawdb.StateFlatDomainKVLatest, Owner: common.SystemAccountAddress, Generation: 4, Domain: kvdomains.SystemDynamicProperty, Key: []byte{byte(i)}}
+		key := stateDomainChangeBinaryAccessorLookupKey(q.FlatDomain, q.Owner, q.Generation, q.Domain, q.Key)
+		queries = append(queries, historyCandidateQuery{query: q, lookup: key})
+		// Reverse route column order, and hits both inside/outside the window.
+		route.keys[string(key)] = []byte{0, 0x3f}
+	}
+	delete(route.columns, tab.sources[3].id)
+	plan, err := newHistoryCandidatePlan(context.Background(), "", m, 2, 5, queries, nil, route, nil, newMetadataHistoryRoutingReader(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []uint32
+	for r, ok := plan.next(func([]byte) bool { return true }); ok; r, ok = plan.next(func([]byte) bool { return true }) {
+		got = append(got, r.row)
+	}
+	if !reflect.DeepEqual(got, []uint32{1, 2, 3, 4}) {
+		t.Fatal(got)
+	}
+	// Compiled coverage is local: replacing a route must not retain the prior
+	// request's coverage or out-of-window translation.
+	route.keys = map[string][]byte{}
+	plan, err = newHistoryCandidatePlan(context.Background(), "", m, 1, 6, queries, nil, route, nil, newMetadataHistoryRoutingReader(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := plan.next(func([]byte) bool { return true })
+	if !ok || r.row != 3 {
+		t.Fatalf("uncovered replacement %v %v", r, ok)
+	}
+	if _, ok := plan.next(func([]byte) bool { return true }); ok {
+		t.Fatal("false candidate")
+	}
+}

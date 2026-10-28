@@ -39,6 +39,86 @@ func TestStateChangePostingEncodingRoundTripAndRejectsMalformed(t *testing.T) {
 	}
 }
 
+func TestStateChangePostingScratchParityAndQueryBounds(t *testing.T) {
+	var scratch [StateChangePostingFrameRows]uint64
+	for count := 1; count <= len(scratch); count++ {
+		want := make([]uint64, count)
+		for i := range want {
+			want[i] = 17 + uint64(i*i+i)
+		}
+		encoded, err := encodeStateChangePosting(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := decodeStateChangePostingInto(want[0], encoded, scratch[:0])
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("count %d: %v", count, err)
+		}
+		if &got[0] != &scratch[0] {
+			t.Fatal("scratch was not reused")
+		}
+		if _, err := decodeStateChangePostingInto(want[0], append(encoded, 0), scratch[:0]); err == nil {
+			t.Fatal("trailing bytes accepted")
+		}
+	}
+	db := NewMemoryDatabase()
+	defer db.Close()
+	key := []byte("test/posting-range")
+	hash := stateChangePostingHash(key)
+	// Keep overlapping frames supported; no predecessor-only shortcut may
+	// discard an earlier frame crossing the query's lower bound.
+	for _, blocks := range [][]uint64{{1, 100}, {2, 3}, {101, 102}} {
+		encoded, err := encodeStateChangePosting(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Put(stateChangePostingKey(hash, blocks[0]), encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Put(stateChangePostingKey(hash, 200), []byte("bad beyond upper bound")); err != nil {
+		t.Fatal(err)
+	}
+	var got []uint64
+	if err := iterateStateChangePostingCandidatesContext(context.Background(), db, key, 99, 101, func(n uint64) (bool, error) { got = append(got, n); return true, nil }); err != nil || !slices.Equal(got, []uint64{100, 101}) {
+		t.Fatalf("range %v: %v", got, err)
+	}
+	if err := iterateStateChangePostingCandidatesContext(context.Background(), db, key, 199, 200, func(uint64) (bool, error) { return true, nil }); err == nil {
+		t.Fatal("in-range corruption hidden")
+	}
+}
+
+func BenchmarkStateChangePostingFrameDecoding(b *testing.B) {
+	blocks := make([]uint64, StateChangePostingFrameRows)
+	for i := range blocks {
+		blocks[i] = uint64(i*7 + 1)
+	}
+	value, err := encodeStateChangePosting(blocks)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, reuse := range []bool{false, true} {
+		name := "owning"
+		if reuse {
+			name = "query-scratch"
+		}
+		b.Run(name, func(b *testing.B) {
+			var scratch [StateChangePostingFrameRows]uint64
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				var dst []uint64
+				if reuse {
+					dst = scratch[:0]
+				}
+				got, err := decodeStateChangePostingInto(1, value, dst)
+				if err != nil || got[len(got)-1] != blocks[len(blocks)-1] {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestSingletonStateChangePostingValidation(t *testing.T) {
 	value, err := encodeStateChangePosting([]uint64{17})
 	if err != nil {
