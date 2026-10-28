@@ -352,6 +352,9 @@ func repairStorageHistoryRoutingPage(ctx context.Context, dir string, m *Manifes
 					continue
 				}
 				rows[id] = f
+				if len(rows) > storageRoutingPageSources || storageRoutingSize(rows) > storageRoutingPageBytes {
+					return SegmentRef{}, false, nil
+				}
 				from, to = min(from, h.FromTxNum), max(to, h.ToTxNum)
 			}
 		}
