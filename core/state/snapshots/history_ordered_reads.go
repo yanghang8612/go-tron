@@ -15,6 +15,8 @@ const historyReadAheadResultBytes = 1 << 20
 var historyReadAheadAdmission = make(chan struct{}, historyReadAheadWindow)
 var errHistoryReadAheadResultBudget = errors.New("snapshots: speculative history result budget")
 
+type historyPointReadKey struct{}
+
 type historyReadAheadRow struct {
 	key    []byte
 	change *rawdb.StateDomainChange

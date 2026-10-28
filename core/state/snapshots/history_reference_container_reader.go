@@ -53,6 +53,7 @@ func openHistoryReferenceReader(ctx context.Context, path string, cacheBytes int
 	if err != nil {
 		return nil, err
 	}
+	adviseHistoryPointReads(ctx, file)
 	info, err := file.Stat()
 	if err == nil && (!info.Mode().IsRegular() || info.Size() < historyReferenceHeaderSize) {
 		err = fmt.Errorf("%w: file", errHistoryReferenceCorrupt)

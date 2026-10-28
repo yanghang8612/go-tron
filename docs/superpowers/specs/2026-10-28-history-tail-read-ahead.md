@@ -20,6 +20,12 @@ Coalesce the initial accessor magic and header on the same descriptor, and
 anchor final-page reads at EOF so descending adjacent footers share one read.
 Keep existing CRC, dictionary binding, range and identity checks unchanged.
 
+The exact-key lookup context also marks only its own Linux descriptors as
+FADV_RANDOM. Suppress unrelated kernel readahead on these independent point
+files, without changing sequential scan descriptors or evicting any pages.
+Compare the hint separately on the same private cold-history input; other
+platforms retain normal file reads and a failed optional hint is nonfatal.
+
 Tests cover ordered errors/results, cancellation/join, result budget fallback,
 mixed owners/domains and corrupt tail/footer bytes. Benchmark incomplete and
 complete routing separately; do not count a routing coverage change as reader
