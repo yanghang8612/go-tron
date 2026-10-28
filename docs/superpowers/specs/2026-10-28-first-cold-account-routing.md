@@ -45,6 +45,36 @@ Prioritize fixed-copy performance and identical results. Do not repeat full-stat
 MuHash scans or whole-node restore loops for this read/scheduling iteration.
 The unindexed hot-tail phase remains an independent required optimization.
 
+## Account design gate: measure density before selecting the representation
+
+The 1,521-source account-gap ablation adds about 118.8 MB of actual query reads
+for 1,490 extra unknown sources (about 80 KB/source). Source object sizes are
+not equivalent to query read bytes. The existing small-system routing may
+already eliminate the system account; inspect the actual contract envelope
+separately. Do not assume that a per-source Bloom analogous to storage routing
+will be smaller than the reads it replaces. A 65,536-key filter would occupy
+128 KiB before metadata, and whole-object authentication reads that bitmap.
+
+Authenticate all 1,521 unknown dictionaries on the fixed ablation input. Count
+account/generation keys and exact membership for the two actual HTTP envelope
+keys; generation keys are labeled controls. Record small/broad negative proofs
+and exact source identities. Project 16-bit Bloom bytes with a bounded hash
+array, identifying excluded dense/unsupported sources. Separately deduplicate
+groups of 64 source dictionaries and project paged independent delta tables,
+including full root metadata, duplicated initial header and the actual unique
+4-KiB directory/data pages for this two-key request. A 2M-key union cap produces
+a lower bound, not an exact result; unsupported groups are incomplete. These
+are layout/I/O projections, not built-index or HTTP performance measurements.
+
+Each delta must keep its own exact covered-pair set and key upper bound. Never
+extend the old base's coverage set and authorize its stale bound for new sources.
+New-account and later-than-old-bound positives require dedicated correctness
+tests. Select the representation from measured density and remaining query
+reads; if Bloom pages exceed the canonical reads avoided, use independently
+paged deltas. The previous global-table fair-admission prototype remains
+withdrawn; current small/metadata/storage scheduling does not admit that costly
+account refresh as another fair family.
+
 ## Measured update: metadata replacement loses valid coverage
 
 The 64-source account refresh on the private fixed copy took 58.53 seconds and

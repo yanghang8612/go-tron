@@ -1,0 +1,248 @@
+package snapshots
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+	"time"
+)
+
+func TestOfflineAccountRoutingDistribution(t *testing.T) {
+	dir, out := os.Getenv("GTRON_ACCOUNT_STUDY_INPUT"), os.Getenv("GTRON_ACCOUNT_STUDY_OUTPUT")
+	if dir == "" {
+		t.Skip("offline only")
+	}
+	raw, e := os.ReadFile(filepath.Join(dir, ManifestFile))
+	if e != nil {
+		t.Fatal(e)
+	}
+	beforeSHA := sha256.Sum256(raw)
+	m, e := LoadProductionManifest(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	m = manifestLookupView(m)
+	ref, ok := accountRoutingRef(m, 0, ^uint64(0))
+	if !ok {
+		t.Fatal("no account base")
+	}
+	base, e := openAccountHistoryRouting(context.Background(), dir, ref)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer base.Close()
+	var queries []StateHistoryQuery
+	var targets [][]byte
+	var bounds []map[string]any
+	for _, flat := range []rawdb.StateFlatDomain{rawdb.StateFlatDomainAccountLatest, rawdb.StateFlatDomainKVGeneration} {
+		for _, hexOwner := range []string{"41fffffffffffffffffffffffffffffffffffffffe", "41a4997124a328a4615eab437cede31da47a31b375"} {
+			b, _ := hex.DecodeString(hexOwner)
+			owner := common.BytesToAddress(b)
+			q := StateHistoryQuery{FlatDomain: flat, Owner: owner}
+			queries = append(queries, q)
+			key := stateDomainChangeBinaryAccessorLookupKey(flat, owner, 0, 0, nil)
+			targets = append(targets, key)
+			bound, found, e := base.lookup(context.Background(), key)
+			if e != nil {
+				t.Fatal(e)
+			}
+			bounds = append(bounds, map[string]any{"flat": flat, "owner": hexOwner, "bound": bound, "found": found, "actual_http_batch": flat == rawdb.StateFlatDomainAccountLatest})
+		}
+	}
+	small, e := loadSmallSystemHistoryRouting(context.Background(), dir, m)
+	if e != nil {
+		t.Fatal(e)
+	}
+	broad, e := loadSystemHistoryRoutingForKeys(context.Background(), dir, m, targets)
+	if e != nil {
+		t.Fatal(e)
+	}
+	cfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	type source struct {
+		h, a SegmentRef
+		id   [32]byte
+	}
+	var unknown []source
+	for _, h := range m.Segments {
+		if h.Kind != SegmentHistory || h.normalizedDataset() != SegmentDatasetStateDomainChange {
+			continue
+		}
+		a, ok := cfg.HistoryAccessorRef(m, h)
+		if !ok {
+			t.Fatal(h.Path)
+		}
+		id := systemHistoryRoutingPairID(h, a)
+		if _, ok := base.metadata.covered[id]; !ok {
+			unknown = append(unknown, source{h, a, id})
+		}
+	}
+	if len(unknown) != 1521 {
+		t.Fatal("wrong frozen account gap", len(unknown))
+	}
+	began := time.Now()
+	var rows, groups []map[string]any
+	groupKeys := make(map[[21]byte]struct{})
+	groupOverflow := false
+	groupUnsupported := false
+	groupN := 0
+	groupFrom, groupTo := uint64(0), uint64(0)
+	groupNeeded := make([]bool, len(targets))
+	groupTargetPresent := make([]bool, len(targets))
+	groupTargetMaxTo := make([]uint64, len(targets))
+	flushGroup := func() {
+		if groupN == 0 {
+			return
+		}
+		keys := make([][21]byte, 0, len(groupKeys))
+		for k := range groupKeys {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
+		n := uint64(len(keys))
+		h := accountRoutingHeader{sources: uint32(groupN), rows: n, pages: ceilDiv(n, accountRoutingPageRecords)}
+		h.directories = ceilDiv(h.pages, accountRoutingDirectoryEntries)
+		var projections []map[string]any
+		seenDirs, seenPages := make(map[uint64]bool), make(map[uint64]bool)
+		for i, key := range targets {
+			projected := uint64(0)
+			j := sort.Search(len(keys), func(j int) bool { return bytes.Compare(keys[j][:], key) > 0 })
+			if n > 0 && j > 0 {
+				page := uint64(j-1) / accountRoutingPageRecords
+				directory := page / accountRoutingDirectoryEntries
+				projected = 2 * accountRoutingPageBytes
+				if i < 2 && groupNeeded[i] {
+					seenDirs[directory] = true
+					seenPages[page] = true
+				}
+			}
+			projections = append(projections, map[string]any{"target": i, "needed_after_existing_routes": groupNeeded[i], "child_bytes_single_lookup": projected, "present_in_group": groupTargetPresent[i], "max_source_to_if_present": groupTargetMaxTo[i]})
+		}
+		batchBytes := uint64(0)
+		if groupNeeded[0] || groupNeeded[1] {
+			batchBytes = 64 + h.metadataBytes() + uint64(len(seenDirs)+len(seenPages))*accountRoutingPageBytes
+		}
+		groups = append(groups, map[string]any{"sources": groupN, "from": groupFrom, "to": groupTo, "unique_account_keys": n, "overflow_lower_bound": groupOverflow, "incomplete_due_to_unsupported": groupUnsupported, "projected_file_bytes": h.fileBytes(), "root_metadata_bytes": h.metadataBytes(), "initial_header_read_bytes": 64, "projected_actual_two_key_batch_read_bytes": batchBytes, "lookup_projections": projections})
+		groupKeys = make(map[[21]byte]struct{})
+		groupOverflow = false
+		groupUnsupported = false
+		groupN = 0
+		groupFrom, groupTo = 0, 0
+		groupNeeded = make([]bool, len(targets))
+		groupTargetPresent = make([]bool, len(targets))
+		groupTargetMaxTo = make([]uint64, len(targets))
+	}
+	for i, p := range unknown {
+		start := time.Now()
+		envelopes, generations := 0, 0
+		present := make([]bool, len(targets))
+		skipped := make([]bool, len(targets))
+		var hashes []storagePrefixHash
+		hashOverflow := false
+		for j, q := range queries {
+			if smallSystemHistoryRoutingQuery(q) {
+				if small != nil {
+					if col, ok := small.columns[p.id]; ok && !small.mayContain(col, targets[j]) {
+						skipped[j] = true
+						continue
+					}
+				}
+				if systemHistoryRoutingQuery(q) && broad != nil {
+					if col, ok := broad.columns[p.id]; ok && !broad.mayContain(col, targets[j]) {
+						skipped[j] = true
+					}
+				}
+			}
+		}
+		ioBefore, _ := os.ReadFile("/proc/self/io")
+		e := iterateHistoryRoutingSourceKeys(context.Background(), dir, p.h, p.a, func(key []byte) error {
+			if !accountRoutingKey(key) {
+				return nil
+			}
+			if key[0] == byte(rawdb.StateFlatDomainAccountLatest) {
+				envelopes++
+			} else {
+				generations++
+			}
+			for j, target := range targets {
+				if bytes.Equal(key, target) {
+					present[j] = true
+					groupTargetPresent[j] = true
+					groupTargetMaxTo[j] = max(groupTargetMaxTo[j], p.h.ToTxNum)
+				}
+			}
+			if len(hashes) < 1<<20 {
+				hashes = append(hashes, hashStoragePrefix(key))
+			} else {
+				hashOverflow = true
+			}
+			var k [21]byte
+			copy(k[:], key)
+			if len(groupKeys) < 2_000_000 {
+				groupKeys[k] = struct{}{}
+			} else if _, ok := groupKeys[k]; !ok {
+				groupOverflow = true
+			}
+			return nil
+		})
+		ioAfter, _ := os.ReadFile("/proc/self/io")
+		unsupported := errors.Is(e, errSystemHistoryRoutingBudget)
+		if e != nil && !unsupported {
+			t.Fatal(e)
+		}
+		groupUnsupported = groupUnsupported || unsupported
+		possible := make([]bool, len(targets))
+		filterBytes := 0
+		if !unsupported && !hashOverflow {
+			f := storageFilterFromHashes(hashes)
+			filterBytes = len(f.bits)
+			for j, target := range targets {
+				possible[j] = f.count != 0
+				h := hashStoragePrefix(target)
+				for probe := uint64(0); probe < 8 && possible[j]; probe++ {
+					bit := (h.first + probe*h.step) & uint64(len(f.bits)*8-1)
+					possible[j] = f.bits[bit/8]&(1<<(bit%8)) != 0
+				}
+				if present[j] && !possible[j] {
+					t.Fatal("study filter lost a target")
+				}
+			}
+		}
+		if groupN == 0 {
+			groupFrom = p.h.FromTxNum
+		}
+		groupTo = p.h.ToTxNum
+		groupN++
+		for j := range queries {
+			groupNeeded[j] = groupNeeded[j] || !skipped[j]
+		}
+		row := map[string]any{"source": p.h, "accessor": p.a, "pair_id": hex.EncodeToString(p.id[:]), "account_keys": envelopes, "generation_keys": generations, "target_present": present, "target_may_contain": possible, "target_skipped_by_existing_routes": skipped, "unsupported": unsupported, "hash_budget_excluded": hashOverflow, "projected_filter_bytes_16bits": filterBytes, "seconds": time.Since(start).Seconds(), "io_before": string(ioBefore), "io_after": string(ioAfter)}
+		rows = append(rows, row)
+		if groupN == 64 || i+1 == len(unknown) {
+			flushGroup()
+		}
+		if (i+1)%16 == 0 || i+1 == len(unknown) {
+			b, _ := json.MarshalIndent(map[string]any{"complete": false, "sources": len(unknown), "processed": len(rows), "seconds": time.Since(began).Seconds(), "queries": bounds, "rows": rows, "groups": groups}, "", "  ")
+			if e := os.WriteFile(filepath.Join(out, "distribution-progress.json"), b, 0644); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	after, e := os.ReadFile(filepath.Join(dir, ManifestFile))
+	if e != nil || !bytes.Equal(raw, after) {
+		t.Fatal("read-only study changed parent", e)
+	}
+	result := map[string]any{"complete": true, "sources": len(unknown), "seconds": time.Since(began).Seconds(), "queries": bounds, "rows": rows, "groups": groups, "manifest_sha256": hex.EncodeToString(beforeSHA[:]), "manifest_unchanged": true, "projections_only_not_built_or_benchmarked": true}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	if e := os.WriteFile(filepath.Join(out, "distribution.json"), b, 0644); e != nil {
+		t.Fatal(e)
+	}
+}
