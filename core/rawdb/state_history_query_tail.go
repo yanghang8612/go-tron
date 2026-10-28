@@ -18,8 +18,8 @@ const (
 )
 
 // WithStateHistoryQueryTailCache reuses only this query's pinned hot view. It
-// retains rows for requested owners, never the entire tail or shared mutable
-// process state. A moving/legacy reader is left unchanged. Closing the source
+// retains bounded owner rows and canonical blocks, never the entire tail or
+// shared mutable process state. A moving/legacy reader is left unchanged. Closing the source
 // remains the caller's responsibility; the cache owns no snapshots or files.
 func WithStateHistoryQueryTailCache(source StateKVHistoryReader) StateKVHistoryReader {
 	marker, ok := source.(pointread.PinnedKeyValueView)
@@ -46,6 +46,9 @@ type stateHistoryQueryTailView struct {
 	first                       map[common.Address]*stateHistoryQueryTailFirst
 	planned                     map[common.Address]bool
 	used, rows, budget, maxRows int
+	blocks                      map[uint64]*historyQueryBlock
+	blockRejected               map[uint64]bool
+	blockBytes, blockRows       int
 }
 
 func (*stateHistoryQueryTailView) IsPinnedKeyValueView() bool { return true }

@@ -336,33 +336,6 @@ type historyMemoManifestCold struct {
 
 func (c *historyMemoManifestCold) Manifest() *snapshots.Manifest { return c.manifest }
 
-func TestHistoryExecutionPrefetchBatchesFullyIndexedHotSpan(t *testing.T) {
-	cold := &historyMemoCold{}
-	r := newHistoryMemoReader(t, cold, true)
-	r.coldHistory = &historyMemoManifestCold{historyMemoCold: cold}
-	contract := testAddr(0x7b)
-	envelope := func(gen uint64) []byte {
-		return encodeStateAccountV2Fields(StateAccountVersion, []byte{1}, EmptyKVRoot, gen, common.Hash{})
-	}
-	r.latest = &recordingHotStateLatestReader{account: map[common.Address][]byte{common.SystemAccountAddress: envelope(4), contract: envelope(7)}}
-	if err := r.PrefetchExecutionAt(2, common.Address{}, contract, nil); err != nil {
-		t.Fatal(err)
-	}
-	if cold.mixed != 0 {
-		t.Fatal("unindexed hot-only hint unexpectedly performed reads")
-	}
-	db := r.db.(historyMemoPinnedDB).readerDB.(ethdb.KeyValueWriter)
-	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageStateHistoryIndex, 3, common.Hash{3}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.PrefetchExecutionAt(2, common.Address{}, contract, nil); err != nil {
-		t.Fatal(err)
-	}
-	if cold.mixed != 2 || len(r.firstMemo) == 0 {
-		t.Fatalf("fully indexed span not batched: plans=%d memo=%d", cold.mixed, len(r.firstMemo))
-	}
-}
-
 func TestHistoryExecutionPrefetchRangeHintDoesNotProveAbsence(t *testing.T) {
 	owner := testAddr(0x79)
 	for _, end := range []uint64{0, 1, 2} {

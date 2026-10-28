@@ -795,6 +795,9 @@ func IterateStateDomainChangesContext(ctx context.Context, db ethdb.Iteratee, bl
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if cache, ok := historyView.(*stateHistoryQueryTailView); ok {
+		return cache.iterateBlock(ctx, blockNum, fn)
+	}
 	prefix := stateChangeSetBlockPrefix(blockNum)
 	it := db.NewIterator(prefix, nil)
 	defer it.Release()

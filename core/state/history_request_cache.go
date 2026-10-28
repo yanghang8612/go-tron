@@ -183,9 +183,7 @@ func (r *PersistentHistoryReader) PrefetchExecutionAt(block uint64, caller, cont
 	if err != nil {
 		return r.contextError()
 	}
-	// Cold spans amortize planning. A fully indexed hot span also needs the
-	// batch: scalar posting reads otherwise decode the same candidate block
-	// independently for every dynamic property near HEAD.
+	// Planning pays for itself only if this span can visit a cold segment.
 	// A manifest is merely a cost hint here: skipping optional prefetch does
 	// not skip, memoize, or prove any authoritative demand-read result.
 	if view, ok := r.coldHistory.(interface{ Manifest() *snapshots.Manifest }); ok {
@@ -199,10 +197,7 @@ func (r *PersistentHistoryReader) PrefetchExecutionAt(block uint64, caller, cont
 			}
 		}
 		if !overlap {
-			indexed, present, err := rawdb.ReadStageProgressRow(r.db, rawdb.StageStateHistoryIndex)
-			if err != nil || !present || indexed.BlockNum < r.hotHistoryToBlock {
-				return r.contextError()
-			}
+			return nil
 		}
 	}
 	accounts := []common.Address{common.SystemAccountAddress, contract}

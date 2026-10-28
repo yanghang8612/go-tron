@@ -29,7 +29,11 @@ The preliminary block-aligned index ablation is not admitted: 256 is a count of
 key occurrences per frame, not a block-alignment rule. Final data appends from
 the exact previous frontier plus one, with no overlapping rebuild.
 
-Allow execution prefetch for a hot-only span when its pinned posting frontier
-covers the entire hot bound. This preserves batching near HEAD after catch-up;
-unindexed hot-only spans retain the existing cheap path. Stage progress remains
-a cost hint, and all prefetched values require ordinary authoritative reads.
+The hot-only prefetch trial did not remove the near-HEAD regression and is
+reverted. Instead retain canonical repaired block rows within one pinned
+request, bounded to 16 MiB, 32,768 rows and 64 admitted/rejected blocks. Decode
+through the existing owning/authenticated source and clone callback rows.
+Preserve terminal error ordering, callback early stop and cancellation; oversized
+blocks bypass admission after one failed attempt. This adds no persistent format
+or cross-request cache. Compare this final variant against the previous reader
+on exactly the corrected auxiliary input before drawing a latency conclusion.
