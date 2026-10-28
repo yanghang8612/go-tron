@@ -1,0 +1,37 @@
+{
+  "feature_source": "19bdd0dd239f4bd0c2ea097beca15980e2f4e629",
+  "native_matrix_source": "7a1d189ad2cd3927a1d9a506c418f2a34e22ab23",
+  "production_deployed": false,
+  "snapshots_package": {
+    "command": "go test ./core/state/snapshots -count=1 -timeout=360s",
+    "passed": true,
+    "seconds": 231.968
+  },
+  "filter_and_metadata_repair_race": {
+    "command_scope": "TestStoragePrefix and TestMetadataHistoryRoutingRepair before the added publication/retirement tests",
+    "passed": true,
+    "seconds": 79.803
+  },
+  "publication_and_retirement_race": {
+    "command_scope": "TestStoragePrefixRoutingPublicationRejectsChangedCanonicalPair and TestStoragePrefixRoutingRetirementRespectsReadAndPublishedLeases",
+    "passed": true,
+    "seconds": 3.643
+  },
+  "vet": {
+    "command": "go vet ./core/state/snapshots ./core/state ./core/rawdb ./core ./cmd/gtron",
+    "passed": true
+  },
+  "early_hit_negative_control": {
+    "method": "local overlay removing only the consume-earliest-pending-read fix",
+    "expected_failure_observed": true,
+    "failure": "loaded=2, want 1",
+    "seconds": 18.734
+  },
+  "post_matrix_source_change": {
+    "description": "stop overlap repair immediately when retained proof rows exceed the page cap; only offline observation/sealing harnesses otherwise",
+    "focused_regression_passed": true,
+    "seconds": 2.984
+  },
+  "full_muhash_repeated": false,
+  "full_restore_repeated": false
+}
