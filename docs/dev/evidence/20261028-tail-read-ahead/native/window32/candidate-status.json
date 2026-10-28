@@ -1,0 +1,15 @@
+{
+  "complete": false,
+  "stage": "failed",
+  "source": "27e4e4aadc35b893efff68bfb3cb8581652cd494",
+  "base": "9365e06710d5cdc7ac836e0b40cbde09e8977906",
+  "production_mutations": false,
+  "production_before": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "utc": "2026-10-28T07:46:33.052244Z",
+  "error": "Traceback (most recent call last):\n  File \"/data/gtron/maintenance/tail-read-ahead-20261028-01/window-bench.py\", line 23, in <module>\n    extra=sorted(seen-readset);assert sum((partial/rel).stat().st_size for rel in extra)<512<<20\nAssertionError\n"
+}

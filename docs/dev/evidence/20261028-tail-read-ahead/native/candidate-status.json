@@ -1,0 +1,24 @@
+{
+  "complete": true,
+  "source": "80293e10cbc9ff983fe112dad2b9dafa08a29ed0",
+  "base": "cda883baa52a1f3134e3d459209a52e8ff3b123e",
+  "production_mutations": false,
+  "full_muhash_repeated": false,
+  "full_restore_repeated": false,
+  "stage": "HTTP matrix complete",
+  "production_before": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "utc": "2026-10-28T07:10:11.696675Z",
+  "production_after": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "requests": 35,
+  "all_returns_match": true
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "case": "discovery-window32",
+    "cache": "discovery-excluded",
+    "seconds_loopback_http": 20.19198227673769,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  }
+]

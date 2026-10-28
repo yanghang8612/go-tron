@@ -41,12 +41,17 @@ summary={'head_identity':list(heads)[0],'sealed_members_verified':len(seal['file
 groups=collections.defaultdict(list)
 for x in formal:
  variant=('window32' if 'window32' in x['case'] else 'window8' if 'window8' in x['case'] else 'random' if 'random' in x['case'] else 'lookahead' if 'candidate' in x['case'] or 'lookahead' in x['case'] else 'baseline')
- tier='controlled-cold' if x['cache'].startswith('private-cold') else 'second-call' if x['cache'].startswith('second-call') else 'new-process' if x.get('repeat')==0 else 'later-call'
+ tier='controlled-cold' if x['cache'].startswith('private-cold') else 'second-call' if x['cache'].startswith('second-call') else 'new-process' if x['cache'].startswith('fresh-process') else 'first-at-height' if x.get('repeat')==0 else 'later-call'
  coverage='complete' if 'complete' in x['case'] else 'partial'
  groups[(x['phase'],variant,coverage,tier,x['height'])].append(x)
 rejected=json.loads((r/'window32/candidate-status.json').read_text());assert not rejected['complete'] and rejected['stage']=='failed'
 summary['rejected_window']=rejected
 summary['groups']=[]
+for x in formal:
+ if x['read_bytes']==0 and (x.get('repeat',0)>0 or x['cache'].startswith('second-call')):
+  variant='random' if 'random' in x['case'] else 'lookahead' if 'candidate' in x['case'] or 'lookahead' in x['case'] else 'baseline'
+  coverage='complete' if 'complete' in x['case'] else 'partial'
+  groups[(x['phase'],variant,coverage,'zero-physical-read-later',x['height'])].append(x)
 for key,rs in sorted(groups.items()):
  g=dict(zip(['phase','variant','coverage','cache','height'],key));g.update(n=len(rs),wall_values=[x['seconds_loopback_http'] for x in rs])
  for field in ['seconds_loopback_http','cpu_seconds','alloc_bytes','read_bytes','rchar','read_syscalls']:g['median_'+field]=statistics.median(x[field] for x in rs)

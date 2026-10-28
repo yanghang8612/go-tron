@@ -1,0 +1,27 @@
+{
+  "complete": true,
+  "stage": "controlled cold-history HTTP complete",
+  "source": "80293e10cbc9ff983fe112dad2b9dafa08a29ed0",
+  "production_mutations": false,
+  "cache_scope": "private cold-history file pages zero resident at dispatch; startup/process and hot Pebble caches retained",
+  "production_before": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "utc": "2026-10-28T07:25:06.847589Z",
+  "files": 12995,
+  "whole_file_bytes": 133808033713,
+  "private_files": 12901,
+  "copied_bytes": 91763089002,
+  "reused_bytes": 42044944711,
+  "copy_seconds": 436.8756497055292,
+  "production_after": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "all_returns_match": true
+}

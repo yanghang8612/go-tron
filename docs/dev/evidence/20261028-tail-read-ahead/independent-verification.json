@@ -1,0 +1,43 @@
+{
+  "accepted_product_commit": "80293e10cbc9ff983fe112dad2b9dafa08a29ed0",
+  "accepted_head_product_tree_matches": true,
+  "transport_head": "be673f333cc0c8d8d8d9917538e2bb42bc59274d",
+  "archive_bytes": 4192590,
+  "archive_sha256": "f5af8090a011ac494d62bea74e9199b4b95fcefce1a9eaf91dacc1088380be52",
+  "sealed_members_verified": 110,
+  "formal_http_requests": 65,
+  "all_formal_returns_match": true,
+  "cold_case_zero_residency_proofs": 8,
+  "baseline_cold_n": 2,
+  "accepted_same_phase_cold_n": 2,
+  "baseline_cold_median_s": 69.11480402573943,
+  "accepted_cold_median_s": 22.29828680679202,
+  "same_phase_cold_reduction": 0.6773732180664538,
+  "same_phase_cold_factor": 3.099556689022727,
+  "warm_zero_read_reduction": 0.16722520621383619,
+  "hint_latency_increase": 0.1320962119588629,
+  "hint_physical_read_reduction": 0.5656687475716046,
+  "cold_file_extensions": {
+    ".route": {
+      "files": 3,
+      "bytes": 3466955721
+    },
+    ".kv": {
+      "files": 6496,
+      "bytes": 54861930250
+    },
+    ".seg": {
+      "files": 6496,
+      "bytes": 75479147742
+    }
+  },
+  "production_unchanged": true,
+  "source_full_muhash_repeated": false,
+  "source_full_restore_repeated": false,
+  "final_gateway_height": 46595927,
+  "failed_harness_http_rows": {
+    "native/random-failed-shadowing-02/cold-0-random/server-requests.jsonl": 0,
+    "native/random-failed-no-http/cold-0-random/server-requests.jsonl": 0
+  },
+  "excluded_discovery_requests": 3
+}

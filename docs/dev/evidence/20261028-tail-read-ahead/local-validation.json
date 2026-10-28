@@ -1,0 +1,22 @@
+{
+  "product_commit": "80293e10cbc9ff983fe112dad2b9dafa08a29ed0",
+  "focused": "passed 20.865s",
+  "targeted_race": "passed 5.351s after final retry admission",
+  "vet": "passed",
+  "no_full_muhash": true,
+  "no_full_restore": true,
+  "random_io_product_commit": "9365e06710d5cdc7ac836e0b40cbde09e8977906",
+  "point_io_local": "passed 2.858s",
+  "accepted_product_commit": "80293e10cbc9ff983fe112dad2b9dafa08a29ed0",
+  "accepted_selection_commit": "be673f333cc0c8d8d8d9917538e2bb42bc59274d",
+  "accepted_core_tree_matches": true,
+  "rejected_experiments": [
+    "FADV_RANDOM: no cold latency benefit",
+    "32-source window: extra-copy budget exceeded"
+  ],
+  "native_focused": "passed 1.505s",
+  "formal_http_requests": 65,
+  "formal_http_returns_match": true,
+  "controlled_cold_cases": 8,
+  "sealed_raw_files_verified": 110
+}

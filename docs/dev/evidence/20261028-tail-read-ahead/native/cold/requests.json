@@ -1,0 +1,102 @@
+[
+  {
+    "case": "discovery-baseline",
+    "cache": "discovery-excluded",
+    "seconds_loopback_http": 5.514834091067314,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "discovery-candidate",
+    "cache": "discovery-excluded",
+    "seconds_loopback_http": 5.135471574962139,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-0-baseline",
+    "cache": "private-cold-history-pages-zero-at-dispatch",
+    "seconds_loopback_http": 69.84808674454689,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-0-baseline",
+    "cache": "second-call-process-warm",
+    "seconds_loopback_http": 4.619750641286373,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-1-candidate",
+    "cache": "private-cold-history-pages-zero-at-dispatch",
+    "seconds_loopback_http": 23.443186931312084,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-1-candidate",
+    "cache": "second-call-process-warm",
+    "seconds_loopback_http": 3.7570740282535553,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-2-candidate",
+    "cache": "private-cold-history-pages-zero-at-dispatch",
+    "seconds_loopback_http": 21.153386682271957,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-2-candidate",
+    "cache": "second-call-process-warm",
+    "seconds_loopback_http": 3.678490534424782,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-3-baseline",
+    "cache": "private-cold-history-pages-zero-at-dispatch",
+    "seconds_loopback_http": 68.38152130693197,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "cold-3-baseline",
+    "cache": "second-call-process-warm",
+    "seconds_loopback_http": 57.31698750704527,
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  }
+]

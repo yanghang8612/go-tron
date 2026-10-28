@@ -1,0 +1,16 @@
+{
+  "complete": false,
+  "stage": "failed",
+  "source": "9365e06710d5cdc7ac836e0b40cbde09e8977906",
+  "base": "80293e10cbc9ff983fe112dad2b9dafa08a29ed0",
+  "production_mutations": false,
+  "production_before": {
+    "MainPID": "20471",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 05:23:28 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-3e456e757cc4-328b58a510c20ba3/gtron"
+  },
+  "utc": "2026-10-28T07:31:02.216321Z",
+  "native_build_reused_from": "/data/gtron/maintenance/tail-read-ahead-20261028-01/random-failed-no-http",
+  "error": "Traceback (most recent call last):\n  File \"/data/gtron/maintenance/tail-read-ahead-20261028-01/random.py\", line 39, in <module>\n    try:call(ready,name,'private-cold-history-pages-zero-at-dispatch')\n  File \"cold-host-definitions\", line 29, in call\n    for index,(version,exe) in enumerate([('random',R/'candidate-http.test'),('lookahead',W/'candidate-http.test'),('lookahead',W/'candidate-http.test'),('random',R/'candidate-http.test')]):\nAttributeError: module 'urllib.request' has no attribute 'Request'\n"
+}
