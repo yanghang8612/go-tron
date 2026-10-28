@@ -8,7 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-const historyReadAheadWindow = 8
+const historyReadAheadWindow = 32
 const historyReadAheadResultBytes = 1 << 20
 
 // Bound active descriptor pairs across requests as well as within a request.
