@@ -1,0 +1,30 @@
+package main
+
+import (
+ "context"
+ "encoding/json"
+ "fmt"
+ "os"
+ "time"
+ "github.com/tronprotocol/go-tron/core/state/snapshots"
+)
+
+func main() {
+ dir := os.Args[1]
+ m, err := snapshots.LoadProductionManifest(dir)
+ if err != nil { panic(err) }
+ before, err := os.ReadFile("/proc/self/io")
+ if err != nil { panic(err) }
+ ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+ defer cancel()
+ start := time.Now()
+ ref, built, err := snapshots.BuildAccountHistoryRoutingContext(ctx, dir, m, 64)
+ elapsed := time.Since(start).Seconds()
+ after, ioerr := os.ReadFile("/proc/self/io")
+ if ioerr != nil { panic(ioerr) }
+ record := map[string]any{"seconds":elapsed,"built":built,"output_ref":ref,"io_before":string(before),"io_after":string(after),"manifest_published":false,"input_manifest_generation":m.Generation}
+ if err != nil { record["error"] = err.Error() }
+ b, _ := json.MarshalIndent(record,"","  ")
+ fmt.Println(string(b))
+ if err != nil { os.Exit(1) }
+}
