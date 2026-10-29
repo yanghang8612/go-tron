@@ -1,0 +1,10 @@
+// Injected only into the isolated native fixed-copy acceptance source archive.
+package rawdb
+import (
+ "crypto/sha256"
+ "github.com/ethereum/go-ethereum/ethdb"
+)
+func OfflineHistoryPackProof(db ethdb.KeyValueReader, block uint64) (bool, int, [32]byte, error) {
+ p,present,err:=readPresentValue(db,stateChangeSetKey(block,0),"offline retained tail pack")
+ return present,len(p),sha256.Sum256(p),err
+}

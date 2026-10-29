@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+ "encoding/hex"
 	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
@@ -75,8 +76,12 @@ func TestOfflineTailDirectoryAblation(t *testing.T) {
 	batch := db.NewBatch()
 	built := 0
 	start := time.Now()
-	for block := indexed + 1; block <= head.BlockNum; block++ {
-		yes, e := rawdb.BuildStateHistoryOwnerSpans(context.Background(), view, batch, block)
+	var retained []map[string]any
+ for block := indexed + 1; block <= head.BlockNum; block++ {
+		present, encodedBytes, digest, e := rawdb.OfflineHistoryPackProof(view, block)
+  if e != nil || !present || encodedBytes == 0 { release(); t.Fatal("missing canonical pack in artificial tail", block, e) }
+  retained = append(retained,map[string]any{"block":block,"pack_present":present,"encoded_bytes":encodedBytes,"encoded_sha256":hex.EncodeToString(digest[:])})
+  yes, e := rawdb.BuildStateHistoryOwnerSpans(context.Background(), view, batch, block)
 		if e != nil {
 			release()
 			t.Fatal(block, e)
@@ -114,7 +119,7 @@ func TestOfflineTailDirectoryAblation(t *testing.T) {
 	if e != nil || !present || head != after {
 		t.Fatal("canonical HEAD changed", e)
 	}
-	result := map[string]any{"complete": true, "ablation": true, "scope": "lowered private derived posting watermark; identical canonical rows and HEAD", "original_indexed": before.BlockNum, "indexed": indexed, "tail_blocks": n, "built": built, "last_batch_value_bytes": size, "head": head.BlockNum, "head_tx": head.TxNum, "root": head.Root.Hex(), "canonical_head_unchanged": true, "seconds": time.Since(start).Seconds()}
+	result := map[string]any{"complete": true, "ablation": true, "scope": "lowered private derived posting watermark; identical canonical rows and HEAD", "original_indexed": before.BlockNum, "indexed": indexed, "tail_blocks": n, "built": built, "retained_packs":retained, "last_batch_value_bytes": size, "head": head.BlockNum, "head_tx": head.TxNum, "root": head.Root.Hex(), "canonical_head_unchanged": true, "seconds": time.Since(start).Seconds()}
 	b, _ := json.MarshalIndent(result, "", "  ")
 	if e = os.WriteFile(filepath.Join(out, "tail-ablation-result.json"), b, 0644); e != nil {
 		t.Fatal(e)
