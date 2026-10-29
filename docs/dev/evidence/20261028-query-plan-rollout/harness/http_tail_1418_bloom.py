@@ -7,7 +7,7 @@ W=pathlib.Path('/data/gtron/maintenance/tail-read-ahead-20261028-01')
 exec(compile((W/'cold.py').read_text().split('\ntry:\n until=',1)[0],'fixed-host-definitions','exec'))
 code=git('show',SOURCE+':docs/dev/evidence/20261028-query-plan-rollout/harness/whole_query_cold.py').decode().split('\ntry:\n until=',1)[0]
 exec(compile(code,'private-file-cold-definitions','exec'))
-primary=R;R=primary/'tail-path-cold-1418-bloom';R.mkdir();input_=primary/'input'
+primary=R;R=primary/'tail-path-cold-1418-bloom-r2';R.mkdir();input_=primary/'input'
 proof={};readset=set();copy_started=time.monotonic();copied=0
 s={'complete':False,'stage':'wait for primary cold HTTP seal','ablation':True,'tail_blocks':1418,'query_filter_format':4,'source':SOURCE,'production_mutations':False,'cache':'all DB files actually read by HTTP independently isolated, file pages zero before fresh engine start and again after ready; mandatory startup/application metadata caches retained; no DB mmap'};requests=[]
 class AccessOnly(AllDatabaseOpens):
@@ -22,10 +22,20 @@ class AccessOnly(AllDatabaseOpens):
     if mask&0x4000:self.overflow=True
     if mask&1 and not mask&0x40000000 and wd in self.paths and name:self.seen.add(self.paths[wd]+'/'+name)
 try:
- save();until=time.monotonic()+1800
- while not (primary/'tail-path-cold-1418-final/archive-receipt.json').exists():
-  status=json.loads((primary/'tail-path-cold-1418-final/whole-query-status.json').read_text());assert status['stage']!='failed',status
-  assert time.monotonic()<until,'primary cold HTTP timeout';time.sleep(2)
+ save()
+ # Earlier intermediate cold trials failed closed on residual private pages.
+ # Require all of them to have exited; their data is not a prerequisite.
+ for unit in ['gtron-http-tail-1418-final-20261029-01','gtron-http-tail-1418-bloom-20261029-01']:
+  state=subprocess.check_output(['systemctl','show',unit,'-p','MainPID','-p','ActiveState']).decode()
+  assert 'MainPID=0' in state and ('ActiveState=inactive' in state or 'ActiveState=failed' in state),state
+ def private_cold(label):
+  for retry in range(15):
+   rows=residency(True)
+   remaining=[r for r in rows if r['resident_pages']]
+   if not remaining:return rows
+   dump('eviction-retry-'+label+'.json',{'retry':retry,'remaining':remaining})
+   time.sleep(.2)
+  raise AssertionError(('private pages remain resident; no cold timing accepted',label,remaining))
  s['production_before']=identity();s['stage']='build controlled V3 owner-span-only reader and retained-tail fixture';save()
  candidate_src=archive_source('source-candidate',SOURCE)
  command(['/data/go/bin/go','test','-tags=sapling','-c','./core','-o',str(R/'http.test')],candidate_src,R/'build-candidate.log',300)
@@ -72,9 +82,9 @@ try:
   for height,want in heights:
    for version,exe in (versions if round_==0 else list(reversed(versions))):
     for attempt in range(5):
-     name='path-cold-%d-%s-%d-%d'%(round_,version,height,attempt);s['stage']=name;save();before=residency(True);assert sum(p['resident_pages'] for p in before)==0
+     name='path-cold-%d-%s-%d-%d'%(round_,version,height,attempt);s['stage']=name;save();before=private_cold(name+'-before')
      with host(name,exe,input_) as ready:
-      dump(name+'/pre-start-residency.json',before);dump(name+'/startup-residency.json',residency(False));dispatch=residency(True);dump(name+'/dispatch-residency.json',dispatch);assert sum(p['resident_pages'] for p in dispatch)==0,'HTTP data file pages not cold at dispatch'
+      dump(name+'/pre-start-residency.json',before);dump(name+'/startup-residency.json',residency(False));dispatch=private_cold(name+'-dispatch');dump(name+'/dispatch-residency.json',dispatch)
       observer=AccessOnly()
       try:rows=[request(ready,name,height,want,0,'all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained'),request(ready,name,height,want,1,'same process repeat')]
       finally:seen=observer.close()
@@ -86,7 +96,7 @@ try:
      accepted.append({'case':name,'round':round_,'version':version,'height':height,'first_seconds':rows[0]['seconds_loopback_http'],'repeat_seconds':rows[1]['seconds_loopback_http'],'dispatch_resident_pages':0,'post_run_inodes_stable':True});dump('accepted.json',accepted);break
     else:raise AssertionError('HTTP read closure did not stabilize')
  s['production_after']=identity();s['production_identity_changed']=s['production_before']!=s['production_after'];s.update(complete=True,stage='four-height full HTTP cold data-path matrix complete',accepted=len(accepted),all_returns_match=True);save()
- target=pathlib.Path('/tmp/AAA-gtron-http-tail-1418-bloom-20261029-final.zip');assert not target.exists()
+ target=pathlib.Path('/tmp/AAA-gtron-http-tail-1418-bloom-r2-20261029-final.zip');assert not target.exists()
  with zipfile.ZipFile(str(target),'x',zipfile.ZIP_DEFLATED) as z:
   for p in sorted(R.rglob('*')):
    if p.is_file() and p.suffix in ['.json','.jsonl','.log']:z.write(str(p),str(p.relative_to(R)))
