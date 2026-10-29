@@ -46,6 +46,8 @@ type stateHistoryQueryTailView struct {
 	first                       map[common.Address]*stateHistoryQueryTailFirst
 	planned                     map[common.Address]bool
 	used, rows, budget, maxRows int
+	packFilters                 map[uint64]*historyTailPackFilters
+	packFilterBytes             int
 }
 
 func (*stateHistoryQueryTailView) IsPinnedKeyValueView() bool { return true }

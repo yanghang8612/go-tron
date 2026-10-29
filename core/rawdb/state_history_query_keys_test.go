@@ -16,12 +16,16 @@ import (
 
 type queryKeyChunkCountView struct {
 	StateHistoryReadView
-	chunks int
+	chunks   int
+	sidecars int
 }
 
 func (v *queryKeyChunkCountView) Get(key []byte) ([]byte, error) {
 	if bytes.HasPrefix(key, stateHistorySharedChunkPrefix) || bytes.HasPrefix(key, stateHistorySharedBucketPrefix) {
 		v.chunks++
+	}
+	if bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) {
+		v.sidecars++
 	}
 	return v.StateHistoryReadView.Get(key)
 }

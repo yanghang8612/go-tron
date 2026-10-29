@@ -90,3 +90,14 @@ Use the fixed cut's historical original lag of 1418 blocks (posting watermark
 45,835,409 at HEAD 45,836,827), in addition to the shorter 256-block experiment.
 The encoded pack must be present at every block and each source digest recorded.
 Keep unsuccessful V3 measurements separate; do not average different candidates.
+
+The V4 native 1418-block experiment proves all four actual remaining-wanted
+scopes negative, but still regresses against the full planned-owner cache path.
+Repeated per-family reads/checksum/decode of the owner directory are not free.
+Retain only validated V4 filters in a request-owned 4 MiB charged cache, separate
+from complete owner rows. Copy pooled bytes; bind every cache hit to the encoded
+canonical pack digest and pinned view; never share between requests. Unknown
+scopes remain canonical fallbacks. The retained 1418-block fixture fits this
+budget; overflow simply keeps the uncached path. Positive-sequence repair scans
+and complete-owner publication rules remain unchanged. Re-run the identical
+cold data-path HTTP matrix; an all-negative diagnostic alone is not a speedup.

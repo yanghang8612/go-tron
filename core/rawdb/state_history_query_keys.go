@@ -178,6 +178,12 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 	if !ok || !marker.IsPinnedKeyValueView() {
 		return false, nil
 	}
+	if v, ok := db.(*stateHistoryQueryTailView); ok {
+		if cached := v.cachedPackFilters(block, pack); cached != nil {
+			matched := q.filtersMayMatch(cached.known, cached.filters)
+			return !matched, ctx.Err()
+		}
+	}
 	raw, present, err := readPresentValue(db, stateChangeOwnerSpansKey(block), "history query keys")
 	if err != nil || !present {
 		return false, err
@@ -208,12 +214,9 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 		return false, nil
 	}
 	if filter := r.queryFilters[q.group]; filter != nil {
-		matched = false
-		for name := range q.wanted {
-			if historyQueryFilterContains(filter, q.hashes[name]) {
-				matched = true
-				break
-			}
+		matched = q.filtersMayMatch(r.queryKnown, r.queryFilters)
+		if v, ok := db.(*stateHistoryQueryTailView); ok {
+			v.rememberPackFilters(block, r)
 		}
 	}
 	return !matched, ctx.Err()
