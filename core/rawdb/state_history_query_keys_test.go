@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"reflect"
@@ -286,5 +287,67 @@ func TestQueryKeysBadMissingAndStaleMetadataFallBack(t *testing.T) {
 				t.Fatal("invalid optional metadata became absence", got, want, err)
 			}
 		})
+	}
+}
+
+func TestQueryKeysBorrowedVisitorValidatesAllGroupsWithoutKeyRetention(t *testing.T) {
+	var builder historyQueryKeysBuilder
+	for i := 0; i < 200; i++ {
+		var owner common.Address
+		owner[18] = byte(i >> 8)
+		owner[19] = byte(i)
+		builder.add(&StateDomainChange{FlatDomain: StateFlatDomainAccountLatest, Owner: owner})
+	}
+	raw := builder.appendTo(nil)
+	var full, borrowed historyOwnerSpans
+	if err := decodeHistoryQueryKeys(raw, &full); err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	if err := decodeHistoryQueryKeysVisit(raw, &borrowed, func(group int, key []byte) {
+		seen++
+		if group != 0 || len(key) == 0 {
+			t.Fatal("wrong borrowed key")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != len(full.queryKeys[0]) || seen != 200 || borrowed.queryKnown != full.queryKnown {
+		t.Fatal("incomplete membership validation", seen)
+	}
+	for _, keys := range borrowed.queryKeys {
+		if len(keys) != 0 {
+			t.Fatal("query retained decoded key strings")
+		}
+	}
+	ordinary := testing.AllocsPerRun(20, func() {
+		var parsed historyOwnerSpans
+		if err := decodeHistoryQueryKeys(raw, &parsed); err != nil {
+			panic(err)
+		}
+	})
+	visited := testing.AllocsPerRun(20, func() {
+		var parsed historyOwnerSpans
+		if err := decodeHistoryQueryKeysVisit(raw, &parsed, func(int, []byte) {}); err != nil {
+			panic(err)
+		}
+	})
+	if visited >= ordinary/4 {
+		t.Fatalf("borrowed query still allocates per directory key: full=%v visited=%v", ordinary, visited)
+	}
+	// A visitor that has already found a match must still reject a malformed
+	// later group. Optional metadata can never turn partial validation into absence.
+	bad := binary.AppendUvarint(nil, 7)
+	bad = binary.AppendUvarint(bad, 1)
+	bad = binary.AppendUvarint(bad, 1)
+	bad = append(bad, 'a')
+	bad = binary.AppendUvarint(bad, 0)
+	bad = binary.AppendUvarint(bad, 2)
+	for i := 0; i < 2; i++ {
+		bad = binary.AppendUvarint(bad, 1)
+		bad = append(bad, 'z')
+	}
+	if err := decodeHistoryQueryKeysVisit(bad, &historyOwnerSpans{}, func(int, []byte) {}); err == nil {
+		t.Fatal("visitor accepted duplicate keys in later group")
 	}
 }

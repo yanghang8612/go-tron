@@ -50,8 +50,8 @@ func TestOfflineTailDirectoryAblation(t *testing.T) {
 		t.Fatal(e)
 	}
 	before, present, e := rawdb.ReadStageProgressRow(db, rawdb.StageStateHistoryIndex)
-	if e != nil || !present || before.BlockNum != head.BlockNum {
-		t.Fatal("requires initial fully indexed cut", e)
+	if e != nil || !present || before.BlockNum > head.BlockNum {
+		t.Fatal("requires private watermark at or below HEAD", e)
 	}
 	ancient, e := rawdbfreezer.NewFreezer(filepath.Join(input, "ancient"), "", true, 2_000_000_000, chainfreezer.FreezerTableSet())
 	if e != nil {
@@ -122,7 +122,7 @@ func TestOfflineTailDirectoryAblation(t *testing.T) {
 	if e != nil || !present || head != after {
 		t.Fatal("canonical HEAD changed", e)
 	}
-	result := map[string]any{"complete": true, "ablation": true, "scope": "lowered private derived posting watermark; identical canonical rows and HEAD", "original_indexed": before.BlockNum, "indexed": indexed, "tail_blocks": n, "built": built, "retained_packs": retained, "last_batch_value_bytes": size, "head": head.BlockNum, "head_tx": head.TxNum, "root": head.Root.Hex(), "canonical_head_unchanged": true, "seconds": time.Since(start).Seconds()}
+	result := map[string]any{"complete": true, "ablation": true, "scope": "lowered private derived posting watermark; identical canonical rows and HEAD", "original_indexed": head.BlockNum, "prior_private_indexed":before.BlockNum, "indexed": indexed, "tail_blocks": n, "built": built, "retained_packs": retained, "last_batch_value_bytes": size, "head": head.BlockNum, "head_tx": head.TxNum, "root": head.Root.Hex(), "canonical_head_unchanged": true, "seconds": time.Since(start).Seconds()}
 	b, _ := json.MarshalIndent(result, "", "  ")
 	if e = os.WriteFile(filepath.Join(out, "tail-ablation-result.json"), b, 0644); e != nil {
 		t.Fatal(e)

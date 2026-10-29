@@ -195,6 +195,10 @@ func decodeHistoryOwnerSpans(data []byte, block uint64) (*historyOwnerSpans, err
 }
 
 func decodeHistoryOwnerSpansInto(data []byte, block uint64, work *historyOwnerSpansWork) (*historyOwnerSpans, error) {
+	return decodeHistoryOwnerSpansIntoVisit(data, block, work, nil)
+}
+
+func decodeHistoryOwnerSpansIntoVisit(data []byte, block uint64, work *historyOwnerSpansWork, visit func(int, []byte)) (*historyOwnerSpans, error) {
 	bad := errors.New("rawdb: invalid optional owner spans")
 	if len(data) > historyOwnerSpansMaxBytes+64 || len(data) < 42 || (!bytes.Equal(data[:8], historyOwnerSpansMagic[:]) && !bytes.Equal(data[:8], historyOwnerSpansMagicV2[:])) {
 		return nil, bad
@@ -287,7 +291,7 @@ func decodeHistoryOwnerSpansInto(data []byte, block uint64, work *historyOwnerSp
 		return nil, bad
 	}
 	if bytes.Equal(data[:8], historyOwnerSpansMagic[:]) {
-		if err := decodeHistoryQueryKeys(p, r); err != nil {
+		if err := decodeHistoryQueryKeysVisit(p, r, visit); err != nil {
 			return nil, err
 		}
 	} else if len(p) != 0 {

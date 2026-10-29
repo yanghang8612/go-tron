@@ -96,6 +96,12 @@ func (b *historyQueryKeysBuilder) appendTo(out []byte) []byte {
 }
 
 func decodeHistoryQueryKeys(raw []byte, r *historyOwnerSpans) error {
+	return decodeHistoryQueryKeysVisit(raw, r, nil)
+}
+
+// A query validates every directory, but only needs borrowed key membership.
+// Do not allocate strings for the unrelated account and generation keys.
+func decodeHistoryQueryKeysVisit(raw []byte, r *historyOwnerSpans, visit func(int, []byte)) error {
 	bad := errors.New("rawdb: invalid optional history query keys")
 	flags, n := binary.Uvarint(raw)
 	if n <= 0 || flags >= 1<<historyQueryKeyGroups {
@@ -113,19 +119,25 @@ func decodeHistoryQueryKeys(raw []byte, r *historyOwnerSpans) error {
 		}
 		raw = raw[n:]
 		var used uint64
+		var previous []byte
 		for i := uint64(0); i < count; i++ {
 			size, n := binary.Uvarint(raw)
 			if n <= 0 || size == 0 || size > uint64(len(raw)-n) || size > historyQueryKeysMaxBytes-used {
 				return bad
 			}
 			raw = raw[n:]
-			key := string(raw[:size])
+			key := raw[:size]
 			raw = raw[size:]
 			used += size
-			if i > 0 && key <= r.queryKeys[group][i-1] {
+			if i > 0 && bytes.Compare(key, previous) <= 0 {
 				return bad
 			}
-			r.queryKeys[group] = append(r.queryKeys[group], key)
+			previous = key
+			if visit == nil {
+				r.queryKeys[group] = append(r.queryKeys[group], string(key))
+			} else {
+				visit(group, key)
+			}
 		}
 	}
 	if len(raw) != 0 {
@@ -135,9 +147,9 @@ func decodeHistoryQueryKeys(raw []byte, r *historyOwnerSpans) error {
 }
 
 type historyTailKeyQuery struct {
-	group  int
-	keys   map[string][]byte // original key -> full canonical latest key
-	wanted map[string][]byte // shrinks as the batch resolves authoritative hits
+	group     int
+	fullNames map[string][]string // full canonical key -> original query names
+	wanted    map[string][]byte   // shrinks after complete repaired blocks
 }
 
 func newHistoryTailKeyQuery(flat StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, wanted map[string][]byte) *historyTailKeyQuery {
@@ -145,13 +157,13 @@ func newHistoryTailKeyQuery(flat StateFlatDomain, owner common.Address, generati
 	if !ok {
 		return nil
 	}
-	q := &historyTailKeyQuery{group: group, keys: make(map[string][]byte, len(wanted)), wanted: wanted}
+	q := &historyTailKeyQuery{group: group, fullNames: make(map[string][]string, len(wanted)), wanted: wanted}
 	for name, key := range wanted {
 		full, ok := stateDomainChangeLatestKeyByKey(flat, owner, generation, domain, key)
 		if !ok {
 			return nil
 		}
-		q.keys[name] = full
+		q.fullNames[string(full)] = append(q.fullNames[string(full)], name)
 	}
 	return q
 }
@@ -178,19 +190,22 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 			historyOwnerSpansWorkPool.Put(work)
 		}
 	}()
-	r, err := decodeHistoryOwnerSpansInto(raw, block, work)
+	matched := false
+	r, err := decodeHistoryOwnerSpansIntoVisit(raw, block, work, func(group int, key []byte) {
+		if group != q.group || matched {
+			return
+		}
+		for _, name := range q.fullNames[string(key)] {
+			if _, active := q.wanted[name]; active {
+				matched = true
+				return
+			}
+		}
+	})
 	if err != nil || r.queryKnown&(1<<q.group) == 0 || blake2b.Sum256(pack) != r.digest {
 		return false, nil
 	}
-	keys := r.queryKeys[q.group]
-	for name := range q.wanted {
-		full := string(q.keys[name])
-		i := sort.SearchStrings(keys, full)
-		if i < len(keys) && keys[i] == full {
-			return false, nil
-		}
-	}
-	return true, ctx.Err()
+	return !matched, ctx.Err()
 }
 
 // Filtered rows cannot populate either complete owner cache. Reuse an already
