@@ -1,0 +1,40 @@
+package snapshots
+import (
+ "bytes"
+ "context"
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "reflect"
+ "testing"
+ "time"
+)
+func TestOfflineStorageBootstrap(t *testing.T) {
+ input,out:=os.Getenv("GTRON_WHOLE_QUERY_INPUT"),os.Getenv("GTRON_WHOLE_QUERY_OUTPUT");if input=="" { t.Skip("private fixed copy") }
+ dir:=filepath.Join(input,"state-snapshots");ctx:=context.Background()
+ save:=func(name string,v any){ b,e:=json.MarshalIndent(v,"","  ");if e!=nil { t.Fatal(e) };if e=os.WriteFile(filepath.Join(out,name),b,0644);e!=nil { t.Fatal(e) } }
+ original,e:=LoadProductionManifest(dir);if e!=nil { t.Fatal(e) }
+ stable:=func(m *Manifest)[]byte { var refs []SegmentRef;for _,r:=range m.Segments { if r.Kind!=SegmentStorageHistoryRouting { refs=append(refs,r) } };b,_:=json.Marshal(refs);return b }
+ canonical:=stable(original)
+ census:=func(m *Manifest)map[string]any {
+  m=manifestLookupView(m);table:=manifestHistorySources(m);if table==nil { t.Fatal("no sources") }
+  small,e:=loadSmallSystemHistoryRouting(ctx,dir,m);if e!=nil { t.Fatal(e) };metadata:=newMetadataHistoryRoutingReader(m);storage:=newStorageHistoryRoutingReader(m)
+  counts:=map[string]int{"sources":len(table.sources)};sizes:=map[SegmentKind]uint64{}
+  for _,r:=range m.Segments { sizes[r.Kind]+=r.Size }
+  for _,s:=range table.sources { h:=m.Segments[s.row];if small!=nil { if _,ok:=small.columns[s.id];ok { counts["small"]++ } };if _,ok,e:=metadata.source(ctx,dir,h,s.id);e!=nil { t.Fatal(e) } else if ok { counts["metadata"]++ };if _,ok,e:=storage.source(ctx,dir,h,s.id);e!=nil { t.Fatal(e) } else if ok { counts["storage"]++ } }
+  return map[string]any{"coverage":counts,"bytes_by_kind":sizes}
+ }
+ save("coverage-before.json",census(original))
+ if os.Getenv("GTRON_ROUTING_CENSUS_ONLY")=="1" { return }
+ state:=storageRoutingRefreshState{};began:=time.Now();var passes []map[string]any
+ for i:=0;i<256;i++ {
+  start:=time.Now();built,e:=refreshStorageHistoryRoutingWithBudget(ctx,dir,&state,time.Now(),256,smallSystemRoutingWorkLimit{bytes:128<<20,duration:2*time.Second});if e!=nil { t.Fatal(e) }
+  passes=append(passes,map[string]any{"pass":i,"built":built,"seconds":time.Since(start).Seconds(),"canonical_source_reads":state.last.sourceReads,"broad_reads":state.last.broadReads,"input_bytes":state.last.inputBytes})
+  save("bootstrap-progress.json",map[string]any{"passes":passes,"seconds":time.Since(began).Seconds()})
+  if !built { break };if i==255 { t.Fatal("pass limit") }
+ }
+ next,e:=LoadProductionManifest(dir);if e!=nil { t.Fatal(e) };if !bytes.Equal(canonical,stable(next)) || !reflect.DeepEqual(original.Progress,next.Progress) { t.Fatal("non-storage refs/frontiers changed") }
+ after:=census(next);save("coverage-after.json",after)
+ counts:=after["coverage"].(map[string]int);if counts["storage"]!=counts["sources"] { t.Fatal("incomplete storage coverage",counts) }
+ save("bootstrap-result.json",map[string]any{"complete":true,"seconds":time.Since(began).Seconds(),"passes":passes,"canonical_refs_unchanged":true,"frontiers_unchanged":true})
+}

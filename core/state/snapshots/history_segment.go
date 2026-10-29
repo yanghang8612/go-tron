@@ -523,14 +523,6 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 	if storageRouting == nil {
 		storageRouting = newStorageHistoryRoutingReader(manifest)
 	}
-	for _, entry := range entries {
-		if systemHistoryRoutingQuery(entry.query) && !smallSystemHistoryRoutingQuery(entry.query) && entry.query.Domain != kvdomains.ContractMetadata {
-			if err := loadBroad(); err != nil {
-				return nil, err
-			}
-			break
-		}
-	}
 	var smallRouting *systemHistoryRouting
 	for _, entry := range entries {
 		if smallSystemHistoryRoutingQuery(entry.query) {
@@ -577,7 +569,7 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 	for i, entry := range entries {
 		planning[i] = historyCandidateQuery{entry.query, entry.lookup, entry.accountBound, entry.accountBoundFound}
 	}
-	candidatePlan, err := newHistoryCandidatePlan(ctx, m.dir, manifest, fromTxNum, toTxNum, planning, routing, smallRouting, accountRouting, metadataRouting)
+	candidatePlan, err := newHistoryCandidatePlan(ctx, m.dir, manifest, fromTxNum, toTxNum, planning, routing, smallRouting, accountRouting, metadataRouting, storageRouting)
 	if err != nil {
 		return nil, err
 	}
@@ -701,6 +693,26 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 					}
 				}
 			}
+			if pairFound && contractStorageHistoryRoutingKey(entry.lookup) {
+				filter, storageCovered, err := storageRouting.source(ctx, m.dir, ref, pairID)
+				if err != nil {
+					return nil, err
+				}
+				if storageCovered {
+					if filter.mayContain(entry.lookup) {
+						lookupKeys = append(lookupKeys, entry.lookup)
+					}
+					continue
+				}
+				// A missing optional page is unknown. Authenticate the broad
+				// legacy proof only when this exact pair actually needs it.
+				if err := loadBroad(); err != nil {
+					return nil, err
+				}
+				if routing != nil {
+					column, covered = routing.columns[pairID]
+				}
+			}
 			if covered && systemHistoryRoutingQuery(entry.query) && !routing.mayContain(column, entry.lookup) {
 				continue
 			}
@@ -710,15 +722,6 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 					return nil, deltaErr
 				}
 				if skip {
-					continue
-				}
-			}
-			if pairFound && contractStorageHistoryRoutingKey(entry.lookup) {
-				filter, covered, err := storageRouting.source(ctx, m.dir, ref, pairID)
-				if err != nil {
-					return nil, err
-				}
-				if covered && !filter.mayContain(entry.lookup) {
 					continue
 				}
 			}

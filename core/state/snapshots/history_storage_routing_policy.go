@@ -29,6 +29,8 @@ type storageRoutingRefreshState struct {
 	holes              bool
 	failures           uint
 	notBefore          time.Time
+	bootstrap          *storageRoutingBootstrap
+	bootstrapDone      bool
 	last               storageRoutingBuildStats
 	metric             *storageRoutingPolicyMetrics
 }
@@ -134,6 +136,7 @@ func refreshStorageHistoryRoutingWithBudget(ctx context.Context, dir string, s *
 	}
 	if s.input != ([32]byte{}) && input != s.input {
 		s.nextTx, s.failures, s.holes, s.notBefore = 0, 0, false, time.Time{}
+		s.bootstrapDone = false
 	}
 	if now.Before(s.notBefore) {
 		if s.metric != nil {
@@ -158,7 +161,12 @@ func refreshStorageHistoryRoutingWithBudget(ctx context.Context, dir string, s *
 			if route.storagePrefixes {
 				covered, from, to = systemRoutingCovered(route.sources), broad.FromTxNum, broad.ToTxNum
 			}
+			s.bootstrap, err = projectStorageHistoryRouting(ctx, data, *broad)
+			if err != nil {
+				return false, err
+			}
 		}
+		s.bootstrapDone = false
 		s.broadLoaded, s.broad, s.broadCovered, s.broadFrom, s.broadTo = true, broadID, covered, from, to
 	}
 	if s.nextTx == 0 {
@@ -180,6 +188,17 @@ func refreshStorageHistoryRoutingWithBudget(ctx context.Context, dir string, s *
 	}
 	if err != nil {
 		return false, err // Keep the pre-build cursor on hard failure.
+	}
+	// First keep the uncovered tail moving; once caught up, replace legacy
+	// broad coverage with small persisted pages without rereading dictionaries.
+	if !built && s.bootstrap != nil && !s.bootstrapDone {
+		ref, built, err = buildStorageHistoryRoutingWithPolicy(ctx, dir, m, maxNew, 0, nil, storageRoutingBuildPolicy{bootstrap: s.bootstrap})
+		if err != nil {
+			return false, err
+		}
+		if !built {
+			s.bootstrapDone = true
+		}
 	}
 	if built {
 		latest, publishErr := publishPagedHistoryRoutingContext(ctx, dir, m, ref, SegmentStorageHistoryRouting)

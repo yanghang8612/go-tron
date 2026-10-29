@@ -270,6 +270,7 @@ type storageRoutingBuildPolicy struct {
 	work               smallSystemRoutingWorkLimit
 	broadFrom, broadTo uint64
 	broadCovered       map[[32]byte]struct{}
+	bootstrap          *storageRoutingBootstrap
 	stats              *storageRoutingBuildStats
 }
 
@@ -325,10 +326,19 @@ func buildStorageHistoryRoutingWithPolicy(ctx context.Context, dir string, m *Ma
 		if attempts > 0 && (work.bytes > 0 && a.Size > work.bytes-min(readBytes, work.bytes) || work.duration > 0 && time.Since(started) >= work.duration) {
 			break
 		}
-		f, err := storageHistorySourceFilter(ctx, dir, h, a)
+		var f storageSourceFilter
+		if policy.bootstrap != nil {
+			col, ok := policy.bootstrap.route.columns[id]
+			if !ok {
+				continue
+			}
+			f = policy.bootstrap.filters[col]
+		} else {
+			f, err = storageHistorySourceFilter(ctx, dir, h, a)
+			readBytes += a.Size
+		}
 		attempts++
-		readBytes += a.Size
-		if policy.stats != nil {
+		if policy.stats != nil && policy.bootstrap == nil {
 			policy.stats.sourceReads++
 			policy.stats.inputBytes += a.Size
 			if errors.Is(err, errSystemHistoryRoutingBudget) {

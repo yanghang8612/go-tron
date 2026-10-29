@@ -16,6 +16,7 @@ type historyRoutingReadKey struct {
 type historyRoutingReadImage struct {
 	data   []byte
 	digest [32]byte
+	index  *historyRoutingImageIndex
 }
 type historyRoutingReadScope struct {
 	mu     sync.Mutex
@@ -27,8 +28,9 @@ type historyRoutingReadScope struct {
 // logical historical query. The caller must not reuse it for another request.
 // Each exact reference is read and authenticated before admission; later calls
 // in this request use those owned immutable bytes, like a pinned read view.
-// New requests reauthenticate current physical bytes. No errors, incomplete
-// reads or cross-request proofs enter this cache; exhaustion uses normal reads.
+// New requests check current physical identity including OS ctime before
+// reusing an authenticated owned image. No errors, incomplete
+// reads enter this cache; exhaustion uses normal reads.
 func WithHistoryRoutingReadScope(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()

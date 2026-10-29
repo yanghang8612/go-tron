@@ -37,7 +37,7 @@ var (
 )
 
 // One decoded immutable object, admitted by a conservative byte charge. Every
-// cross-request hit still reads and hashes CURRENT physical bytes first.
+// cross-request hit still checks the current physical identity including ctime.
 var sharedSystemHistoryRouting struct {
 	sync.Mutex
 	digest [32]byte
@@ -202,7 +202,8 @@ func readSystemHistoryRoutingSelected(ctx context.Context, dir string, ref Segme
 	if err := validateSegmentRef(ref); err != nil {
 		return nil, err
 	}
-	data, digest, err := readSystemHistoryRoutingBytes(ctx, dir, ref)
+	image, err := readSystemHistoryRoutingImage(ctx, dir, ref)
+	data, digest := image.data, image.digest
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +216,12 @@ func readSystemHistoryRoutingSelected(ctx context.Context, dir string, ref Segme
 	if cached != nil && cached.from == ref.FromTxNum && cached.to == ref.ToTxNum && uint64(len(cached.keys)) == ref.Rows {
 		return cached, nil
 	}
-	decoded, err := decodeHistoryRoutingFamilySelected(ctx, data, ref, false, wanted)
+	var decoded *systemHistoryRouting
+	if wanted != nil {
+		decoded, err = image.index.selected(ctx, data, ref, wanted)
+	} else {
+		decoded, err = decodeHistoryRoutingFamilySelected(ctx, data, ref, false, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -232,47 +238,69 @@ func readSystemHistoryRoutingSelected(ctx context.Context, dir string, ref Segme
 	return decoded, nil
 }
 
-// Authenticate the current open object before any shared decoded hit.
+// Reuse only authenticated owned bytes bound to the exact physical identity.
 func readSystemHistoryRoutingBytes(ctx context.Context, dir string, ref SegmentRef) ([]byte, [32]byte, error) {
+	image, err := readSystemHistoryRoutingImage(ctx, dir, ref)
+	return image.data, image.digest, err
+}
+func readSystemHistoryRoutingImage(ctx context.Context, dir string, ref SegmentRef) (historyRoutingReadImage, error) {
+	var zero historyRoutingReadImage
 	if err := contextError(ctx); err != nil {
-		return nil, [32]byte{}, err
+		return zero, err
 	}
 	if (ref.Kind != SegmentSystemHistoryRouting && ref.Kind != SegmentSmallSystemHistoryRouting) || ref.normalizedDataset() != SegmentDatasetStateDomainChange || ref.Size < systemHistoryRoutingHeaderSize || ref.Size > systemHistoryRoutingMaxBytes {
-		return nil, [32]byte{}, errors.New("snapshots: invalid system history routing reference")
+		return zero, errors.New("snapshots: invalid system history routing reference")
 	}
 	if err := validateSegmentRef(ref); err != nil {
-		return nil, [32]byte{}, err
+		return zero, err
 	}
 	scope := routingReadScope(ctx)
 	key := historyRoutingReadKey{dir: dir, ref: ref}
 	if image, ok := scope.get(key); ok {
-		return image.data, image.digest, contextError(ctx)
+		return image, contextError(ctx)
 	}
 	f, err := os.Open(filepath.Join(dir, ref.Path))
 	if err != nil {
-		return nil, [32]byte{}, err
+		return zero, err
 	}
 	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil {
-		return nil, [32]byte{}, err
+		return zero, err
 	}
 	if stat.Size() != int64(ref.Size) {
-		return nil, [32]byte{}, errors.New("snapshots: system history routing size mismatch")
+		return zero, errors.New("snapshots: system history routing size mismatch")
+	}
+	if image, ok := cachedRoutingImage(key, stat); ok {
+		if err := contextError(ctx); err != nil {
+			return zero, err
+		}
+		scope.put(key, image)
+		return image, nil
 	}
 	data := make([]byte, ref.Size)
-	if _, err := io.ReadFull(contextReader{ctx: ctx, r: f}, data); err != nil {
-		return nil, [32]byte{}, err
+	if _, err = io.ReadFull(contextReader{ctx: ctx, r: f}, data); err != nil {
+		return zero, err
 	}
 	digest := sha256.Sum256(data)
 	if fmt.Sprintf("sha256:%x", digest) != ref.Checksum {
-		return nil, [32]byte{}, errors.New("snapshots: system history routing checksum mismatch")
+		return zero, errors.New("snapshots: system history routing checksum mismatch")
 	}
-	if err := contextError(ctx); err != nil {
-		return nil, [32]byte{}, err
+	if err = contextError(ctx); err != nil {
+		return zero, err
 	}
-	scope.put(key, historyRoutingReadImage{data: data, digest: digest})
-	return data, digest, nil
+	image := historyRoutingReadImage{data: data, digest: digest, index: &historyRoutingImageIndex{}}
+	after, err := f.Stat()
+	if err != nil {
+		return zero, err
+	}
+	beforeCT, known := historyStagingChangeTime(stat)
+	afterCT, afterKnown := historyStagingChangeTime(after)
+	if os.SameFile(stat, after) && stat.Size() == after.Size() && stat.Mode() == after.Mode() && stat.ModTime().Equal(after.ModTime()) && known && afterKnown && beforeCT == afterCT {
+		cacheRoutingImage(key, after, image)
+	}
+	scope.put(key, image)
+	return image, nil
 }
 
 func decodeSystemHistoryRouting(data []byte, ref SegmentRef) (*systemHistoryRouting, error) {
