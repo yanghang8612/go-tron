@@ -149,7 +149,8 @@ func decodeHistoryQueryKeysVisit(raw []byte, r *historyOwnerSpans, visit func(in
 type historyTailKeyQuery struct {
 	group     int
 	fullNames map[string][]string // full canonical key -> original query names
-	wanted    map[string][]byte   // shrinks after complete repaired blocks
+	hashes    map[string]uint64
+	wanted    map[string][]byte // shrinks after complete repaired blocks
 }
 
 func newHistoryTailKeyQuery(flat StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, wanted map[string][]byte) *historyTailKeyQuery {
@@ -157,13 +158,14 @@ func newHistoryTailKeyQuery(flat StateFlatDomain, owner common.Address, generati
 	if !ok {
 		return nil
 	}
-	q := &historyTailKeyQuery{group: group, fullNames: make(map[string][]string, len(wanted)), wanted: wanted}
+	q := &historyTailKeyQuery{group: group, fullNames: make(map[string][]string, len(wanted)), hashes: make(map[string]uint64, len(wanted)), wanted: wanted}
 	for name, key := range wanted {
 		full, ok := stateDomainChangeLatestKeyByKey(flat, owner, generation, domain, key)
 		if !ok {
 			return nil
 		}
 		q.fullNames[string(full)] = append(q.fullNames[string(full)], name)
+		q.hashes[name] = historyQueryKeyHash(full)
 	}
 	return q
 }
@@ -180,7 +182,7 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 	if err != nil || !present {
 		return false, err
 	}
-	if len(raw) < 8 || !bytes.Equal(raw[:8], historyOwnerSpansMagic[:]) {
+	if len(raw) < 8 || (!bytes.Equal(raw[:8], historyOwnerSpansMagic[:]) && !bytes.Equal(raw[:8], historyOwnerSpansMagicV3[:])) {
 		return false, nil
 	}
 	work := historyOwnerSpansWorkPool.Get().(*historyOwnerSpansWork)
@@ -204,6 +206,15 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 	})
 	if err != nil || r.queryKnown&(1<<q.group) == 0 || blake2b.Sum256(pack) != r.digest {
 		return false, nil
+	}
+	if filter := r.queryFilters[q.group]; filter != nil {
+		matched = false
+		for name := range q.wanted {
+			if historyQueryFilterContains(filter, q.hashes[name]) {
+				matched = true
+				break
+			}
+		}
 	}
 	return !matched, ctx.Err()
 }
@@ -260,7 +271,7 @@ func historyQueryDirectoryHint(ctx context.Context, db StateKVHistoryReader, fro
 			break
 		}
 		value := it.Value()
-		if len(value) >= 8 && bytes.Equal(value[:8], historyOwnerSpansMagic[:]) {
+		if len(value) >= 8 && (bytes.Equal(value[:8], historyOwnerSpansMagic[:]) || bytes.Equal(value[:8], historyOwnerSpansMagicV3[:])) {
 			return true, nil
 		}
 	}

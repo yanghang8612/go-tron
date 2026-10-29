@@ -1,0 +1,17 @@
+// Native diagnostic source only. The timed production candidate has no hook.
+package rawdb
+import (
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "sync/atomic"
+)
+var offlineFilterAttempts,offlineFilterValid,offlineFilterSkipped [3]atomic.Uint64
+func offlineQueryFilterAttempt(group int) {offlineFilterAttempts[group].Add(1)}
+func offlineQueryFilterObserved(group int,negative bool) {offlineFilterValid[group].Add(1);if negative {offlineFilterSkipped[group].Add(1)}}
+func OfflineDumpQueryFilterCounts() {
+ out:=os.Getenv("GTRON_FIXED_OUTPUT");if out=="" {return}
+ var rows []map[string]any
+ for group:=0;group<3;group++ {attempts,valid,skipped:=offlineFilterAttempts[group].Load(),offlineFilterValid[group].Load(),offlineFilterSkipped[group].Load();rows=append(rows,map[string]any{"group":group,"attempted_packs":attempts,"validated_filters":valid,"all_remaining_keys_negative":skipped,"canonical_maybes":valid-skipped,"unknown":attempts-valid})}
+ b,e:=json.MarshalIndent(map[string]any{"scope":"real remaining wanted sets in excluded traced discovery requests","groups":rows},"","  ");if e!=nil {panic(e)};if e=os.WriteFile(filepath.Join(out,"query-filter-counts.json"),b,0644);e!=nil {panic(e)}
+}
