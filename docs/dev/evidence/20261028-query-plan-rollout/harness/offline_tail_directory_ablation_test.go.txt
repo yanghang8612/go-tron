@@ -1,0 +1,122 @@
+package core
+
+import (
+	"context"
+	"encoding/json"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// Explicitly labelled ablation: lower only a private derived posting watermark.
+// Every canonical history row, commitment and cold segment remains unchanged.
+func TestOfflineTailDirectoryAblation(t *testing.T) {
+	input, out := os.Getenv("GTRON_WHOLE_QUERY_INPUT"), os.Getenv("GTRON_WHOLE_QUERY_OUTPUT")
+	if input == "" {
+		t.Skip("private fixed-copy ablation only")
+	}
+	n, e := strconv.ParseUint(os.Getenv("GTRON_OFFLINE_TAIL_BLOCKS"), 10, 64)
+	if e != nil || n == 0 || n > 4096 {
+		t.Fatal("bounded tail required", e)
+	}
+	tune := rawdb.DefaultPebbleOptions()
+	tune.DisableAutomaticCompactions = true
+	tune.MemTableSizeBytes = 32 << 20
+	tune.MaxConcurrentCompactions = 1
+	hot, e := rawdb.NewPebbleDBReadOnly(filepath.Join(input, "chaindata"), 128, 256)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer hot.Close()
+	tune.EnableL6Filter = false
+	history, e := rawdb.NewPebbleDBWithOptions(filepath.Join(input, "history"), 128, 256, tune)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer history.Close()
+	if e = rawdb.EnsureDirectHistoryPair(hot, history, false); e != nil {
+		t.Fatal(e)
+	}
+	db := rawdb.NewDirectHistoryStore(hot, history)
+	head, present, e := rawdb.ReadStateCommitmentHead(db)
+	if e != nil || !present {
+		t.Fatal(e)
+	}
+	before, present, e := rawdb.ReadStageProgressRow(db, rawdb.StageStateHistoryIndex)
+	if e != nil || !present || before.BlockNum != head.BlockNum {
+		t.Fatal("requires initial fully indexed cut", e)
+	}
+	ancient, e := rawdbfreezer.NewFreezer(filepath.Join(input, "ancient"), "", true, 2_000_000_000, chainfreezer.FreezerTableSet())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer ancient.Close()
+	chain := rawdb.NewChainDB(hot, rawdb.NewFreezerReader(ancient))
+	manager, e := snapshots.OpenManager(filepath.Join(input, "state-snapshots"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	chain.SetChainIndexReader(manager)
+	indexed := head.BlockNum - n
+	hash, ok, e := chain.BlockHashByNumberStrict(indexed)
+	if e != nil || !ok {
+		t.Fatal("watermark canonical hash", e)
+	}
+	view, release, e := rawdb.AcquireStateHistoryReadView(db)
+	if e != nil {
+		t.Fatal(e)
+	}
+	batch := db.NewBatch()
+	built := 0
+	start := time.Now()
+	for block := indexed + 1; block <= head.BlockNum; block++ {
+		yes, e := rawdb.BuildStateHistoryOwnerSpans(context.Background(), view, batch, block)
+		if e != nil {
+			release()
+			t.Fatal(block, e)
+		}
+		if yes {
+			built++
+		}
+		if batch.ValueSize() >= 8<<20 {
+			if e = batch.Write(); e != nil {
+				release()
+				t.Fatal(e)
+			}
+			batch.Reset()
+		}
+	}
+	release()
+	size := batch.ValueSize()
+	if e = batch.Write(); e != nil {
+		t.Fatal(e)
+	}
+	if built == 0 {
+		t.Fatal("fixed cut has no retained tail packs for this ablation")
+	}
+	if e = rawdb.WriteStageProgressWithHash(history, rawdb.StageStateHistoryIndex, indexed, hash); e != nil {
+		t.Fatal(e)
+	}
+	f, ok := history.(interface{ OfflineFlushKeyValue() error })
+	if !ok {
+		t.Fatal("missing offline flush bridge")
+	}
+	if e = f.OfflineFlushKeyValue(); e != nil {
+		t.Fatal(e)
+	}
+	after, present, e := rawdb.ReadStateCommitmentHead(db)
+	if e != nil || !present || head != after {
+		t.Fatal("canonical HEAD changed", e)
+	}
+	result := map[string]any{"complete": true, "ablation": true, "scope": "lowered private derived posting watermark; identical canonical rows and HEAD", "original_indexed": before.BlockNum, "indexed": indexed, "tail_blocks": n, "built": built, "last_batch_value_bytes": size, "head": head.BlockNum, "head_tx": head.TxNum, "root": head.Root.Hex(), "canonical_head_unchanged": true, "seconds": time.Since(start).Seconds()}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	if e = os.WriteFile(filepath.Join(out, "tail-ablation-result.json"), b, 0644); e != nil {
+		t.Fatal(e)
+	}
+}
