@@ -146,6 +146,7 @@ func refreshStorageHistoryRoutingWithBudget(ctx context.Context, dir string, s *
 		return false, nil
 	}
 	if !s.broadLoaded || s.broad != broadID {
+		s.broadLoaded = false
 		s.bootstrap = nil
 		var covered map[[32]byte]struct{}
 		from, to := uint64(0), uint64(0)

@@ -186,3 +186,39 @@ func TestStorageRoutingBootstrapRejectsChangedPhysicalProof(t *testing.T) {
 		t.Fatal("changed physical broad published a new proof", built, err)
 	}
 }
+
+func TestStorageRoutingBootstrapRetriesRestoredReference(t *testing.T) {
+	dir, m, _ := storageRoutingFixture(t)
+	m = addRoutingFixture(t, dir, m, 3)
+	m = addStorageFilterFixture(t, dir, m, 1)
+	state := storageRoutingRefreshState{}
+	now := time.Now()
+	refresh := func(at time.Time) (bool, error) {
+		return refreshStorageHistoryRoutingWithBudget(context.Background(), dir, &state, at, 1, smallSystemRoutingWorkLimit{})
+	}
+	if built, err := refresh(now); err != nil || !built {
+		t.Fatal(built, err)
+	}
+	good, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := cloneManifest(good)
+	for i := range bad.Segments {
+		if bad.Segments[i].Kind == SegmentSystemHistoryRouting {
+			bad.Segments[i].Path = "history/missing-replacement.route"
+		}
+	}
+	if err = PublishManifest(dir, bad); err != nil {
+		t.Fatal(err)
+	}
+	if built, err := refresh(now.Add(time.Second)); err == nil || built {
+		t.Fatal("missing replacement accepted", built, err)
+	}
+	if err = PublishManifest(dir, good); err != nil {
+		t.Fatal(err)
+	}
+	if built, err := refresh(now.Add(2 * time.Second)); err != nil || !built || state.bootstrap == nil {
+		t.Fatal("restored reference did not resume bootstrap", built, err)
+	}
+}

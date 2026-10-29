@@ -1,0 +1,162 @@
+[
+  {
+    "case": "path-cold-0-baseline-9000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 9000000,
+    "first_seconds": 3.846758157014847,
+    "repeat_seconds": 0.8804720118641853,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-9000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 3.4367965385317802,
+    "repeat_seconds": 0.6890138760209084,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-10000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 10000000,
+    "first_seconds": 3.765187628567219,
+    "repeat_seconds": 0.9076711237430573,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-10000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 3.2991252914071083,
+    "repeat_seconds": 0.6777858808636665,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-15000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 15000000,
+    "first_seconds": 3.634106822311878,
+    "repeat_seconds": 0.9459813982248306,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-15000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 3.072378098964691,
+    "repeat_seconds": 0.6035034283995628,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-20000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 20000000,
+    "first_seconds": 4.140074834227562,
+    "repeat_seconds": 0.9492602124810219,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-20000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 3.919086679816246,
+    "repeat_seconds": 0.8143433183431625,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-9000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 3.3146691769361496,
+    "repeat_seconds": 0.6789896637201309,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-9000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 9000000,
+    "first_seconds": 3.7674895599484444,
+    "repeat_seconds": 0.9242166504263878,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-10000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 3.4800909906625748,
+    "repeat_seconds": 0.6460971236228943,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-10000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 10000000,
+    "first_seconds": 3.6792799904942513,
+    "repeat_seconds": 1.0002410188317299,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-15000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 3.5913054943084717,
+    "repeat_seconds": 0.5940764471888542,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-15000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 15000000,
+    "first_seconds": 9.907149359583855,
+    "repeat_seconds": 0.9981004297733307,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-20000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 4.058019921183586,
+    "repeat_seconds": 0.8149953559041023,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-20000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 20000000,
+    "first_seconds": 4.302431307733059,
+    "repeat_seconds": 0.9573403596878052,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  }
+]

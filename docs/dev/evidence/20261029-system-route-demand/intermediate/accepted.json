@@ -1,0 +1,162 @@
+[
+  {
+    "case": "path-cold-0-baseline-9000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 9000000,
+    "first_seconds": 3.7778879404067993,
+    "repeat_seconds": 0.9094992280006409,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-9000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 4.108553744852543,
+    "repeat_seconds": 0.7906007543206215,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-10000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 10000000,
+    "first_seconds": 3.498794749379158,
+    "repeat_seconds": 0.9333490952849388,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-10000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 3.968774326145649,
+    "repeat_seconds": 0.8066149577498436,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-15000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 15000000,
+    "first_seconds": 3.542655237019062,
+    "repeat_seconds": 0.8742584511637688,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-15000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 3.960595041513443,
+    "repeat_seconds": 0.9250053241848946,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-20000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 20000000,
+    "first_seconds": 4.00436956435442,
+    "repeat_seconds": 0.9324922934174538,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-20000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 3.850794404745102,
+    "repeat_seconds": 0.8599445968866348,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-9000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 4.010792002081871,
+    "repeat_seconds": 0.796171210706234,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-9000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 9000000,
+    "first_seconds": 3.7107356041669846,
+    "repeat_seconds": 0.9152050167322159,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-10000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 4.123872734606266,
+    "repeat_seconds": 0.793031632900238,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-10000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 10000000,
+    "first_seconds": 3.79544135928154,
+    "repeat_seconds": 1.0114875957369804,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-15000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 4.095167934894562,
+    "repeat_seconds": 0.7691769003868103,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-15000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 15000000,
+    "first_seconds": 3.790510445833206,
+    "repeat_seconds": 0.9869876578450203,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-20000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 3.948648266494274,
+    "repeat_seconds": 0.870104156434536,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-20000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 20000000,
+    "first_seconds": 3.9035749286413193,
+    "repeat_seconds": 1.1277773827314377,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  }
+]

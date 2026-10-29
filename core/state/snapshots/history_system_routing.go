@@ -159,9 +159,9 @@ func loadSystemHistoryRouting(ctx context.Context, dir string, manifest *Manifes
 	return loadSystemHistoryRoutingForKeys(ctx, dir, manifest, nil, window...)
 }
 
-// A non-nil selection is a request-local view. Still authenticate the complete
-// physical object and validate every encoded row, but do not allocate the
-// million-key map for a request that only needs a handful of memberships.
+// A non-nil selection is a request-local view over an authenticated, fully
+// structurally validated owned image. Physical identity changes invalidate
+// cross-request reuse. Do not allocate a million-key map for a few memberships.
 func loadSystemHistoryRoutingForKeys(ctx context.Context, dir string, manifest *Manifest, lookups [][]byte, window ...TxRange) (*systemHistoryRouting, error) {
 	var found *SegmentRef
 	for i := range manifest.Segments {

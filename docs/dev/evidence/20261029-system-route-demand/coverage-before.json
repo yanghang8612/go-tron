@@ -1,0 +1,21 @@
+{
+  "bytes_by_kind": {
+    "accessor": 252371503203,
+    "account-history-routing": 3399082087,
+    "account-history-routing-delta": 3577679356,
+    "event-log": 153268047924,
+    "event-log-index": 29267952753,
+    "history": 352540172507,
+    "inverted": 11360457032,
+    "metadata-history-routing": 1297472,
+    "small-system-history-routing": 1093070,
+    "storage-history-routing": 10119232,
+    "system-history-routing": 66948766
+  },
+  "coverage": {
+    "metadata": 32036,
+    "small": 32036,
+    "sources": 32036,
+    "storage": 6436
+  }
+}

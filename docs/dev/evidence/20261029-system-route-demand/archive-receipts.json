@@ -1,0 +1,30 @@
+{
+  "preparation": {
+    "path": "/Users/asuka/Downloads/AAA-gtron-system-route-demand-20261029-final.zip",
+    "bytes": 5258717,
+    "sha256": "aa15ca3ba643c7e14a54a479ef984d901f9281903abe1eb5798a10a1dfe85082"
+  },
+  "final": {
+    "path": "/Users/asuka/Downloads/AAA-gtron-system-route-demand-20261029-02-final.zip",
+    "bytes": 4975677,
+    "sha256": "45389b15cfb1ff1d38d54cb4805705e048d9be229c7f9bfc6d4cb555cfcdda13"
+  },
+  "production_after_matrix_receipt": {
+    "pid": 30127,
+    "started_utc": "2026-10-29 06:10:30 UTC",
+    "active": true,
+    "binary_sha256": "fcb488f6b9fdcbd401855ed6fbf3fac9ab7f0e240ebbedb6d17e212668134e18"
+  },
+  "offline_units": {
+    "gtron-system-route-demand-20261029-01": {
+      "active": false,
+      "pid": 0,
+      "exit": 0
+    },
+    "gtron-system-route-demand-20261029-02": {
+      "active": false,
+      "pid": 0,
+      "exit": 0
+    }
+  }
+}
