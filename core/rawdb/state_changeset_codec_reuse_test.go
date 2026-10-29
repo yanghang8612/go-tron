@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"reflect"
@@ -210,10 +211,26 @@ func TestStateHistoryChunkWorkCanonicalWriterBytes(t *testing.T) {
 	if err := WriteStateDomainChangeBlockRows(scope, rows); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(scope.pending, oldScope.pending) {
+	// Query directories are derived separately from the canonical chunk plan.
+	// Compare all canonical bytes, then independently validate the new sidecar.
+	canonical := make(map[string][]byte, len(scope.pending))
+	for key, value := range scope.pending {
+		if key != string(stateChangeOwnerSpansKey(rows[0].BlockNum)) {
+			canonical[key] = value
+		}
+	}
+	if !reflect.DeepEqual(canonical, oldScope.pending) {
 		t.Fatal("canonical writer differs from independent old planning")
 	}
 	if err := scope.batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	view, release, err := AcquireStateHistoryReadView(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := CheckStateHistoryOwnerSpans(context.Background(), view, rows[0].BlockNum); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range rows {

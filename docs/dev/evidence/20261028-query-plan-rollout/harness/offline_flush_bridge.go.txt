@@ -1,0 +1,3 @@
+// Injected only into a private offline diagnostic source archive. Never production.
+package pebbledb
+func (d *Database) OfflineFlushKeyValue() error { return d.db.Flush() }

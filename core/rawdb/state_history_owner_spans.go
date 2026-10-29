@@ -24,7 +24,8 @@ const (
 	historyOwnerSpansMinRaw   = 16 << 10
 )
 
-var historyOwnerSpansMagic = [8]byte{'G', 'T', 'H', 'O', 'S', '0', '0', '2'}
+var historyOwnerSpansMagic = [8]byte{'G', 'T', 'H', 'O', 'S', '0', '0', '3'}
+var historyOwnerSpansMagicV2 = [8]byte{'G', 'T', 'H', 'O', 'S', '0', '0', '2'}
 
 var historyOwnerSpansHits = metrics.NewRegisteredCounter("state/history/query/owner_spans/validated_hits", nil)
 var historyOwnerSpansSelectedRows = metrics.NewRegisteredCounter("state/history/query/owner_spans/selected_rows", nil)
@@ -40,6 +41,8 @@ type historyOwnerSpans struct {
 	digest                                [32]byte
 	owners                                []common.Address
 	spans                                 []historyOwnerSpan
+	queryKnown                            uint8
+	queryKeys                             [historyQueryKeyGroups][]string
 }
 
 // Owner spans are optional derived data, never authoritative rows. Their source
@@ -48,10 +51,14 @@ type historyOwnerSpans struct {
 // Version 2 uses BLAKE2b-256 only for auxiliary binding/checksum; canonical
 // history, commitments and consensus hashes keep their original algorithms.
 func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomainChange) ([]byte, error) {
+	return buildHistoryOwnerSpansVersion(raw, pack, block, known, true)
+}
+
+func buildHistoryOwnerSpansVersion(raw, pack []byte, block uint64, known []*StateDomainChange, queryDirectory bool) ([]byte, error) {
 	if len(raw) < historyOwnerSpansMinRaw || len(raw) > stateDomainChangeBlockMaxDecodedBytes {
 		return nil, nil
 	}
-	if known != nil && len(known) < 32 {
+	if !queryDirectory && known != nil && len(known) < 32 {
 		return nil, nil
 	}
 	first, rows, err := splitHistoryOwnerRows(raw)
@@ -67,6 +74,7 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 	rowBytes, index := rows, uint64(0)
 	var scratch StateDomainChange
 	var previousTx uint64
+	var queryKeys historyQueryKeysBuilder
 	for len(rows) > 0 {
 		row, rest, err := rlp.SplitList(rows)
 		if err != nil || index > ^uint64(0)-first {
@@ -79,11 +87,13 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 				return nil, errors.New("rawdb: owner span writer row mismatch")
 			}
 			owner, tx = known[index].Owner, known[index].TxNum
+			queryKeys.add(known[index])
 		} else {
 			if err := decodeBorrowedStateDomainChangeRow(row, block, first+index, &scratch); err != nil {
 				return nil, err
 			}
 			owner, tx = scratch.Owner, scratch.TxNum
+			queryKeys.add(&scratch)
 		}
 		if index != 0 && tx < previousTx {
 			return nil, errors.New("rawdb: owner span source txNum order")
@@ -109,8 +119,8 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 	if known != nil && index != uint64(len(known)) {
 		return nil, errors.New("rawdb: owner span writer row count mismatch")
 	}
-	if index < 32 || len(owners) < 2 || uint64(len(raw))/index > 4096 {
-		return nil, nil // Few/huge rows do not justify an additional whole-source hash.
+	if !queryDirectory && (index < 32 || len(owners) < 2 || uint64(len(raw))/index > 4096) {
+		return nil, nil
 	}
 	ordered := make([]common.Address, 0, len(owners))
 	for owner := range owners {
@@ -134,11 +144,18 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 		payload = binary.AppendUvarint(payload, uint64(run.rows))
 		payload = binary.AppendUvarint(payload, uint64(run.size))
 	}
+	if queryDirectory {
+		payload = queryKeys.appendTo(payload)
+	}
 	if len(payload) > historyOwnerSpansMaxBytes {
 		return nil, nil
 	}
 	digest = blake2b.Sum256(payload)
-	encoded := append([]byte(nil), historyOwnerSpansMagic[:]...)
+	magic := historyOwnerSpansMagic
+	if !queryDirectory {
+		magic = historyOwnerSpansMagicV2
+	}
+	encoded := append([]byte(nil), magic[:]...)
 	encoded = binary.AppendUvarint(encoded, uint64(len(payload)))
 	encoded = append(encoded, digest[:]...)
 	return append(encoded, snappy.Encode(nil, payload)...), nil
@@ -179,7 +196,7 @@ func decodeHistoryOwnerSpans(data []byte, block uint64) (*historyOwnerSpans, err
 
 func decodeHistoryOwnerSpansInto(data []byte, block uint64, work *historyOwnerSpansWork) (*historyOwnerSpans, error) {
 	bad := errors.New("rawdb: invalid optional owner spans")
-	if len(data) > historyOwnerSpansMaxBytes+64 || len(data) < 42 || !bytes.Equal(data[:8], historyOwnerSpansMagic[:]) {
+	if len(data) > historyOwnerSpansMaxBytes+64 || len(data) < 42 || (!bytes.Equal(data[:8], historyOwnerSpansMagic[:]) && !bytes.Equal(data[:8], historyOwnerSpansMagicV2[:])) {
 		return nil, bad
 	}
 	size, n := binary.Uvarint(data[8:])
@@ -266,7 +283,14 @@ func decodeHistoryOwnerSpansInto(data []byte, block uint64, work *historyOwnerSp
 		totalBytes += entry[2]
 		r.spans[i] = historyOwnerSpan{uint32(entry[0]), uint32(entry[1]), uint32(entry[2])}
 	}
-	if len(p) != 0 || totalRows != r.rows || totalBytes != r.rowsBytes {
+	if totalRows != r.rows || totalBytes != r.rowsBytes {
+		return nil, bad
+	}
+	if bytes.Equal(data[:8], historyOwnerSpansMagic[:]) {
+		if err := decodeHistoryQueryKeys(p, r); err != nil {
+			return nil, err
+		}
+	} else if len(p) != 0 {
 		return nil, bad
 	}
 	return r, nil
@@ -300,16 +324,13 @@ func BuildStateHistoryOwnerSpans(ctx context.Context, source StateHistoryReadVie
 	if err != nil {
 		return false, err
 	}
-	if len(pack) > len(raw)/2 {
-		return false, nil // Hashing an incompressible source can cost more than the saved decode.
-	}
 	index, err := buildHistoryOwnerSpans(raw, pack, block, nil)
 	if err != nil && !isStateHistorySharedPack(pack) {
 		if _, legacyErr := decodePersistedStateDomainChange(pack, block, 0); legacyErr == nil {
 			return false, nil // Old sequence-zero standalone rows are not block packs.
 		}
 	}
-	if err != nil || len(index) == 0 || len(index) > 4096+len(pack)/2 {
+	if err != nil || len(index) == 0 {
 		return false, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -464,7 +485,8 @@ func CheckStateHistoryOwnerSpans(ctx context.Context, db StateHistoryReadView, b
 	if err != nil {
 		return err
 	}
-	want, err := buildHistoryOwnerSpans(raw, pack, block, nil)
+	withKeys := len(stored) >= 8 && bytes.Equal(stored[:8], historyOwnerSpansMagic[:])
+	want, err := buildHistoryOwnerSpansVersion(raw, pack, block, nil, withKeys)
 	if err != nil {
 		return err
 	}

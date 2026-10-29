@@ -162,6 +162,10 @@ func iterateStateHistoryOwnerTail(ctx context.Context, db StateKVHistoryReader, 
 }
 
 func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistoryReader, from, to uint64, selected func(common.Address) bool, fn func(*StateDomainChange) (bool, error)) error {
+	return iterateStateHistorySelectedOwnersTailFiltered(ctx, db, from, to, selected, nil, fn)
+}
+
+func iterateStateHistorySelectedOwnersTailFiltered(ctx context.Context, db StateKVHistoryReader, from, to uint64, selected func(common.Address) bool, skipPack func(context.Context, StateKVHistoryReader, []byte, uint64) (bool, error), fn func(*StateDomainChange) (bool, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -223,6 +227,15 @@ func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistor
 		seq := binary.BigEndian.Uint64(key[len(stateChangeSetPrefix)+8:])
 		if seq == 0 {
 			value := it.Value()
+			if skipPack != nil {
+				skip, err := skipPack(ctx, db, value, num)
+				if err != nil {
+					return err
+				}
+				if skip {
+					continue
+				} // Still consume every positive-seq repair.
+			}
 			used, err := iterateHistoryOwnerSpans(ctx, db, value, num, selected, &scratch, func(row *StateDomainChange) (bool, error) {
 				rows[row.Seq] = cloneStateDomainChange(row)
 				return true, nil

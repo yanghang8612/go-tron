@@ -388,16 +388,13 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		compressed = true
 	}
 	var ownerSpans []byte
-	if writer, ok := db.(StateHistoryChunkAtomicWriter); ok && writer.StateHistoryChunkWritesAtomic() && len(data) <= rawBuffer.Len()/2 {
+	if writer, ok := db.(StateHistoryChunkAtomicWriter); ok && writer.StateHistoryChunkWritesAtomic() {
 		ownerSpans, err = buildHistoryOwnerSpans(rawBuffer.Bytes(), data, blockNum, changes)
 		if err != nil {
 			if rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
 				stateChangeBlockRawBufferPool.Put(rawBuffer)
 			}
 			return err
-		}
-		if len(ownerSpans) > 4096+len(data)/2 {
-			ownerSpans = nil // The optional index must not expand a tiny pack unboundedly.
 		}
 	}
 	if compressed && rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
@@ -1588,7 +1585,8 @@ func ReadFirstStateDomainChangeByKeyBlockRangeContext(ctx context.Context, db St
 			directFrom = indexedHead + 1
 		}
 		var first *StateDomainChange
-		if err := iterateFirstStateHistoryTail(ctx, db, directFrom, headBlock, targetTxNum, headTxNum, owner, func(change *StateDomainChange) (bool, error) {
+		keyQuery := newHistoryTailKeyQuery(flatDomain, owner, generation, domain, map[string][]byte{string(key): key})
+		if err := iterateFirstStateHistoryKeyTail(ctx, db, directFrom, headBlock, targetTxNum, headTxNum, owner, keyQuery, func(change *StateDomainChange) (bool, error) {
 			if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 				!stateDomainChangeMatchesKey(change, flatDomain, owner, generation, domain, key) {
 				return true, nil
@@ -1672,7 +1670,8 @@ func ReadFirstStateKVChangesByKeysBlockRangeContext(ctx context.Context, db Stat
 		}
 		directFrom = indexedHead + 1
 	}
-	if err := iterateFirstStateHistoryTail(ctx, db, directFrom, headBlock, targetTxNum, headTxNum, owner, func(change *StateDomainChange) (bool, error) {
+	keyQuery := newHistoryTailKeyQuery(StateFlatDomainKVLatest, owner, generation, domain, wanted)
+	if err := iterateFirstStateHistoryKeyTail(ctx, db, directFrom, headBlock, targetTxNum, headTxNum, owner, keyQuery, func(change *StateDomainChange) (bool, error) {
 		if !stateDomainChangeInTxWindow(change, targetTxNum, headTxNum) ||
 			change.FlatDomain != StateFlatDomainKVLatest || change.Owner != owner ||
 			change.Generation != generation || change.Domain != domain {

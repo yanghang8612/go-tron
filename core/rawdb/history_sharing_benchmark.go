@@ -153,6 +153,8 @@ func (b *HistorySharingBenchmark) AddPack(ctx context.Context, block uint64, enc
 			sample.NewChunkValueBytes += uint64(len(value))
 		case bytes.HasPrefix([]byte(key), stateHistorySharedBucketPrefix):
 			sample.NewMetadataKVBytes += uint64(len(key) + len(value))
+		case bytes.Equal([]byte(key), stateChangeOwnerSpansKey(block)):
+			sample.NewMetadataKVBytes += uint64(len(key) + len(value))
 		case bytes.Equal([]byte(key), stateChangeSetKey(block, 0)):
 			sample.PackBytes = uint64(len(value))
 			sample.Shared = isStateHistorySharedPack(value)
