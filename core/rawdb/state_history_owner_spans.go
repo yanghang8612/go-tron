@@ -370,7 +370,9 @@ func iterateHistoryOwnerSpans(ctx context.Context, db StateKVHistoryReader, pack
 			historyOwnerSpansWorkPool.Put(work)
 		}
 	}()
-	r, err := decodeHistoryOwnerSpansInto(index, block, work)
+	// Owner selection needs no retained query-key strings. Still validate every
+	// directory, including those unrelated to the selected owner.
+	r, err := decodeHistoryOwnerSpansIntoVisit(index, block, work, func(int, []byte) {})
 	if err != nil {
 		return false, nil
 	}
