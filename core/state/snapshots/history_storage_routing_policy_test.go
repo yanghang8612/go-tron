@@ -114,8 +114,14 @@ func TestStorageRoutingRuntimeReusesBroadAndRepairsInteriorHole(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Rename(path+".held", path)
+	if built, err := refreshStorageHistoryRoutingContext(context.Background(), dir, &s, now.Add(time.Second)); err == nil || built || s.last.sourceReads != 0 {
+		t.Fatal("new bootstrap proof did not check current broad object", built, s.last, err)
+	}
+	if err := os.Rename(path+".held", path); err != nil {
+		t.Fatal(err)
+	}
 	if built, err := refreshStorageHistoryRoutingContext(context.Background(), dir, &s, now.Add(time.Second)); err != nil || !built || s.last.sourceReads != 0 || s.last.broadReads != 0 {
-		t.Fatal("bootstrap did not publish cached exact-pair storage proof", built, s.last, err)
+		t.Fatal("bootstrap reread canonical sources", built, s.last, err)
 	}
 	otherDir, other, _ := routingFixture(t)
 	other = addStorageFilterFixture(t, otherDir, other, 1)

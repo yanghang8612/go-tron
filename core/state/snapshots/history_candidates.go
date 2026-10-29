@@ -90,13 +90,13 @@ type historyCandidateRoute struct {
 
 type historyCandidateRoutes map[*systemHistoryRouting]*historyCandidateRoute
 
-func newHistoryCandidatePlan(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader, storage ...*storageHistoryRoutingReader) (*historyCandidatePlan, error) {
+func newHistoryCandidatePlan(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader) (*historyCandidatePlan, error) {
 	p := &historyCandidatePlan{table: manifestHistorySources(m)}
 	routes := make(historyCandidateRoutes, 2)
 	used := 0
 	if p.table != nil && len(queries) <= 256 {
 		for _, q := range queries {
-			candidates, err := historyCandidatesWithRoutes(ctx, dir, m, from, to, []historyCandidateQuery{q}, broad, small, account, metadata, routes, storage...)
+			candidates, err := historyCandidatesWithRoutes(ctx, dir, m, from, to, []historyCandidateQuery{q}, broad, small, account, metadata, routes)
 			if err != nil {
 				return nil, err
 			}
@@ -116,7 +116,7 @@ func newHistoryCandidatePlan(ctx context.Context, dir string, m *Manifest, from,
 		}
 	}
 	var err error
-	p.fallback, err = historyCandidatesWithRoutes(ctx, dir, m, from, to, queries, broad, small, account, metadata, routes, storage...)
+	p.fallback, err = historyCandidatesWithRoutes(ctx, dir, m, from, to, queries, broad, small, account, metadata, routes)
 	return p, err
 }
 
@@ -163,7 +163,7 @@ func historyCandidates(ctx context.Context, dir string, m *Manifest, from, to ui
 	return historyCandidatesWithRoutes(ctx, dir, m, from, to, queries, broad, small, account, metadata, make(historyCandidateRoutes, 2))
 }
 
-func historyCandidatesWithRoutes(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader, routes historyCandidateRoutes, storage ...*storageHistoryRoutingReader) ([]historySource, error) {
+func historyCandidatesWithRoutes(ctx context.Context, dir string, m *Manifest, from, to uint64, queries []historyCandidateQuery, broad, small *systemHistoryRouting, account *accountHistoryRoutingReader, metadata *metadataHistoryRoutingReader, routes historyCandidateRoutes) ([]historySource, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -225,7 +225,7 @@ func historyCandidatesWithRoutes(ctx context.Context, dir string, m *Manifest, f
 		if smallSystemHistoryRoutingQuery(q.query) && addRoute(small, q.lookup) {
 			continue
 		}
-		if systemHistoryRoutingQuery(q.query) && q.query.Domain != kvdomains.ContractMetadata && !(contractStorageHistoryRoutingKey(q.lookup) && len(storage) > 0) && addRoute(broad, q.lookup) {
+		if systemHistoryRoutingQuery(q.query) && q.query.Domain != kvdomains.ContractMetadata && addRoute(broad, q.lookup) {
 			continue
 		}
 		for i, s := range t.sources {
@@ -254,12 +254,6 @@ func historyCandidatesWithRoutes(ctx context.Context, dir string, m *Manifest, f
 					if col, ok := broad.columns[s.id]; ok && !broad.mayContain(col, q.lookup) {
 						continue
 					}
-				}
-			}
-			if contractStorageHistoryRoutingKey(q.lookup) && s.paired && len(storage) > 0 && storage[0] != nil {
-				f, covered, err := storage[0].source(ctx, dir, h, s.id)
-				if err == nil && covered && !f.mayContain(q.lookup) {
-					continue
 				}
 			}
 			possible[i] = true

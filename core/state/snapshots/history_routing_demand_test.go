@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestStorageLightRoutingCompleteDoesNotLoadBroad(t *testing.T) {
@@ -149,5 +150,39 @@ func TestRoutingImageCacheReuseAndSameMtimeCorruption(t *testing.T) {
 	}
 	if _, err = readSystemHistoryRoutingImage(context.Background(), dir, ref); err == nil {
 		t.Fatal("restored mtime bypassed corruption detection")
+	}
+}
+
+func TestStorageRoutingBootstrapRejectsChangedPhysicalProof(t *testing.T) {
+	dir, m, _ := storageRoutingFixture(t)
+	m = addRoutingFixture(t, dir, m, 3)
+	// Runtime admission requires existing storage indexing for a tiny fixture.
+	m = addStorageFilterFixture(t, dir, m, 1)
+	state := storageRoutingRefreshState{}
+	now := time.Now()
+	if built, err := refreshStorageHistoryRoutingContext(context.Background(), dir, &state, now); err != nil || !built {
+		t.Fatal(built, err)
+	}
+	// Depending on tail batching the first pass fills modern holes. The cached
+	// legacy projection must recheck its physical parent before publishing more.
+	broad := mustRoutingRef(t, m)
+	path := filepath.Join(dir, broad.Path)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 1
+	if err = os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if built, err := refreshStorageHistoryRoutingContext(context.Background(), dir, &state, now.Add(time.Second)); err == nil || built {
+		t.Fatal("changed physical broad published a new proof", built, err)
 	}
 }

@@ -55,10 +55,12 @@ func (f storageSourceFilter) mayContain(key []byte) bool {
 	if !contractStorageHistoryRoutingKey(key) {
 		return true
 	}
+	return f.mayContainHash(hashStoragePrefix(key))
+}
+func (f storageSourceFilter) mayContainHash(h storagePrefixHash) bool {
 	if f.count == 0 {
 		return false
 	}
-	h := hashStoragePrefix(key)
 	for i := uint64(0); i < storageRoutingProbes; i++ {
 		bit := (h.first + i*h.step) & uint64(len(f.bits)*8-1)
 		if f.bits[bit/8]&(1<<(bit%8)) == 0 {

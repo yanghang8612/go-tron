@@ -146,6 +146,7 @@ func refreshStorageHistoryRoutingWithBudget(ctx context.Context, dir string, s *
 		return false, nil
 	}
 	if !s.broadLoaded || s.broad != broadID {
+		s.bootstrap = nil
 		var covered map[[32]byte]struct{}
 		from, to := uint64(0), uint64(0)
 		if broad != nil {
@@ -192,6 +193,14 @@ func refreshStorageHistoryRoutingWithBudget(ctx context.Context, dir string, s *
 	// First keep the uncovered tail moving; once caught up, replace legacy
 	// broad coverage with small persisted pages without rereading dictionaries.
 	if !built && s.bootstrap != nil && !s.bootstrapDone {
+		// A cached projection is authority for new persisted proofs. Recheck the
+		// current exact physical object, including ctime, before every publication.
+		if broad == nil {
+			return false, errors.New("snapshots: bootstrap broad reference removed")
+		}
+		if _, _, err = readSystemHistoryRoutingBytes(ctx, dir, *broad); err != nil {
+			return false, err
+		}
 		ref, built, err = buildStorageHistoryRoutingWithPolicy(ctx, dir, m, maxNew, 0, nil, storageRoutingBuildPolicy{bootstrap: s.bootstrap})
 		if err != nil {
 			return false, err

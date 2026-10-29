@@ -48,7 +48,7 @@ func projectStorageHistoryRouting(ctx context.Context, data []byte, ref SegmentR
 		return nil, nil
 	}
 	b := &storageRoutingBootstrap{route: route, filters: make([]storageSourceFilter, len(counts))}
-	charge := len(counts) * 160
+	charge := len(counts) * 256
 	for col, n := range counts {
 		if n <= storageRoutingSourceHashes {
 			size := storageFilterBytes(n)
