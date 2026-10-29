@@ -387,9 +387,12 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 	if shared != nil {
 		compressed = true
 	}
-	var ownerSpans []byte
+	var ownerSpans, queryFilters []byte
 	if writer, ok := db.(StateHistoryChunkAtomicWriter); ok && writer.StateHistoryChunkWritesAtomic() {
 		ownerSpans, err = buildHistoryOwnerSpans(rawBuffer.Bytes(), data, blockNum, changes)
+		if err == nil && len(ownerSpans) != 0 {
+			queryFilters, err = queryFilterRecordFromOwner(ownerSpans, blockNum)
+		}
 		if err != nil {
 			if rawBuffer.Cap() <= stateDomainChangeBlockPooledBufferMax {
 				stateChangeBlockRawBufferPool.Put(rawBuffer)
@@ -409,12 +412,21 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 			return err
 		}
 	}
+	if len(queryFilters) != 0 {
+		if err := db.Put(stateChangeQueryFiltersKey(blockNum), queryFilters); err != nil {
+			return err
+		}
+	}
 	shared.observe()
 	// Include newly stored out-of-line chunk values in encoding accounting;
 	// counting only tiny reference packs would falsely report near-total
 	// savings on the bucket's first, full-content seed. Keys/metadata belong
 	// to logical KV bytes; these remain staged counters, not fsync receipts.
 	encodedBytes, extraKeyBytes := len(data), 0
+	if len(queryFilters) != 0 {
+		encodedBytes += len(queryFilters)
+		extraKeyBytes += len(stateChangeQueryFiltersKey(blockNum))
+	}
 	if len(ownerSpans) != 0 {
 		encodedBytes += len(ownerSpans)
 		extraKeyBytes += len(stateChangeOwnerSpansKey(blockNum))

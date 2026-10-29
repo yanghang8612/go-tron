@@ -54,6 +54,9 @@ func queryKeysFixture(t *testing.T, legacy bool) *historyViewTestFactory {
 			t.Fatal(err)
 		}
 		if legacy {
+			if err := f.Delete(stateChangeQueryFiltersKey(block)); err != nil {
+				t.Fatal(err)
+			}
 			pack, err := v.Get(stateChangeSetKey(block, 0))
 			if err != nil {
 				t.Fatal(err)

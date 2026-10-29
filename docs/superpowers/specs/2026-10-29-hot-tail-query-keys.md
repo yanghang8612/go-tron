@@ -101,3 +101,24 @@ scopes remain canonical fallbacks. The retained 1418-block fixture fits this
 budget; overflow simply keeps the uncached path. Positive-sequence repair scans
 and complete-owner publication rules remain unchanged. Re-run the identical
 cold data-path HTTP matrix; an all-negative diagnostic alone is not a speedup.
+
+Even the shared filter cache remains slower than planned-owner reads because
+the first filter access still loads and validates large owner/run tables. Add a
+small separately checksummed GTHQPF01 record under the same optional index
+family: schema key parent(block) + qf01. Its bounded Snappy payload contains only
+block, canonical encoded-pack digest and the three versioned filter scopes.
+The existing atomic writer and explicit fixed-copy builder derive it from the
+same complete source pack; charge its key/value bytes to encoding statistics.
+A pinned query validates this small record and pack digest before use; missing
+records retain the previous reader fallback and corrupt/stale records never
+prove absence. No canonical exported history or commitment elements change.
+
+Both sparse and bounded point-retirement paths must recognize exact parent and
+child keys independently, including orphan children. Existing coarse ranges
+already include the child through the same block boundary. Strict validation
+checks either record even when its counterpart is absent, rebuilding from the
+canonical pack. Directory cost hints also recognize a standalone child without
+loading the big parent. Restore does not require the optional record. Test
+missing/corrupt/stale source, child-only hints/strict checks, maximum block key
+bounds and more than 512 orphan records followed by live parents. The request
+cache uses a conservative 256-byte per-entry accounting charge (not an RSS cap).

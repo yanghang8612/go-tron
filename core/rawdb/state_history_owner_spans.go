@@ -368,7 +368,19 @@ func BuildStateHistoryOwnerSpans(ctx context.Context, source StateHistoryReadVie
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	return true, target.Put(stateChangeOwnerSpansKey(block), index)
+	filters, err := queryFilterRecordFromOwner(index, block)
+	if err != nil {
+		return false, err
+	}
+	if err = target.Put(stateChangeOwnerSpansKey(block), index); err != nil {
+		return false, err
+	}
+	if len(filters) != 0 {
+		if err = target.Put(stateChangeQueryFiltersKey(block), filters); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // An invalid/stale sidecar is an optimization miss. Canonical materialization
@@ -497,9 +509,16 @@ func CheckStateHistoryOwnerSpans(ctx context.Context, db StateHistoryReadView, b
 	if db == nil || !db.IsPinnedKeyValueView() {
 		return ErrStateHistoryReadViewUnpinned
 	}
-	stored, present, err := readPresentValue(db, stateChangeOwnerSpansKey(block), "check owner spans")
-	if err != nil || !present {
+	stored, parentPresent, err := readPresentValue(db, stateChangeOwnerSpansKey(block), "check owner spans")
+	if err != nil {
 		return err
+	}
+	filters, filterPresent, err := readPresentValue(db, stateChangeQueryFiltersKey(block), "check pack filters")
+	if err != nil {
+		return err
+	}
+	if !parentPresent && !filterPresent {
+		return nil
 	}
 	pack, present, err := readPresentValue(db, stateChangeSetKey(block, 0), "check owner span source")
 	if err != nil {
@@ -519,18 +538,33 @@ func CheckStateHistoryOwnerSpans(ctx context.Context, db StateHistoryReadView, b
 	if err != nil {
 		return err
 	}
-	version := 2
-	if len(stored) >= 8 && bytes.Equal(stored[:8], historyOwnerSpansMagic[:]) {
-		version = 4
-	} else if len(stored) >= 8 && bytes.Equal(stored[:8], historyOwnerSpansMagicV3[:]) {
-		version = 3
+	if parentPresent {
+		version := 2
+		if len(stored) >= 8 && bytes.Equal(stored[:8], historyOwnerSpansMagic[:]) {
+			version = 4
+		} else if len(stored) >= 8 && bytes.Equal(stored[:8], historyOwnerSpansMagicV3[:]) {
+			version = 3
+		}
+		want, err := buildHistoryOwnerSpansFormat(raw, pack, block, nil, version)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(stored, want) {
+			return errors.New("rawdb: owner spans differ from authoritative rows")
+		}
 	}
-	want, err := buildHistoryOwnerSpansFormat(raw, pack, block, nil, version)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(stored, want) {
-		return errors.New("rawdb: owner spans differ from authoritative rows")
+	if filterPresent {
+		v4, e := buildHistoryOwnerSpansFormat(raw, pack, block, nil, 4)
+		if e != nil {
+			return e
+		}
+		expected, e := queryFilterRecordFromOwner(v4, block)
+		if e != nil {
+			return e
+		}
+		if !bytes.Equal(filters, expected) {
+			return errors.New("rawdb: pack filters differ from authoritative rows")
+		}
 	}
 	return ctx.Err()
 }
@@ -556,10 +590,10 @@ func deleteHistoryOwnerSpans(db StateKVLatestStore, blocks []uint64) error {
 	selected := 0
 	for it.Next() {
 		key := it.Key()
-		if len(key) != len(stateChangeOwnerSpansPrefix)+8 || !bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) {
+		block, valid := stateChangeOwnerIndexBlock(key)
+		if !valid {
 			continue
 		}
-		block := binary.BigEndian.Uint64(key[len(stateChangeOwnerSpansPrefix):])
 		for selected < len(blocks) && blocks[selected] < block {
 			selected++
 		}
@@ -597,10 +631,11 @@ func RetireStateHistoryOwnerSpans(source ethdb.Iteratee, target ethdb.KeyValueWr
 	for scanned < 512 && work < 4<<20 && it.Next() {
 		scanned++
 		key := it.Key()
-		if len(key) != len(stateChangeOwnerSpansPrefix)+8 || !bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) {
+		block, valid := stateChangeOwnerIndexBlock(key)
+		if !valid {
 			continue
 		}
-		if binary.BigEndian.Uint64(key[len(stateChangeOwnerSpansPrefix):]) > through {
+		if block > through {
 			break
 		}
 		work += len(key) + len(it.Value())

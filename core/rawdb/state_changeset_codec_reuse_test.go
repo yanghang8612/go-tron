@@ -215,7 +215,7 @@ func TestStateHistoryChunkWorkCanonicalWriterBytes(t *testing.T) {
 	// Compare all canonical bytes, then independently validate the new sidecar.
 	canonical := make(map[string][]byte, len(scope.pending))
 	for key, value := range scope.pending {
-		if key != string(stateChangeOwnerSpansKey(rows[0].BlockNum)) {
+		if !bytes.HasPrefix([]byte(key), stateChangeOwnerSpansPrefix) {
 			canonical[key] = value
 		}
 	}

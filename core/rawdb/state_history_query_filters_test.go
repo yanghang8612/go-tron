@@ -120,6 +120,9 @@ func TestQueryFiltersV3ReadAndStrictRebuild(t *testing.T) {
 func TestQueryFiltersSaturatedMetadataUsesCanonicalFallback(t *testing.T) {
 	f := queryKeysFixture(t, false)
 	for block := uint64(2); block <= 5; block++ {
+		if err := f.Delete(stateChangeQueryFiltersKey(block)); err != nil {
+			t.Fatal(err)
+		}
 		index, err := f.Get(stateChangeOwnerSpansKey(block))
 		if err != nil {
 			t.Fatal(err)

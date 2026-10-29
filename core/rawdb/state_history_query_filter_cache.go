@@ -32,7 +32,7 @@ func (v *stateHistoryQueryTailView) rememberPackFilters(block uint64, r *history
 	if v.packFilters[block] != nil {
 		return
 	}
-	size := 128 // Includes entry and map charge; payload lengths are fixed.
+	size := 256 // Conservative entry/map charge; this is a budget, not an RSS limit.
 	for _, filter := range r.queryFilters {
 		size += len(filter)
 	}

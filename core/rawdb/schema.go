@@ -1169,6 +1169,20 @@ func stateChangeOwnerSpansKey(blockNum uint64) []byte {
 	return k
 }
 
+// A child of the same optional block-index family: range retirement includes
+// it, while older exact-length owner-index readers safely ignore it.
+func stateChangeQueryFiltersKey(blockNum uint64) []byte {
+	return append(stateChangeOwnerSpansKey(blockNum), 'q', 'f', '0', '1')
+}
+
+func stateChangeOwnerIndexBlock(key []byte) (uint64, bool) {
+	n := len(stateChangeOwnerSpansPrefix) + 8
+	if !bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) || (len(key) != n && (len(key) != n+4 || !bytes.Equal(key[n:], []byte("qf01")))) {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(key[len(stateChangeOwnerSpansPrefix):n]), true
+}
+
 // StateHistoryOwnerSpansBounds selects only the derived block index family.
 func StateHistoryOwnerSpansBounds() ([]byte, []byte) {
 	return bytes.Clone(stateChangeOwnerSpansPrefix), prefixUpperBound(stateChangeOwnerSpansPrefix)

@@ -184,6 +184,21 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 			return !matched, ctx.Err()
 		}
 	}
+	compact, present, err := readPresentValue(db, stateChangeQueryFiltersKey(block), "compact history pack filters")
+	if err != nil {
+		return false, err
+	}
+	if present {
+		r, err := decodeQueryFilterRecord(compact, block)
+		if err != nil || blake2b.Sum256(pack) != r.digest {
+			return false, nil
+		}
+		if v, ok := db.(*stateHistoryQueryTailView); ok {
+			v.rememberPackFilters(block, r)
+		}
+		matched := q.filtersMayMatch(r.queryKnown, r.queryFilters)
+		return !matched, ctx.Err()
+	}
 	raw, present, err := readPresentValue(db, stateChangeOwnerSpansKey(block), "history query keys")
 	if err != nil || !present {
 		return false, err
@@ -267,11 +282,24 @@ func historyQueryDirectoryHint(ctx context.Context, db StateKVHistoryReader, fro
 			return false, err
 		}
 		key := it.Key()
-		if len(key) != len(stateChangeOwnerSpansPrefix)+8 || !bytes.HasPrefix(key, stateChangeOwnerSpansPrefix) {
+		block, valid := stateChangeOwnerIndexBlock(key)
+		if !valid {
 			continue
 		}
-		if binary.BigEndian.Uint64(key[len(stateChangeOwnerSpansPrefix):]) > to {
+		if block > to {
 			break
+		}
+		if len(key) > len(stateChangeOwnerSpansPrefix)+8 {
+			return true, nil
+		}
+		// Presence is only a cost hint; skipPack authenticates the record.
+		// Avoid loading the larger parent merely to discover its small child.
+		present, err := db.Has(stateChangeQueryFiltersKey(block))
+		if err != nil {
+			return false, err
+		}
+		if present {
+			return true, nil
 		}
 		value := it.Value()
 		if len(value) >= 8 && (bytes.Equal(value[:8], historyOwnerSpansMagic[:]) || bytes.Equal(value[:8], historyOwnerSpansMagicV3[:])) {
