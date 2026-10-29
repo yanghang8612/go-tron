@@ -27,6 +27,7 @@ type historyCompactionBudgetState struct {
 	routingRetiredCursor  retiredMetadataSweepCursor
 	systemRouting         systemRoutingRefreshState
 	storageRouting        storageRoutingRefreshState
+	accountRouting        accountRoutingRefreshState
 	nextLightweightRoute  uint8
 	routingWorkSinceMerge uint8
 }
@@ -203,15 +204,19 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 			}
 			r.compactionBudget.routingRetiredCursor = pruned.Next
 		}
-		// Give each bounded family a turn; the old multi-GB account rebuild
-		// is deliberately outside this rotation.
+		// Give each bounded family a turn. Account maintenance appends a
+		// bounded delta; it never falls back to rewriting the old base.
 		small := func() (bool, error) { return refreshSmallSystemHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
 		metadata := func() (bool, error) { return refreshMetadataHistoryRoutingContext(ctx, r.cfg.Dir, busy) }
 		r.compactionBudget.storageRouting.initMetrics(r.cfg.MetricsNamespace)
 		storage := func() (bool, error) {
 			return refreshStorageHistoryRoutingContext(ctx, r.cfg.Dir, &r.compactionBudget.storageRouting, time.Now())
 		}
-		families := []func() (bool, error){small, metadata, storage}
+		r.compactionBudget.accountRouting.initMetrics(r.cfg.MetricsNamespace)
+		account := func() (bool, error) {
+			return refreshAccountHistoryDeltaContext(ctx, r.cfg.Dir, &r.compactionBudget.accountRouting, time.Now())
+		}
+		families := []func() (bool, error){small, metadata, storage, account}
 		for offset := range families {
 			i := (int(r.compactionBudget.nextLightweightRoute) + offset) % len(families)
 			refresh := families[i]
@@ -235,22 +240,16 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 				r.compactionBudget.routingWorkSinceMerge++
 				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, Deferred: true, DeferReason: "storage-routing-work"}, nil
 			}
+			if i == 3 && r.compactionBudget.accountRouting.last.didWork() {
+				r.compactionBudget.nextLightweightRoute = uint8((i + 1) % len(families))
+				r.compactionBudget.routingWorkSinceMerge++
+				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, Deferred: true, DeferReason: "account-routing-work"}, nil
+			}
 		}
 		r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
 		var built bool
 		var routeErr error
 		built, routeErr = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
-		if routeErr != nil {
-			if routingFailureCountsAsWork(routeErr) {
-				r.compactionBudget.routingWorkSinceMerge++
-			}
-			return total, routeErr
-		}
-		if built {
-			r.compactionBudget.routingWorkSinceMerge++
-			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
-		}
-		built, routeErr = refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy)
 		if routeErr != nil {
 			if routingFailureCountsAsWork(routeErr) {
 				r.compactionBudget.routingWorkSinceMerge++

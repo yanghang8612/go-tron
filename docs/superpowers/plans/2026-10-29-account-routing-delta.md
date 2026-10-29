@@ -112,3 +112,30 @@ holes. Resolve scalable logical runs/key shards, proof-cohort preservation and
 bounded resumable consolidation before claiming production maintenance. Remove
 normal old-base refresh only with the complete fair Runner integration. The hot
 unindexed tail and actual live first query are still separate acceptance work.
+
+## Incremental runtime follow-up (development, not deployed)
+
+The next candidate replaces the normal global account refresh with a fourth
+bounded rotating family. It retains the pre-existing 64-source bootstrap
+threshold unless an account base/delta already exists. Cursor/backoff state is
+Runner-owned; unsupported sources advance scan position without claiming proof,
+tail appends do not reset failed-prefix backoff, hard errors/conflicts retain
+the cursor, and metadata/header-only work consumes a heavy opportunity. The
+existing canonical reservation after three auxiliary operations remains intact.
+
+Successful publication compares the scoped input excluding only its own new
+object, so concurrent earlier replacements force an immediate rescan rather
+than being absorbed into a new fingerprint. Invalid optional old metadata is
+unknown for scheduling; healthy new dictionaries can still be indexed.
+
+The request constructor no longer truncates the earliest 128 overlapping refs.
+An immutable manifest-owned interval index selects actual enclosing objects;
+the 128-object budget limits attempts. Once admission is exhausted, only cached
+proofs are checked, bounding CPU even for thousands of overlapping envelopes.
+This does NOT solve a request needing more than 128 independent proofs. Logical
+runs/key shards and bounded resumable consolidation remain required step 10.
+
+Native acceptance script: `docs/dev/evidence/20261028-query-plan-rollout/harness/validate_account_runtime.py`.
+It measures three real policy passes and compares complete HTTP on the same
+sealed compact input, then reuses only the prior private account-index inodes
+for an explicitly scoped cold-page phase. No production service/cache changes.

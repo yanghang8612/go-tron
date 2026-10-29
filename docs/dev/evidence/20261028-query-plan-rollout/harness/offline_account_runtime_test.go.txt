@@ -1,0 +1,92 @@
+package snapshots
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestOfflineAccountRuntimeBoundedPasses(t *testing.T) {
+	dir, out := os.Getenv("GTRON_ACCOUNT_RUNTIME_INPUT"), os.Getenv("GTRON_ACCOUNT_RUNTIME_OUTPUT")
+	if dir == "" {
+		t.Skip("offline native only")
+	}
+	ctx := context.Background()
+	original, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := func(m *Manifest) []byte {
+		var refs []SegmentRef
+		for _, r := range m.Segments {
+			if r.Kind != SegmentAccountHistoryRoutingDelta {
+				refs = append(refs, r)
+			}
+		}
+		b, _ := json.Marshal(refs)
+		return b
+	}
+	canonical := stable(original)
+	old, err := accountRoutingCoveredForBuild(ctx, dir, manifestLookupView(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofIDs := make(map[[32]byte]bool)
+	s := accountRoutingRefreshState{}
+	var passes []map[string]any
+	cpu := func() float64 {
+		var r syscall.Rusage
+		if err := syscall.Getrusage(syscall.RUSAGE_SELF, &r); err != nil {
+			t.Fatal(err)
+		}
+		return float64(r.Utime.Sec+r.Stime.Sec) + float64(r.Utime.Usec+r.Stime.Usec)/1e6
+	}
+	for i := 0; i < 3; i++ {
+		beforeIO, _ := os.ReadFile("/proc/self/io")
+		beforeCPU := cpu()
+		began := time.Now()
+		built, err := refreshAccountHistoryDeltaWithBudget(ctx, dir, &s, time.Now(), 8, smallSystemRoutingWorkLimit{bytes: 128 << 20, duration: 2 * time.Second})
+		elapsed, usedCPU := time.Since(began).Seconds(), cpu()-beforeCPU
+		if err != nil || !built || s.last.sources < 1 || s.last.sources > 8 || s.last.sourceReads > 8 || s.last.inputBytes > 128<<20 {
+			t.Fatal("bounded native runtime pass", built, s, err)
+		}
+		current, err := LoadProductionManifest(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(canonical, stable(current)) || !reflect.DeepEqual(original.Progress, current.Progress) {
+			t.Fatal("runtime changed canonical refs/frontiers")
+		}
+		for _, ref := range current.Segments {
+			if ref.Kind != SegmentAccountHistoryRoutingDelta {
+				continue
+			}
+			if ref.Size > accountDeltaMaxFileBytes || ref.Rows > accountDeltaMaxRows {
+				t.Fatal("unbounded output", ref)
+			}
+			r, err := openAccountHistoryRouting(ctx, dir, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for id := range r.metadata.covered {
+				if _, ok := old[id]; ok {
+					t.Fatal("reprocessed already covered source")
+				}
+				proofIDs[id] = true
+			}
+			r.Close()
+		}
+		afterIO, _ := os.ReadFile("/proc/self/io")
+		passes = append(passes, map[string]any{"pass": i, "seconds": elapsed, "cpu_seconds": usedCPU, "cursor": s.nextTx, "sources": s.last.sources, "source_reads": s.last.sourceReads, "metadata_reads": s.last.metadataReads, "metadata_bytes": s.last.metadataBytes, "declared_input_bytes": s.last.inputBytes, "dictionary_keys": s.last.dictionaryKeys, "io_before": string(beforeIO), "io_after": string(afterIO), "new_exact_proofs": len(proofIDs)})
+	}
+	result := map[string]any{"complete": true, "passes": passes, "new_exact_proofs": len(proofIDs), "canonical_refs_unchanged": true, "frontiers_unchanged": true, "scope": "three bounded real refresh policy passes; no full MuHash/state scan; Runner fairness tested in native fixture tests"}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	if err := os.WriteFile(filepath.Join(out, "runtime-result.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -30,26 +30,27 @@ type accountDeltaKeyProof struct {
 	found bool
 }
 type accountDeltaObjectProof struct {
-	attempted bool
-	covered   map[[32]byte]struct{}
-	keys      []accountDeltaKeyProof
+	covered map[[32]byte]struct{}
+	keys    []accountDeltaKeyProof
 }
 
 // All proofs are request-local. An omitted, unreadable or budget-excluded
 // object is unknown; the caller still reads the authoritative history source.
 // Each object's bound is usable only for that same object's exact covered IDs.
 type accountDeltaHistoryReader struct {
-	refs                                 []SegmentRef
-	objects                              []accountDeltaObjectProof
+	manifest                             *Manifest
+	ranges                               *accountDeltaRangeIndex
+	objects                              map[uint32]*accountDeltaObjectProof
 	keys                                 [][]byte
 	byKey                                map[string]int
 	metadataRemaining, residentRemaining uint64
 	opened                               int
+	visited                              int
 }
 
 func newAccountDeltaHistoryReader(m *Manifest, from, to uint64, keys [][]byte) *accountDeltaHistoryReader {
 	r := &accountDeltaHistoryReader{metadataRemaining: accountDeltaRequestMetadata, residentRemaining: accountDeltaRequestResident}
-	if m == nil || len(keys) > accountDeltaRequestKeys {
+	if m == nil || from > to || len(keys) > accountDeltaRequestKeys {
 		return r
 	}
 	r.byKey = make(map[string]int)
@@ -66,15 +67,9 @@ func newAccountDeltaHistoryReader(m *Manifest, from, to uint64, keys [][]byte) *
 	if len(r.keys) == 0 {
 		return r
 	}
-	for _, ref := range m.Segments {
-		if ref.Kind == SegmentAccountHistoryRoutingDelta && ref.ToTxNum >= from && ref.FromTxNum <= to {
-			if len(r.refs) == accountDeltaRequestObjects {
-				break
-			}
-			r.refs = append(r.refs, ref)
-		}
-	}
-	r.objects = make([]accountDeltaObjectProof, len(r.refs))
+	r.manifest = manifestLookupView(m)
+	r.ranges = manifestAccountDeltaRanges(r.manifest)
+	r.objects = make(map[uint32]*accountDeltaObjectProof)
 	return r
 }
 
@@ -82,33 +77,48 @@ func (r *accountDeltaHistoryReader) maySkip(ctx context.Context, dir string, his
 	if err := contextError(ctx); err != nil {
 		return false, err
 	}
-	if r == nil || len(r.refs) == 0 {
+	if r == nil || r.ranges == nil {
 		return false, nil
 	}
 	index, ok := r.byKey[string(key)]
 	if !ok {
 		return false, nil
 	}
-	for i, ref := range r.refs {
-		if history.FromTxNum < ref.FromTxNum || history.ToTxNum > ref.ToTxNum {
-			continue
+	canOpen := func() bool {
+		return len(r.objects) < accountDeltaRequestObjects && r.residentRemaining >= uint64(len(r.keys))*64+128 && r.metadataRemaining >= 128
+	}
+	if !canOpen() {
+		return r.skipFromCached(history, id, index, from), nil
+	}
+	var skipped bool
+	var resultErr error
+	r.ranges.visit(r.manifest, history, func(row uint32, ref SegmentRef) bool {
+		r.visited++
+		if e := contextError(ctx); e != nil {
+			resultErr = e
+			return true
 		}
-		proof := &r.objects[i]
-		if !proof.attempted {
-			proof.attempted = true
+		proof := r.objects[row]
+		if proof == nil {
 			keyCost := uint64(len(r.keys))*64 + 128
-			if r.residentRemaining < keyCost || r.metadataRemaining < 128 {
-				continue
+			if !canOpen() {
+				// Once admission stops, only inspect <=128 cached proofs.
+				// Do not repeat O(N) empty callbacks for overlapping tails.
+				skipped = r.skipFromCached(history, id, index, from)
+				return true
 			}
+			proof = &accountDeltaObjectProof{}
+			r.objects[row] = proof
 			r.opened++
 			var charged uint64
 			reader, err := openAccountHistoryRoutingBudget(ctx, dir, ref, r.metadataRemaining, r.residentRemaining-keyCost, &charged)
 			r.metadataRemaining -= min(charged, r.metadataRemaining)
 			if err != nil {
 				if e := contextError(ctx); e != nil {
-					return false, e
+					resultErr = e
+					return true
 				}
-				continue
+				return false
 			}
 			// Charge authenticated reads even if a used child page is unreadable.
 			residentCost := reader.metadata.header.metadataBytes() + uint64(reader.metadata.header.sources)*128 + keyCost
@@ -124,41 +134,86 @@ func (r *accountDeltaHistoryReader) maySkip(ctx context.Context, dir string, his
 			closeErr := reader.Close()
 			if err != nil || closeErr != nil {
 				if e := contextError(ctx); e != nil {
-					return false, e
+					resultErr = e
+					return true
 				}
-				continue // lookup failure is never a proved missing key.
+				return false // lookup failure is never a proved missing key.
 			}
 			proof.covered, proof.keys = covered, values
 		}
 		if _, ok := proof.covered[id]; ok {
 			value := proof.keys[index]
 			if !value.found || from > value.bound || history.FromTxNum > value.bound {
-				return true, nil
+				skipped = true
+				return true
+			}
+		}
+		return false
+	})
+	return skipped, resultErr
+}
+
+func (r *accountDeltaHistoryReader) skipFromCached(history SegmentRef, id [32]byte, key int, from uint64) bool {
+	for row, proof := range r.objects {
+		ref := r.manifest.Segments[row]
+		if history.FromTxNum < ref.FromTxNum || history.ToTxNum > ref.ToTxNum {
+			continue
+		}
+		if _, ok := proof.covered[id]; ok {
+			value := proof.keys[key]
+			if !value.found || from > value.bound || history.FromTxNum > value.bound {
+				return true
 			}
 		}
 	}
-	return false, nil
+	return false
 }
 
 type accountDeltaBuildStats struct {
-	attempted, sourceReads, sources, unsupported int
-	inputBytes, dictionaryKeys                   uint64
-	nextTx                                       uint64
-	eof                                          bool
+	attempted, sourceReads, sources, unsupported      int
+	metadataReads, metadataUnknown, dictionaryHeaders int
+	inputBytes, dictionaryKeys, metadataBytes         uint64
+	nextTx                                            uint64
+	eof                                               bool
+}
+
+func (s accountDeltaBuildStats) didWork() bool {
+	return s.metadataReads > 0 || s.dictionaryHeaders > 0 || s.sourceReads > 0
 }
 
 // Coverage union is a scheduling hint only. Query proofs must never borrow a
 // bound from this union. Authenticate current metadata even on repeated builds.
 func accountRoutingCoveredForBuild(ctx context.Context, dir string, m *Manifest) (map[[32]byte]struct{}, error) {
+	return accountRoutingCoveredForBuildStats(ctx, dir, m, nil)
+}
+
+func accountRoutingCoveredForBuildStats(ctx context.Context, dir string, m *Manifest, stats *accountDeltaBuildStats) (map[[32]byte]struct{}, error) {
 	covered := make(map[[32]byte]struct{})
 	remaining := accountDeltaScheduleMetadata
 	for _, ref := range m.Segments {
 		if !isAccountRoutingKind(ref.Kind) {
 			continue
 		}
-		r, err := openAccountHistoryRoutingBudget(ctx, dir, ref, remaining, 64<<20, nil)
+		var charged uint64
+		r, err := openAccountHistoryRoutingBudget(ctx, dir, ref, remaining, 64<<20, &charged)
+		if stats != nil {
+			stats.metadataReads++
+			stats.metadataBytes += charged
+		}
 		if err != nil {
-			return nil, err
+			if e := contextError(ctx); e != nil {
+				return nil, e
+			}
+			if errors.Is(err, errSystemHistoryRoutingBudget) {
+				return nil, err
+			}
+			// Optional metadata is only a scheduling hint. Its failure proves
+			// nothing, but cannot pin healthy new canonical sources behind it.
+			remaining -= min(charged, remaining)
+			if stats != nil {
+				stats.metadataUnknown++
+			}
+			continue
 		}
 		cost := r.metadata.header.metadataBytes() + 64
 		for id := range r.metadata.covered {
@@ -190,7 +245,7 @@ func buildAccountRoutingDelta(ctx context.Context, dir string, m *Manifest, maxN
 		return
 	}
 	m = manifestLookupView(m)
-	covered, e := accountRoutingCoveredForBuild(ctx, dir, m)
+	covered, e := accountRoutingCoveredForBuildStats(ctx, dir, m, &stats)
 	if e != nil {
 		err = e
 		return
@@ -237,6 +292,7 @@ func buildAccountRoutingDelta(ctx context.Context, dir string, m *Manifest, maxN
 			stats.nextTx = h.ToTxNum + 1
 			continue
 		}
+		stats.dictionaryHeaders++
 		keys, e := accountRoutingDictionaryCost(dir, a)
 		if errors.Is(e, errSystemHistoryRoutingBudget) {
 			stats.unsupported++

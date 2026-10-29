@@ -632,7 +632,7 @@ func (m *Manager) firstStateDomainChangesContext(ctx context.Context, fromTxNum,
 		metadataCovered := false
 		var pairID [32]byte
 		pairFound := false
-		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || len(storageRouting.refs) > 0 || len(accountDeltas.refs) > 0 || !broadLoaded {
+		if routing != nil || smallRouting != nil || accountRouting != nil || len(metadataRouting.refs) > 0 || len(storageRouting.refs) > 0 || accountDeltas.ranges != nil && len(accountDeltas.ranges.rows) > 0 || !broadLoaded {
 			if accessor, ok := DefaultDomainRegistry().byDataset[SegmentDatasetStateDomainChange].HistoryAccessorRef(manifest, ref); ok {
 				id := source.id
 				if !source.paired {

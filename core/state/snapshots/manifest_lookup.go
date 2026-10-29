@@ -9,15 +9,18 @@ import (
 // Only Manager-owned immutable manifests and function-local read views carry
 // this index. Public loaders and clones return mutable, unindexed manifests.
 // Indexes contain row numbers, not duplicate SegmentRefs or owned path strings.
-// At most two uint32 arrays are retained: 8 MiB at the reference limit. Larger
-// catalogs retain the scan path instead of growing an unbounded second cache.
+// Path/freezer arrays retain at most 8 MiB at the reference limit. Independently
+// bounded lazy history and account-range indexes contain no decoded file data.
+// Larger catalogs retain the scan path rather than growing an unbounded cache.
 const manifestLookupMaxReferences = 1 << 20
 
 type manifestLookup struct {
-	paths       []uint32
-	freezer     []uint32 // same descending range order as chainFreezerRefs
-	historyOnce sync.Once
-	history     *historySourceTable
+	paths            []uint32
+	freezer          []uint32 // same descending range order as chainFreezerRefs
+	historyOnce      sync.Once
+	history          *historySourceTable
+	accountDeltaOnce sync.Once
+	accountDelta     *accountDeltaRangeIndex
 }
 
 // manifestLookupView borrows m.Segments. The caller must keep that slice
