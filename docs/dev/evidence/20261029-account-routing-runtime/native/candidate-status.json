@@ -1,0 +1,29 @@
+{
+  "complete": true,
+  "stage": "runtime policy, built-input and same-input HTTP sealed",
+  "source": "0f93254f81b8c49738cc7c0cae79b84f63b32f26",
+  "base_source": "78c48bd020c11dbde226cb47245ae6d3f97aaf6e",
+  "production_mutations": false,
+  "cache": "fresh processes; shared canonical cache uncontrolled; separate private account-index cold phase",
+  "production_before": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-29T02:04:54.981032Z",
+  "binary_sha256": {
+    "before": "12827bd067d3632ac1bd10852cffbc3a06bec9846931846e1561a74197cff9c0",
+    "candidate": "1336b002c3e806fa02fd3005f29eecc91556fd51dc781fd43c79d9b05700f24e"
+  },
+  "compact_manifest_sha256_before": "54fea9455696b9f0293c0357c1fb3b6605f7af9a9c27b3744a0755ff44747e12",
+  "compact_manifest_sha256_after": "54fea9455696b9f0293c0357c1fb3b6605f7af9a9c27b3744a0755ff44747e12",
+  "production_after": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "requests": 64,
+  "all_returns_match": true
+}

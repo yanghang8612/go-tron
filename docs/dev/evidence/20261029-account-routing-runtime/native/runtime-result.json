@@ -1,0 +1,54 @@
+{
+  "canonical_refs_unchanged": true,
+  "complete": true,
+  "frontiers_unchanged": true,
+  "new_exact_proofs": 24,
+  "passes": [
+    {
+      "cpu_seconds": 3.9889829999999993,
+      "cursor": 3793726779,
+      "declared_input_bytes": 45475041,
+      "dictionary_keys": 1220974,
+      "io_after": "rchar: 331660018\nwchar: 79825583\nsyscr: 18331\nsyscw: 523\nread_bytes: 124723200\nwrite_bytes: 88363008\ncancelled_write_bytes: 16326656\n",
+      "io_before": "rchar: 51314145\nwchar: 49\nsyscr: 28\nsyscw: 1\nread_bytes: 78995456\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n",
+      "metadata_bytes": 1540263,
+      "metadata_reads": 1,
+      "new_exact_proofs": 8,
+      "pass": 0,
+      "seconds": 3.860880478,
+      "source_reads": 8,
+      "sources": 8
+    },
+    {
+      "cpu_seconds": 3.8342530000000004,
+      "cursor": 3795714061,
+      "declared_input_bytes": 88563598,
+      "dictionary_keys": 2348229,
+      "io_after": "rchar: 779655261\nwchar: 237291863\nsyscr: 51295\nsyscw: 1482\nread_bytes: 213688320\nwrite_bytes: 245841920\ncancelled_write_bytes: 98422784\n",
+      "io_before": "rchar: 331660151\nwchar: 79825583\nsyscr: 18333\nsyscw: 523\nread_bytes: 124723200\nwrite_bytes: 88363008\ncancelled_write_bytes: 16326656\n",
+      "metadata_bytes": 1543403,
+      "metadata_reads": 2,
+      "new_exact_proofs": 16,
+      "pass": 1,
+      "seconds": 3.628569771,
+      "source_reads": 8,
+      "sources": 8
+    },
+    {
+      "cpu_seconds": 3.5004120000000007,
+      "cursor": 3797448176,
+      "declared_input_bytes": 81559419,
+      "dictionary_keys": 2213947,
+      "io_after": "rchar: 1204379777\nwchar: 384260490\nsyscr: 82366\nsyscw: 2352\nread_bytes: 295723008\nwrite_bytes: 392822784\ncancelled_write_bytes: 172544000\n",
+      "io_before": "rchar: 779655397\nwchar: 237291863\nsyscr: 51297\nsyscw: 1482\nread_bytes: 213688320\nwrite_bytes: 245841920\ncancelled_write_bytes: 98422784\n",
+      "metadata_bytes": 1548504,
+      "metadata_reads": 3,
+      "new_exact_proofs": 24,
+      "pass": 2,
+      "seconds": 3.432628722,
+      "source_reads": 8,
+      "sources": 8
+    }
+  ],
+  "scope": "three bounded real refresh policy passes; no full MuHash/state scan; Runner fairness tested in native fixture tests"
+}

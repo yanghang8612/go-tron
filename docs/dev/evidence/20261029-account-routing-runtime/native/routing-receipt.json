@@ -1,0 +1,60 @@
+{
+  "canonical_and_other_auxiliary_refs_sha256": "8fb1b94cb4ea54b17a2c1442bead961c125757cb0330ec0f36789f40904c7cf5",
+  "progress": {
+    "historyBuildTxNum": 4063356397,
+    "accessorBuildTxNum": 4063356397,
+    "hotPruneTxNum": 4063356397,
+    "hotPruneBlockNum": 45046617
+  },
+  "visible": [
+    1,
+    4063356397
+  ],
+  "objects": [
+    {
+      "ref": {
+        "rows": 554654,
+        "dataset": "state-domain-change",
+        "kind": "account-history-routing-delta",
+        "fromTxNum": 3792723933,
+        "toTxNum": 3793726778,
+        "path": "history/account-routing-delta-3792723933-3793726778-89e21577821168cf148ed23fb4e64ad7d1c76fbb927ec87420e02b2ea1913dc3.route",
+        "size": 16329732,
+        "checksum": "sha256:89e21577821168cf148ed23fb4e64ad7d1c76fbb927ec87420e02b2ea1913dc3",
+        "lookupRoot": "sha256:fe10cfc99dc39cdfe626670a5a59f3f48d1e42ae40ed0e2289affdfb0cf8bf24"
+      },
+      "metadata": "metadata/fe10cfc99dc39cdfe626670a5a59f3f48d1e42ae40ed0e2289affdfb0cf8bf24.bin",
+      "allocated_bytes": 16330752
+    },
+    {
+      "ref": {
+        "rows": 958235,
+        "dataset": "state-domain-change",
+        "kind": "account-history-routing-delta",
+        "fromTxNum": 3793726779,
+        "toTxNum": 3795714060,
+        "path": "history/account-routing-delta-3793726779-3795714060-ce111bc8f34003fc888549eb99aadf006be501793f876c2ca527d00ea148ccc1.route",
+        "size": 28205997,
+        "checksum": "sha256:ce111bc8f34003fc888549eb99aadf006be501793f876c2ca527d00ea148ccc1",
+        "lookupRoot": "sha256:bb8faa888a1a983b7c32ab5e00ef4172c9b1e63f339eca69ccc746b972c867c3"
+      },
+      "metadata": "metadata/bb8faa888a1a983b7c32ab5e00ef4172c9b1e63f339eca69ccc746b972c867c3.bin",
+      "allocated_bytes": 28213248
+    },
+    {
+      "ref": {
+        "rows": 872485,
+        "dataset": "state-domain-change",
+        "kind": "account-history-routing-delta",
+        "fromTxNum": 3795714061,
+        "toTxNum": 3797448175,
+        "path": "history/account-routing-delta-3795714061-3797448175-22b620c89eaf6828635a07859710ce4f426f094f41d24b190b90ae8759e07d59.route",
+        "size": 25682437,
+        "checksum": "sha256:22b620c89eaf6828635a07859710ce4f426f094f41d24b190b90ae8759e07d59",
+        "lookupRoot": "sha256:015d5b456a0c1dab41b3476820940e0f058d7d6809bb21948ff15a64605b1433"
+      },
+      "metadata": "metadata/015d5b456a0c1dab41b3476820940e0f058d7d6809bb21948ff15a64605b1433.bin",
+      "allocated_bytes": 25690112
+    }
+  ]
+}

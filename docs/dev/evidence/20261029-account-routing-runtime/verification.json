@@ -1,0 +1,79 @@
+{
+  "complete": true,
+  "source": "0f93254f81b8c49738cc7c0cae79b84f63b32f26",
+  "production_identity": {
+    "MainPID": "32436",
+    "ExecMainStartTimestamp": "Wed 2026-10-28 14:26:39 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "requests": 64,
+  "head": [
+    45836827,
+    "0000000002bb6a1bcb3ab2e1ac8af3817bec7a121f92f1413d2552eceef0a30c",
+    4240407293,
+    "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627"
+  ],
+  "runtime": {
+    "canonical_refs_unchanged": true,
+    "complete": true,
+    "frontiers_unchanged": true,
+    "new_exact_proofs": 24,
+    "passes": [
+      {
+        "cpu_seconds": 3.9889829999999993,
+        "cursor": 3793726779,
+        "declared_input_bytes": 45475041,
+        "dictionary_keys": 1220974,
+        "io_after": "rchar: 331660018\nwchar: 79825583\nsyscr: 18331\nsyscw: 523\nread_bytes: 124723200\nwrite_bytes: 88363008\ncancelled_write_bytes: 16326656\n",
+        "io_before": "rchar: 51314145\nwchar: 49\nsyscr: 28\nsyscw: 1\nread_bytes: 78995456\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n",
+        "metadata_bytes": 1540263,
+        "metadata_reads": 1,
+        "new_exact_proofs": 8,
+        "pass": 0,
+        "seconds": 3.860880478,
+        "source_reads": 8,
+        "sources": 8
+      },
+      {
+        "cpu_seconds": 3.8342530000000004,
+        "cursor": 3795714061,
+        "declared_input_bytes": 88563598,
+        "dictionary_keys": 2348229,
+        "io_after": "rchar: 779655261\nwchar: 237291863\nsyscr: 51295\nsyscw: 1482\nread_bytes: 213688320\nwrite_bytes: 245841920\ncancelled_write_bytes: 98422784\n",
+        "io_before": "rchar: 331660151\nwchar: 79825583\nsyscr: 18333\nsyscw: 523\nread_bytes: 124723200\nwrite_bytes: 88363008\ncancelled_write_bytes: 16326656\n",
+        "metadata_bytes": 1543403,
+        "metadata_reads": 2,
+        "new_exact_proofs": 16,
+        "pass": 1,
+        "seconds": 3.628569771,
+        "source_reads": 8,
+        "sources": 8
+      },
+      {
+        "cpu_seconds": 3.5004120000000007,
+        "cursor": 3797448176,
+        "declared_input_bytes": 81559419,
+        "dictionary_keys": 2213947,
+        "io_after": "rchar: 1204379777\nwchar: 384260490\nsyscr: 82366\nsyscw: 2352\nread_bytes: 295723008\nwrite_bytes: 392822784\ncancelled_write_bytes: 172544000\n",
+        "io_before": "rchar: 779655397\nwchar: 237291863\nsyscr: 51297\nsyscw: 1482\nread_bytes: 213688320\nwrite_bytes: 245841920\ncancelled_write_bytes: 98422784\n",
+        "metadata_bytes": 1548504,
+        "metadata_reads": 3,
+        "new_exact_proofs": 24,
+        "pass": 2,
+        "seconds": 3.432628722,
+        "source_reads": 8,
+        "sources": 8
+      }
+    ],
+    "scope": "three bounded real refresh policy passes; no full MuHash/state scan; Runner fairness tested in native fixture tests"
+  },
+  "delta_objects": 3,
+  "delta_rows": 2385374,
+  "delta_file_bytes": 70218166,
+  "delta_allocated_bytes": 70234112,
+  "new_exact_proofs": 24,
+  "archive_bytes": 77423,
+  "archive_sha256": "02fc4005bce5ef6f2e9bf69f3013e85eaef967ba8c5dd8cd6fc7838f52d3c522",
+  "scope": "three bounded native policy passes and 64 full HTTP values; only private new index pages cold; no repeated full-state MuHash or full-node restore"
+}

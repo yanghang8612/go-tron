@@ -139,3 +139,12 @@ Native acceptance script: `docs/dev/evidence/20261028-query-plan-rollout/harness
 It measures three real policy passes and compares complete HTTP on the same
 sealed compact input, then reuses only the prior private account-index inodes
 for an explicitly scoped cold-page phase. No production service/cache changes.
+
+Native acceptance completed for `0f93254f`: three real policy passes published
+24 exact proofs in 3.43–3.86 s/pass, with measured process CPU, unchanged base,
+canonical refs and frontiers. 64 full HTTP requests passed, including the new
+built input and isolated private account-index cold pages. Report:
+`docs/dev/account-routing-runtime-20261029.md`. The partially repaired 9M input
+still took 4.60 s with 1,497 holes; do not equate scheduler integration with
+coverage convergence or live first-query acceptance. Steps 10 and hot-tail
+work remain active. No master/deployment/production restart occurred.
