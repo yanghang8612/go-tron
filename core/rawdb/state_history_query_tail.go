@@ -48,6 +48,7 @@ type stateHistoryQueryTailView struct {
 	used, rows, budget, maxRows int
 	packFilters                 map[uint64]*historyTailPackFilters
 	packFilterBytes             int
+	filterRange                 *historyTailFilterRange
 }
 
 func (*stateHistoryQueryTailView) IsPinnedKeyValueView() bool { return true }
@@ -168,6 +169,9 @@ func iterateStateHistorySelectedOwnersTail(ctx context.Context, db StateKVHistor
 }
 
 func iterateStateHistorySelectedOwnersTailFiltered(ctx context.Context, db StateKVHistoryReader, from, to uint64, selected func(common.Address) bool, skipPack func(context.Context, StateKVHistoryReader, []byte, uint64) (bool, error), fn func(*StateDomainChange) (bool, error)) error {
+	return iterateStateHistorySelectedOwnersTailCollect(ctx, db, from, to, selected, skipPack, nil, fn)
+}
+func iterateStateHistorySelectedOwnersTailCollect(ctx context.Context, db StateKVHistoryReader, from, to uint64, selected func(common.Address) bool, skipPack func(context.Context, StateKVHistoryReader, []byte, uint64) (bool, error), repair func(*StateDomainChange), fn func(*StateDomainChange) (bool, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -279,6 +283,9 @@ func iterateStateHistorySelectedOwnersTailFiltered(ctx context.Context, db State
 		row, err := decodePersistedStateDomainChange(it.Value(), num, seq)
 		if err != nil {
 			return err
+		}
+		if repair != nil {
+			repair(row)
 		}
 		if selected(row.Owner) {
 			rows[seq] = row

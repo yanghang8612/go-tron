@@ -18,6 +18,7 @@ func TestQueryFilterRecordStandaloneStrictAndCanonicalFallback(t *testing.T) {
 				t.Fatal(len(record), err)
 			}
 			f.Delete(stateChangeOwnerSpansKey(2)) // Only the small child remains.
+			block := uint64(2)
 			switch mode {
 			case "corrupt":
 				record[8] ^= 1
@@ -26,6 +27,8 @@ func TestQueryFilterRecordStandaloneStrictAndCanonicalFallback(t *testing.T) {
 				f.Delete(stateChangeQueryFiltersKey(2))
 			case "wrong-block":
 				f.Put(stateChangeQueryFiltersKey(3), record)
+				f.Delete(stateChangeOwnerSpansKey(3))
+				block = 3
 				f.Delete(stateChangeQueryFiltersKey(2))
 			case "missing-source":
 				f.Delete(stateChangeSetKey(2, 0))
@@ -35,21 +38,21 @@ func TestQueryFilterRecordStandaloneStrictAndCanonicalFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer release()
-			check := CheckStateHistoryOwnerSpans(context.Background(), view, 2)
-			if (mode == "corrupt" || mode == "missing-source") != (check != nil) {
+			check := CheckStateHistoryOwnerSpans(context.Background(), view, block)
+			if (mode == "corrupt" || mode == "wrong-block" || mode == "missing-source") != (check != nil) {
 				t.Fatal("orphan child strict validation", mode, check)
 			}
 			if mode == "missing-source" {
 				return
 			}
-			hint, err := historyQueryDirectoryHint(context.Background(), view, 2, 2)
+			hint, err := historyQueryDirectoryHint(context.Background(), view, block, block)
 			if err != nil || mode == "valid" && !hint {
 				t.Fatal("standalone child not discovered", hint, err)
 			}
 			counted := &queryKeyChunkCountView{StateHistoryReadView: view}
 			q := newHistoryTailKeyQuery(StateFlatDomainKVLatest, common.SystemAccountAddress, 7, kvdomains.SystemDynamicProperty, map[string][]byte{"missing": []byte("missing")})
-			pack, _ := view.Get(stateChangeSetKey(2, 0))
-			skip, err := q.skipPack(context.Background(), counted, pack, 2)
+			pack, _ := view.Get(stateChangeSetKey(block, 0))
+			skip, err := q.skipPack(context.Background(), counted, pack, block)
 			if err != nil || skip != (mode == "valid") {
 				t.Fatal("invalid optional child proved absence", mode, skip, err)
 			}

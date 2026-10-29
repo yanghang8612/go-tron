@@ -122,3 +122,22 @@ loading the big parent. Restore does not require the optional record. Test
 missing/corrupt/stale source, child-only hints/strict checks, maximum block key
 bounds and more than 512 orphan records followed by live parents. The request
 cache uses a conservative 256-byte per-entry accounting charge (not an RSS cap).
+
+The independent-record HTTP experiment remains slower than the span-only
+control: smaller metadata does not remove repeated seq-zero iterator scans.
+Coalesce later families using one request-owned exact-range proof. During a
+full successful scan, require one validated source-bound V4 filter per block
+continuously from `from` to `to`; OR per-scope filters, AND known flags, and
+retain all canonical positive-sequence repairs before owner/Tx/key selection.
+Repairs are deep copied with a 1 MiB charge limit; errors, cancellation, gaps,
+invalid metadata, early callback stop or overflow prevent publication.
+
+OR saturation is conservative but can erase negatives. For the bounded planned
+owners, current owner and omitted caller, evaluate AccountLatest/KVGeneration
+hash probes independently on every pack. Only a probe negative on every pack
+may bypass a saturated group OR. Unknown/unplanned probes retain OR/canonical
+fallback. Hash collisions cannot create a false negative. A later exact-range
+query whose entire wanted set is proved negative replays only the cached raw
+repairs in original `(block,seq)` order, filtered by owner; the unchanged
+high-level callback applies its own Tx/key window. This does not publish a
+complete owner cache and does not treat positive filters as row evidence.

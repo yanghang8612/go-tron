@@ -151,6 +151,7 @@ type historyTailKeyQuery struct {
 	fullNames map[string][]string // full canonical key -> original query names
 	hashes    map[string]uint64
 	wanted    map[string][]byte // shrinks after complete repaired blocks
+	summary   *historyTailFilterRange
 }
 
 func newHistoryTailKeyQuery(flat StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, wanted map[string][]byte) *historyTailKeyQuery {
@@ -172,38 +173,46 @@ func newHistoryTailKeyQuery(flat StateFlatDomain, owner common.Address, generati
 
 func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryReader, pack []byte, block uint64) (bool, error) {
 	if err := ctx.Err(); err != nil {
+		q.noFilterProof()
 		return false, err
 	}
 	marker, ok := db.(pointread.PinnedKeyValueView)
 	if !ok || !marker.IsPinnedKeyValueView() {
+		q.noFilterProof()
 		return false, nil
 	}
 	if v, ok := db.(*stateHistoryQueryTailView); ok {
 		if cached := v.cachedPackFilters(block, pack); cached != nil {
+			q.observeFilters(block, cached.known, cached.filters)
 			matched := q.filtersMayMatch(cached.known, cached.filters)
 			return !matched, ctx.Err()
 		}
 	}
 	compact, present, err := readPresentValue(db, stateChangeQueryFiltersKey(block), "compact history pack filters")
 	if err != nil {
+		q.noFilterProof()
 		return false, err
 	}
 	if present {
 		r, err := decodeQueryFilterRecord(compact, block)
 		if err != nil || blake2b.Sum256(pack) != r.digest {
+			q.noFilterProof()
 			return false, nil
 		}
 		if v, ok := db.(*stateHistoryQueryTailView); ok {
 			v.rememberPackFilters(block, r)
 		}
+		q.observeFilters(block, r.queryKnown, r.queryFilters)
 		matched := q.filtersMayMatch(r.queryKnown, r.queryFilters)
 		return !matched, ctx.Err()
 	}
 	raw, present, err := readPresentValue(db, stateChangeOwnerSpansKey(block), "history query keys")
 	if err != nil || !present {
+		q.noFilterProof()
 		return false, err
 	}
 	if len(raw) < 8 || (!bytes.Equal(raw[:8], historyOwnerSpansMagic[:]) && !bytes.Equal(raw[:8], historyOwnerSpansMagicV3[:])) {
+		q.noFilterProof()
 		return false, nil
 	}
 	work := historyOwnerSpansWorkPool.Get().(*historyOwnerSpansWork)
@@ -226,13 +235,17 @@ func (q *historyTailKeyQuery) skipPack(ctx context.Context, db StateKVHistoryRea
 		}
 	})
 	if err != nil || r.queryKnown&(1<<q.group) == 0 || blake2b.Sum256(pack) != r.digest {
+		q.noFilterProof()
 		return false, nil
 	}
 	if filter := r.queryFilters[q.group]; filter != nil {
+		q.observeFilters(block, r.queryKnown, r.queryFilters)
 		matched = q.filtersMayMatch(r.queryKnown, r.queryFilters)
 		if v, ok := db.(*stateHistoryQueryTailView); ok {
 			v.rememberPackFilters(block, r)
 		}
+	} else {
+		q.noFilterProof()
 	}
 	return !matched, ctx.Err()
 }
@@ -251,6 +264,9 @@ func iterateFirstStateHistoryKeyTail(ctx context.Context, db StateKVHistoryReade
 		return iterateFirstStateHistoryTail(ctx, db, from, to, target, head, owner, fn)
 	}
 	if v, ok := db.(*stateHistoryQueryTailView); ok {
+		if summary := v.cachedFilterRange(from, to, q); summary != nil {
+			return summary.iterateRepairs(ctx, owner, fn)
+		}
 		v.mu.Lock()
 		entry, first := v.entries[owner], v.first[owner]
 		cached := entry != nil && entry.from <= from && entry.to >= to || first != nil && first.from == from && first.to == to && first.targetTx == target && first.headTx == head
@@ -268,6 +284,28 @@ func iterateFirstStateHistoryKeyTail(ctx context.Context, db StateKVHistoryReade
 	}
 	if !available {
 		return iterateFirstStateHistoryTail(ctx, db, from, to, target, head, owner, fn)
+	}
+	if v, ok := db.(*stateHistoryQueryTailView); ok {
+		summary := newHistoryTailFilterRange(from, to)
+		v.mu.Lock()
+		summary.planEnvelopes(v.planned, owner)
+		v.mu.Unlock()
+		q.summary = summary
+		defer func() { q.summary = nil }()
+		stopped := false
+		err := iterateStateHistorySelectedOwnersTailCollect(ctx, db, from, to, func(candidate common.Address) bool { return candidate == owner }, q.skipPack, summary.addRepair, func(row *StateDomainChange) (bool, error) {
+			cont, e := fn(row)
+			if !cont {
+				stopped = true
+			}
+			return cont, e
+		})
+		if err == nil && !stopped && summary.valid && summary.seen && summary.coveredTo == to && ctx.Err() == nil {
+			v.mu.Lock()
+			v.filterRange = summary
+			v.mu.Unlock()
+		}
+		return err
 	}
 	return iterateStateHistorySelectedOwnersTailFiltered(ctx, db, from, to, func(candidate common.Address) bool { return candidate == owner }, q.skipPack, fn)
 }
