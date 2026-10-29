@@ -1,0 +1,82 @@
+[
+  {
+    "case": "path-cold-0-span-only-9000000-0",
+    "round": 0,
+    "version": "span-only",
+    "height": 9000000,
+    "first_seconds": 3.766675442457199,
+    "repeat_seconds": 0.8971114233136177,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-9000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 3.7623753771185875,
+    "repeat_seconds": 1.0239324569702148,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-span-only-10000000-0",
+    "round": 0,
+    "version": "span-only",
+    "height": 10000000,
+    "first_seconds": 3.761338695883751,
+    "repeat_seconds": 0.9041595160961151,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-10000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 3.4487275555729866,
+    "repeat_seconds": 1.0359970331192017,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-span-only-15000000-0",
+    "round": 0,
+    "version": "span-only",
+    "height": 15000000,
+    "first_seconds": 3.7706461995840073,
+    "repeat_seconds": 0.9219697937369347,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-15000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 3.509517155587673,
+    "repeat_seconds": 1.0224395766854286,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-span-only-20000000-0",
+    "round": 0,
+    "version": "span-only",
+    "height": 20000000,
+    "first_seconds": 4.0171045660972595,
+    "repeat_seconds": 0.9734776318073273,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-20000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 4.128306828439236,
+    "repeat_seconds": 1.093097634613514,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  }
+]

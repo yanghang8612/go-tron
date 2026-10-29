@@ -1,0 +1,162 @@
+[
+  {
+    "case": "path-cold-0-baseline-9000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 9000000,
+    "first_seconds": 2.3173423632979393,
+    "repeat_seconds": 0.6296914219856262,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-9000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 2.412680983543396,
+    "repeat_seconds": 0.6039040982723236,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-10000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 10000000,
+    "first_seconds": 2.377516031265259,
+    "repeat_seconds": 0.5925320908427238,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-10000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 2.3556484058499336,
+    "repeat_seconds": 0.5704398825764656,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-15000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 15000000,
+    "first_seconds": 2.363750971853733,
+    "repeat_seconds": 0.5653171166777611,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-15000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 2.413247436285019,
+    "repeat_seconds": 0.5878511890769005,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-baseline-20000000-0",
+    "round": 0,
+    "version": "baseline",
+    "height": 20000000,
+    "first_seconds": 2.715401828289032,
+    "repeat_seconds": 0.6783337891101837,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-0-candidate-20000000-0",
+    "round": 0,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 2.6380532532930374,
+    "repeat_seconds": 0.6362541541457176,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-9000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 9000000,
+    "first_seconds": 2.34252667427063,
+    "repeat_seconds": 0.6323764026165009,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-9000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 9000000,
+    "first_seconds": 2.4360325261950493,
+    "repeat_seconds": 0.6420924440026283,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-10000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 10000000,
+    "first_seconds": 2.399837836623192,
+    "repeat_seconds": 0.5770924389362335,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-10000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 10000000,
+    "first_seconds": 2.509760297834873,
+    "repeat_seconds": 0.5780496597290039,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-15000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 15000000,
+    "first_seconds": 2.336281344294548,
+    "repeat_seconds": 0.5861197486519814,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-15000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 15000000,
+    "first_seconds": 2.4065057560801506,
+    "repeat_seconds": 0.6819673553109169,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-candidate-20000000-0",
+    "round": 1,
+    "version": "candidate",
+    "height": 20000000,
+    "first_seconds": 2.6362157613039017,
+    "repeat_seconds": 0.6467259451746941,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  },
+  {
+    "case": "path-cold-1-baseline-20000000-0",
+    "round": 1,
+    "version": "baseline",
+    "height": 20000000,
+    "first_seconds": 2.6689560413360596,
+    "repeat_seconds": 0.6235923245549202,
+    "dispatch_resident_pages": 0,
+    "post_run_inodes_stable": true
+  }
+]

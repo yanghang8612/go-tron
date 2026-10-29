@@ -301,9 +301,7 @@ func iterateFirstStateHistoryKeyTail(ctx context.Context, db StateKVHistoryReade
 			return cont, e
 		})
 		if err == nil && !stopped && summary.valid && summary.seen && summary.coveredTo == to && ctx.Err() == nil {
-			v.mu.Lock()
-			v.filterRange = summary
-			v.mu.Unlock()
+			return v.publishFilterRange(ctx, summary)
 		}
 		return err
 	}

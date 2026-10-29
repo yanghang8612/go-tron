@@ -1,0 +1,23 @@
+{
+  "complete": true,
+  "stage": "private mutable clone ready; immutable files still shared and NOT eligible for eviction",
+  "production_mutations": false,
+  "evictions": false,
+  "production_before": {
+    "MainPID": "15034",
+    "ExecMainStartTimestamp": "Thu 2026-10-29 02:40:49 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "free_bytes_before": 1951825297408,
+  "utc": 1793242072.8639288,
+  "files": 188844,
+  "linked_bytes": 1487486252444,
+  "private_mutable_bytes": 1511090477,
+  "production_after": {
+    "MainPID": "15034",
+    "ExecMainStartTimestamp": "Thu 2026-10-29 02:40:49 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  }
+}

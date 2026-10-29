@@ -1,0 +1,10 @@
+{
+  "file": "core/rawdb/state_history_query_keys.go",
+  "original_sha256": "71bb4f979d63f6796fbe32aa962571a183395c019fb44d59bf11277742cffb40",
+  "patched_sha256": "bfaad45ce4269892257db60916d3279a40d28f0f1288c55a28f3c03989911515",
+  "inserted_branch": "\tif os.Getenv(\"GTRON_OFFLINE_DISABLE_QUERY_KEYS\")==\"1\" { return iterateFirstStateHistoryTail(ctx,db,from,to,target,head,owner,fn) }\n",
+  "V3_owner_spans_retained": true,
+  "V4_owner_spans_retained": true,
+  "diagnostic_hook_excluded_from_timed_candidate": true,
+  "scope": "diagnostic only; candidate HTTP binary unchanged"
+}

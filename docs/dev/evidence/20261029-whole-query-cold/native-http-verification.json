@@ -1,0 +1,122 @@
+{
+  "complete": true,
+  "archive_bytes": 4696344,
+  "archive_sha256": "dfc05022774a762f452c4aa1e7c7f28e231e95c814996f6acc48c6b2d3086fec",
+  "ablation": false,
+  "source": "3152d54477b3f04b4988b8babe0eefb0b345e0a3",
+  "binary_sha256": {
+    "baseline": "1336b002c3e806fa02fd3005f29eecc91556fd51dc781fd43c79d9b05700f24e",
+    "candidate": "1b5fc51412930f8c3949398fb885c19977a373ca06f02c9f094fd47a63ad50df"
+  },
+  "accepted_first_requests": 16,
+  "total_http_requests": 40,
+  "all_returns_match": true,
+  "all_dispatch_file_pages_zero": true,
+  "private_file_bytes": 26218801235,
+  "files_by_database": {
+    "ancient": 8,
+    "chaindata": 18,
+    "history": 271,
+    "state-snapshots": 1281
+  },
+  "constructor_only_file_count": 8273,
+  "scope": "full HTTP actual read paths over four databases; new process; file pages zero at dispatch; normal startup/application caches retained; no cold-device-cache claim",
+  "groups": [
+    {
+      "version": "baseline",
+      "height": 9000000,
+      "first_seconds": [
+        2.3173423632979393,
+        2.4360325261950493
+      ],
+      "repeat_seconds": [
+        0.6296914219856262,
+        0.6420924440026283
+      ]
+    },
+    {
+      "version": "baseline",
+      "height": 10000000,
+      "first_seconds": [
+        2.377516031265259,
+        2.509760297834873
+      ],
+      "repeat_seconds": [
+        0.5925320908427238,
+        0.5780496597290039
+      ]
+    },
+    {
+      "version": "baseline",
+      "height": 15000000,
+      "first_seconds": [
+        2.363750971853733,
+        2.4065057560801506
+      ],
+      "repeat_seconds": [
+        0.5653171166777611,
+        0.6819673553109169
+      ]
+    },
+    {
+      "version": "baseline",
+      "height": 20000000,
+      "first_seconds": [
+        2.715401828289032,
+        2.6689560413360596
+      ],
+      "repeat_seconds": [
+        0.6783337891101837,
+        0.6235923245549202
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 9000000,
+      "first_seconds": [
+        2.412680983543396,
+        2.34252667427063
+      ],
+      "repeat_seconds": [
+        0.6039040982723236,
+        0.6323764026165009
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 10000000,
+      "first_seconds": [
+        2.3556484058499336,
+        2.399837836623192
+      ],
+      "repeat_seconds": [
+        0.5704398825764656,
+        0.5770924389362335
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 15000000,
+      "first_seconds": [
+        2.413247436285019,
+        2.336281344294548
+      ],
+      "repeat_seconds": [
+        0.5878511890769005,
+        0.5861197486519814
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 20000000,
+      "first_seconds": [
+        2.6380532532930374,
+        2.6362157613039017
+      ],
+      "repeat_seconds": [
+        0.6362541541457176,
+        0.6467259451746941
+      ]
+    }
+  ]
+}

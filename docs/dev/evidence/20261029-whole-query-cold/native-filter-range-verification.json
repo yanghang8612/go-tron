@@ -1,0 +1,139 @@
+{
+  "complete": true,
+  "archive_bytes": 3286023,
+  "archive_sha256": "edf2e7a1c5e69b6bf4e486d0b5ddf4ee8338e300921c8ef2de828ff7bb715753",
+  "ablation": true,
+  "source": "b1b303ff",
+  "binary_sha256": {
+    "span-only": "75656acd13399426208d8fb8b9f6290e1da38f1b5e683b9be31b3eb3249bc581",
+    "candidate": "4c60a9dda6ed2dbbfcf3b77d55a3faf67ebb32953f88d1a31acb0c8452da80a2"
+  },
+  "accepted_first_requests": 8,
+  "total_http_requests": 24,
+  "all_returns_match": true,
+  "all_dispatch_file_pages_zero": true,
+  "private_file_bytes": 26623043066,
+  "files_by_database": {
+    "ancient": 8,
+    "chaindata": 18,
+    "history": 291,
+    "state-snapshots": 1281
+  },
+  "constructor_only_file_count": 8281,
+  "scope": "full HTTP actual read paths over four databases; new process; file pages zero at dispatch; normal startup/application caches retained; no cold-device-cache claim",
+  "groups": [
+    {
+      "version": "candidate",
+      "height": 9000000,
+      "first_seconds": [
+        3.7623753771185875
+      ],
+      "repeat_seconds": [
+        1.0239324569702148
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 10000000,
+      "first_seconds": [
+        3.4487275555729866
+      ],
+      "repeat_seconds": [
+        1.0359970331192017
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 15000000,
+      "first_seconds": [
+        3.509517155587673
+      ],
+      "repeat_seconds": [
+        1.0224395766854286
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 20000000,
+      "first_seconds": [
+        4.128306828439236
+      ],
+      "repeat_seconds": [
+        1.093097634613514
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 9000000,
+      "first_seconds": [
+        3.766675442457199
+      ],
+      "repeat_seconds": [
+        0.8971114233136177
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 10000000,
+      "first_seconds": [
+        3.761338695883751
+      ],
+      "repeat_seconds": [
+        0.9041595160961151
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 15000000,
+      "first_seconds": [
+        3.7706461995840073
+      ],
+      "repeat_seconds": [
+        0.9219697937369347
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 20000000,
+      "first_seconds": [
+        4.0171045660972595
+      ],
+      "repeat_seconds": [
+        0.9734776318073273
+      ]
+    }
+  ],
+  "tail_blocks": 1418,
+  "diagnostic_filter_counts": {
+    "groups": [
+      {
+        "all_remaining_keys_negative": 5672,
+        "attempted_packs": 5672,
+        "canonical_maybes": 0,
+        "group": 0,
+        "range_hits": 4,
+        "unknown": 0,
+        "validated_filters": 5672
+      },
+      {
+        "all_remaining_keys_negative": 0,
+        "attempted_packs": 0,
+        "canonical_maybes": 0,
+        "group": 1,
+        "range_hits": 4,
+        "unknown": 0,
+        "validated_filters": 0
+      },
+      {
+        "all_remaining_keys_negative": 0,
+        "attempted_packs": 0,
+        "canonical_maybes": 0,
+        "group": 2,
+        "range_hits": 4,
+        "unknown": 0,
+        "validated_filters": 0
+      }
+    ],
+    "scope": "real remaining wanted sets in excluded traced discovery requests"
+  }
+}

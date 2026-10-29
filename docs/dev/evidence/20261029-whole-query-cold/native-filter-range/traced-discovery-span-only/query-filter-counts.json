@@ -1,0 +1,32 @@
+{
+  "groups": [
+    {
+      "all_remaining_keys_negative": 0,
+      "attempted_packs": 0,
+      "canonical_maybes": 0,
+      "group": 0,
+      "range_hits": 0,
+      "unknown": 0,
+      "validated_filters": 0
+    },
+    {
+      "all_remaining_keys_negative": 0,
+      "attempted_packs": 0,
+      "canonical_maybes": 0,
+      "group": 1,
+      "range_hits": 0,
+      "unknown": 0,
+      "validated_filters": 0
+    },
+    {
+      "all_remaining_keys_negative": 0,
+      "attempted_packs": 0,
+      "canonical_maybes": 0,
+      "group": 2,
+      "range_hits": 0,
+      "unknown": 0,
+      "validated_filters": 0
+    }
+  ],
+  "scope": "real remaining wanted sets in excluded traced discovery requests"
+}

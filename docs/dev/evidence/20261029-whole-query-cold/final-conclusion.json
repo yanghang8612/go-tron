@@ -1,0 +1,35 @@
+{
+  "native_performance_source": "b1b303ffee8ebc2eed88cfaea7a6c43f3c246045",
+  "native_performance_sha256": "4c60a9dda6ed2dbbfcf3b77d55a3faf67ebb32953f88d1a31acb0c8452da80a2",
+  "complete_tail_blocks": 1418,
+  "cold_account_sources_before": 30539,
+  "cold_account_sources_after": 32036,
+  "cold_account_sources_total": 32036,
+  "native_mu_hash_head_unchanged": true,
+  "complete_http_return_values": {
+    "9000000": 207,
+    "10000000": 213,
+    "15000000": 238,
+    "20000000": 249
+  },
+  "performance_gate": "NO-GO: no consistent cold latency gain and warm latency regression",
+  "production_mutations": false,
+  "master": "52aea62ef56799b7e6c1365293123dd029286935",
+  "local_validation": [
+    "rawdb full package pass 25.894s",
+    "rawdb focused race pass 3.382s",
+    "rawdb vet pass",
+    "focused snapshot/MuHash/restore regressions pass 2.203s",
+    "post-performance cancellation-publication regression race pass 2.944s"
+  ],
+  "full_database_muhash_rescan_repeated": false,
+  "production_read_only_final": {
+    "observed_utc": "2026-10-29T05:31:22.951096+00:00",
+    "pid_from_jss": 22738,
+    "process_started_utc": "2026-10-29T03:04:30Z",
+    "eth_blockNumber_hex": "0x2e9c7e8",
+    "height": 48875496,
+    "status": "active",
+    "offline_final_unit": "inactive; MainPID=0; ExecMainStatus=0"
+  }
+}

@@ -90,6 +90,16 @@ func (v *stateHistoryQueryTailView) cachedFilterRange(from, to uint64, q *histor
 	}
 	return nil
 }
+
+func (v *stateHistoryQueryTailView) publishFilterRange(ctx context.Context, r *historyTailFilterRange) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	v.filterRange = r
+	return nil
+}
 func (r *historyTailFilterRange) iterateRepairs(ctx context.Context, owner common.Address, fn func(*StateDomainChange) (bool, error)) error {
 	for _, row := range r.repairs {
 		if err := ctx.Err(); err != nil {

@@ -1,0 +1,178 @@
+[
+  {
+    "height": 9000000,
+    "version": "span-only",
+    "repeat": 0,
+    "seconds_server": 3.764687836,
+    "cpu_seconds": 1.6129430000000005,
+    "alloc_bytes": 320976008,
+    "logical_read_bytes": 180351141,
+    "physical_read_bytes": 215830528,
+    "read_syscalls": 7037
+  },
+  {
+    "height": 9000000,
+    "version": "span-only",
+    "repeat": 1,
+    "seconds_server": 0.895984875,
+    "cpu_seconds": 0.9316490000000002,
+    "alloc_bytes": 288940864,
+    "logical_read_bytes": 88916742,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2119
+  },
+  {
+    "height": 9000000,
+    "version": "candidate",
+    "repeat": 0,
+    "seconds_server": 3.755638136,
+    "cpu_seconds": 1.4624460000000004,
+    "alloc_bytes": 318382776,
+    "logical_read_bytes": 180607852,
+    "physical_read_bytes": 224768000,
+    "read_syscalls": 7106
+  },
+  {
+    "height": 9000000,
+    "version": "candidate",
+    "repeat": 1,
+    "seconds_server": 1.022859437,
+    "cpu_seconds": 1.0580720000000001,
+    "alloc_bytes": 286836248,
+    "logical_read_bytes": 88916742,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2119
+  },
+  {
+    "height": 10000000,
+    "version": "span-only",
+    "repeat": 0,
+    "seconds_server": 3.759466612,
+    "cpu_seconds": 1.6086359999999997,
+    "alloc_bytes": 319005000,
+    "logical_read_bytes": 179932852,
+    "physical_read_bytes": 218169344,
+    "read_syscalls": 7007
+  },
+  {
+    "height": 10000000,
+    "version": "span-only",
+    "repeat": 1,
+    "seconds_server": 0.903011193,
+    "cpu_seconds": 0.9351799999999999,
+    "alloc_bytes": 287829088,
+    "logical_read_bytes": 88843919,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2090
+  },
+  {
+    "height": 10000000,
+    "version": "candidate",
+    "repeat": 0,
+    "seconds_server": 3.446520063,
+    "cpu_seconds": 1.47403,
+    "alloc_bytes": 316416128,
+    "logical_read_bytes": 180189564,
+    "physical_read_bytes": 218513408,
+    "read_syscalls": 7076
+  },
+  {
+    "height": 10000000,
+    "version": "candidate",
+    "repeat": 1,
+    "seconds_server": 1.034774931,
+    "cpu_seconds": 1.0806699999999996,
+    "alloc_bytes": 285914088,
+    "logical_read_bytes": 88843920,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2090
+  },
+  {
+    "height": 15000000,
+    "version": "span-only",
+    "repeat": 0,
+    "seconds_server": 3.768721653,
+    "cpu_seconds": 1.4251709999999997,
+    "alloc_bytes": 318540648,
+    "logical_read_bytes": 180762319,
+    "physical_read_bytes": 222728192,
+    "read_syscalls": 7110
+  },
+  {
+    "height": 15000000,
+    "version": "span-only",
+    "repeat": 1,
+    "seconds_server": 0.920765038,
+    "cpu_seconds": 1.0506920000000006,
+    "alloc_bytes": 288685376,
+    "logical_read_bytes": 89993008,
+    "physical_read_bytes": 32768,
+    "read_syscalls": 2091
+  },
+  {
+    "height": 15000000,
+    "version": "candidate",
+    "repeat": 0,
+    "seconds_server": 3.507593524,
+    "cpu_seconds": 1.543399,
+    "alloc_bytes": 317424064,
+    "logical_read_bytes": 181019026,
+    "physical_read_bytes": 222969856,
+    "read_syscalls": 7179
+  },
+  {
+    "height": 15000000,
+    "version": "candidate",
+    "repeat": 1,
+    "seconds_server": 1.021158704,
+    "cpu_seconds": 1.0590119999999992,
+    "alloc_bytes": 287124184,
+    "logical_read_bytes": 89993006,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2091
+  },
+  {
+    "height": 20000000,
+    "version": "span-only",
+    "repeat": 0,
+    "seconds_server": 4.015275398,
+    "cpu_seconds": 1.5834589999999995,
+    "alloc_bytes": 311342808,
+    "logical_read_bytes": 186942495,
+    "physical_read_bytes": 220807168,
+    "read_syscalls": 7197
+  },
+  {
+    "height": 20000000,
+    "version": "span-only",
+    "repeat": 1,
+    "seconds_server": 0.972325455,
+    "cpu_seconds": 0.994631,
+    "alloc_bytes": 280491472,
+    "logical_read_bytes": 94063309,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2126
+  },
+  {
+    "height": 20000000,
+    "version": "candidate",
+    "repeat": 0,
+    "seconds_server": 4.12634974,
+    "cpu_seconds": 1.521728,
+    "alloc_bytes": 309924008,
+    "logical_read_bytes": 187199205,
+    "physical_read_bytes": 221134848,
+    "read_syscalls": 7266
+  },
+  {
+    "height": 20000000,
+    "version": "candidate",
+    "repeat": 1,
+    "seconds_server": 1.091950365,
+    "cpu_seconds": 1.1221359999999994,
+    "alloc_bytes": 279262520,
+    "logical_read_bytes": 94063309,
+    "physical_read_bytes": 0,
+    "read_syscalls": 2126
+  }
+]

@@ -1,0 +1,25 @@
+{
+  "complete": true,
+  "stage": "all fixed-copy auxiliary preparation complete",
+  "source": "87260ebc2e6c5c6fe26f2f65972b75af4744f179",
+  "production_mutations": false,
+  "evictions": false,
+  "production_before": {
+    "MainPID": "22738",
+    "ExecMainStartTimestamp": "Thu 2026-10-29 03:04:30 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "utc": "2026-10-29T03:15:23.441835Z",
+  "binary_sha256": {
+    "candidate": "1b5fc51412930f8c3949398fb885c19977a373ca06f02c9f094fd47a63ad50df",
+    "baseline": "1336b002c3e806fa02fd3005f29eecc91556fd51dc781fd43c79d9b05700f24e"
+  },
+  "production_after": {
+    "MainPID": "22738",
+    "ExecMainStartTimestamp": "Thu 2026-10-29 03:04:30 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "production_identity_changed": false
+}

@@ -1,0 +1,15 @@
+{
+  "reason": "replace constructor-open copy with traced actual HTTP read-path isolation and explicit startup warming scope",
+  "jobs": [
+    {
+      "unit": "gtron-whole-query-cold-20261029-01",
+      "pid": 26340,
+      "stopped_offline_only": true
+    },
+    {
+      "unit": "gtron-whole-query-tail-20261029-01",
+      "pid": 29599,
+      "stopped_offline_only": true
+    }
+  ]
+}

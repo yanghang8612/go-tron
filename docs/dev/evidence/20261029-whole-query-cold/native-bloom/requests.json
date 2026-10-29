@@ -1,0 +1,578 @@
+[
+  {
+    "case": "traced-discovery-span-only",
+    "height": 9000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 3.617769628763199,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "traced-discovery-span-only",
+    "height": 10000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 1.3131497353315353,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x989680"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "traced-discovery-span-only",
+    "height": 15000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 1.3534923195838928,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0xe4e1c0"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "traced-discovery-span-only",
+    "height": 20000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 1.8424562141299248,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x1312d00"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "traced-discovery-candidate",
+    "height": 9000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 2.790095053613186,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "traced-discovery-candidate",
+    "height": 10000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 1.938625045120716,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x989680"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "traced-discovery-candidate",
+    "height": 15000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 1.7607902809977531,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0xe4e1c0"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "traced-discovery-candidate",
+    "height": 20000000,
+    "repeat": 0,
+    "cache": "traced discovery excluded from performance",
+    "seconds_loopback_http": 2.127841368317604,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x1312d00"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-9000000-0",
+    "height": 9000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 3.760082371532917,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-9000000-0",
+    "height": 9000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 0.9271312728524208,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-9000000-0",
+    "height": 9000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 4.330219514667988,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-9000000-0",
+    "height": 9000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 1.6626443564891815,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x895440"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000cf"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-10000000-0",
+    "height": 10000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 3.5311133563518524,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x989680"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-10000000-0",
+    "height": 10000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 0.931202843785286,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x989680"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-10000000-0",
+    "height": 10000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 4.366389401257038,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x989680"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-10000000-0",
+    "height": 10000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 1.6239992305636406,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x989680"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000d5"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-15000000-0",
+    "height": 15000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 3.693757802248001,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0xe4e1c0"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-15000000-0",
+    "height": 15000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 0.900524340569973,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 18,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0xe4e1c0"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 18,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-15000000-0",
+    "height": 15000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 4.674731127917767,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 19,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0xe4e1c0"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 19,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-15000000-0",
+    "height": 15000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 1.764063872396946,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0xe4e1c0"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000ee"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-20000000-0",
+    "height": 20000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 4.074587546288967,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 21,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x1312d00"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 21,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "path-cold-0-span-only-20000000-0",
+    "height": 20000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 0.9364015236496925,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 22,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x1312d00"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 22,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-20000000-0",
+    "height": 20000000,
+    "repeat": 0,
+    "cache": "all four DB HTTP read-path file pages zero at dispatch; normal startup metadata caches retained",
+    "seconds_loopback_http": 4.4747184962034225,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 23,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x1312d00"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 23,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  },
+  {
+    "case": "path-cold-0-candidate-20000000-0",
+    "height": 20000000,
+    "repeat": 1,
+    "cache": "same process repeat",
+    "seconds_loopback_http": 1.5531839281320572,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 24,
+      "method": "eth_call",
+      "params": [
+        {
+          "to": "0xa4997124a328a4615eab437cede31da47a31b375",
+          "data": "0x9fa6a6e3"
+        },
+        "0x1312d00"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 24,
+      "result": "0x00000000000000000000000000000000000000000000000000000000000000f9"
+    }
+  }
+]

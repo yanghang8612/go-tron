@@ -1,0 +1,36 @@
+{
+  "complete": true,
+  "stage": "four-height full HTTP cold data-path matrix complete",
+  "ablation": true,
+  "tail_blocks": 1418,
+  "query_filter_format": 4,
+  "source": "237f2bf5",
+  "production_mutations": false,
+  "cache": "all DB files actually read by HTTP independently isolated, file pages zero before fresh engine start and again after ready; mandatory startup/application metadata caches retained; no DB mmap",
+  "utc": 1793250277.6852634,
+  "production_before": {
+    "MainPID": "22738",
+    "ExecMainStartTimestamp": "Thu 2026-10-29 03:04:30 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "binary_sha256": {
+    "span-only": "3bffd6c6dbc12f7c1e7971d4a1db9aca8615c97670d62ed057e943bd59ba9fac",
+    "candidate": "05050db9dca3c516f6525a017bba0be440a94025784a9ab42ce248701edfeee0"
+  },
+  "diagnostic_discovery_candidate_sha256": "3bffd6c6dbc12f7c1e7971d4a1db9aca8615c97670d62ed057e943bd59ba9fac",
+  "prepared_source": "87260ebc2e6c5c6fe26f2f65972b75af4744f179",
+  "query_files": 1596,
+  "query_file_bytes": 26614622929,
+  "private_files": 1550,
+  "copied_bytes": 0,
+  "production_after": {
+    "MainPID": "22738",
+    "ExecMainStartTimestamp": "Thu 2026-10-29 03:04:30 UTC",
+    "ActiveState": "active",
+    "exe": "/data/gtron/releases/auto-52aea62ef567-fcb488f6b9fdcbd4/gtron"
+  },
+  "production_identity_changed": false,
+  "accepted": 8,
+  "all_returns_match": true
+}

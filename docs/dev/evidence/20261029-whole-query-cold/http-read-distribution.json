@@ -1,0 +1,178 @@
+[
+  {
+    "height": 9000000,
+    "logical_bytes_by_root": {
+      "ancient": 572504,
+      "history": 7364260,
+      "chaindata": 3857229,
+      "state-snapshots": 84865077
+    },
+    "read_syscalls": 4111,
+    "largest_files": [
+      [
+        "state-snapshots/history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        66948766
+      ],
+      [
+        "state-snapshots/history/account-gap-ablation.route",
+        1556647
+      ],
+      [
+        "chaindata/958814.sst",
+        1272270
+      ],
+      [
+        "state-snapshots/history/small-system-routing-1-4063356397-9ae3099faf7ab650b2bf96f65baff68499b9d3ddb98f94cb3bd0ece9e5170351.route",
+        1093070
+      ],
+      [
+        "chaindata/959529.sst",
+        764071
+      ],
+      [
+        "ancient/v2/bodies/00000000000008978432-00000000000009043968.gtv2",
+        570378
+      ],
+      [
+        "chaindata/948046.sst",
+        503117
+      ],
+      [
+        "state-snapshots/history/state-domain-change-415154210-415295913-22bef6afc8260d03.seg",
+        440284
+      ]
+    ]
+  },
+  {
+    "height": 10000000,
+    "logical_bytes_by_root": {
+      "ancient": 345675,
+      "history": 7256,
+      "chaindata": 7532,
+      "state-snapshots": 86971477
+    },
+    "read_syscalls": 2076,
+    "largest_files": [
+      [
+        "state-snapshots/history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        66948766
+      ],
+      [
+        "state-snapshots/history/account-gap-ablation.route",
+        1556647
+      ],
+      [
+        "state-snapshots/history/small-system-routing-1-4063356397-9ae3099faf7ab650b2bf96f65baff68499b9d3ddb98f94cb3bd0ece9e5170351.route",
+        1093070
+      ],
+      [
+        "state-snapshots/history/state-domain-change-470940383-471074394-97bc751a20304e01.seg",
+        493215
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1549102736-1549235501-16a375938bc0b4ad.seg",
+        411486
+      ],
+      [
+        "state-snapshots/history/state-domain-change-471621326-471706065-2ce23f79228c4e46.seg",
+        409700
+      ],
+      [
+        "ancient/v2/bodies/00000000000009961472-00000000000010027008.gtv2",
+        343549
+      ],
+      [
+        "state-snapshots/history/state-domain-change-501796887-501901595-139f80dce883b3b7.seg",
+        285418
+      ]
+    ]
+  },
+  {
+    "height": 15000000,
+    "logical_bytes_by_root": {
+      "ancient": 220238,
+      "history": 393271,
+      "chaindata": 7524,
+      "state-snapshots": 86373373
+    },
+    "read_syscalls": 2162,
+    "largest_files": [
+      [
+        "state-snapshots/history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        66948766
+      ],
+      [
+        "state-snapshots/history/account-gap-ablation.route",
+        1556647
+      ],
+      [
+        "state-snapshots/history/small-system-routing-1-4063356397-9ae3099faf7ab650b2bf96f65baff68499b9d3ddb98f94cb3bd0ece9e5170351.route",
+        1093070
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1549102736-1549235501-16a375938bc0b4ad.seg",
+        411486
+      ],
+      [
+        "state-snapshots/history/state-domain-change-830652790-830737916-aded03b8158aea13.seg",
+        405687
+      ],
+      [
+        "state-snapshots/history/state-domain-change-830338153-830490510-3c3d4f9f8af9c73c.seg",
+        301896
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1362836000-1362974977-728764d8b1015272.seg",
+        249547
+      ],
+      [
+        "state-snapshots/history/state-domain-change-830490511-830652789-a1147bbf58df3d44.seg",
+        240544
+      ]
+    ]
+  },
+  {
+    "height": 20000000,
+    "logical_bytes_by_root": {
+      "ancient": 242149,
+      "history": 114447,
+      "chaindata": 19224,
+      "state-snapshots": 92492904
+    },
+    "read_syscalls": 2143,
+    "largest_files": [
+      [
+        "state-snapshots/history/system-routing-1-3006279261-a15563aa10624efaeb51108c52130e719ca75d9543bef713fc9bcfd4eebd67de.route",
+        66948766
+      ],
+      [
+        "state-snapshots/history/account-gap-ablation.route",
+        1556647
+      ],
+      [
+        "state-snapshots/history/small-system-routing-1-4063356397-9ae3099faf7ab650b2bf96f65baff68499b9d3ddb98f94cb3bd0ece9e5170351.route",
+        1093070
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1026891439-1026998555-8ef841ca525510b5.seg",
+        514241
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1027078693-1027178864-e7839ac9f135f9fd.seg",
+        425444
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1549102736-1549235501-16a375938bc0b4ad.seg",
+        411486
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1027263276-1027342343-b60ee6918d0557d8.seg",
+        286828
+      ],
+      [
+        "state-snapshots/history/state-domain-change-1031552977-1031684539-7bb6e49c795156d3.seg",
+        277913
+      ]
+    ]
+  }
+]

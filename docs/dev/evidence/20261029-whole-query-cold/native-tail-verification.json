@@ -1,0 +1,107 @@
+{
+  "complete": true,
+  "archive_bytes": 3080342,
+  "archive_sha256": "c545676916b6ddc54b4d62bc3d5c6c85a8f2244a630d503dd0648c57475ff4f3",
+  "ablation": true,
+  "source": "04ca0b073fbdaecfb9f10f8341e9075d073b0808",
+  "binary_sha256": {
+    "span-only": "a691ab1bbea11a280d4afa38a5930234f18df81e985db2271ac580a6a5b0b374",
+    "candidate": "1b5fc51412930f8c3949398fb885c19977a373ca06f02c9f094fd47a63ad50df"
+  },
+  "accepted_first_requests": 8,
+  "total_http_requests": 24,
+  "all_returns_match": true,
+  "all_dispatch_file_pages_zero": true,
+  "private_file_bytes": 26535399937,
+  "files_by_database": {
+    "ancient": 8,
+    "chaindata": 18,
+    "history": 279,
+    "state-snapshots": 1281
+  },
+  "constructor_only_file_count": 8274,
+  "scope": "full HTTP actual read paths over four databases; new process; file pages zero at dispatch; normal startup/application caches retained; no cold-device-cache claim",
+  "groups": [
+    {
+      "version": "candidate",
+      "height": 9000000,
+      "first_seconds": [
+        2.771547496318817
+      ],
+      "repeat_seconds": [
+        0.9108291640877724
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 10000000,
+      "first_seconds": [
+        2.7435573115944862
+      ],
+      "repeat_seconds": [
+        0.8948664218187332
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 15000000,
+      "first_seconds": [
+        2.7324433997273445
+      ],
+      "repeat_seconds": [
+        0.837699644267559
+      ]
+    },
+    {
+      "version": "candidate",
+      "height": 20000000,
+      "first_seconds": [
+        3.0169320330023766
+      ],
+      "repeat_seconds": [
+        0.8575594052672386
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 9000000,
+      "first_seconds": [
+        3.0595069974660873
+      ],
+      "repeat_seconds": [
+        0.6436177641153336
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 10000000,
+      "first_seconds": [
+        3.0499001145362854
+      ],
+      "repeat_seconds": [
+        0.6665546074509621
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 15000000,
+      "first_seconds": [
+        2.802539438009262
+      ],
+      "repeat_seconds": [
+        0.6607192233204842
+      ]
+    },
+    {
+      "version": "span-only",
+      "height": 20000000,
+      "first_seconds": [
+        2.9861663207411766
+      ],
+      "repeat_seconds": [
+        0.7293371558189392
+      ]
+    }
+  ],
+  "tail_blocks": 256
+}

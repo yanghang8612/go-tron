@@ -141,3 +141,17 @@ func TestQueryFilterRangePartialAndInvalidScansDoNotPublish(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryFilterRangeCancellationWhilePublishingDoesNotEscape(t *testing.T) {
+	v := &stateHistoryQueryTailView{}
+	ctx, cancel := context.WithCancel(context.Background())
+	v.mu.Lock()
+	started, done := make(chan struct{}), make(chan error, 1)
+	go func() { close(started); done <- v.publishFilterRange(ctx, newHistoryTailFilterRange(1, 2)) }()
+	<-started
+	cancel()
+	v.mu.Unlock()
+	if err := <-done; err != context.Canceled || v.filterRange != nil {
+		t.Fatal("canceled publication escaped", err)
+	}
+}

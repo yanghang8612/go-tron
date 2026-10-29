@@ -1,0 +1,15 @@
+{
+  "built": 0,
+  "commitment_head_unchanged": true,
+  "complete": true,
+  "cpu_seconds": 0.008972999999969034,
+  "frontier_unchanged": true,
+  "head": 45836827,
+  "head_tx": 4240407293,
+  "indexed": 45836827,
+  "private_memtables_flushed": true,
+  "root": "4bb19b7a938ba6c865820ea86f5239235172f84923c350b04c4b0eb75743b627",
+  "seconds": 0.024667043,
+  "tiny_or_missing": 0,
+  "value_bytes": 0
+}

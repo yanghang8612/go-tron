@@ -1,0 +1,12 @@
+{
+  "product_commit": "87260ebc2e6c5c6fe26f2f65972b75af4744f179",
+  "rawdb_package": "pass 26.696 s",
+  "focused_race": "pass 3.897 s",
+  "related_state": "pass",
+  "related_snapshots": "pass",
+  "related_core": "no matching tests; native full HTTP required",
+  "vet": "pass",
+  "full_MuHash_repeated": false,
+  "production_deployment": false,
+  "production_restart": false
+}
