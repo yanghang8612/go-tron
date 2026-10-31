@@ -459,3 +459,151 @@ func TestFrozenDemandPublicMaterializerDependencyReplay(t *testing.T) {
 		})
 	}
 }
+
+// A preloaded protobuf has existing upstream visibility after deletion. Keep
+// that case separate: only the independent point cache is changed here.
+func TestFrozenDemandDeletedVisibilityBoundaries(t *testing.T) {
+	fixture := func(t *testing.T, materialized bool) (*StateDB, tcommon.Address) {
+		t.Helper()
+		s := newTestStateDB(t)
+		addr := testAddr(0xe9)
+		s.CreateAccount(addr, corepb.AccountType_Normal)
+		s.FreezeV1Bandwidth(addr, 11, 100)
+		root, err := s.Commit()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err = New(root, s.db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 11 {
+			t.Fatal(got)
+		}
+		if materialized {
+			if n, err := s.GetFreezeV1BandwidthCount(addr); err != nil || n != 1 {
+				t.Fatal(n, err)
+			}
+		}
+		return s, addr
+	}
+	for _, materialized := range []bool{false, true} {
+		for _, consumer := range []string{"count", "balance_expire", "legacy_power"} {
+			t.Run(fmt.Sprintf("materialized_%t/%s", materialized, consumer), func(t *testing.T) {
+				s, addr := fixture(t, materialized)
+				mark := s.Snapshot()
+				s.DeleteAccount(addr)
+				obj := s.getStateObject(addr)
+				before := *obj.accountFrozenBandwidthPoints
+				// Deleted direct probes must reach the normal deleted guard and must not
+				// fill absence atop the old present mask or expose the old physical row.
+				var rec TransactionAccessRecorder
+				rec.Reset(4)
+				s.SetTransactionAccessRecorder(&rec)
+				if _, exists, err := s.accountFrozenBandwidthRowAt(obj, 0); err != nil || exists {
+					t.Fatal("deleted point visible", exists, err)
+				}
+				s.SetTransactionAccessRecorder(nil)
+				if *obj.accountFrozenBandwidthPoints != before {
+					t.Fatal("deleted probe populated point cache")
+				}
+				required := map[TransactionAccessKey]bool{
+					{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldExistence}:                                               false,
+					{Kind: TransactionAccessAccountKVGeneration, Address: addr}:                                                                                        false,
+					{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: kvdomains.AccountFrozenBandwidthAux, LogicalKey: string(accountFrozenBandwidthKey(0))}: false,
+				}
+				for _, read := range rec.CaptureReadSet().Reads {
+					if _, ok := required[read.Key]; ok {
+						required[read.Key] = true
+					}
+				}
+				for key, found := range required {
+					if !found {
+						t.Fatalf("deleted point omitted dependency %+v", key)
+					}
+				}
+				copy, err := s.Copy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, view := range []*StateDB{s, copy} {
+					switch consumer {
+					case "count":
+						want := 0
+						if materialized {
+							want = 1
+						}
+						n, err := view.GetFreezeV1BandwidthCount(addr)
+						if err != nil || n != want {
+							t.Fatalf("deleted count=%d err=%v want=%d", n, err, want)
+						}
+					case "balance_expire":
+						wantAmount, wantExpiry := int64(0), int64(0)
+						if materialized {
+							wantAmount, wantExpiry = 11, 100
+						}
+						amount, expiry := view.GetFreezeV1BalanceAndExpire(addr, 0)
+						if amount != wantAmount || expiry != wantExpiry {
+							t.Fatalf("deleted balance/expiry=%d/%d want=%d/%d", amount, expiry, wantAmount, wantExpiry)
+						}
+					case "legacy_power":
+						if got := view.GetLegacyTronPower(addr); got != 0 {
+							t.Fatalf("deleted legacy power=%d", got)
+						}
+					}
+				}
+				s.RevertToSnapshot(mark)
+				if got := s.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 11 {
+					t.Fatalf("delete revert amount=%d", got)
+				}
+				oldGeneration := s.getStateObject(addr).accountKVGeneration
+				s.DeleteAccount(addr)
+				s.CreateAccount(addr, corepb.AccountType_Normal)
+				if s.getStateObject(addr).accountKVGeneration <= oldGeneration {
+					t.Fatal("recreation did not advance generation")
+				}
+				if n, err := s.GetFreezeV1BandwidthCount(addr); err != nil || n != 0 {
+					t.Fatal("recreate retained old point", n, err)
+				}
+				s.FreezeV1Bandwidth(addr, 33, 200)
+				if got := s.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 33 {
+					t.Fatal(got)
+				}
+			})
+		}
+	}
+	for _, boundary := range []string{"transaction_finalize", "commit_finalize"} {
+		t.Run(boundary, func(t *testing.T) {
+			s, addr := fixture(t, false)
+			mark := s.Snapshot()
+			s.SelfDestruct(addr)
+			// SELFDESTRUCT is visible until transaction/commit finalization, exactly as
+			// upstream's generic account-KV reader (which checks deleted only).
+			if got := s.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 11 {
+				t.Fatalf("pre-finalize selfdestruct amount=%d", got)
+			}
+			if boundary == "transaction_finalize" {
+				s.FinalizeTransaction()
+				if n, err := s.GetFreezeV1BandwidthCount(addr); err != nil || n != 0 {
+					t.Fatal("finalize retained point", n, err)
+				}
+				s.RevertToSnapshot(mark)
+				if got := s.FrozenV1ResourceAmount(addr, corepb.ResourceCode_BANDWIDTH); got != 11 {
+					t.Fatal("finalize revert lost row", got)
+				}
+			} else {
+				if _, err := s.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				if obj := s.getStateObject(addr); obj != nil {
+					if _, exists, err := s.accountFrozenBandwidthRowAt(obj, 0); err != nil || exists {
+						t.Fatal("commit-finalized point visible", exists, err)
+					}
+				}
+				if n, err := s.GetFreezeV1BandwidthCount(addr); err != nil || n != 0 {
+					t.Fatal("commit finalize retained point", n, err)
+				}
+			}
+		})
+	}
+}

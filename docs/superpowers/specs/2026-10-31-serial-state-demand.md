@@ -25,7 +25,11 @@ It never asserts prefix completeness. Existing invalidation clears both the
 point cache and materialization; installing equivalent materialization leaves
 the independent point results intact. Copies own separate cache containers.
 Generation is checked, errors are not cached and active transaction-versioned
-readers bypass point caching. Reset, generic Set/Delete, journal/revert,
+readers bypass point caching. Deleted objects bypass both lookup and population
+and continue through the ordinary account-KV deletion guard. Merely marking an
+object self-destructed keeps its prior visibility until finalization. Existing
+preloaded protobuf materializer behavior after deletion is preserved; this
+change fixes only independent point results bypassing the ordinary reader. Reset, generic Set/Delete, journal/revert,
 recreation and object reuse retain invalidation boundaries.
 
 Materialization provenance is explicit: canonical-only, compatibility-fast or
@@ -65,3 +69,8 @@ commit/reopen/reset/recreate and database close; delegation additionally compare
 all durable bytes including temporal history and exercises both TVM float orders
 and MergeUsageToInheritor. Fixtures are deterministic synthetic state, not a
 mainnet replay or an SSD-throughput claim.
+
+Deletion-boundary differential coverage separately exercises point-only and
+already-materialized accounts, direct/public probes, legacy voting power, copied
+deleted objects, snapshot/delete/query/revert, self-destruct visibility before
+and after transaction finalization, commit finalization and a recreated generation.

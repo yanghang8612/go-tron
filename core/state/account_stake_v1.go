@@ -245,7 +245,11 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 	key := s.accountUint32Key(index)
 	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
-	if index < 2 && s.transactionVersionedReader == nil && obj.accountFrozenBandwidthPoints != nil && obj.accountFrozenBandwidthPoints.generation == obj.accountKVGeneration {
+	// Deleted objects retain historical cache containers until revert/eviction.
+	// The generic reader makes that incarnation absent; neither a point hit nor
+	// a cached miss may bypass or overwrite its deletion boundary.
+	cacheable := index < 2 && !obj.deleted && s.transactionVersionedReader == nil
+	if cacheable && obj.accountFrozenBandwidthPoints != nil && obj.accountFrozenBandwidthPoints.generation == obj.accountKVGeneration {
 		c := obj.accountFrozenBandwidthPoints
 		mask := uint8(1 << index)
 		if c.loaded&mask != 0 {
@@ -262,7 +266,7 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 	}
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
-		if err == nil && index < 2 && s.transactionVersionedReader == nil {
+		if err == nil && cacheable {
 			if obj.accountFrozenBandwidthPoints == nil || obj.accountFrozenBandwidthPoints.generation != obj.accountKVGeneration {
 				obj.accountFrozenBandwidthPoints = &accountFrozenBandwidthPointCache{generation: obj.accountKVGeneration}
 			}
@@ -274,7 +278,7 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 	if err != nil {
 		return accountFrozenBandwidthRow{}, false, err
 	}
-	if index < 2 && s.transactionVersionedReader == nil {
+	if cacheable {
 		if obj.accountFrozenBandwidthPoints == nil || obj.accountFrozenBandwidthPoints.generation != obj.accountKVGeneration {
 			obj.accountFrozenBandwidthPoints = &accountFrozenBandwidthPointCache{generation: obj.accountKVGeneration}
 		}

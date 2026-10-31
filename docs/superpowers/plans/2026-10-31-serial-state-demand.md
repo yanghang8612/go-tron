@@ -38,3 +38,27 @@ that limitation; they are not pre-edit exact-content proof.
    No push/deploy/restart until final GO. After GO use ordinary master FF push,
    current deployment lock/config/reader guards and normal release flow; measure
    sync throughput, state cold backlog and archive/freezer backlog together.
+
+
+## Second candidate validation boundary
+
+Candidate `6991ec78cf19fff5c7693ef6263facf5cff3ee0f` is not released: a
+public-API differential test found point-only warm -> DeleteAccount -> frozen
+materializer returning a cached row where exact upstream returned absence.
+Its successful local component timings and full/race logs remain original v1
+evidence, not proof for the final candidate. The v1 native validation was
+intentionally stopped with `ABORTED_KNOWN_DELETED_REGRESSION`; this is neither a
+product test pass nor a spontaneous product failure. The private process group
+was proved and terminated without touching the production node.
+
+The minimal second candidate excludes deleted objects from both point-cache
+lookup and population while retaining the existing generic reader/dependencies.
+After related local correctness/race passes, freeze new source and an independent
+native v2 plan for Astra review. Keep the SAME three lifecycle fixture files,
+16 workloads, five alternating rounds, one-second timing and thresholds. Reuse
+the v1 private Go build cache only with the SAME Go binary, compiler, flags and
+native archive; Go validates action IDs. Retain every v1 artifact. Final exact
+v2 Linux full Sapling, related race, clean ELF metadata and all 160 benchmark
+records are mandatory. The prior lengthy Mac full run is not relabeled v2;
+Linux full validation covers the final source without another redundant Mac
+full run. No push/deploy until final exact-source release GO.
