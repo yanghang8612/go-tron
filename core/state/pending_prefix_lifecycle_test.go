@@ -150,9 +150,11 @@ func BenchmarkPendingPrefixLifecycle(b *testing.B) {
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
+			cpuStart := frozenDemandCPU()
 			for i := 0; i < b.N; i++ {
 				pendingPrefixLifecycleSink = pendingPrefixLifecycle(b, disk, rows, shape.queries)
 			}
+			b.ReportMetric(float64(frozenDemandCPU()-cpuStart)/float64(b.N), "cpu-ns/op")
 		})
 	}
 }

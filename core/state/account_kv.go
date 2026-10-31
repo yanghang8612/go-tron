@@ -1117,7 +1117,10 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
+		// entries owns independent values, and this one-shot merge is never reused.
+		// Transfer that ownership to the callback instead of copying every value
+		// for a second time after the eager durable read/error barrier.
+		cont, err := fn([]byte(key), entries[key])
 		if err != nil {
 			return err
 		}
@@ -2258,6 +2261,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	clearAccountPermissionCaches(obj)
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
+	clearAccountFrozenBandwidthCache(obj)
 	obj.accountKVGenerationDirty = true
 	obj.markDirty()
 	return nil

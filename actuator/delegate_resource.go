@@ -73,8 +73,8 @@ func (a *DelegateResourceActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(receiverAddr) {
 		return errors.New("receiver account does not exist")
 	}
-	receiver := ctx.State.GetAccount(receiverAddr)
-	if receiver != nil && receiver.Type() == corepb.AccountType_Contract {
+	receiverType, receiverExists := ctx.State.GetAccountType(receiverAddr)
+	if receiverExists && receiverType == corepb.AccountType_Contract {
 		return errors.New("Do not allow delegate resources to contract addresses")
 	}
 	available := delegation.AvailableFrozenV2ForDelegation(ctx.State, ctx.DynProps, ownerAddr, c.Resource, ctx.ResourceTime())

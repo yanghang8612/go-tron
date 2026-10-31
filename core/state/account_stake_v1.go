@@ -34,6 +34,34 @@ type accountFrozenBandwidthRow struct {
 	entry *corepb.Account_Frozen
 }
 
+// Only two compatibility point probes are retained. A present value owns its
+// unknown-field bytes as an immutable string; each reader receives a fresh
+// protobuf, independent of the mutable Account.Proto().Frozen materialization.
+// No cache entry asserts that a prefix is complete or that index >= 2 is absent.
+const (
+	accountFrozenBandwidthCanonical uint8 = iota + 1
+	accountFrozenBandwidthFast
+	accountFrozenBandwidthComplete
+)
+
+type accountFrozenBandwidthPoint struct {
+	balance, expiry int64
+	unknown         string
+}
+type accountFrozenBandwidthPointCache struct {
+	rows           [2]accountFrozenBandwidthPoint
+	loaded, exists uint8
+	generation     uint64
+}
+
+func cloneAccountFrozenBandwidthPoints(c *accountFrozenBandwidthPointCache) *accountFrozenBandwidthPointCache {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	return &cp
+}
+
 func accountFrozenBandwidthKey(index uint32) []byte {
 	var key [4]byte
 	binary.BigEndian.PutUint32(key[:], index)
@@ -83,6 +111,13 @@ func clearAccountStakeV1Proto(pb *corepb.Account) {
 }
 
 func clearAccountFrozenBandwidthCache(obj *stateObject) {
+	if obj != nil {
+		obj.accountFrozenBandwidthPoints = nil
+	}
+	clearAccountFrozenBandwidthMaterialization(obj)
+}
+
+func clearAccountFrozenBandwidthMaterialization(obj *stateObject) {
 	if obj == nil {
 		return
 	}
@@ -99,13 +134,14 @@ func clearAccountFrozenBandwidthCache(obj *stateObject) {
 	}
 	obj.accountFrozenBandwidthCanonicalPooled = false
 	obj.accountFrozenBandwidthLoaded = false
+	obj.accountFrozenBandwidthMode = 0
 }
 
 func cacheAccountFrozenBandwidth(obj *stateObject, entries []*corepb.Account_Frozen) {
 	if obj == nil || obj.account == nil {
 		return
 	}
-	clearAccountFrozenBandwidthCache(obj)
+	clearAccountFrozenBandwidthMaterialization(obj)
 	pb := obj.account.Proto()
 	for _, entry := range entries {
 		if entry != nil {
@@ -113,6 +149,7 @@ func cacheAccountFrozenBandwidth(obj *stateObject, entries []*corepb.Account_Fro
 		}
 	}
 	obj.accountFrozenBandwidthLoaded = true
+	obj.accountFrozenBandwidthMode = accountFrozenBandwidthComplete
 }
 
 // cacheAccountFrozenBandwidthOwned installs entries decoded exclusively for
@@ -124,9 +161,10 @@ func cacheAccountFrozenBandwidthOwned(obj *stateObject, entries []*corepb.Accoun
 	if obj == nil || obj.account == nil {
 		return
 	}
-	clearAccountFrozenBandwidthCache(obj)
+	clearAccountFrozenBandwidthMaterialization(obj)
 	obj.account.Proto().Frozen = entries
 	obj.accountFrozenBandwidthLoaded = true
+	obj.accountFrozenBandwidthMode = accountFrozenBandwidthComplete
 }
 
 // cacheAccountFrozenBandwidthCanonicalOwned is the zero-allocation ownership
@@ -136,13 +174,14 @@ func cacheAccountFrozenBandwidthCanonicalOwned(obj *stateObject, entry *corepb.A
 	if obj == nil || obj.account == nil {
 		return
 	}
-	clearAccountFrozenBandwidthCache(obj)
+	clearAccountFrozenBandwidthMaterialization(obj)
 	slot := accountFrozenBandwidthCanonicalPool.Get().(*accountFrozenBandwidthCanonicalSlot)
 	slot[0] = entry
 	slot[1] = accountFrozenBandwidthCanonicalMarker
 	obj.account.Proto().Frozen = slot[:1:2]
 	obj.accountFrozenBandwidthCanonicalPooled = true
 	obj.accountFrozenBandwidthLoaded = true
+	obj.accountFrozenBandwidthMode = accountFrozenBandwidthCanonical
 }
 
 func cacheAccountTronPower(obj *stateObject, entry *corepb.Account_Frozen) {
@@ -204,13 +243,45 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 		}
 	}()
 	key := s.accountUint32Key(index)
+	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
+	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
+	if index < 2 && s.transactionVersionedReader == nil && obj.accountFrozenBandwidthPoints != nil && obj.accountFrozenBandwidthPoints.generation == obj.accountKVGeneration {
+		c := obj.accountFrozenBandwidthPoints
+		mask := uint8(1 << index)
+		if c.loaded&mask != 0 {
+			if c.exists&mask == 0 {
+				return accountFrozenBandwidthRow{}, false, nil
+			}
+			v := c.rows[index]
+			entry := &corepb.Account_Frozen{FrozenBalance: v.balance, ExpireTime: v.expiry}
+			if len(v.unknown) != 0 {
+				entry.ProtoReflect().SetUnknown([]byte(v.unknown))
+			}
+			return accountFrozenBandwidthRow{index: index, entry: entry}, true, nil
+		}
+	}
 	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
+		if err == nil && index < 2 && s.transactionVersionedReader == nil {
+			if obj.accountFrozenBandwidthPoints == nil || obj.accountFrozenBandwidthPoints.generation != obj.accountKVGeneration {
+				obj.accountFrozenBandwidthPoints = &accountFrozenBandwidthPointCache{generation: obj.accountKVGeneration}
+			}
+			obj.accountFrozenBandwidthPoints.loaded |= 1 << index
+		}
 		return accountFrozenBandwidthRow{}, exists, err
 	}
 	entry, err := decodeAccountFrozenBandwidthEntry(key, value)
 	if err != nil {
 		return accountFrozenBandwidthRow{}, false, err
+	}
+	if index < 2 && s.transactionVersionedReader == nil {
+		if obj.accountFrozenBandwidthPoints == nil || obj.accountFrozenBandwidthPoints.generation != obj.accountKVGeneration {
+			obj.accountFrozenBandwidthPoints = &accountFrozenBandwidthPointCache{generation: obj.accountKVGeneration}
+		}
+		c := obj.accountFrozenBandwidthPoints
+		c.rows[index] = accountFrozenBandwidthPoint{entry.FrozenBalance, entry.ExpireTime, string(entry.ProtoReflect().GetUnknown())}
+		c.loaded |= 1 << index
+		c.exists |= 1 << index
 	}
 	// Point readers need only the ordinal and decoded value. Iterator readers
 	// retain an owned physical key for later delete/replace operations.
@@ -222,21 +293,27 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 // migrated/synthetic account contains multiple or sparse rows, fall back to the
 // generic iterator so no stored state is lost.
 func (s *StateDB) accountFrozenBandwidthFastRows(obj *stateObject) ([]accountFrozenBandwidthRow, error) {
+	rows, _, err := s.accountFrozenBandwidthFastRowsWithShape(obj)
+	return rows, err
+}
+
+func (s *StateDB) accountFrozenBandwidthFastRowsWithShape(obj *stateObject) ([]accountFrozenBandwidthRow, bool, error) {
 	first, firstExists, err := s.accountFrozenBandwidthRowAt(obj, 0)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	_, secondExists, err := s.accountFrozenBandwidthRowAt(obj, 1)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if secondExists {
-		return s.accountFrozenBandwidthRows(obj)
+		rows, err := s.accountFrozenBandwidthRows(obj)
+		return rows, true, err
 	}
 	if !firstExists {
-		return nil, nil
+		return nil, false, nil
 	}
-	return []accountFrozenBandwidthRow{first}, nil
+	return []accountFrozenBandwidthRow{first}, false, nil
 }
 
 func (s *StateDB) accountTronPower(obj *stateObject) (_ *corepb.Account_Frozen, _ bool, err error) {
@@ -260,7 +337,11 @@ func (s *StateDB) accountTronPower(obj *stateObject) (_ *corepb.Account_Frozen, 
 }
 
 func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) (err error) {
-	if obj == nil || obj.account == nil || obj.accountFrozenBandwidthLoaded {
+	if obj == nil || obj.account == nil {
+		return nil
+	}
+	if obj.accountFrozenBandwidthLoaded && obj.accountFrozenBandwidthMode == accountFrozenBandwidthComplete {
+		s.recordAccountKVPrefixRead(obj.address)
 		return nil
 	}
 	defer func() {
@@ -278,6 +359,7 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) (err error
 		entries = append(entries, row.entry)
 	}
 	cacheAccountFrozenBandwidthOwned(obj, entries)
+	obj.accountFrozenBandwidthMode = accountFrozenBandwidthComplete
 	return nil
 }
 
@@ -297,12 +379,16 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) (err e
 	}()
 	// Reproduce the two compatibility point probes on cache hits. The cache is
 	// block-scoped while transaction access capture is transaction-scoped.
+	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(1))
-	if obj.accountFrozenBandwidthLoaded {
+	if obj.accountFrozenBandwidthLoaded && obj.accountFrozenBandwidthMode != accountFrozenBandwidthCanonical {
+		if obj.accountFrozenBandwidthMode == accountFrozenBandwidthComplete {
+			s.recordAccountKVPrefixRead(obj.address)
+		}
 		return nil
 	}
-	rows, err := s.accountFrozenBandwidthFastRows(obj)
+	rows, complete, err := s.accountFrozenBandwidthFastRowsWithShape(obj)
 	if err != nil {
 		clearAccountFrozenBandwidthCache(obj)
 		return err
@@ -312,6 +398,10 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) (err e
 		entries = append(entries, row.entry)
 	}
 	cacheAccountFrozenBandwidthOwned(obj, entries)
+	obj.accountFrozenBandwidthMode = accountFrozenBandwidthFast
+	if complete {
+		obj.accountFrozenBandwidthMode = accountFrozenBandwidthComplete
+	}
 	return nil
 }
 
@@ -331,8 +421,12 @@ func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) (
 	}()
 	// The materialized value can come from an earlier transaction. Keep the
 	// current transaction dependent on the canonical physical row as well.
+	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
 	if obj.accountFrozenBandwidthLoaded {
+		if obj.accountFrozenBandwidthMode == accountFrozenBandwidthComplete {
+			s.recordAccountKVPrefixRead(obj.address)
+		}
 		return nil
 	}
 	row, exists, err := s.accountFrozenBandwidthRowAt(obj, 0)
@@ -342,6 +436,7 @@ func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) (
 	}
 	if !exists {
 		cacheAccountFrozenBandwidthOwned(obj, nil)
+		obj.accountFrozenBandwidthMode = accountFrozenBandwidthCanonical
 		return nil
 	}
 	cacheAccountFrozenBandwidthCanonicalOwned(obj, row.entry)

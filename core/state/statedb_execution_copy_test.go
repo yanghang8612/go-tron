@@ -28,6 +28,7 @@ func TestStateObjectCopyFieldPolicy(t *testing.T) {
 		"witnessPermissionSignerLoaded": "copy", "accountVotesLoaded": "copy",
 		"accountStakeV2Loaded": "copy", "accountFrozenSupplyLoaded": "copy",
 		"accountResourceLoaded": "copy", "accountFrozenBandwidthLoaded": "copy",
+		"accountFrozenBandwidthMode": "copy", "accountFrozenBandwidthPoints": "clone-immutable-values",
 		"accountTronPowerLoaded": "copy", "trc10PointDomain": "copy",
 		"trc10PointKey": "copy-immutable", "trc10PointValue": "copy",
 		"trc10PointExists": "copy", "trc10PointLoaded": "copy",

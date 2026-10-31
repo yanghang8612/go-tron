@@ -1180,8 +1180,34 @@ func (s *StateDB) AccountReference(addr tcommon.Address) *types.Account {
 // unlike AccountReference this records a typed resource dependency rather than
 // consuming the whole Account envelope version.
 func (s *StateDB) AccountResourceReference(addr tcommon.Address) *types.Account {
+	s.recordAccountFieldRead(addr, TransactionAccountFieldExistence)
 	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted {
+		return nil
+	}
+	if err := s.materializeAccountResource(obj); err != nil {
+		return nil
+	}
+	return obj.account
+}
+
+// AccountDelegationResourceReference is the read-only resource projection used
+// by delegation's balance/usage calculations. BANDWIDTH deliberately loads the
+// complete V1 domain: unlike the canonical resource-charge fast path, this
+// replaces a full GetAccount and must retain arbitrary sparse physical rows.
+// V2 balances remain point-addressable via GetFrozenV2Amount.
+func (s *StateDB) AccountDelegationResourceReference(addr tcommon.Address, resource corepb.ResourceCode) *types.Account {
+	s.recordAccountFieldRead(addr, TransactionAccountFieldExistence)
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	if resource == corepb.ResourceCode_BANDWIDTH {
+		if err := s.materializeAccountFrozenBandwidth(obj); err != nil {
+			return nil
+		}
+	}
+	if _, _, err := s.accountFrozenV2Amount(obj, resource); err != nil {
 		return nil
 	}
 	if err := s.materializeAccountResource(obj); err != nil {
@@ -3783,6 +3809,8 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		accountFrozenSupplyLoaded:     obj.accountFrozenSupplyLoaded,
 		accountResourceLoaded:         obj.accountResourceLoaded,
 		accountFrozenBandwidthLoaded:  obj.accountFrozenBandwidthLoaded,
+		accountFrozenBandwidthMode:    obj.accountFrozenBandwidthMode,
+		accountFrozenBandwidthPoints:  cloneAccountFrozenBandwidthPoints(obj.accountFrozenBandwidthPoints),
 		accountTronPowerLoaded:        obj.accountTronPowerLoaded,
 		trc10PointDomain:              obj.trc10PointDomain,
 		trc10PointKey:                 obj.trc10PointKey,

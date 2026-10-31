@@ -16,7 +16,8 @@ import (
 // recovery window (raw + optimized) for a resource.
 func resState(statedb *state.StateDB, acct *types.Account, addr tcommon.Address, resource corepb.ResourceCode) (usage, lastTime, rawWindow int64, optimized bool) {
 	if resource == corepb.ResourceCode_BANDWIDTH {
-		return statedb.GetNetUsage(addr), statedb.GetLatestConsumeTime(addr), acct.RawNetWindowSize(), acct.NetWindowOptimized()
+		raw, optimized := statedb.GetNetWindow(addr)
+		return statedb.GetNetUsage(addr), statedb.GetLatestConsumeTime(addr), raw, optimized
 	}
 	return statedb.GetEnergyUsage(addr), statedb.GetLatestConsumeTimeForEnergy(addr), acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized()
 }
@@ -50,7 +51,7 @@ func writeResState(statedb *state.StateDB, addr tcommon.Address, resource corepb
 // committed transferUsage — so the shared helper must use the form matching its
 // caller's java path.
 func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperties, receiver tcommon.Address, resource corepb.ResourceCode, unDelegateBalance, now int64, tvmForm bool) (transfer, recvRawWindow int64, recvOptimized bool) {
-	acct := statedb.GetAccount(receiver)
+	acct := statedb.AccountDelegationResourceReference(receiver, resource)
 	if acct == nil {
 		return 0, 0, false
 	}
@@ -62,12 +63,12 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 	if resource == corepb.ResourceCode_BANDWIDTH {
 		totalLimit = dp.TotalNetLimit()
 		totalWeight = dp.TotalNetWeight()
-		totalFrozen = totalBandwidthFrozen(acct)
+		totalFrozen = acct.TotalFrozenBandwidth() + acct.AcquiredDelegatedFrozenBandwidth() + statedb.GetFrozenV2Amount(receiver, resource) + acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 	} else {
 		totalLimit = dp.TotalEnergyCurrentLimit()
 		totalWeight = dp.TotalEnergyWeight()
-		totalFrozen = totalEnergyFrozen(acct)
+		totalFrozen = acct.FrozenEnergyAmount() + acct.AcquiredDelegatedFrozenEnergy() + statedb.GetFrozenV2Amount(receiver, resource) + acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 	}
 
@@ -108,7 +109,7 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 // callers must only invoke it when transferUsage > 0 (the selfdestruct-inheritor
 // merge calls it with the owner's full recovered usage, also > 0).
 func FoldUsageIntoOwner(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resource corepb.ResourceCode, transferUsage, recvRawWindow int64, recvOptimized bool, now int64) {
-	acct := statedb.GetAccount(owner)
+	acct := statedb.AccountResourceReference(owner)
 	if acct == nil {
 		return
 	}
@@ -139,7 +140,7 @@ func FoldUsageIntoOwner(statedb *state.StateDB, dp *state.DynamicProperties, own
 // the fold on `owner.getUsage() > 0` after the recovery, so callers that later
 // clearOwnerFreezeV2 still see the owner's consume time advanced to now.
 func MergeUsageToInheritor(statedb *state.StateDB, dp *state.DynamicProperties, owner, inheritor tcommon.Address, resource corepb.ResourceCode, now int64) {
-	acct := statedb.GetAccount(owner)
+	acct := statedb.AccountResourceReference(owner)
 	if acct == nil {
 		return
 	}
@@ -167,12 +168,12 @@ func MergeUsageToInheritor(statedb *state.StateDB, dp *state.DynamicProperties, 
 // updateUsageForDelegated/updateUsage on the owner first); validate is
 // non-persisting, so the recovered window is discarded.
 func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resource corepb.ResourceCode, now int64) int64 {
-	acct := statedb.GetAccount(owner)
+	acct := statedb.AccountDelegationResourceReference(owner, resource)
 	if acct == nil {
 		return 0
 	}
 
-	selfFrozen := acct.GetFrozenV2Amount(resource)
+	selfFrozen := statedb.GetFrozenV2Amount(owner, resource)
 	if selfFrozen <= 0 {
 		return 0
 	}
@@ -221,20 +222,4 @@ func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicPro
 // applies big.Int / harden to this product, so neither must go.
 func resourceUsageToFrozenBalance(usage, totalLimit, totalWeight int64) int64 {
 	return tcommon.JavaDoubleToInt64(float64(usage) * float64(params.TRXPrecision) * (float64(totalWeight) / float64(totalLimit)))
-}
-
-func totalBandwidthFrozen(acct *types.Account) int64 {
-	frozen := acct.TotalFrozenBandwidth()
-	frozen += acct.AcquiredDelegatedFrozenBandwidth()
-	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
-	frozen += acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
-	return frozen
-}
-
-func totalEnergyFrozen(acct *types.Account) int64 {
-	frozen := acct.FrozenEnergyAmount()
-	frozen += acct.AcquiredDelegatedFrozenEnergy()
-	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
-	frozen += acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
-	return frozen
 }
