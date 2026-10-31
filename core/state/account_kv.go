@@ -1117,10 +1117,7 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		// entries owns independent values, and this one-shot merge is never reused.
-		// Transfer that ownership to the callback instead of copying every value
-		// for a second time after the eager durable read/error barrier.
-		cont, err := fn([]byte(key), entries[key])
+		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
 		if err != nil {
 			return err
 		}

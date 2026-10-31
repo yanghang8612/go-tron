@@ -7,8 +7,9 @@ Existing dirty workspaces remain untouched. Full-content preservation manifests
 were first recorded after isolated implementation began, and explicitly document
 that limitation; they are not pre-edit exact-content proof.
 
-1. Implement consumed resource projections, independent bounded point results,
-   explicit provenance and one-shot prefix value ownership.
+1. Implement consumed resource projections, independent bounded point results
+   and explicit provenance. Keep prefix iteration identical to upstream after
+   withdrawing the ownership-transfer experiment described below.
 2. Pass adversarial tests and exact upstream oracle; retain every failed fixture
    iteration log. Freeze fixture/source/binary hashes, exact commands, environment
    and acceptance thresholds in `protocol.json` before formal timing.
@@ -62,3 +63,27 @@ v2 Linux full Sapling, related race, clean ELF metadata and all 160 benchmark
 records are mandatory. The prior lengthy Mac full run is not relabeled v2;
 Linux full validation covers the final source without another redundant Mac
 full run. No push/deploy until final exact-source release GO.
+
+## Prefix experiment withdrawn after native v2 hold
+
+Candidate `c1f72d2c6200e40e3b219f51fc637f75a860b896` passed all 64 Linux
+Sapling package tests, related race tests, exact clean ELF metadata and all
+15 lifecycle trace comparisons. Its native fixed 160-record benchmark passed
+79 of 80 strict checks. The sole miss was prefix many-groups median wall time:
+19,297,780ns baseline versus 20,338,813ns candidate (+5.3946%, limit +5%).
+Its 76,144ns excess above the boundary is within twice maximum arm MAD
+(938,368ns), so the frozen rule classifies it INCONCLUSIVE/HOLD. All five
+paired wall and CPU results were slower; no selective retry or relaxed limit
+is used to seek a pass. All original and independently sealed evidence remains.
+
+The next candidate restores the upstream callback value clone and leaves
+`iterateLatestPrefix` byte-identical to upstream. It retains the account demand
+projections, frozen point reuse, deleted-object guard and reset invalidation.
+Related full-state, four-package race and 15-trace checks precede a separately
+frozen native plan using the same pinned Go/compiler/native archive and owned
+Go cache. The exact new candidate must pass full Linux Sapling `./... -count=1`,
+related race, clean ELF metadata and all 16 shapes in five alternating rounds.
+Each new benchmark process uses a three-second duration; all original thresholds
+and the MAD/HOLD rule remain unchanged. Every prefix control remains included;
+c1f's full test results remain facts about c1f rather than proof for a different
+candidate. No source is pushed or deployed without final exact-source GO.
