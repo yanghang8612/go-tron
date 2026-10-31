@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/cockroachdb/pebble/bloom"
 	"github.com/cockroachdb/pebble/vfs"
 	"testing"
@@ -48,6 +49,11 @@ func l6FilterTestRead(t *testing.T, c *GetCursor, key, want string) {
 	}
 }
 func TestGetCursorL6FiltersPreserveVersionsMergeAndRange(t *testing.T) {
+	for _, limit := range []int{4, 8, 16} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) { runTestGetCursorL6FiltersPreserveVersionsMergeAndRange(t, limit) })
+	}
+}
+func runTestGetCursorL6FiltersPreserveVersionsMergeAndRange(t *testing.T, limit int) {
 	d, e := Open("db", l6FilterTestOptions(vfs.NewMem(), true))
 	if e != nil {
 		t.Fatal(e)
@@ -73,7 +79,7 @@ func TestGetCursorL6FiltersPreserveVersionsMergeAndRange(t *testing.T) {
 	var cursors []*GetCursor
 	for _, flag := range []bool{false, true} {
 		for _, s := range []*Snapshot{old, current} {
-			c, e := s.NewGetCursorWithOptions(GetCursorOptions{UseL6Filters: flag})
+			c, e := s.NewGetCursorWithOptions(GetCursorOptions{MaxRetainedTables: limit, UseL6Filters: flag})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -121,7 +127,7 @@ func TestGetCursorL6FiltersPreserveVersionsMergeAndRange(t *testing.T) {
 		t.Fatal(e)
 	}
 	check()
-	late, e := old.NewGetCursorWithOptions(GetCursorOptions{UseL6Filters: true})
+	late, e := old.NewGetCursorWithOptions(GetCursorOptions{MaxRetainedTables: limit, UseL6Filters: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -177,6 +183,11 @@ func TestGetCursorL6FilterOptionDoesNotLeakThroughGetPool(t *testing.T) {
 	}
 }
 func TestGetCursorL6FilterOldSSTReopen(t *testing.T) {
+	for _, limit := range []int{4, 8, 16} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) { runTestGetCursorL6FilterOldSSTReopen(t, limit) })
+	}
+}
+func runTestGetCursorL6FilterOldSSTReopen(t *testing.T, limit int) {
 	fs := vfs.NewMem()
 	d, e := Open("db", l6FilterTestOptions(fs, false))
 	if e != nil {
@@ -204,7 +215,7 @@ func TestGetCursorL6FilterOldSSTReopen(t *testing.T) {
 	}
 	s := d.NewSnapshot()
 	defer s.Close()
-	c, e := s.NewGetCursorWithOptions(GetCursorOptions{UseL6Filters: true})
+	c, e := s.NewGetCursorWithOptions(GetCursorOptions{MaxRetainedTables: limit, UseL6Filters: true})
 	if e != nil {
 		t.Fatal(e)
 	}

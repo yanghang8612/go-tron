@@ -9,6 +9,17 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
+// Prefetch can traverse all populated LSM levels within one whole-Get lease.
+// Keep commitment's default four pairs and canonical storage's separate policy.
+// Overflow backing remains lazy in Pebble and is allocated only on table five.
+func pointReadGetCursorOptions(unbounded bool) pebble.GetCursorOptions {
+	opts := pebble.GetCursorOptions{UseL6Filters: unbounded}
+	if unbounded {
+		opts.MaxRetainedTables = 8
+	}
+	return opts
+}
+
 // viewGet searches levels lazily and stops at the first MVCC-visible value.
 // A merging iterator seeks every overlapping level even when an upper table
 // already contains the answer. Keep the original snapshot sequence, prefix
@@ -29,7 +40,7 @@ func (c *pointReadCursor) viewGet(key []byte, fn func([]byte) error) (found bool
 	if c.getCursor == nil {
 		// Unbounded cursors currently serve state prefetch, whose key mix
 		// includes misses. Commitment prefixes keep the default L6 read policy.
-		c.getCursor, readErr = c.getSnapshot.NewGetCursorWithOptions(pebble.GetCursorOptions{UseL6Filters: c.unbounded})
+		c.getCursor, readErr = c.getSnapshot.NewGetCursorWithOptions(pointReadGetCursorOptions(c.unbounded))
 	}
 	if readErr == nil {
 		value, readErr = c.getCursor.Get(key)

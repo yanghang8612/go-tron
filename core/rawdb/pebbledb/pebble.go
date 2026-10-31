@@ -582,7 +582,7 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 			// State-prefetch cursors were already eager. Pin their Get readState
 			// here as well; bounded commitment cursors remain lazy.
 			var err error
-			cursor.getCursor, err = s.snapshot.NewGetCursorWithOptions(pebble.GetCursorOptions{UseL6Filters: true})
+			cursor.getCursor, err = s.snapshot.NewGetCursorWithOptions(pointReadGetCursorOptions(true))
 			if err != nil {
 				return nil, err
 			}

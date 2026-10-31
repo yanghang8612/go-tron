@@ -2283,19 +2283,69 @@ func validateEventLogIndexCompanions(manifest *Manifest) error {
 	if manifest == nil {
 		return nil
 	}
-	eventRefs := eventLogRefs(manifest)
-	indexRefs := eventLogIndexRefs(manifest)
-	// Index ranges and event ranges are sorted. Retain the earliest event that
-	// can cover the next index instead of rescanning the catalog's entire prefix
-	// for every index. An event spanning several indexes stays at the cursor.
+	var eventRows, indexRows []int
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.normalizedDataset() != SegmentDatasetEventLog {
+			continue
+		}
+		switch ref.Kind {
+		case SegmentEventLog:
+			eventRows = append(eventRows, i)
+		case SegmentEventLogIndex:
+			indexRows = append(indexRows, i)
+		}
+	}
+	less := func(a, b int) bool {
+		left, right := &manifest.Segments[a], &manifest.Segments[b]
+		if left.normalizedDataset() != right.normalizedDataset() {
+			return left.normalizedDataset() < right.normalizedDataset()
+		}
+		if left.Domain != right.Domain {
+			return left.Domain < right.Domain
+		}
+		if left.Kind != right.Kind {
+			return left.Kind < right.Kind
+		}
+		if left.FromTxNum != right.FromTxNum {
+			return left.FromTxNum < right.FromTxNum
+		}
+		if left.ToTxNum != right.ToTxNum {
+			return left.ToTxNum < right.ToTxNum
+		}
+		return left.Path < right.Path
+	}
+	sort.Slice(eventRows, func(i, j int) bool { return less(eventRows[i], eventRows[j]) })
+	sort.Slice(indexRows, func(i, j int) bool { return less(indexRows[i], indexRows[j]) })
 	start := 0
-	for _, indexRef := range indexRefs {
-		for start < len(eventRefs) && eventRefs[start].ToTxNum < indexRef.FromTxNum {
+	for _, indexRow := range indexRows {
+		indexRef := &manifest.Segments[indexRow]
+		for start < len(eventRows) && manifest.Segments[eventRows[start]].ToTxNum < indexRef.FromTxNum {
 			start++
 		}
-		if !eventLogRangeCoveredByRefs(eventRefs[start:], indexRef.FromTxNum, indexRef.ToTxNum) {
-			return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
-				indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+		covered := false
+		if indexRef.ToTxNum >= indexRef.FromTxNum {
+			next := indexRef.FromTxNum
+			for _, eventRow := range eventRows[start:] {
+				ref := &manifest.Segments[eventRow]
+				if ref.ToTxNum < next {
+					continue
+				}
+				if ref.FromTxNum > next {
+					break
+				}
+				if ref.ToTxNum >= indexRef.ToTxNum {
+					covered = true
+					break
+				}
+				if ref.ToTxNum == ^uint64(0) {
+					break
+				}
+				next = ref.ToTxNum + 1
+			}
+		}
+		if !covered {
+			return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]", indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
 		}
 	}
 	return nil

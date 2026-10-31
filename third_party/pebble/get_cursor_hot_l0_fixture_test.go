@@ -22,20 +22,34 @@ type cursorHotL0Fixture struct {
 }
 
 func makeCursorHotL0Fixture(t testing.TB, sublevels int) *cursorHotL0Fixture {
+	return makeCursorHotL0FixtureOptions(t, sublevels, nil)
+}
+
+// The optional hook is test-only: screening can count filesystem reads and
+// freeze a smaller cache without changing existing semantic fixtures.
+func makeCursorHotL0FixtureOptions(t testing.TB, sublevels int, configure func(*Options), afterBase ...func(*DB)) *cursorHotL0Fixture {
 	t.Helper()
+	f := &cursorHotL0Fixture{}
 	levels := make([]LevelOptions, numLevels)
 	for i := range levels {
 		levels[i].FilterPolicy = bloom.FilterPolicy(10)
 	}
 	cache := NewCache(128 << 20)
-	db, e := Open(t.TempDir(), &Options{Cache: cache, Levels: levels, DisableAutomaticCompactions: true, L0StopWritesThreshold: 64})
+	opts := &Options{Cache: cache, Levels: levels, DisableAutomaticCompactions: true, L0StopWritesThreshold: 64}
+	if configure != nil {
+		configure(opts)
+	}
+	db, e := Open(t.TempDir(), opts)
 	cache.Unref()
 	if e != nil {
 		t.Fatal(e)
 	}
+	f.db = db
 	t.Cleanup(func() {
-		if e := db.Close(); e != nil {
-			t.Error(e)
+		if f.db != nil {
+			if e := f.db.Close(); e != nil {
+				t.Error(e)
+			}
 		}
 	})
 	expected := make(map[string][]byte, 4096)
@@ -69,6 +83,9 @@ func makeCursorHotL0Fixture(t testing.TB, sublevels int) *cursorHotL0Fixture {
 	}
 	if db.Metrics().Levels[6].NumFiles == 0 {
 		t.Fatal("fixture requires actual L6 source")
+	}
+	for _, build := range afterBase {
+		build(db)
 	}
 	for i := 0; i < sublevels; i++ {
 		b = db.NewBatch()
@@ -130,12 +147,16 @@ func makeCursorHotL0Fixture(t testing.TB, sublevels int) *cursorHotL0Fixture {
 		keys[i] = []byte(fmt.Sprintf("%s%05d", prefix, j))
 	}
 	snap := db.NewSnapshot()
+	f.snapshot = snap
 	t.Cleanup(func() {
-		if e := snap.Close(); e != nil {
-			t.Error(e)
+		if f.snapshot != nil {
+			if e := f.snapshot.Close(); e != nil {
+				t.Error(e)
+			}
 		}
 	})
-	return &cursorHotL0Fixture{db: db, snapshot: snap, expected: expected, keys: keys, sublevels: sublevels, tables: m.Levels[0].NumFiles}
+	f.expected, f.keys, f.sublevels, f.tables = expected, keys, sublevels, m.Levels[0].NumFiles
+	return f
 }
 func checkCursorHotL0Oracle(t testing.TB, c *GetCursor, f *cursorHotL0Fixture) {
 	t.Helper()
