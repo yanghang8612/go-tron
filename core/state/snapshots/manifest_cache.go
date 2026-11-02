@@ -385,7 +385,7 @@ func manifestStringsValidUTF8(m *Manifest) bool {
 	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
 		for _, ref := range refs {
 			if !utf8.ValidString(string(ref.Dataset)) || !utf8.ValidString(string(ref.Kind)) ||
-				!utf8.ValidString(ref.Path) || !utf8.ValidString(ref.Checksum) || !utf8.ValidString(ref.LookupRoot) {
+				!utf8.ValidString(ref.Path) || !utf8.ValidString(ref.Checksum) || !utf8.ValidString(ref.SourceBlockHash) || !utf8.ValidString(ref.LookupRoot) {
 				return false
 			}
 		}
@@ -408,7 +408,7 @@ func clonePublishedManifestStrings(m *Manifest) uint64 {
 // doubles it for allocation rounding/metadata, as it does for decoded strings.
 func clonePublishedRefStrings(refs []SegmentRef) uint64 {
 	const maxBlock = 64 << 10
-	const fieldsPerRef = 5
+	const fieldsPerRef = 6
 	var slack uint64
 	field := func(index int) string {
 		ref := &refs[index/fieldsPerRef]
@@ -421,6 +421,8 @@ func clonePublishedRefStrings(refs []SegmentRef) uint64 {
 			return ref.Path
 		case 3:
 			return ref.Checksum
+		case 4:
+			return ref.SourceBlockHash
 		default:
 			return ref.LookupRoot
 		}
@@ -461,6 +463,8 @@ func clonePublishedRefStrings(refs []SegmentRef) uint64 {
 				ref.Path = value
 			case 3:
 				ref.Checksum = value
+			case 4:
+				ref.SourceBlockHash = value
 			default:
 				ref.LookupRoot = value
 			}
@@ -532,7 +536,7 @@ func manifestCacheCharge(data []byte, m *Manifest) uint64 {
 	n += uint64(cap(m.Segments)+cap(m.Retired)) * uint64(unsafe.Sizeof(SegmentRef{}))
 	for _, refs := range [][]SegmentRef{m.Segments, m.Retired} {
 		for _, ref := range refs {
-			n += uint64(len(ref.Dataset) + len(ref.Kind) + len(ref.Path) + len(ref.Checksum) + len(ref.LookupRoot))
+			n += uint64(len(ref.Dataset) + len(ref.Kind) + len(ref.Path) + len(ref.Checksum) + len(ref.SourceBlockHash) + len(ref.LookupRoot))
 		}
 	}
 	if m.Chain != nil {

@@ -112,7 +112,12 @@ func TestManifestReadOnlyRestartPublicationIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replaced := bytes.Replace(raw, []byte(`"version":4`), []byte(`"version":9`), 1)
+	version := strconv.Itoa(int(CurrentManifestVersion))
+	invalidVersion := strings.Repeat("9", len(version))
+	if invalidVersion == version {
+		invalidVersion = strings.Repeat("0", len(version))
+	}
+	replaced := bytes.Replace(raw, []byte(`"version":`+version), []byte(`"version":`+invalidVersion), 1)
 	if bytes.Equal(replaced, raw) || len(replaced) != len(raw) {
 		t.Fatal("replacement fixture did not preserve length")
 	}
