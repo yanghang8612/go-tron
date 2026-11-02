@@ -1,0 +1,15 @@
+{
+  "runtime_sources": [
+    "codec.go",
+    "main.go",
+    "io_helpers.go"
+  ],
+  "source_files": {
+    "codec.go": "2d091c620cc2fca8883e401da12c2d0e198d16f29309a8df0a68c2013e8fc51d",
+    "main.go": "f27c86cfc69381c32676f13186f998454d6defb17f15be70464726f5edc1de3c",
+    "io_helpers.go": "5ac1ffc9eb2622795a01716870e863024e2d631de00e581ade536f38504e87c8",
+    "codec_test.go": "54d04d3997cb84154e0e789cc1fc154a268462f4b54a60478619c959f4f677ab"
+  },
+  "scope": "new independent permission SELF/template probe; original research sources and production unchanged",
+  "command": "GOMAXPROCS=1 permission-probe -source /data/gtron/maintenance/chaindata-business-20261102-01/chaindata -out NEW_MAINTENANCE_OUTPUT -rows 500000 -point-ops 10000 -logical-mib-sec 128 -max-scanned-kv 10000000"
+}
