@@ -1,0 +1,12 @@
+{
+  "parent": "1b39b1f948237fc4307a888c4cc80b300be2dad3",
+  "files": {
+    "cmd/research-compact-staging/main.go": "88a917d429b1f8069dfe53e34d4b02c70ee7972d992d623fa0ec412dcf8e3899",
+    "cmd/research-metadata/main.go": "0cd9338a92869b96301b03a576c05a910ed5b956254459dc48b6a04fb768d6da",
+    "build/benchmarks/20261102-contract-storage-compact/cmd/cursor-control/codec-copy-origin.json": "afe65864b18501cfb5310434df0d3852ecf0f43627735036f1faf61d0ad7d8b8",
+    "build/benchmarks/20261102-contract-storage-compact/cmd/cursor-control/evict_other.go": "980b0a2a3641bdda7c342fbc212695fe6f061962a4e8011788b5c105accc9c3d",
+    "build/benchmarks/20261102-contract-storage-compact/cmd/cursor-control/page_copy.go": "80ed68cd5f23bcc89249467503da31b1065a5c0ee6cf6f668562a5a5f92a8001",
+    "build/benchmarks/20261102-contract-storage-compact/cmd/cursor-control/evict_linux.go": "f48b0d15b9ff7daefc232c3aa5c3dd8e9dba0c14e29a7072ce4901e6ea05fe3d",
+    "build/benchmarks/20261102-contract-storage-compact/cmd/cursor-control/main.go": "db8f1729d075aa92ee78a9b55a29988ad4a2a24fb699a59e63b56ef175f4fb00"
+  }
+}

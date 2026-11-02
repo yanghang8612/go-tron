@@ -1,0 +1,14 @@
+{
+  "page_copy.go": {
+    "copied_from": "build/benchmarks/20261102-contract-storage-compact/cmd/storage-pages/page.go",
+    "sha256": "80ed68cd5f23bcc89249467503da31b1065a5c0ee6cf6f668562a5a5f92a8001"
+  },
+  "evict_linux.go": {
+    "copied_from": "build/benchmarks/20261102-contract-storage-compact/cmd/storage-pages/evict_linux.go",
+    "sha256": "f48b0d15b9ff7daefc232c3aa5c3dd8e9dba0c14e29a7072ce4901e6ea05fe3d"
+  },
+  "evict_other.go": {
+    "copied_from": "build/benchmarks/20261102-contract-storage-compact/cmd/storage-pages/evict_other.go",
+    "sha256": "980b0a2a3641bdda7c342fbc212695fe6f061962a4e8011788b5c105accc9c3d"
+  }
+}

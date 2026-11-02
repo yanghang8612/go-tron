@@ -165,11 +165,22 @@ func main() {
 	if e != nil {
 		panic(e)
 	}
+	// Replayed WAL flush/obsolete-file cleanup can unlink files while a live
+	// filesystem walk is in progress. Establish the intermediate disk baseline
+	// only after closing, then reopen for the single manual compaction.
+	if e = db.Close(); e != nil {
+		panic(e)
+	}
+	db = nil
 	afterOpen, e := allocation(dst)
 	if e != nil {
 		panic(e)
 	}
 	afterOpenAllocated, e := allocated(dst)
+	if e != nil {
+		panic(e)
+	}
+	db, e = pebble.Open(dst, &pebble.Options{Cache: cache, DisableAutomaticCompactions: true, Levels: levels, LBaseMaxBytes: 1 << 30, MemTableSize: 64 << 20, MemTableStopWritesThreshold: 8, MaxConcurrentCompactions: func() int { return 1 }})
 	if e != nil {
 		panic(e)
 	}
