@@ -1,0 +1,252 @@
+{
+  "census": {
+    "summary_arithmetic_verified": true,
+    "census_kv_rows": 1266853461,
+    "generation_authority": "present account_latest envelope AccountKVGeneration is authoritative for StateDB.GetAccountKV; kv_generation is a recreation/deletion watermark checked separately. Missing generation table with account generation zero is the implicit-zero case; absent accounts have no active KV state and are never classified current.",
+    "generation_consistency": {
+      "account_generation_table_mismatches": 0,
+      "nonzero_account_generation_without_table_row": 0,
+      "zero_account_generation_without_table_row": 172929438,
+      "generation_rows_without_account": 964014,
+      "kv_owners_without_account": 175764
+    },
+    "priority_reward_matches_complete_domain_export": true,
+    "all_owner_fanout_stream_verified": "not present locally",
+    "contract_owner_stream_and_top100_scores_verified": "not present locally",
+    "domain_business_table": [
+      {
+        "name": "AccountPermissionAux",
+        "rows": 338943975,
+        "physical_key_value_bytes": 33393922660,
+        "logical_key_value_bytes": 21530883535,
+        "inactive_generation_or_owner_rows": 362784,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "ContractStorage",
+        "rows": 422867214,
+        "physical_key_value_bytes": 32556739405,
+        "logical_key_value_bytes": 27063501696,
+        "inactive_generation_or_owner_rows": 2520926,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountAssetV2",
+        "rows": 360435453,
+        "physical_key_value_bytes": 16122587824,
+        "logical_key_value_bytes": 5406531795,
+        "inactive_generation_or_owner_rows": 23917,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemReward",
+        "rows": 19724230,
+        "physical_key_value_bytes": 10374586557,
+        "logical_key_value_bytes": 9714137452,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountResourceAux",
+        "rows": 111382602,
+        "physical_key_value_bytes": 6630981853,
+        "logical_key_value_bytes": 2732590783,
+        "inactive_generation_or_owner_rows": 6,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "ContractMetadata",
+        "rows": 1605763,
+        "physical_key_value_bytes": 2539505460,
+        "logical_key_value_bytes": 2483303755,
+        "inactive_generation_or_owner_rows": 1280,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "ContractABI",
+        "rows": 644324,
+        "physical_key_value_bytes": 663629027,
+        "logical_key_value_bytes": 641079294,
+        "inactive_generation_or_owner_rows": 1258,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemDelegation",
+        "rows": 3731255,
+        "physical_key_value_bytes": 440594078,
+        "logical_key_value_bytes": 310000153,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountAsset",
+        "rows": 6221995,
+        "physical_key_value_bytes": 274361317,
+        "logical_key_value_bytes": 99918442,
+        "inactive_generation_or_owner_rows": 4,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountVotesAux",
+        "rows": 463679,
+        "physical_key_value_bytes": 32251043,
+        "logical_key_value_bytes": 16022278,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountFrozenBandwidthAux",
+        "rows": 359545,
+        "physical_key_value_bytes": 20222092,
+        "logical_key_value_bytes": 7638017,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "ContractRuntimeState",
+        "rows": 223555,
+        "physical_key_value_bytes": 15648872,
+        "logical_key_value_bytes": 7824447,
+        "inactive_generation_or_owner_rows": 14,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountFrozenV2Aux",
+        "rows": 147503,
+        "physical_key_value_bytes": 7522653,
+        "logical_key_value_bytes": 2360048,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemAsset",
+        "rows": 25549,
+        "physical_key_value_bytes": 3096023,
+        "logical_key_value_bytes": 2246051,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemAccountIndex",
+        "rows": 44479,
+        "physical_key_value_bytes": 3023918,
+        "logical_key_value_bytes": 1467153,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountUnfrozenV2Aux",
+        "rows": 24781,
+        "physical_key_value_bytes": 1519658,
+        "logical_key_value_bytes": 652323,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "WitnessVoteState",
+        "rows": 698,
+        "physical_key_value_bytes": 104126,
+        "logical_key_value_bytes": 79703,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemProposal",
+        "rows": 89,
+        "physical_key_value_bytes": 96655,
+        "logical_key_value_bytes": 93540,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountFrozenSupplyAux",
+        "rows": 1247,
+        "physical_key_value_bytes": 70629,
+        "logical_key_value_bytes": 26984,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountAssetOperationTimeV2",
+        "rows": 1524,
+        "physical_key_value_bytes": 70104,
+        "logical_key_value_bytes": 22860,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "WitnessCapsule",
+        "rows": 629,
+        "physical_key_value_bytes": 69230,
+        "logical_key_value_bytes": 48887,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountFreeAssetNetUsageV2",
+        "rows": 1524,
+        "physical_key_value_bytes": 66575,
+        "logical_key_value_bytes": 22860,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemExchange",
+        "rows": 331,
+        "physical_key_value_bytes": 38147,
+        "logical_key_value_bytes": 26562,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountAssetOperationTime",
+        "rows": 716,
+        "physical_key_value_bytes": 31002,
+        "logical_key_value_bytes": 8806,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "AccountFreeAssetNetUsage",
+        "rows": 716,
+        "physical_key_value_bytes": 29089,
+        "logical_key_value_bytes": 8806,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemWitnessSchedule",
+        "rows": 2,
+        "physical_key_value_bytes": 9072,
+        "logical_key_value_bytes": 9002,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemDynamicProperty",
+        "rows": 61,
+        "physical_key_value_bytes": 3979,
+        "logical_key_value_bytes": 2145,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemForkVote",
+        "rows": 19,
+        "physical_key_value_bytes": 1311,
+        "logical_key_value_bytes": 646,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      },
+      {
+        "name": "SystemShielded",
+        "rows": 3,
+        "physical_key_value_bytes": 212,
+        "logical_key_value_bytes": 109,
+        "inactive_generation_or_owner_rows": 0,
+        "future_generation_rows": 0
+      }
+    ]
+  },
+  "experiments": []
+}

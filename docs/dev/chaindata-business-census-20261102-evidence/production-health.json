@@ -1,0 +1,58 @@
+{
+  "started_utc": "2026-11-02T05:45:10.026346Z",
+  "scope": "read-only production original binary identity, head advancement, three historical RPC oracle checks, recent log tail only",
+  "pid": 21838,
+  "active_state": "active",
+  "exe": "/data/gtron/releases/auto-0096c0af878e-6611fc4273c457b4/gtron",
+  "binary_sha256": "6611fc4273c457b47cad2ea47742a2eea0653b50e59fe0b1d74d10105bb41745",
+  "original_binary_matches": true,
+  "process_status": {
+    "VmSize": "27542400 kB",
+    "VmRSS": "24302364 kB",
+    "VmSwap": "0 kB",
+    "Threads": "37"
+  },
+  "memory_available": "13614752 kB",
+  "disk_available_bytes": 2013948821504,
+  "head": 53159783,
+  "head_above_copy": true,
+  "head_query_seconds": 0.009349852800369263,
+  "historical_checks": [
+    {
+      "method": "eth_getBalance",
+      "height": 341,
+      "seconds": 0.3275456801056862,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 341,
+        "result": "0x0"
+      },
+      "expected_sun": 0,
+      "correct": true
+    },
+    {
+      "method": "eth_getBalance",
+      "height": 342,
+      "seconds": 0.1159454733133316,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 342,
+        "result": "0x6b714021d45c37522e100000"
+      },
+      "expected_sun": 33251807524000000,
+      "correct": true
+    },
+    {
+      "method": "eth_getTransactionByHash",
+      "seconds": 4.254764147102833,
+      "block_number": "0x156",
+      "hash": "0x5281eb99b3cab6b3cb4777e6b070df936f2cb068163fb8f3959a1cd88733a4c2",
+      "correct": true
+    }
+  ],
+  "historical_checks_correct": true,
+  "recent_log_tail_bytes": 8388608,
+  "recent_log_tail_sha256": "0236e3334489a1c7cc566445b99ad25cae35d1f9de9bddb744f2fc763936913a",
+  "recent_muhash_error_candidates": [],
+  "finished_utc": "2026-11-02T05:45:16.168407Z"
+}

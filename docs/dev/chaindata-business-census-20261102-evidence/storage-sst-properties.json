@@ -1,0 +1,168 @@
+{
+  "files": [
+    {
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/storage-results/baseline/db/000004.sst",
+      "file_bytes": 19933877,
+      "num_entries": 781112,
+      "filter_size": 976453,
+      "data_size": 18773342,
+      "index_size": 554719,
+      "raw_key_size": 57802288,
+      "raw_value_size": 9306615,
+      "value_blocks_size": 0,
+      "metadata_read_bytes": 918,
+      "data_region_read_bytes": 0,
+      "reads": [
+        {
+          "offset": 19933824,
+          "bytes": 53
+        },
+        {
+          "offset": 19933733,
+          "bytes": 91
+        },
+        {
+          "offset": 19932959,
+          "bytes": 774
+        }
+      ]
+    },
+    {
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/storage-results/baseline/db/000005.sst",
+      "file_bytes": 22133298,
+      "num_entries": 739637,
+      "filter_size": 924613,
+      "data_size": 21010899,
+      "index_size": 586892,
+      "raw_key_size": 54733138,
+      "raw_value_size": 12375738,
+      "value_blocks_size": 0,
+      "metadata_read_bytes": 918,
+      "data_region_read_bytes": 0,
+      "reads": [
+        {
+          "offset": 22133245,
+          "bytes": 53
+        },
+        {
+          "offset": 22133154,
+          "bytes": 91
+        },
+        {
+          "offset": 22132380,
+          "bytes": 774
+        }
+      ]
+    },
+    {
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/storage-results/baseline/db/000006.sst",
+      "file_bytes": 14342212,
+      "num_entries": 479251,
+      "filter_size": 599109,
+      "data_size": 13615394,
+      "index_size": 379422,
+      "raw_key_size": 35464574,
+      "raw_value_size": 8012937,
+      "value_blocks_size": 0,
+      "metadata_read_bytes": 917,
+      "data_region_read_bytes": 0,
+      "reads": [
+        {
+          "offset": 14342159,
+          "bytes": 53
+        },
+        {
+          "offset": 14342068,
+          "bytes": 91
+        },
+        {
+          "offset": 14341295,
+          "bytes": 773
+        }
+      ]
+    },
+    {
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/storage-results/pages/db/000004.sst",
+      "file_bytes": 18886290,
+      "num_entries": 18172,
+      "filter_size": 22725,
+      "data_size": 18765994,
+      "index_size": 345886,
+      "raw_key_size": 1344728,
+      "raw_value_size": 21725800,
+      "value_blocks_size": 0,
+      "metadata_read_bytes": 916,
+      "data_region_read_bytes": 0,
+      "reads": [
+        {
+          "offset": 18886237,
+          "bytes": 53
+        },
+        {
+          "offset": 18886146,
+          "bytes": 91
+        },
+        {
+          "offset": 18885374,
+          "bytes": 772
+        }
+      ]
+    },
+    {
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/storage-results/pages/db/000005.sst",
+      "file_bytes": 21305265,
+      "num_entries": 6471,
+      "filter_size": 8133,
+      "data_size": 21177509,
+      "index_size": 480667,
+      "raw_key_size": 478854,
+      "raw_value_size": 25028282,
+      "value_blocks_size": 0,
+      "metadata_read_bytes": 913,
+      "data_region_read_bytes": 0,
+      "reads": [
+        {
+          "offset": 21305212,
+          "bytes": 53
+        },
+        {
+          "offset": 21305122,
+          "bytes": 90
+        },
+        {
+          "offset": 21304352,
+          "bytes": 770
+        }
+      ]
+    },
+    {
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/storage-results/pages/db/000006.sst",
+      "file_bytes": 13809812,
+      "num_entries": 4192,
+      "filter_size": 5317,
+      "data_size": 13726876,
+      "index_size": 311084,
+      "raw_key_size": 310208,
+      "raw_value_size": 16211418,
+      "value_blocks_size": 0,
+      "metadata_read_bytes": 913,
+      "data_region_read_bytes": 0,
+      "reads": [
+        {
+          "offset": 13809759,
+          "bytes": 53
+        },
+        {
+          "offset": 13809669,
+          "bytes": 90
+        },
+        {
+          "offset": 13808899,
+          "bytes": 770
+        }
+      ]
+    }
+  ],
+  "observed_utc": "2026-11-02T05:50:45.154824284Z",
+  "scope": "explicit immutable SST footer/metaindex/properties only; no DB open, no iterator, no data/filter block read"
+}

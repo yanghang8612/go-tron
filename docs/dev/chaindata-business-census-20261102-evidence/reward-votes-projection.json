@@ -1,0 +1,104 @@
+{
+  "account_vote_rows": 12726979,
+  "bloom_bits_per_key": 10,
+  "build_wall_nanos": 169837609321,
+  "candidate_table": {
+    "variant": "votes-only-semantic-projection",
+    "compression": "snappy",
+    "files": 157,
+    "file_bytes": 823022838,
+    "rows": 19724230
+  },
+  "comparison": {
+    "available": true,
+    "baseline_file_bytes": 4512508220,
+    "baseline_results_sha256": "eaa0b262f516e7cf9051704189af3ebc6f14802853bfab402f501f0bff381260",
+    "candidate_file_bytes": 823022838,
+    "saved_bytes": 3689485382,
+    "saved_percent": 81.76129997165967,
+    "source_sha_rows_input_chunk_and_sst_parameters_match": true
+  },
+  "equal_original_input_chunk_bytes": 67108864,
+  "finished_utc": "2026-11-02T05:34:02.369146805Z",
+  "full_account_byte_equality_claimed": false,
+  "go_version": "go1.25.5",
+  "input_stream_bytes": 10532380397,
+  "input_stream_sha256": "512ccfce04f593357cf8423031de0dd53c1a2709d47ca8e409c6d516dc708cc3",
+  "nested_vote_unknown_bytes_preserved": 0,
+  "original_native_snapshot_bytes": 8841164502,
+  "present_empty_snapshots": 0,
+  "production_muhash_verified": false,
+  "projected_native_decode_reencode_mismatches": 0,
+  "projected_native_snapshot_bytes": 889295863,
+  "projection_nanos": 7451075413,
+  "row_presence_mismatches": 0,
+  "rows": 19724230,
+  "sample_memory_bytes": 3113469,
+  "sample_memory_rejections": 0,
+  "sample_selection": "Algorithm R seeded reservoir across the entire account-vote stream, capacity4096, 32MiB cap; memory-rejection count reported",
+  "scope": "NEW SEMANTIC STATE MODEL RESEARCH ONLY. Full Account snapshot fields are deliberately discarded; original full Account/native/MuHash cannot be reconstructed. Not installable into production.",
+  "source_rows": "/data/gtron/maintenance/chaindata-business-20261102-01/kv-results/SystemReward-system-owner-current.bin",
+  "sst_block_bytes": 4096,
+  "sst_index_block_bytes": 4096,
+  "started_utc": "2026-11-02T05:31:11.872325753Z",
+  "subtypes": {
+    "account-vote": {
+      "rows": 12726979,
+      "original_wrapped_bytes": 8853891481,
+      "candidate_wrapped_bytes": 902022842
+    },
+    "begin-cycle": {
+      "rows": 1932261,
+      "original_wrapped_bytes": 5791828,
+      "candidate_wrapped_bytes": 5791828
+    },
+    "brokerage": {
+      "rows": 1760253,
+      "original_wrapped_bytes": 8801265,
+      "candidate_wrapped_bytes": 8801265
+    },
+    "end-cycle": {
+      "rows": 997145,
+      "original_wrapped_bytes": 2987909,
+      "candidate_wrapped_bytes": 2987909
+    },
+    "reward": {
+      "rows": 473550,
+      "original_wrapped_bytes": 2241291,
+      "candidate_wrapped_bytes": 2241291
+    },
+    "vi": {
+      "rows": 73789,
+      "original_wrapped_bytes": 785800,
+      "candidate_wrapped_bytes": 785800
+    },
+    "vote": {
+      "rows": 1760253,
+      "original_wrapped_bytes": 5548908,
+      "candidate_wrapped_bytes": 5548908
+    }
+  },
+  "table_format": "PebbleV4",
+  "vote_entries": 19363802,
+  "votes_order_address_count_unknown_mismatches": 0,
+  "votes_read_microbenchmark": {
+    "baseline_full_snapshot_decode": {
+      "mean_nanos": 19341.750523158484,
+      "operations": 28672,
+      "p50_nanos": 12061,
+      "p95_nanos": 46392,
+      "p99_nanos": 89816
+    },
+    "candidate_votes_projection_decode": {
+      "mean_nanos": 2930.366629464286,
+      "operations": 28672,
+      "p50_nanos": 1931,
+      "p95_nanos": 5195,
+      "p99_nanos": 12350
+    },
+    "samples": 4096,
+    "scope": "In-memory native Account decode then deterministic Votes-only semantic result. Full Account returns intentionally differ. Interleaved AB/BA; no HTTP/DB I/O.",
+    "votes_semantic_return_byte_mismatches": 0
+  },
+  "votes_verification_nanos": 89259547470
+}

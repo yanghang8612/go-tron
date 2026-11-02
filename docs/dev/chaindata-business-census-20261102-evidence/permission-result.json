@@ -1,0 +1,503 @@
+{
+  "all_candidate_rows_restore_exact_old_native": true,
+  "arms": {
+    "baseline": {
+      "bytes": 11990650,
+      "db": {
+        "db_path": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/baseline-control/db",
+        "ingested_same_inode_as_independent_copy": true,
+        "ingested_table_path": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/baseline-control/db/000004.sst",
+        "l6_filter_bytes": 625093,
+        "l6_tables": 1,
+        "source_sst": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/baseline.sst",
+        "source_sst_bytes": 11990650,
+        "source_sst_preserved": true,
+        "source_sst_sha256": "30139ba3fb430e91f86de62106808a9231f2be900734d9ba6b3f4786ff84d6cb",
+        "sst_rewritten": false
+      },
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/baseline.sst",
+      "sha256": "30139ba3fb430e91f86de62106808a9231f2be900734d9ba6b3f4786ff84d6cb",
+      "write_wall_ns": 187032190
+    },
+    "candidate": {
+      "bytes": 8107628,
+      "db": {
+        "db_path": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/candidate-control/db",
+        "ingested_same_inode_as_independent_copy": true,
+        "ingested_table_path": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/candidate-control/db/000004.sst",
+        "l6_filter_bytes": 625093,
+        "l6_tables": 1,
+        "source_sst": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/candidate.sst",
+        "source_sst_bytes": 8107628,
+        "source_sst_preserved": true,
+        "source_sst_sha256": "0d560ae9ff819649daa3b3d7e0bb4dfd76595a54b46a4f5f270813c238df1a80",
+        "sst_rewritten": false
+      },
+      "path": "/data/gtron/maintenance/chaindata-business-20261102-01/permission-results/candidate.sst",
+      "sha256": "0d560ae9ff819649daa3b3d7e0bb4dfd76595a54b46a4f5f270813c238df1a80",
+      "write_wall_ns": 149325615
+    }
+  },
+  "cohort": {
+    "permission_rows": 500000,
+    "all_kv_rows_scanned": 1371677,
+    "source_key_value_bytes_processed": 99864462,
+    "permission_physical_key_bytes": 18500012,
+    "old_wrapped_value_bytes": 30761293,
+    "candidate_wrapped_value_bytes": 11469108,
+    "old_native_bytes": 30261293,
+    "self_address_occurrences": 499954,
+    "rows_with_unknown_fields": 0,
+    "modes": {
+      "default_active_exact_raw_ops": 248257,
+      "default_active_immutable_ops_1": 1611,
+      "default_owner": 249860,
+      "raw_fallback": 46,
+      "self_only_custom": 226
+    },
+    "old_wrapped_exact_length_histogram": {
+      "103": 6,
+      "104": 6,
+      "129": 99,
+      "145": 1,
+      "159": 1,
+      "161": 1,
+      "178": 1,
+      "40": 1,
+      "45": 249877,
+      "65": 1,
+      "70": 17,
+      "72": 1,
+      "74": 1,
+      "76": 1,
+      "77": 1,
+      "78": 249876,
+      "79": 6,
+      "80": 1,
+      "95": 100,
+      "97": 1,
+      "99": 1
+    },
+    "exact_operations_bitmaps": {
+      "": 249997,
+      "031800c000400000000000000000000000000000000000000000000000000000": 1,
+      "1000000000000000000000000000000000000000000000000000000000000000": 2,
+      "1018000000000000000000000000000000000000000000000000000000000000": 2,
+      "76f307c0023e0300000000000000000000000000000000000000000000000000": 1,
+      "77f707c0023e0300000000000000000000000000000000000000000000000000": 1,
+      "77ff07c0023e0300000000000000000000000000000000000000000000000000": 1,
+      "77ff07c0027e0300000000000000000000000000000000000000000000000000": 5,
+      "77ff07c0027ec307000000000000000000000000000000000000000000000000": 1,
+      "7fff1fc0033e0000000000000000000000000000000000000000000000000000": 1614,
+      "7fff1fc0033e0100000000000000000000000000000000000000000000000000": 1225,
+      "7fff1fc0033e0300000000000000000000000000000000000000000000000000": 215131,
+      "7fff1fc0033ec307000000000000000000000000000000000000000000000000": 30700,
+      "7fff1fc0033ec30f000000000000000000000000000000000000000000000000": 1206,
+      "7fff1fc0037e0000000000000000000000000000000000000000000000000000": 110,
+      "7fff1fc0037e0100000000000000000000000000000000000000000000000000": 1,
+      "7fff1fc0037e0300000000000000000000000000000000000000000000000000": 2
+    },
+    "source_cohort_sha256": "77f5db2d25223ea7d5bb52a1fcca72b87471993a37db947b7386b4088aae8b3b",
+    "source_cohort_bytes": 53261305,
+    "requested_prefix_complete": true
+  },
+  "finished_utc": "2026-11-02T05:42:15.280609485Z",
+  "physical_keys_unchanged": true,
+  "point_measurements": [
+    {
+      "arm": "baseline",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 38496856,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 34420,
+        "sst_read_bytes": 7462245,
+        "sst_read_calls": 6840,
+        "wall_ns": 66523229
+      },
+      "negative": false,
+      "operations_per_pass": 10000,
+      "round": 0,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 192,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 1,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 28106835
+      }
+    },
+    {
+      "arm": "candidate",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 32405152,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 71547,
+        "sst_read_bytes": 6489269,
+        "sst_read_calls": 5320,
+        "wall_ns": 62616317
+      },
+      "negative": false,
+      "operations_per_pass": 10000,
+      "round": 0,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 1839672,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 44988,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 30008313
+      }
+    },
+    {
+      "arm": "baseline",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 1770040,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 927,
+        "sst_read_bytes": 922558,
+        "sst_read_calls": 191,
+        "wall_ns": 9828726
+      },
+      "negative": true,
+      "operations_per_pass": 10000,
+      "round": 0,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 544,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 5,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 8744917
+      }
+    },
+    {
+      "arm": "candidate",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 1653736,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 836,
+        "sst_read_bytes": 892001,
+        "sst_read_calls": 174,
+        "wall_ns": 11138538
+      },
+      "negative": true,
+      "operations_per_pass": 10000,
+      "round": 0,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 192,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 1,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 6411176
+      }
+    },
+    {
+      "arm": "candidate",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 32417440,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 71675,
+        "sst_read_bytes": 6489269,
+        "sst_read_calls": 5320,
+        "wall_ns": 58273930
+      },
+      "negative": false,
+      "operations_per_pass": 10000,
+      "round": 1,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 1839672,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 44988,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 30424812
+      }
+    },
+    {
+      "arm": "baseline",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 38469832,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 34168,
+        "sst_read_bytes": 7462245,
+        "sst_read_calls": 6840,
+        "wall_ns": 65613966
+      },
+      "negative": false,
+      "operations_per_pass": 10000,
+      "round": 1,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 192,
+        "bloom_may_contain": 10000,
+        "bloom_rejections": 0,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 1,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 28465351
+      }
+    },
+    {
+      "arm": "candidate",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 1653736,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 836,
+        "sst_read_bytes": 892001,
+        "sst_read_calls": 174,
+        "wall_ns": 8872172
+      },
+      "negative": true,
+      "operations_per_pass": 10000,
+      "round": 1,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 192,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 1,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 6998257
+      }
+    },
+    {
+      "arm": "baseline",
+      "cache_bytes": 33554432,
+      "cursor": "Snapshot.NewGetCursorWithOptions(MaxRetainedTables=16,UseL6Filters=true)",
+      "empty_app_cache": {
+        "allocated_bytes": 1767208,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 923,
+        "sst_read_bytes": 922558,
+        "sst_read_calls": 191,
+        "wall_ns": 13352593
+      },
+      "negative": true,
+      "operations_per_pass": 10000,
+      "round": 1,
+      "scope": "single cursor for one workload pass; first application cache empty, OS cache uncontrolled; not HTTP",
+      "warm_app_cache": {
+        "allocated_bytes": 544,
+        "bloom_may_contain": 109,
+        "bloom_rejections": 9891,
+        "cursor_stats": {
+          "TableRequests": 10000,
+          "TableOpens": 1,
+          "TableReuses": 9999,
+          "TableFallbacks": 0,
+          "TableEvictions": 0,
+          "MaxRetained": 1,
+          "TableFallbackIncompatible": 0,
+          "TableFallbackAllLeased": 0
+        },
+        "every_result_verified": true,
+        "mallocs": 5,
+        "sst_read_bytes": 0,
+        "sst_read_calls": 0,
+        "wall_ns": 6690293
+      }
+    }
+  ],
+  "scope": "short owner-sorted PermissionAux prefix cohort; mixed semantic generations retained; actual fresh Snappy SSTs only, not whole-DB savings; no production/MuHash/history/snapshot-format change",
+  "source": "/data/gtron/maintenance/chaindata-business-20261102-01/chaindata",
+  "started_utc": "2026-11-02T05:42:11.77864438Z"
+}
