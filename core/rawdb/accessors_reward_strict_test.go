@@ -1,7 +1,9 @@
 package rawdb
 
 import (
+	"bytes"
 	"errors"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"math/big"
 	"strings"
 	"testing"
@@ -25,7 +27,7 @@ func TestRewardStrictReadersRoundTripAndAbsentDefaults(t *testing.T) {
 	if got, ok, err := ReadCycleBrokerageStrict(db, 3, addr); err != nil || ok || got != DefaultBrokerage {
 		t.Fatalf("missing cycle brokerage: got=%d ok=%v err=%v", got, ok, err)
 	}
-	if got, ok, err := ReadCycleAccountVoteStrict(db, 3, addr); err != nil || ok || got != nil {
+	if got, ok, err := ReadCycleAccountVotesStrict(db, 3, addr); err != nil || ok || got != nil {
 		t.Fatalf("missing account vote: got=%x ok=%v err=%v", got, ok, err)
 	}
 	if got, ok, err := ReadBeginCycleStrict(db, addr); err != nil || ok || got != 0 {
@@ -46,7 +48,7 @@ func TestRewardStrictReadersRoundTripAndAbsentDefaults(t *testing.T) {
 	WriteCycleVote(db, 3, addr, 22)
 	WriteWitnessVI(db, 3, addr, vi)
 	WriteCycleBrokerage(db, 3, addr, 33)
-	WriteCycleAccountVote(db, 3, addr, []byte{0x0a, 0x01})
+	WriteCycleAccountVotes(db, 3, addr, []*corepb.Vote{{VoteAddress: []byte{0x41, 0x01}, VoteCount: 7}})
 	WriteBeginCycle(db, addr, 4)
 	WriteEndCycle(db, addr, 5)
 	WriteRewardVi(db, 3, addr, vi)
@@ -64,7 +66,7 @@ func TestRewardStrictReadersRoundTripAndAbsentDefaults(t *testing.T) {
 	if got, ok, err := ReadCycleBrokerageStrict(db, 3, addr); err != nil || !ok || got != 33 {
 		t.Fatalf("cycle brokerage: got=%d ok=%v err=%v", got, ok, err)
 	}
-	if got, ok, err := ReadCycleAccountVoteStrict(db, 3, addr); err != nil || !ok || string(got) != string([]byte{0x0a, 0x01}) {
+	if got, ok, err := ReadCycleAccountVotesStrict(db, 3, addr); err != nil || !ok || len(got) != 1 || got[0].VoteCount != 7 || !bytes.Equal(got[0].VoteAddress, []byte{0x41, 0x01}) {
 		t.Fatalf("account vote: got=%x ok=%v err=%v", got, ok, err)
 	}
 	if got, ok, err := ReadBeginCycleStrict(db, addr); err != nil || !ok || got != 4 {
@@ -81,6 +83,26 @@ func TestRewardStrictReadersRoundTripAndAbsentDefaults(t *testing.T) {
 	}
 }
 
+func TestIsCycleAccountVoteStateKeyStrictShape(t *testing.T) {
+	addr := rewardStrictTestAddr()
+	valid := CycleAccountVoteStateKey(7, addr)
+	if !IsCycleAccountVoteStateKey(valid) || !IsCycleAccountVoteStateKey(CycleAccountVoteStateKey(-1, addr)) {
+		t.Fatal("canonical cycle snapshot key was not recognized")
+	}
+	wrongSeparator := append([]byte(nil), valid...)
+	wrongSeparator[len(delegRewardPrefix)+8] = '_'
+	for _, key := range [][]byte{
+		nil, valid[:len(valid)-1], append(append([]byte(nil), valid...), 0),
+		CycleRewardStateKey(7, addr), CycleVoteStateKey(7, addr),
+		BeginCycleStateKey(addr), EndCycleStateKey(addr), wrongSeparator,
+		CycleAccountVoteStateKey(7, addr[:len(addr)-1]),
+	} {
+		if IsCycleAccountVoteStateKey(key) {
+			t.Fatalf("non-snapshot logical key accepted: %x", key)
+		}
+	}
+}
+
 func TestRewardStrictReadersSurfaceStorageErrors(t *testing.T) {
 	db := NewMemoryDatabase()
 	addr := rewardStrictTestAddr()
@@ -90,7 +112,7 @@ func TestRewardStrictReadersSurfaceStorageErrors(t *testing.T) {
 	WriteCycleVote(db, 3, addr, 22)
 	WriteWitnessVI(db, 3, addr, vi)
 	WriteCycleBrokerage(db, 3, addr, 33)
-	WriteCycleAccountVote(db, 3, addr, []byte{0x0a, 0x01})
+	WriteCycleAccountVotes(db, 3, addr, []*corepb.Vote{{VoteAddress: []byte{0x41, 0x01}, VoteCount: 7}})
 	WriteBeginCycle(db, addr, 4)
 	WriteEndCycle(db, addr, 5)
 	WriteRewardVi(db, 3, addr, vi)
@@ -131,7 +153,7 @@ func TestRewardStrictReadersSurfaceStorageErrors(t *testing.T) {
 		{
 			name: "account vote",
 			read: func(r ethdb.KeyValueReader) (bool, error) {
-				_, ok, err := ReadCycleAccountVoteStrict(r, 3, addr)
+				_, ok, err := ReadCycleAccountVotesStrict(r, 3, addr)
 				return ok, err
 			},
 		},
@@ -274,7 +296,7 @@ func TestRewardLegacyReadersKeepDefaultsOnStorageErrors(t *testing.T) {
 	WriteCycleVote(db, 3, addr, 22)
 	WriteWitnessVI(db, 3, addr, vi)
 	WriteCycleBrokerage(db, 3, addr, 33)
-	WriteCycleAccountVote(db, 3, addr, []byte{0x0a, 0x01})
+	WriteCycleAccountVotes(db, 3, addr, []*corepb.Vote{{VoteAddress: []byte{0x41, 0x01}, VoteCount: 7}})
 	WriteBeginCycle(db, addr, 4)
 	WriteEndCycle(db, addr, 5)
 	WriteRewardVi(db, 3, addr, vi)
@@ -307,7 +329,7 @@ func TestRewardLegacyReadersKeepDefaultsOnStorageErrors(t *testing.T) {
 		if got := ReadCycleBrokerage(reader, 3, addr); got != DefaultBrokerage {
 			t.Fatalf("cycle brokerage default on error: got %d", got)
 		}
-		if got := ReadCycleAccountVote(reader, 3, addr); got != nil {
+		if got, present := ReadCycleAccountVotes(reader, 3, addr); got != nil || present {
 			t.Fatalf("account vote default on error: got %x", got)
 		}
 		if got := ReadBeginCycle(reader, addr); got != 0 {

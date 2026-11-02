@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -386,7 +387,31 @@ func normalizedEventLogBuildVersion(version uint32) (uint32, error) {
 	return version, nil
 }
 
-func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toBlock uint64, opts EventLogBuildOptions) ([]SegmentRef, error) {
+func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toBlock uint64, opts EventLogBuildOptions) (refs []SegmentRef, buildErr error) {
+	anchor, err := requireSnapshotStageBoundaryHash(chain, rawdb.StageSnapshotEventLogBuild, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if buildErr != nil {
+			return
+		}
+		current, err := requireSnapshotStageBoundaryHash(chain, rawdb.StageSnapshotEventLogBuild, toBlock)
+		if err != nil {
+			refs, buildErr = nil, err
+			return
+		}
+		if current != anchor {
+			refs = nil
+			buildErr = fmt.Errorf("snapshots: event source block %d changed during construction from %x to %x", toBlock, anchor, current)
+			return
+		}
+		for i := range refs {
+			if refs[i].Kind == SegmentEventLog {
+				refs[i].SourceBlockHash = anchor.Hex()
+			}
+		}
+	}()
 	version, err := normalizedEventLogBuildVersion(opts.Version)
 	if err != nil {
 		return nil, err
@@ -703,7 +728,36 @@ func snapshotInstallProgressRows(db ethdb.KeyValueWriter, progress *Progress, ma
 		Stage:    rawdb.StageSnapshotInstall,
 		BlockNum: manifest.VisibleTxEnd,
 	})
-	eventRow, ok, err := eventLogBuildStageProgress(db, manifest)
+	// Event files can legitimately lead the state cut. Installing them must
+	// not publish an execution/event stage beyond the authenticated restored
+	// HEAD, nor require canonical rows that have not been replayed yet.
+	eventManifest := manifest
+	if reader, ok := db.(ethdb.KeyValueReader); ok {
+		head, present, err := rawdb.ReadStateCommitmentHead(reader)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			eventManifest = eventManifestAtBlock(manifest, head.BlockNum)
+		}
+	}
+	if reader, ok := db.(ethdb.KeyValueReader); ok {
+		if verified, err := verifyEventSourceRefs(eventLogRefs(eventManifest), 1, ^uint64(0), func(n uint64, expected common.Hash) (bool, error) {
+			got, present, err := snapshotStageBoundaryHash(reader, rawdb.StageSnapshotEventLogBuild, n)
+			if err != nil || !present {
+				return false, err
+			}
+			if got != expected {
+				return false, fmt.Errorf("snapshots: restored event source block %d hash does not match canonical", n)
+			}
+			return true, nil
+		}, false); err != nil {
+			return nil, err
+		} else if !verified {
+			return nil, errors.New("snapshots: restored event source canonical boundary unavailable")
+		}
+	}
+	eventRow, ok, err := eventLogBuildStageProgress(db, eventManifest)
 	if err != nil {
 		return nil, err
 	}

@@ -16,7 +16,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 // Reads use real blockbuffer latest-state layers, while the embedded database
@@ -112,11 +111,7 @@ func newRewardSelectiveFixture(tb testing.TB, tc rewardSelectiveCase, layers int
 		if tc.snapshotVotes {
 			snapshot.Votes = []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 40}}
 		}
-		data, err := proto.Marshal(snapshot)
-		if err != nil {
-			tb.Fatal(err)
-		}
-		if err := s.WriteCycleAccountVote(tc.begin, voter.Bytes(), data); err != nil {
+		if err := s.WriteCycleAccountVotes(tc.begin, voter.Bytes(), snapshot.Votes); err != nil {
 			tb.Fatal(err)
 		}
 	}
@@ -211,20 +206,19 @@ func TestRewardSelectiveReadsMatchEagerReference(t *testing.T) {
 					if want.Error() != nil || got.Error() != nil {
 						t.Fatalf("state errors: got %v, reference %v", got.Error(), want.Error())
 					}
-					if !bytes.Equal(marshalAccountVote(got.GetAccount(voter)), marshalAccountVote(want.GetAccount(voter))) {
+					if !bytes.Equal(marshalCompleteAccountForRewardOracle(got.GetAccount(voter)), marshalCompleteAccountForRewardOracle(want.GetAccount(voter))) {
 						t.Fatal("complete post-settlement account differs")
 					}
 					if got.ReadBeginCycle(voter.Bytes()) != want.ReadBeginCycle(voter.Bytes()) || got.ReadEndCycle(voter.Bytes()) != want.ReadEndCycle(voter.Bytes()) {
 						t.Fatal("cycle cursors differ")
 					}
 					for _, cycle := range []int64{tc.begin, tc.current} {
-						// The API reader decodes native storage and uses proto.Marshal,
-						// whose map order is unspecified. Compare the actual stored bytes.
+						// Compare canonical V4 Votes+presence storage, not the old full Account.
 						key := rawdb.CycleAccountVoteStateKey(cycle, voter.Bytes())
 						gotRaw, gotExists, gotErr := got.GetAccountKV(common.SystemAccountAddress, kvdomains.SystemReward, key)
 						wantRaw, wantExists, wantErr := want.GetAccountKV(common.SystemAccountAddress, kvdomains.SystemReward, key)
 						if gotErr != nil || wantErr != nil || gotExists != wantExists || !bytes.Equal(gotRaw, wantRaw) {
-							t.Fatalf("complete historical storage bytes differ at cycle %d: got exists=%v err=%v want exists=%v err=%v", cycle, gotExists, gotErr, wantExists, wantErr)
+							t.Fatalf("V4 Votes historical storage bytes differ at cycle %d: got exists=%v err=%v want exists=%v err=%v", cycle, gotExists, gotErr, wantExists, wantErr)
 						}
 					}
 				})

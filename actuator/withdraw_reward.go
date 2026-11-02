@@ -4,8 +4,6 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
-	"github.com/tronprotocol/go-tron/core/types"
-	"google.golang.org/protobuf/proto"
 
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -36,30 +34,18 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 	// Current-cycle edge: a snapshot exists for beginCycle — voter's vote
 	// was already counted there — skip.
 	if beginCycle == currentCycle {
-		if snap := statedb.ReadCycleAccountVote(beginCycle, addr.Bytes()); snap != nil {
+		if _, present := statedb.ReadCycleAccountVotes(beginCycle, addr.Bytes()); present {
 			return
 		}
 	}
 
-	currentVotes := voteEntriesFromVotes(statedb.GetVotes(addr))
+	currentVoteList := statedb.GetVotes(addr)
+	currentVotes := voteEntriesFromVotes(currentVoteList)
 	if statedb.Error() != nil {
 		return
 	}
-	// java-tron's accountStore.get returns a detached AccountCapsule. Later
-	// adjustAllowance calls read and write a different capsule, so the
-	// account-vote row saved at the end contains the allowance from before this
-	// settlement. Only voters with current votes write a snapshot; hydrate their
-	// complete account and serialize it before either AddAllowance below so the
-	// newly paid reward cannot leak into the historical snapshot. Early returns
-	// and accounts without current votes never need unrelated auxiliary domains.
-	var accountVoteSnapshot []byte
-	if len(currentVotes) != 0 {
-		acct := statedb.GetAccount(addr)
-		if acct == nil {
-			return
-		}
-		accountVoteSnapshot = marshalAccountVote(acct)
-	}
+	// V4 preserves the exact pre-settlement ballot only. Reward adjustments do
+	// not mutate Votes; unrelated assets/permissions/allowance are not snapshots.
 
 	// Finalize the most-recent recorded-but-not-yet-settled cycle.
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
@@ -88,9 +74,7 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 
 	_ = statedb.WriteBeginCycle(addr.Bytes(), endCycle)
 	_ = statedb.WriteEndCycle(addr.Bytes(), endCycle+1)
-	if accountVoteSnapshot != nil {
-		_ = statedb.WriteCycleAccountVote(endCycle, addr.Bytes(), accountVoteSnapshot)
-	}
+	_ = statedb.WriteCycleAccountVotes(endCycle, addr.Bytes(), currentVoteList)
 }
 
 // queryReward returns the pending reward a voter would settle on withdraw,
@@ -145,40 +129,12 @@ func voteEntriesFromVotes(pb []*corepb.Vote) []reward.VoteEntry {
 	return out
 }
 
-// readSnapshotVotes loads a voter's cycle-snapshot vote list (written via
-// WriteCycleAccountVote) into reward.VoteEntry slice.
+// readSnapshotVotes loads the typed cycle snapshot without a full Account
+// protobuf encode/decode round trip. Presence is handled independently above.
 func readSnapshotVotes(statedb *state.StateDB, cycle int64, addr common.Address) []reward.VoteEntry {
-	raw := statedb.ReadCycleAccountVote(cycle, addr.Bytes())
-	if len(raw) == 0 {
+	votes, present := statedb.ReadCycleAccountVotes(cycle, addr.Bytes())
+	if !present {
 		return nil
 	}
-	snap := &corepb.Account{}
-	if err := proto.Unmarshal(raw, snap); err != nil {
-		return nil
-	}
-	out := make([]reward.VoteEntry, 0, len(snap.Votes))
-	for _, v := range snap.Votes {
-		out = append(out, reward.VoteEntry{
-			Witness: common.BytesToAddress(v.VoteAddress),
-			Count:   v.VoteCount,
-		})
-	}
-	return out
-}
-
-// marshalAccountVote serializes a voter's account (votes + allowance) for
-// later recall during the beginCycle+1==endCycle edge-case settlement.
-// Account.Marshal is the canonical deterministic account encoding and uses
-// the direct-map fast path; the generic protobuf encoder reflect-copies every
-// map key/value in otherwise identical account snapshots.
-// Mirrors java-tron's setAccountVote(cycle, addr, account).
-func marshalAccountVote(acct *types.Account) []byte {
-	if acct == nil {
-		return nil
-	}
-	raw, err := acct.Marshal()
-	if err != nil {
-		return nil
-	}
-	return raw
+	return voteEntriesFromVotes(votes)
 }

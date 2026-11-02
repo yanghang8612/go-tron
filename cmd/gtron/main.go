@@ -997,6 +997,7 @@ func gtron(ctx *cli.Context) error {
 	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
 	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
 	bc.ChainDB().SetSectionBloomReader(stateSnapshotManager)
+	stateSnapshotManager.SetEventLogCanonicalVerifier(statesnapshots.NewCanonicalEventLogVerifier(newStateSnapshotChainSource(bc)))
 	bc.ChainDB().SetEventLogReader(stateSnapshotManager)
 	backend.SetStateColdHistory(stateSnapshotManager)
 	if manifest := stateSnapshotManager.Manifest(); manifest != nil {
@@ -1346,6 +1347,7 @@ func gtron(ctx *cli.Context) error {
 				BuildEventLogsWhileSyncing:       buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
 				SyncEventLogCatchupBlocks:        freezerCfg.V2SegmentBlocks,
 				SyncEventLogTargetBlock:          syncEventLogTargetBlock,
+				EventLogIndependentFrontier:      syncEventLogTargetBlock != nil,
 			},
 			Pruner: statepruning.PrunerConfig{
 				HistoryRangePrune:               historyRangePrune,
@@ -1433,6 +1435,7 @@ func gtron(ctx *cli.Context) error {
 			"syncBuildRequiresImporterCapacity", true,
 			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
 			"buildEventLogsWhileSyncing", buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+			"eventLogIndependentFrontier", syncEventLogTargetBlock != nil,
 			"syncEventLogCatchupBlocks", freezerCfg.V2SegmentBlocks,
 			"syncEventLogFreezerHandoff", syncEventLogTargetBlock != nil,
 			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),

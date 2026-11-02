@@ -20,7 +20,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	troncrypto "github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -1226,14 +1225,17 @@ func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
 	currentCycle := tvm.DynProps.CurrentCycleNumber()
 	beginCycle := tvm.StateDB.ReadBeginCycle(addr.Bytes())
 	endCycle := tvm.StateDB.ReadEndCycle(addr.Bytes())
-	acct := tvm.StateDB.GetAccount(addr)
-	if acct == nil || beginCycle > currentCycle {
+	if !tvm.StateDB.Exist(addr) || beginCycle > currentCycle {
 		return
 	}
 	if beginCycle == currentCycle {
-		if snap := tvm.StateDB.ReadCycleAccountVote(beginCycle, addr.Bytes()); snap != nil {
+		if _, present := tvm.StateDB.ReadCycleAccountVotes(beginCycle, addr.Bytes()); present {
 			return
 		}
+	}
+	currentVoteList := tvm.StateDB.GetVotes(addr)
+	if tvm.StateDB.Error() != nil {
+		return
 	}
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
 		if votes := tvmReadSnapshotVotes(tvm.StateDB, beginCycle, addr); len(votes) > 0 {
@@ -1243,7 +1245,7 @@ func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
 	}
 	endCycle = currentCycle
 
-	currentVotes := tvmVoteEntriesFromAccount(acct)
+	currentVotes := tvmVoteEntriesFromVotes(currentVoteList)
 	if len(currentVotes) == 0 {
 		_ = tvm.StateDB.WriteBeginCycle(addr.Bytes(), endCycle+1)
 		return
@@ -1253,17 +1255,14 @@ func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
 	}
 	_ = tvm.StateDB.WriteBeginCycle(addr.Bytes(), endCycle)
 	_ = tvm.StateDB.WriteEndCycle(addr.Bytes(), endCycle+1)
-	if snap := tvmMarshalAccountVote(acct); snap != nil {
-		_ = tvm.StateDB.WriteCycleAccountVote(endCycle, addr.Bytes(), snap)
-	}
+	_ = tvm.StateDB.WriteCycleAccountVotes(endCycle, addr.Bytes(), currentVoteList)
 }
 
 func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 	if tvm == nil || !tvm.cfg.Vote || tvm.StateDB == nil || tvm.DynProps == nil {
 		return 0
 	}
-	acct := tvm.StateDB.GetAccount(addr)
-	if acct == nil {
+	if !tvm.StateDB.Exist(addr) {
 		return 0
 	}
 	allowance := tvm.StateDB.GetAllowance(addr)
@@ -1282,7 +1281,10 @@ func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 		beginCycle++
 	}
 	endCycle = currentCycle
-	currentVotes := tvmVoteEntriesFromAccount(acct)
+	currentVotes := tvmVoteEntriesFromVotes(tvm.StateDB.GetVotes(addr))
+	if tvm.StateDB.Error() != nil {
+		return 0
+	}
 	if len(currentVotes) == 0 {
 		return pending + allowance
 	}
@@ -1292,16 +1294,7 @@ func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 	return pending + allowance
 }
 
-type tvmVoteAccount interface {
-	Votes() []*corepb.Vote
-	Proto() *corepb.Account
-}
-
-func tvmVoteEntriesFromAccount(acct tvmVoteAccount) []reward.VoteEntry {
-	if acct == nil {
-		return nil
-	}
-	votes := acct.Votes()
+func tvmVoteEntriesFromVotes(votes []*corepb.Vote) []reward.VoteEntry {
 	out := make([]reward.VoteEntry, 0, len(votes))
 	for _, vote := range votes {
 		out = append(out, reward.VoteEntry{
@@ -1313,35 +1306,13 @@ func tvmVoteEntriesFromAccount(acct tvmVoteAccount) []reward.VoteEntry {
 }
 
 func tvmReadSnapshotVotes(store interface {
-	ReadCycleAccountVote(cycle int64, addr []byte) []byte
+	ReadCycleAccountVotes(cycle int64, addr []byte) ([]*corepb.Vote, bool)
 }, cycle int64, addr tcommon.Address) []reward.VoteEntry {
-	raw := store.ReadCycleAccountVote(cycle, addr.Bytes())
-	if len(raw) == 0 {
+	votes, present := store.ReadCycleAccountVotes(cycle, addr.Bytes())
+	if !present {
 		return nil
 	}
-	snap := &corepb.Account{}
-	if err := proto.Unmarshal(raw, snap); err != nil {
-		return nil
-	}
-	out := make([]reward.VoteEntry, 0, len(snap.Votes))
-	for _, vote := range snap.Votes {
-		out = append(out, reward.VoteEntry{
-			Witness: tcommon.BytesToAddress(vote.VoteAddress),
-			Count:   vote.VoteCount,
-		})
-	}
-	return out
-}
-
-func tvmMarshalAccountVote(acct tvmVoteAccount) []byte {
-	if acct == nil {
-		return nil
-	}
-	raw, err := proto.Marshal(acct.Proto())
-	if err != nil {
-		return nil
-	}
-	return raw
+	return tvmVoteEntriesFromVotes(votes)
 }
 
 func tvmAdjustAllowance(tvm *TVM, addr tcommon.Address, amount int64) {

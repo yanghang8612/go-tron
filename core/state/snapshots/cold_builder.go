@@ -209,14 +209,20 @@ type Config struct {
 	// deferred. This is only needed when frozen transaction receipts externalize
 	// their logs into the authenticated event-log snapshot.
 	BuildEventLogsWhileSyncing bool
+	// EventLogIndependentFrontier lets direct V2 prepare its next required event
+	// range independently of state-history publication. Its source cap is the
+	// minimum of solid, hash-verified Finish and SyncEventLogTargetBlock. Missing
+	// Finish/target never falls back to HEAD or SnapshotBuild.
+	EventLogIndependentFrontier bool
 	// SyncEventLogCatchupBlocks bounds one sync-time event-log catch-up range.
 	// Production aligns this with the direct V2 freezer segment size so every
 	// successful build can unblock at least one complete freezer segment. Zero
 	// falls back to BatchBlocks.
 	SyncEventLogCatchupBlocks uint64
 	// SyncEventLogTargetBlock returns the inclusive event-log block required by
-	// the next direct-V2 freezer segment. While sync is active, catch-up does not
-	// run past this target even when state history is much farther ahead. The
+	// the next direct-V2 freezer segment. With EventLogIndependentFrontier,
+	// the target also applies while idle. Sync-time catch-up does not run past it
+	// even when state history is much farther ahead. The
 	// freezer advance hook wakes the lifecycle after consuming the prepared
 	// segment, producing an explicit sidecar -> freezer handoff instead of letting
 	// consecutive event-log builds monopolize the shared heavy-work gate.
@@ -844,6 +850,9 @@ func (c Config) validate() error {
 	if c.BuildEventLogsWhileSyncing && !c.BuildEventLogs {
 		return errors.New("snapshots: sync-time event-log catch-up requires event-log builds")
 	}
+	if c.EventLogIndependentFrontier && (!c.BuildEventLogsWhileSyncing || c.SyncEventLogTargetBlock == nil) {
+		return errors.New("snapshots: independent event frontier requires sync event builds and a freezer target")
+	}
 	if c.CatchupHeavyWorkCooldown < 0 {
 		return fmt.Errorf("snapshots: invalid catch-up heavy-work cooldown %s", c.CatchupHeavyWorkCooldown)
 	}
@@ -1109,7 +1118,7 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	// otherwise a successful history build installs a cooldown before the
 	// dependent sidecar can ever run while continuous sync keeps history ready.
 	syncCriticalAttempted := false
-	if err == nil && !spaceDeferred && !prioritizeMerge && !r.historyLoad.hard && r.historySyncBudgetActive() && r.syncEventLogCatchupEnabled() {
+	if err == nil && !spaceDeferred && !prioritizeMerge && !r.historyLoad.hard && (r.historySyncBudgetActive() || r.cfg.EventLogIndependentFrontier) && r.syncEventLogCatchupEnabled() {
 		syncCriticalAttempted, err = r.derivedSidecarCatchupPass(&result)
 		// Preserve an already admitted sidecar pass even if sync status changed
 		// while planning it. A later history result must not overwrite its work.
@@ -1650,7 +1659,10 @@ func (r *Runner) onePassWithPressureContext(ctx context.Context, pressure Histor
 	var chainDB *rawdb.ChainDB
 	planDerived := func(syncActive bool) (derived, events bool) {
 		derived = !(r.cfg.DeferDerivedSidecarsWhileSyncing && syncActive && r.derivedSidecarsConfigured())
-		events = r.cfg.BuildEventLogs && (derived || (syncActive && r.syncEventLogCatchupEnabled()))
+		// The independent cursor owns event coverage. Rebuilding a shorter
+		// state-history range could retire a wider prepared event ref and lose
+		// its suffix, even though both files were individually valid.
+		events = !r.cfg.EventLogIndependentFrontier && r.cfg.BuildEventLogs && (derived || (syncActive && r.syncEventLogCatchupEnabled()))
 		return derived, events
 	}
 	prepareDerived := func(derived, events bool) error {
@@ -2532,9 +2544,10 @@ func (r *Runner) syncEventLogCatchupEnabled() bool {
 }
 
 // derivedSidecarCatchupPass publishes at most one bounded missing range per
-// configured sidecar family. StageSnapshotBuild is hash-bound to the canonical
-// chain and therefore serves as the authoritative upper bound; each family's
-// active manifest coverage is its restart-safe cursor. The boolean reports
+// configured sidecar family. State-derived sidecars use hash-bound
+// StageSnapshotBuild; opted-in freezer event work instead uses solid/Finish and
+// the next ancient segment. Each family's active manifest is its restart cursor.
+// The boolean reports
 // that a sync-critical event-log gap claimed this lifecycle pass, including a
 // gate deferral, so the caller does not let history take the same admission.
 func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, passErr error) {
@@ -2546,12 +2559,19 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 		return false, errors.New("snapshots: nil derived sidecar catch-up database")
 	}
 	publishedBlock, ok, err := r.verifiedSnapshotBuildStageBlock(db)
-	if err != nil || !ok || publishedBlock == 0 {
+	if err != nil || ((!ok || publishedBlock == 0) && !r.cfg.EventLogIndependentFrontier) {
 		return false, err
 	}
 	manifest, err := loadOptionalProductionManifest(r.cfg.Dir)
-	if err != nil || manifest == nil {
+	if err != nil {
 		return false, err
+	}
+	if manifest == nil {
+		if !r.cfg.EventLogIndependentFrontier {
+			return false, nil
+		}
+		// An event-only first publication must not manufacture state coverage.
+		manifest = &Manifest{}
 	}
 
 	plan, err := r.derivedSidecarCatchupPlan(manifest, publishedBlock)
@@ -2573,7 +2593,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 		return false, nil
 	}
 	syncActive := r.historySyncBudgetActive()
-	syncCriticalEventLog := syncActive && r.syncEventLogCatchupEnabled() && plan.event != nil
+	syncCriticalEventLog := (syncActive || r.cfg.EventLogIndependentFrontier) && r.syncEventLogCatchupEnabled() && plan.event != nil
 	if syncActive {
 		// Balance traces and section blooms are optional for direct V2 receipt
 		// publication and remain deferred during import. Event logs are different:
@@ -2684,6 +2704,13 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 		return syncCriticalEventLog, nil
 	}
 
+	// Files remain inactive until the original canonical source cut is rechecked.
+	// A rollback or source replacement must leave both manifest and stage intact.
+	if plan.event != nil && r.cfg.EventLogIndependentFrontier {
+		if err := r.verifyIndependentEventSource(db, *plan.event, plan.eventAnchor); err != nil {
+			return syncCriticalEventLog, err
+		}
+	}
 	publishStarted := time.Now()
 	updated, err := NewAggregator(r.cfg.Dir).integrateWithManifest(manifest.VisibleTxStart, manifest.VisibleTxEnd, refs, manifest)
 	if err != nil {
@@ -2697,7 +2724,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 		if err := r.cfg.ColdChainVerificationCache.recordTrustedEventLogs(r.cfg.Dir, eventLogIndexRef, []SegmentRef{eventLogRef}); err != nil {
 			return syncCriticalEventLog, fmt.Errorf("snapshots: record trusted sidecar catch-up event-log range [%d,%d]: %w", plan.event.from, plan.event.to, err)
 		}
-		if err := writeEventLogBuildStage(chainDB, updated); err != nil {
+		if err := r.reconcileEventLogBuildStage(updated); err != nil {
 			return syncCriticalEventLog, err
 		}
 	}
@@ -2733,6 +2760,7 @@ type coldSidecarCatchupPlan struct {
 	section           *coldSidecarBlockRange
 	eventTargetCapped bool
 	targetDeferred    bool
+	eventAnchor       common.Hash
 }
 
 func (p coldSidecarCatchupPlan) pending() bool {
@@ -2741,7 +2769,7 @@ func (p coldSidecarCatchupPlan) pending() bool {
 
 func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock uint64) (coldSidecarCatchupPlan, error) {
 	var plan coldSidecarCatchupPlan
-	if r == nil || manifest == nil || publishedBlock == 0 {
+	if r == nil || manifest == nil {
 		return plan, nil
 	}
 	if r.cfg.BuildBalanceTraces {
@@ -2752,7 +2780,7 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 	if r.cfg.BuildEventLogs {
 		batchBlocks := r.cfg.BatchBlocks
 		eventTargetBlock := publishedBlock
-		if r.historySyncBudgetActive() && r.syncEventLogCatchupEnabled() {
+		if (r.historySyncBudgetActive() || r.cfg.EventLogIndependentFrontier) && r.syncEventLogCatchupEnabled() {
 			if r.cfg.SyncEventLogCatchupBlocks > 0 {
 				batchBlocks = r.cfg.SyncEventLogCatchupBlocks
 			}
@@ -2763,13 +2791,38 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 					plan.targetDeferred = true
 					return plan, nil
 				}
-				if ok && target < eventTargetBlock {
+				if r.cfg.EventLogIndependentFrontier {
+					eventTargetBlock = 0
+					if ok {
+						cap, err := r.independentEventSourceCap(r.chain.DB())
+						if err != nil {
+							return plan, err
+						}
+						eventTargetBlock = min(target, cap)
+						plan.eventTargetCapped = target <= cap
+					}
+				} else if ok && target < eventTargetBlock {
 					eventTargetBlock = target
 					plan.eventTargetCapped = true
 				}
 			}
 		}
 		if next, ok := nextEventLogCatchupRange(manifest, eventTargetBlock, batchBlocks); ok {
+			if r.cfg.EventLogIndependentFrontier {
+				// Repairing an interrupted companion can expand the overlap
+				// component; never let that escape the authenticated source cap.
+				cap, err := r.independentEventSourceCap(r.chain.DB())
+				if err != nil {
+					return plan, err
+				}
+				if next.to > cap {
+					return plan, fmt.Errorf("snapshots: event repair range end %d exceeds solid/Finish %d", next.to, cap)
+				}
+				plan.eventAnchor, err = r.snapshotBuildStageBoundaryHash(r.chain.DB(), rawdb.StageSnapshotEventLogBuild, next.to)
+				if err != nil {
+					return plan, err
+				}
+			}
 			plan.event = &next
 		}
 	}
@@ -2792,6 +2845,17 @@ func (r *Runner) reconcileEventLogBuildStage(manifest *Manifest) error {
 	chainDB, err := r.derivedIndexChainDB()
 	if err != nil {
 		return err
+	}
+	if r.cfg.EventLogIndependentFrontier {
+		cap, err := r.independentEventSourceCap(r.chain.DB())
+		if err != nil {
+			return err
+		}
+		manifest = eventManifestAtBlock(manifest, cap)
+		verified, err := verifyEventSourceRefs(eventLogRefs(manifest), 1, cap, NewCanonicalEventLogVerifier(r.chain), true)
+		if err != nil || !verified {
+			return err
+		}
 	}
 	return writeEventLogBuildStage(chainDB, manifest)
 }

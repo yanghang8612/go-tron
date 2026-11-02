@@ -7,7 +7,7 @@
 // The reward store (cycleReward / cycleVote / witnessVI) is append-only — each
 // cycle's value is written once at maintenance and never overwritten — so the
 // values for historical cycles are still readable from the HEAD state. The
-// voter's account-vote snapshots (WriteCycleAccountVote at each settlement)
+// voter's V4 Votes+presence snapshots (WriteCycleAccountVotes at each settlement)
 // reconstruct the settlement-period boundaries and the vote config per period
 // WITHOUT needing historical flat state.
 //
@@ -48,7 +48,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/proto"
 )
 
 func mustAddr(h string) tcommon.Address {
@@ -593,18 +592,17 @@ func main() {
 			statedb.ReadBeginCycle(owner.Bytes()), statedb.ReadEndCycle(owner.Bytes()),
 			statedb.GetAllowance(owner), statedb.GetBalance(owner))
 		fmt.Printf("current votes: %s\n", votesStr(statedb.GetVotes(owner)))
-		fmt.Printf("%-8s %s\n", "cycle", "snapshotVotes (ReadCycleAccountVote)")
+		fmt.Println("V4 snapshot projection: ordered Votes + presence only; full Account/allowance is not retained")
+		fmt.Printf("%-8s %s\n", "cycle", "snapshotVotes (ReadCycleAccountVotesStrict)")
 		for c := *fromCycle; c <= *toCycle; c++ {
-			raw := statedb.ReadCycleAccountVote(c, owner.Bytes())
-			if len(raw) == 0 {
-				continue
-			}
-			snap := &corepb.Account{}
-			if err := proto.Unmarshal(raw, snap); err != nil {
+			votes, present, err := statedb.ReadCycleAccountVotesStrict(c, owner.Bytes())
+			if err != nil {
 				fmt.Printf("%-8d <decode error: %v>\n", c, err)
 				continue
 			}
-			fmt.Printf("%-8d %s  allowance=%d\n", c, votesStr(snap.Votes), snap.GetAllowance())
+			if present {
+				fmt.Printf("%-8d %s  present=true\n", c, votesStr(votes))
+			}
 		}
 
 		// ---- replay ComputeVoterReward over explicit ranges ----

@@ -11,7 +11,7 @@ import (
 
 // This retains the original byte layout independently of the append helper.
 func originalElementBytes(family byte, key, value []byte) []byte {
-	out := append([]byte(nil), []byte("gtron/latest-domain/muhash3072/compact-v3\x00")...)
+	out := append([]byte(nil), []byte("gtron/latest-domain/muhash3072/compact-v4\x00")...)
 	out = append(out, family)
 	out = binary.BigEndian.AppendUint64(out, uint64(len(key)))
 	out = append(out, key...)

@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	historicalWithdrawFormatVersion  = 2 // V4 snapshot is explicitly Votes+presence, not full Account.
 	historicalWithdrawMaxCycles      = 4096
 	historicalWithdrawMaxKeys        = 100_000
 	historicalWithdrawMaxOutputBytes = 16 << 20
@@ -132,11 +133,11 @@ type historicalRewardInputs struct {
 }
 
 type historicalAccountSnapshot struct {
-	KeyHex    string           `json:"keyHex"`
-	Present   bool             `json:"present"`
-	RawHex    string           `json:"rawHex,omitempty"`
-	Allowance int64            `json:"allowance,omitempty"`
-	Votes     []historicalVote `json:"votes,omitempty"`
+	KeyHex         string           `json:"keyHex"`
+	Present        bool             `json:"present"`
+	RawHex         string           `json:"rawHex,omitempty"`
+	Representation string           `json:"representation"`
+	Votes          []historicalVote `json:"votes,omitempty"`
 }
 
 type historicalRewardComputation struct {
@@ -306,7 +307,7 @@ func exportHistoricalWithdrawInputs(opts historicalWithdrawExportOptions) error 
 	}
 
 	var out historicalWithdrawExport
-	out.FormatVersion = 1
+	out.FormatVersion = historicalWithdrawFormatVersion
 	out.CreatedUTC = time.Now().UTC().Format(time.RFC3339Nano)
 	manifestEnd, err := readHistoricalManifestIdentity(opts.SnapshotDir)
 	if err != nil {
@@ -466,15 +467,14 @@ func readHistoricalRewardInputs(kv *historicalKVReader, owner tcommon.Address, a
 	if err != nil {
 		return out, err
 	}
-	snapshot := &historicalAccountSnapshot{KeyHex: hex.EncodeToString(key), Present: ok}
+	snapshot := &historicalAccountSnapshot{KeyHex: hex.EncodeToString(key), Present: ok, Representation: "V4 ordered Votes + presence projection; full Account/allowance not retained"}
 	if ok {
 		snapshot.RawHex = hex.EncodeToString(raw)
-		decoded := new(corepb.Account)
-		if err := statecodec.Unmarshal(raw, decoded); err != nil {
-			return out, fmt.Errorf("decode begin-cycle account-vote snapshot: %w", err)
+		votes, err := statecodec.UnmarshalRewardVotes(raw)
+		if err != nil {
+			return out, fmt.Errorf("decode begin-cycle Votes projection: %w", err)
 		}
-		snapshot.Allowance = decoded.GetAllowance()
-		snapshot.Votes = historicalVotes(decoded.GetVotes())
+		snapshot.Votes = historicalVotes(votes)
 	}
 	out.BeginSnapshot = snapshot
 	return out, nil

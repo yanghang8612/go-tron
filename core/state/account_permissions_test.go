@@ -68,7 +68,7 @@ func TestAccountPermissionsPersistOutsideAccountEnvelope(t *testing.T) {
 		if readErr != nil || !exists {
 			t.Fatalf("read permission row %x: exists=%v err=%v", test.key, exists, readErr)
 		}
-		got, err := decodeAccountPermissionValue(value)
+		got, _, err := decodeAccountPermissionRow(addr, test.key, value)
 		if err != nil {
 			t.Fatalf("decode permission row %x: %v", test.key, err)
 		}
@@ -531,7 +531,7 @@ func BenchmarkDecodeAccountPermissionRow(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				permission, _, err := decodeAccountPermissionRow(key, value)
+				permission, _, err := decodeAccountPermissionRow(tcommon.Address{}, key, value)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -556,7 +556,7 @@ func TestDecodeAccountPermissionRowOwnsBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := decodeAccountPermissionRow(accountActivePermissionKey(2), raw)
+	got, _, err := decodeAccountPermissionRow(tcommon.Address{}, accountActivePermissionKey(2), raw)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -946,6 +946,12 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 	if err != nil || manifest == nil {
 		return err
 	}
+	if canonical, err := m.eventSourcesCanonical(manifest, fromBlock, toBlock); err != nil {
+		return err
+	} else if !canonical {
+		return fmt.Errorf("snapshots: event source range [%d,%d] is not locally canonical", fromBlock, toBlock)
+	}
+
 	refs, err := m.eventLogRefsForQuery(manifest, fromBlock, toBlock, filter)
 	if err != nil {
 		return err
@@ -964,6 +970,12 @@ func (m *Manager) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter Even
 	if err != nil || manifest == nil {
 		return false, err
 	}
+	if canonical, err := m.eventSourcesCanonical(manifest, fromBlock, toBlock); err != nil {
+		return false, err
+	} else if !canonical {
+		return false, nil
+	}
+
 	refs, covered, forceFullScan, err := m.coveredEventLogRefsForQuery(manifest, fromBlock, toBlock, filter)
 	if err != nil || !covered {
 		return false, err
@@ -1225,6 +1237,12 @@ func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) 
 	if err != nil || manifest == nil {
 		return false, err
 	}
+	if canonical, err := m.eventSourcesCanonical(manifest, fromBlock, toBlock); err != nil {
+		return false, err
+	} else if !canonical {
+		return false, nil
+	}
+
 	refs := eventLogRefs(manifest)
 	if !eventLogRangeCoveredByRefs(refs, fromBlock, toBlock) {
 		return false, nil
@@ -1314,6 +1332,12 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 	if err != nil || manifest == nil {
 		return false, err
 	}
+	if canonical, err := m.eventSourcesCanonical(manifest, fromBlock, toBlock); err != nil {
+		return false, err
+	} else if !canonical {
+		return false, nil
+	}
+
 	refs := eventLogRefs(manifest)
 	_, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
 	if err != nil {

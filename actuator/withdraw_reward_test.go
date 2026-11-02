@@ -1,48 +1,48 @@
 package actuator
 
 import (
-	"bytes"
 	"math/big"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
-	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
-func TestMarshalAccountVoteUsesCanonicalAccountEncoding(t *testing.T) {
-	pb := &corepb.Account{
-		Address:   []byte{0x41, 0x01},
-		Allowance: 123,
-		Votes: []*corepb.Vote{{
-			VoteAddress: []byte{0x41, 0x02},
-			VoteCount:   99,
-		}},
-		Asset:                      map[string]int64{"legacy-z": 9, "legacy-a": 1},
-		AssetV2:                    map[string]int64{"1000002": 2, "1000001": 1},
-		LatestAssetOperationTime:   map[string]int64{"legacy-z": 90, "legacy-a": 10},
-		LatestAssetOperationTimeV2: map[string]int64{"1000002": 20, "1000001": 10},
-		FreeAssetNetUsage:          map[string]int64{"legacy-z": 900, "legacy-a": 100},
-		FreeAssetNetUsageV2:        map[string]int64{"1000002": 200, "1000001": 100},
+func TestWithdrawRewardSnapshotIsExplicitVotesProjection(t *testing.T) {
+	statedb := setupStateDB(t)
+	voter, witness := makeTestAddr(0x11), makeTestAddr(0x12)
+	seedAccount(statedb, voter, 12345)
+	statedb.SetAllowance(voter, 123)
+	statedb.SetTRC10Balance(voter, 1000001, 777)
+	statedb.SetPermissions(voter, &corepb.Permission{Threshold: 1, Keys: []*corepb.Key{{Address: voter.Bytes(), Weight: 1}}}, nil, nil)
+	votes := []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 5}, {VoteAddress: witness.Bytes(), VoteCount: 7}}
+	votes[0].ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 1})
+	statedb.SetVotes(voter, votes)
+	dp := state.NewDynamicProperties()
+	dp.SetChangeDelegation(true)
+	dp.SetCurrentCycleNumber(5)
+	dp.SetNewRewardAlgorithmEffectiveCycle(0)
+	withdrawReward(nil, statedb, dp, voter)
+	got, present, err := statedb.ReadCycleAccountVotesStrict(5, voter.Bytes())
+	if err != nil || !present || !proto.Equal(&corepb.Account{Votes: got}, &corepb.Account{Votes: votes}) {
+		t.Fatalf("Votes snapshot=%v present=%v err=%v", got, present, err)
 	}
-	account := types.NewAccountFromPB(pb)
-	want, err := account.Marshal()
-	if err != nil {
+	projection, present, err := statedb.ReadCycleAccountVoteProjectionStrict(5, voter.Bytes())
+	if err != nil || !present {
+		t.Fatalf("projection: present=%v err=%v", present, err)
+	}
+	var snapshot corepb.Account
+	if err := proto.Unmarshal(projection, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	got := marshalAccountVote(account)
-	if !bytes.Equal(got, want) {
-		t.Fatalf("account-vote encoding differs from canonical Account.Marshal\n got %x\nwant %x", got, want)
+	if !proto.Equal(&snapshot, &corepb.Account{Votes: votes}) {
+		t.Fatalf("snapshot retained non-Votes fields: %v", &snapshot)
 	}
-	var decoded corepb.Account
-	if err := proto.Unmarshal(got, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(&decoded, pb) {
-		t.Fatalf("account-vote round trip differs\n got %v\nwant %v", &decoded, pb)
+	if statedb.GetAllowance(voter) != 123 || statedb.GetBalance(voter) != 12345 || statedb.GetTRC10Balance(voter, 1000001) != 777 {
+		t.Fatal("live account fields changed by snapshot projection")
 	}
 }
 
@@ -102,16 +102,12 @@ func TestWithdrawReward_SettlesPendingReward(t *testing.T) {
 		t.Fatalf("endCycle: got %d, want 11", got)
 	}
 
-	// java-tron snapshots the detached account capsule loaded before reward
-	// settlement. The live account has the new allowance, but account-vote must
-	// retain the pre-settlement value.
-	var snapshot corepb.Account
-	if err := proto.Unmarshal(statedb.ReadCycleAccountVote(10, voter.Bytes()), &snapshot); err != nil {
-		t.Fatal(err)
+	// V4 retains the pre-settlement Votes only; live allowance is paid normally.
+	snapshotVotes, present, err := statedb.ReadCycleAccountVotesStrict(10, voter.Bytes())
+	if err != nil || !present || len(snapshotVotes) != 1 || snapshotVotes[0].VoteCount != 100 {
+		t.Fatalf("Votes snapshot=%v present=%v err=%v", snapshotVotes, present, err)
 	}
-	if got := snapshot.GetAllowance(); got != 0 {
-		t.Fatalf("snapshot allowance: got %d, want pre-settlement value 0", got)
-	}
+
 }
 
 func TestWithdrawReward_NoVotesResetsBegin(t *testing.T) {

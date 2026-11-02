@@ -88,17 +88,18 @@ type StoreBreakdown struct {
 }
 
 type StoreResult struct {
-	Name         string                     `json:"name"`
-	Scope        string                     `json:"scope"`
-	Compared     uint64                     `json:"compared"`
-	Equal        uint64                     `json:"equal"`
-	Different    uint64                     `json:"different"`
-	MissingGtron uint64                     `json:"missing_gtron"`
-	MissingJava  uint64                     `json:"missing_java"`
-	Invalid      uint64                     `json:"invalid"`
-	Skipped      uint64                     `json:"skipped"`
-	Present      bool                       `json:"present"`
-	Breakdown    map[string]*StoreBreakdown `json:"breakdown,omitempty"`
+	Name                string                     `json:"name"`
+	Scope               string                     `json:"scope"`
+	ComparisonSemantics string                     `json:"comparison_semantics,omitempty"`
+	Compared            uint64                     `json:"compared"`
+	Equal               uint64                     `json:"equal"`
+	Different           uint64                     `json:"different"`
+	MissingGtron        uint64                     `json:"missing_gtron"`
+	MissingJava         uint64                     `json:"missing_java"`
+	Invalid             uint64                     `json:"invalid"`
+	Skipped             uint64                     `json:"skipped"`
+	Present             bool                       `json:"present"`
+	Breakdown           map[string]*StoreBreakdown `json:"breakdown,omitempty"`
 }
 
 func (s StoreResult) Mismatches() uint64 {

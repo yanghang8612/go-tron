@@ -23,13 +23,17 @@ func accountActivePermissionKey(id int32) []byte {
 	return key[:]
 }
 
-func decodeAccountPermissionRow(key, value []byte) (*corepb.Permission, byte, error) {
-	if len(key) != 1 && !(len(key) == 5 && key[0] == accountActivePermissionRoot[0]) {
+func decodeAccountPermissionRow(owner common.Address, key, value []byte) (*corepb.Permission, byte, error) {
+	if !(len(key) == 1 && (key[0] == accountOwnerPermissionKey[0] || key[0] == accountWitnessPermissionKey[0])) &&
+		!(len(key) == 5 && key[0] == accountActivePermissionRoot[0] && int32(binary.BigEndian.Uint32(key[1:])) >= 2) {
 		return nil, 0, fmt.Errorf("account permission key %x has invalid length/type", key)
 	}
-	permission, err := decodeAccountPermissionValue(value)
+	permission, err := decodeAccountPermissionForOwner(owner, key, value)
 	if err != nil {
 		return nil, 0, fmt.Errorf("decode account permission %x: %w", key, err)
+	}
+	if len(key) == 5 && permission.GetId() != int32(binary.BigEndian.Uint32(key[1:])) {
+		return nil, 0, fmt.Errorf("account active permission row %d contains id %d", binary.BigEndian.Uint32(key[1:]), permission.GetId())
 	}
 	return permission, key[0], nil
 }
@@ -150,7 +154,7 @@ func (s *StateDB) AccountPermissionByID(addr common.Address, id int32) (_ *corep
 		obj.accountPermissionPointLoaded = true
 		return nil, nil
 	}
-	permission, _, err := decodeAccountPermissionRow(key, value)
+	permission, _, err := decodeAccountPermissionRow(addr, key, value)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +181,7 @@ func (s *StateDB) materializeAccountPermissions(obj *stateObject) (err error) {
 	pb := obj.account.Proto()
 	clearAccountPermissionProto(pb)
 	if err := s.IterateAccountKV(obj.address, kvdomains.AccountPermissionAux, nil, func(key, value []byte) (bool, error) {
-		permission, kind, err := decodeAccountPermissionRow(key, value)
+		permission, kind, err := decodeAccountPermissionRow(obj.address, key, value)
 		if err != nil {
 			return false, err
 		}
@@ -210,7 +214,7 @@ func (s *StateDB) writeAccountPermissionRow(obj *stateObject, key []byte, permis
 	if permission == nil {
 		return s.DeleteAccountKV(obj.address, kvdomains.AccountPermissionAux, key)
 	}
-	value, err := appendAccountPermission(s.accountRowMarshalScratch[:0], permission)
+	value, err := appendAccountPermissionForOwner(s.accountRowMarshalScratch[:0], obj.address, key, permission)
 	if err != nil {
 		return err
 	}

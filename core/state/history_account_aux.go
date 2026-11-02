@@ -68,13 +68,16 @@ func (r *PersistentHistoryReader) materializeHistoricalAccountAux(pb *corepb.Acc
 		}
 	}
 	if r.coldHistory != nil {
-		currentGeneration, exists, err := r.hotLatest().KVGeneration(owner)
+		// The account envelope selects live KV. A missing generation watermark
+		// is normal for generation zero; it must not hide unchanged split rows.
+		// Conversely an orphan watermark must not make a deleted account live.
+		current, exists, err := decodeHotAccountEnvelope(r.hotLatest(), owner)
 		if err != nil {
 			return err
 		}
 		if exists {
 			for _, domain := range accountSplitDomains {
-				if err := rawdb.IterateStateKVLatest(r.db, owner, currentGeneration, domain, nil, func(key, _ []byte) (bool, error) {
+				if err := rawdb.IterateStateKVLatest(r.db, owner, current.AccountKVGeneration, domain, nil, func(key, _ []byte) (bool, error) {
 					candidates[domain][string(key)] = struct{}{}
 					return true, nil
 				}); err != nil {
@@ -135,7 +138,7 @@ func (r *PersistentHistoryReader) materializeHistoricalAccountAux(pb *corepb.Acc
 
 	clearAccountPermissionProto(pb)
 	loadPermission := func(key, value []byte) (bool, error) {
-		permission, kind, err := decodeAccountPermissionRow(key, value)
+		permission, kind, err := decodeAccountPermissionRow(owner, key, value)
 		if err != nil {
 			return false, err
 		}

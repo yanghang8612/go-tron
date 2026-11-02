@@ -485,6 +485,12 @@ func appendAccountPermission(dst []byte, permission *corepb.Permission) ([]byte,
 		return nil, errors.New("account permission name is not valid UTF-8")
 	}
 	e := newAccountRowEncoderAppend(accountRowPermission, dst, 64)
+	appendAccountPermissionFields(e, permission, nil)
+	return e.finish()
+}
+
+// A non-nil owner permits the V2 SELF key marker. V1 callers pass nil.
+func appendAccountPermissionFields(e *accountRowEncoder, permission *corepb.Permission, owner []byte) {
 	e.i32(int32(permission.GetType()))
 	e.i32(permission.GetId())
 	e.bytes([]byte(permission.GetPermissionName()))
@@ -497,13 +503,16 @@ func appendAccountPermission(dst []byte, permission *corepb.Permission) ([]byte,
 			e.u8(0)
 			continue
 		}
-		e.u8(1)
-		e.bytes(key.GetAddress())
+		if owner != nil && bytes.Equal(key.GetAddress(), owner) {
+			e.u8(2)
+		} else {
+			e.u8(1)
+			e.bytes(key.GetAddress())
+		}
 		e.i64(key.GetWeight())
 		appendProtoUnknown(e, key)
 	}
 	appendProtoUnknown(e, permission)
-	return e.finish()
 }
 
 func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
@@ -511,6 +520,10 @@ func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeAccountPermissionFields(d, nil)
+}
+
+func decodeAccountPermissionFields(d *accountRowDecoder, owner []byte) (*corepb.Permission, error) {
 	typeValue, err := d.i32()
 	if err != nil {
 		return nil, err
@@ -561,12 +574,17 @@ func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 			permission.Keys = append(permission.Keys, nil)
 			continue
 		}
-		if present != 1 {
+		if present != 1 && !(present == 2 && owner != nil) {
 			return nil, fmt.Errorf("invalid account permission key presence %d", present)
 		}
-		address, err := d.bytes()
-		if err != nil {
-			return nil, err
+		var address []byte
+		if present == 2 {
+			address = append([]byte(nil), owner...)
+		} else {
+			address, err = d.bytes()
+			if err != nil {
+				return nil, err
+			}
 		}
 		weight, err := d.i64()
 		if err != nil {

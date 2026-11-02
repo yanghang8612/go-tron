@@ -14,10 +14,10 @@ import (
 	"github.com/tronprotocol/go-tron/common/muhash3072"
 )
 
-const StateCommitmentHeadVersion uint16 = 3
-const StateCommitmentElementVersion uint16 = 3
+const StateCommitmentHeadVersion uint16 = 4
+const StateCommitmentElementVersion uint16 = 4
 
-var stateCommitmentHeadMagic = []byte{'G', 'M', 'H', 'H', 'E', 'A', 'D', 3}
+var stateCommitmentHeadMagic = []byte{'G', 'M', 'H', 'H', 'E', 'A', 'D', 4}
 var ErrStateCommitmentHead = errors.New("invalid MuHash latest-domain HEAD; fresh-genesis resync required")
 
 // StateCommitmentHead is a complete current source-cut commitment. Only HEAD
@@ -148,13 +148,13 @@ func StateCommitmentElementFamily(key []byte) (byte, error) {
 	if _, ok := DecodeStateKVGenerationKey(key); ok {
 		return 2, nil
 	}
-	if _, _, _, _, ok := DecodeStateKVLatestKey(key); ok {
+	if _, _, _, _, ok := decodeStateKVLatestKeyNoCopy(key); ok {
 		return 3, nil
 	}
 	return 0, fmt.Errorf("invalid latest-domain commitment source key %x", key)
 }
 
-const stateCommitmentElementDomain = "gtron/latest-domain/muhash3072/compact-v3\x00"
+const stateCommitmentElementDomain = "gtron/latest-domain/muhash3072/compact-v4\x00"
 
 func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 	family, err := StateCommitmentElementFamily(key)
@@ -162,7 +162,7 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 		return nil, err
 	}
 	if family == 3 {
-		if err := ValidateStateKVLatestValue(value); err != nil {
+		if err := ValidateStateKVLatestEntry(key, value); err != nil {
 			return nil, err
 		}
 	}
@@ -178,7 +178,7 @@ func AppendStateCommitmentElement(dst, key, value []byte) ([]byte, error) {
 		return nil, err
 	}
 	if family == 3 {
-		if err := ValidateStateKVLatestValue(value); err != nil {
+		if err := ValidateStateKVLatestEntry(key, value); err != nil {
 			return nil, err
 		}
 	}
@@ -196,7 +196,7 @@ func appendStateCommitmentElement(out []byte, family byte, key, value []byte) []
 }
 func StateCommitmentDeltaID(deltas []StateCommitmentDelta) common.Hash {
 	h := sha256.New()
-	h.Write([]byte("gtron/latest-domain/muhash-delta/compact-v3\x00"))
+	h.Write([]byte("gtron/latest-domain/muhash-delta/compact-v4\x00"))
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(len(deltas)))
 	h.Write(b[:])

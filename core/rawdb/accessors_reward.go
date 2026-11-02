@@ -1,11 +1,15 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // DefaultBrokerage mirrors java-tron's DelegationStore.DEFAULT_BROKERAGE (20%).
@@ -164,28 +168,33 @@ func WriteCycleBrokerage(db ethdb.KeyValueWriter, cycle int64, addr []byte, rate
 	_ = db.Put(delegRewardKey(cycle, addr, "brokerage"), buf[:])
 }
 
-// ---- voter per-cycle account-vote snapshot -----------------------------
+// ---- voter per-cycle Votes-only snapshot -------------------------------
 
-// ReadCycleAccountVote returns the voter account snapshot for a given cycle.
-// Nil if absent.
-func ReadCycleAccountVote(db ethdb.KeyValueReader, cycle int64, addr []byte) []byte {
-	data, ok, err := ReadCycleAccountVoteStrict(db, cycle, addr)
-	if err != nil || !ok || len(data) == 0 {
-		return nil
+// These flat-store helpers use the same strict V4 Votes-only native value as
+// the rooted StateDB surface. Production reward state remains rooted there.
+func ReadCycleAccountVotes(db ethdb.KeyValueReader, cycle int64, addr []byte) ([]*corepb.Vote, bool) {
+	votes, present, err := ReadCycleAccountVotesStrict(db, cycle, addr)
+	if err != nil {
+		return nil, false
 	}
-	return data
+	return votes, present
 }
 
-// ReadCycleAccountVoteStrict returns the voter account snapshot for a given
-// cycle and surfaces storage errors. Missing rows return (nil, false, nil).
-func ReadCycleAccountVoteStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) ([]byte, bool, error) {
-	return readPresentValue(db, delegRewardKey(cycle, addr, "account-vote"), "cycle account vote")
+func ReadCycleAccountVotesStrict(db ethdb.KeyValueReader, cycle int64, addr []byte) ([]*corepb.Vote, bool, error) {
+	data, present, err := readPresentValue(db, delegRewardKey(cycle, addr, "account-vote"), "cycle account votes")
+	if err != nil || !present {
+		return nil, present, err
+	}
+	votes, err := statecodec.UnmarshalRewardVotes(data)
+	return votes, true, err
 }
 
-// WriteCycleAccountVote stores the voter account protobuf snapshot for a
-// given cycle.
-func WriteCycleAccountVote(db ethdb.KeyValueWriter, cycle int64, addr []byte, proto []byte) {
-	_ = db.Put(delegRewardKey(cycle, addr, "account-vote"), proto)
+func WriteCycleAccountVotes(db ethdb.KeyValueWriter, cycle int64, addr []byte, votes []*corepb.Vote) error {
+	data, err := statecodec.MarshalRewardVotes(votes)
+	if err != nil {
+		return err
+	}
+	return db.Put(delegRewardKey(cycle, addr, "account-vote"), data)
 }
 
 func CycleRewardStateKey(cycle int64, addr []byte) []byte {
@@ -222,6 +231,19 @@ func AppendCycleBrokerageStateKey(dst []byte, cycle int64, addr []byte) []byte {
 
 func CycleAccountVoteStateKey(cycle int64, addr []byte) []byte {
 	return delegRewardKey(cycle, addr, "account-vote")
+}
+
+// IsCycleAccountVoteStateKey identifies the complete logical key of a normal
+// per-cycle reward snapshot. It does not accept a physical KV wrapper, partial
+// suffix, truncated address or a different reward row category.
+func IsCycleAccountVoteStateKey(key []byte) bool {
+	const suffix = "account-vote"
+	cycleEnd := len(delegRewardPrefix) + 8
+	addressEnd := cycleEnd + 1 + common.AddressLength
+	return len(key) == addressEnd+1+len(suffix) &&
+		bytes.HasPrefix(key, delegRewardPrefix) &&
+		key[cycleEnd] == '-' && key[addressEnd] == '-' &&
+		bytes.Equal(key[addressEnd+1:], []byte(suffix))
 }
 
 func AppendCycleAccountVoteStateKey(dst []byte, cycle int64, addr []byte) []byte {

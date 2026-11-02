@@ -13,11 +13,67 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
 var benchmarkCycleReward int64
+
+func TestRewardVotesPresenceRevertAndAllCyclesRetained(t *testing.T) {
+	s := newTestStateDB(t)
+	addr := testAddr(0x4b).Bytes()
+	if votes, present, err := s.ReadCycleAccountVotesStrict(1, addr); err != nil || present || votes != nil {
+		t.Fatalf("missing snapshot: %v %v %v", votes, present, err)
+	}
+	if err := s.WriteCycleAccountVotes(1, addr, nil); err != nil {
+		t.Fatal(err)
+	}
+	cut := s.Snapshot()
+	votes := []*corepb.Vote{{VoteAddress: testAddr(0x4c).Bytes(), VoteCount: 5}, {VoteAddress: testAddr(0x4c).Bytes(), VoteCount: -1}}
+	votes[0].ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 1})
+	if err := s.WriteCycleAccountVotes(1, addr, votes); err != nil {
+		t.Fatal(err)
+	}
+	s.RevertToSnapshot(cut)
+	if got, present, err := s.ReadCycleAccountVotesStrict(1, addr); err != nil || !present || len(got) != 0 {
+		t.Fatalf("present empty snapshot lost on revert: %v %v %v", got, present, err)
+	}
+	if err := s.WriteCycleAccountVotes(2, addr, votes); err != nil {
+		t.Fatal(err)
+	}
+	root, err := s.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, present, err := reopened.ReadCycleAccountVotesStrict(1, addr); err != nil || !present || len(got) != 0 {
+		t.Fatalf("older empty cycle key removed: %v %v %v", got, present, err)
+	}
+	got, present, err := reopened.ReadCycleAccountVotesStrict(2, addr)
+	if err != nil || !present || !proto.Equal(&corepb.Account{Votes: got}, &corepb.Account{Votes: votes}) {
+		t.Fatalf("later ordered Votes mismatch: %v %v %v", got, present, err)
+	}
+	data, present, err := reopened.ReadCycleAccountVoteProjectionStrict(1, addr)
+	if err != nil || !present || len(data) != 0 {
+		t.Fatalf("diagnostic projection presence differs for empty snapshot: %x %v %v", data, present, err)
+	}
+}
+
+func TestRewardVotesRejectsFullAccountNative(t *testing.T) {
+	// Test the strict codec explicitly; production source-writer guards reject
+	// this representation before it can become committed V4 reward state.
+	legacy, err := statecodec.Marshal(&corepb.Account{Address: testAddr(0x4d).Bytes(), Allowance: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := statecodec.UnmarshalRewardVotes(legacy); err == nil {
+		t.Fatal("legacy complete Account snapshot accepted")
+	}
+}
 
 func TestRewardStoreDefaults(t *testing.T) {
 	statedb := newTestStateDB(t)
@@ -35,7 +91,7 @@ func TestRewardStoreDefaults(t *testing.T) {
 	if got := statedb.ReadCycleBrokerage(3, addr); got != rawdb.DefaultBrokerage {
 		t.Fatalf("default brokerage: got %d, want %d", got, rawdb.DefaultBrokerage)
 	}
-	if got := statedb.ReadCycleAccountVote(3, addr); got != nil {
+	if got, present := statedb.ReadCycleAccountVotes(3, addr); got != nil || present {
 		t.Fatalf("default account vote: got %x, want nil", got)
 	}
 	if got := statedb.ReadBeginCycle(addr); got != 0 {
@@ -98,7 +154,8 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	addr := testAddr(0x45).Bytes()
 	decimalOfVI := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 	vi := new(big.Int).Mul(big.NewInt(9), decimalOfVI)
-	snap, err := proto.Marshal(&corepb.Account{Address: addr, Votes: []*corepb.Vote{{VoteAddress: testAddr(0x46).Bytes(), VoteCount: 7}}})
+	votes := []*corepb.Vote{{VoteAddress: testAddr(0x46).Bytes(), VoteCount: 7}}
+	snap, err := proto.Marshal(&corepb.Account{Votes: votes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +175,7 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	if err := statedb.WriteCycleBrokerage(8, addr, 33); err != nil {
 		t.Fatal(err)
 	}
-	if err := statedb.WriteCycleAccountVote(8, addr, snap); err != nil {
+	if err := statedb.WriteCycleAccountVotes(8, addr, votes); err != nil {
 		t.Fatal(err)
 	}
 	if err := statedb.WriteBeginCycle(addr, 8); err != nil {
@@ -149,14 +206,23 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	if got := reopened.ReadCycleBrokerage(8, addr); got != 33 {
 		t.Fatalf("brokerage: got %d, want 33", got)
 	}
-	accountVote := reopened.ReadCycleAccountVote(8, addr)
-	if !bytes.Equal(accountVote, snap) {
-		t.Fatalf("account vote: got %x, want %x", accountVote, snap)
+	accountVote, present, err := reopened.ReadCycleAccountVoteProjectionStrict(8, addr)
+	if err != nil || !present || !bytes.Equal(accountVote, snap) {
+		t.Fatalf("Votes projection: got %x present=%v err=%v want=%x", accountVote, present, err, snap)
 	}
 	accountVote[0] ^= 0xff
-	if got := reopened.ReadCycleAccountVote(8, addr); !bytes.Equal(got, snap) {
-		t.Fatalf("account vote read exposed internal storage: got %x want=%x", got, snap)
+	if got, present, err := reopened.ReadCycleAccountVoteProjectionStrict(8, addr); err != nil || !present || !bytes.Equal(got, snap) {
+		t.Fatalf("Votes projection read exposed internal storage: got %x present=%v err=%v", got, present, err)
 	}
+	gotVotes, present := reopened.ReadCycleAccountVotes(8, addr)
+	if !present || !proto.Equal(&corepb.Account{Votes: gotVotes}, &corepb.Account{Votes: votes}) {
+		t.Fatal("typed Votes read mismatch")
+	}
+	gotVotes[0].VoteCount = 999
+	if again, present := reopened.ReadCycleAccountVotes(8, addr); !present || again[0].VoteCount != 7 {
+		t.Fatal("typed Votes read exposed stored value")
+	}
+
 	if got := reopened.ReadBeginCycle(addr); got != 8 {
 		t.Fatalf("begin cycle: got %d, want 8", got)
 	}
@@ -176,7 +242,7 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 	if got, ok, err := reopened.ReadCycleBrokerageStrict(8, addr); err != nil || !ok || got != 33 {
 		t.Fatalf("strict brokerage = (%d,%v,%v), want (33,true,nil)", got, ok, err)
 	}
-	if got, ok, err := reopened.ReadCycleAccountVoteStrict(8, addr); err != nil || !ok || !bytes.Equal(got, snap) {
+	if got, ok, err := reopened.ReadCycleAccountVoteProjectionStrict(8, addr); err != nil || !ok || !bytes.Equal(got, snap) {
 		t.Fatalf("strict account vote = (%x,%v,%v), want (%x,true,nil)", got, ok, err, snap)
 	}
 	if got, ok, err := reopened.ReadBeginCycleStrict(addr); err != nil || !ok || got != 8 {

@@ -47,6 +47,9 @@ type byteComparisonResult struct {
 func (c *comparer) compareByteStore(name, scope string, java ethdb.KeyValueStore, lookup byteLookup) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
 	defer c.trackStore(&r)()
+	if name == "delegation" {
+		r.ComparisonSemantics = "V4 account-vote compares ordered Votes and row presence only; full Java Account snapshot fields are not retained or compared"
+	}
 	if java == nil {
 		return nil
 	}
@@ -107,6 +110,9 @@ func (c *comparer) compareByteStoreParallelDetailedWithLookupFactory(
 ) error {
 	r := StoreResult{Name: name, Scope: scope, Present: java != nil}
 	defer c.trackStore(&r)()
+	if name == "delegation" {
+		r.ComparisonSemantics = "V4 account-vote compares ordered Votes and row presence only; full Java Account snapshot fields are not retained or compared"
+	}
 	if classify != nil {
 		r.Breakdown = make(map[string]*StoreBreakdown)
 	}
@@ -498,7 +504,7 @@ func (c *comparer) compareDelegation(gtron ethdb.KeyValueStore, sdb *state.State
 				}
 			}
 			if category == "account-vote" {
-				return workerState.ReadCycleAccountVoteStrict(cycle, addr)
+				return workerState.ReadCycleAccountVoteProjectionStrict(cycle, addr)
 			}
 			if category == "brokerage" && cycle == -1 {
 				brokerage, ok := currentBrokerage[tcommon.BytesToAddress(addr)]
@@ -603,10 +609,17 @@ func compareDelegationValue(key, java, gtron []byte) (bool, string, error) {
 	if err := proto.Unmarshal(gtron, &got); err != nil {
 		return false, "", fmt.Errorf("decode gtron account-vote: %w", err)
 	}
-	if proto.Equal(&want, &got) {
+	// V4 explicitly projects Java's complete historical Account to the reward
+	// read set. Never report this as full Account equality (see report semantics).
+	wantProjection := &corepb.Account{Votes: want.Votes}
+	gotProjection := &corepb.Account{Votes: got.Votes}
+	if !proto.Equal(&got, gotProjection) {
+		return false, "", fmt.Errorf("gtron V4 account-vote diagnostic contains non-Votes Account fields")
+	}
+	if proto.Equal(wantProjection, &got) {
 		return true, "", nil
 	}
-	return false, cmp.Diff(&want, &got, protocmp.Transform()), nil
+	return false, "Votes projection only: " + cmp.Diff(wantProjection, &got, protocmp.Transform()), nil
 }
 
 func delegationRowCategory(key []byte) string {

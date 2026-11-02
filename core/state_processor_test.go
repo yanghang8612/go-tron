@@ -2800,7 +2800,7 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 		if got := statedb.ReadEndCycle(contractAddr.Bytes()); got != 11 {
 			t.Fatalf("%s end cycle = %d, want 11", name, got)
 		}
-		if vote := statedb.ReadCycleAccountVote(10, contractAddr.Bytes()); vote == nil {
+		if _, present := statedb.ReadCycleAccountVotes(10, contractAddr.Bytes()); !present {
 			t.Fatalf("%s cycle account-vote snapshot is absent", name)
 		}
 	}

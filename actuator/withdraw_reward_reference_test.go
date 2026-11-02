@@ -1,7 +1,7 @@
 package actuator
 
-// These copies freeze the pre-optimization reward paths as independent oracles
-// for selective account hydration. Keep the eager GetAccount and snapshot order.
+// These copies retain the eager Java-style Account hydration as an independent
+// reward oracle. Their stored snapshot is explicitly the V4 Votes projection.
 import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/reward"
@@ -36,19 +36,13 @@ func withdrawRewardBeforeSelectiveAccountRead(db BufferedKVStore, statedb *state
 	// Current-cycle edge: a snapshot exists for beginCycle — voter's vote
 	// was already counted there — skip.
 	if beginCycle == currentCycle {
-		if snap := statedb.ReadCycleAccountVote(beginCycle, addr.Bytes()); snap != nil {
+		if _, present := statedb.ReadCycleAccountVotes(beginCycle, addr.Bytes()); present {
 			return
 		}
 	}
 
-	// java-tron's accountStore.get returns a detached AccountCapsule. Later
-	// adjustAllowance calls read and write a different capsule, so the
-	// account-vote row saved at the end contains the allowance from before this
-	// settlement. StateDB returns a mutable cached account instead; serialize it
-	// now so AddAllowance below cannot leak the newly paid reward into the
-	// historical snapshot.
 	currentVotes := voteEntriesFromAccount(acct)
-	accountVoteSnapshot := marshalAccountVote(acct)
+	accountVoteSnapshot := acct.Votes()
 
 	// Finalize the most-recent recorded-but-not-yet-settled cycle.
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
@@ -78,7 +72,7 @@ func withdrawRewardBeforeSelectiveAccountRead(db BufferedKVStore, statedb *state
 	_ = statedb.WriteBeginCycle(addr.Bytes(), endCycle)
 	_ = statedb.WriteEndCycle(addr.Bytes(), endCycle+1)
 	if accountVoteSnapshot != nil {
-		_ = statedb.WriteCycleAccountVote(endCycle, addr.Bytes(), accountVoteSnapshot)
+		_ = statedb.WriteCycleAccountVotes(endCycle, addr.Bytes(), accountVoteSnapshot)
 	}
 }
 
@@ -118,4 +112,16 @@ func queryRewardBeforeSelectiveAccountRead(db BufferedKVStore, statedb *state.St
 		pending += reward.ComputeVoterReward(statedb, dp, currentVotes, beginCycle, endCycle)
 	}
 	return pending + allowance
+}
+
+// Only the independent oracle tests use a complete live Account encoding.
+func marshalCompleteAccountForRewardOracle(acct *types.Account) []byte {
+	if acct == nil {
+		return nil
+	}
+	raw, err := acct.Marshal()
+	if err != nil {
+		return nil
+	}
+	return raw
 }

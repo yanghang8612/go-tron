@@ -2,9 +2,37 @@ package rawdb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"github.com/tronprotocol/go-tron/common"
 	"testing"
 )
+
+func TestCompactV4RejectsV3HeadIdentity(t *testing.T) {
+	current, err := EncodeStateCommitmentHead(NewStateCommitmentHead())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"magic", "version", "element", "scheme", "complete"} {
+		t.Run(part, func(t *testing.T) {
+			old := bytes.Clone(current)
+			if part == "magic" || part == "complete" {
+				old[7] = 3
+			}
+			if part == "version" || part == "complete" {
+				binary.BigEndian.PutUint16(old[8:10], 3)
+			}
+			if part == "element" || part == "complete" {
+				binary.BigEndian.PutUint16(old[10:12], 3)
+			}
+			if part == "scheme" || part == "complete" {
+				copy(old[14:], "state-flat-latest-muhash3072-compact-v3")
+			}
+			if _, err := DecodeStateCommitmentHead(old); err == nil {
+				t.Fatal("accepted old identity with unchanged valid state/digest")
+			}
+		})
+	}
+}
 
 func TestMuHashHeadStrictCodec(t *testing.T) {
 	h := NewStateCommitmentHead()

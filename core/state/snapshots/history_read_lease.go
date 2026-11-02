@@ -39,6 +39,9 @@ func (m *Manager) PinHistoryReadView() (*Manager, func(), error) {
 	// existing path/companion index while the lease pins its files; the public
 	// OpenPinnedManager still detaches externally mutable input.
 	pinned := newPinnedManager(m.dir, manifest, m.chainVerificationCache)
+	m.mu.RLock()
+	pinned.eventCanonicalVerifier = m.eventCanonicalVerifier
+	m.mu.RUnlock()
 	return pinned, release, nil
 }
 

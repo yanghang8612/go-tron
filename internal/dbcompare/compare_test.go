@@ -201,7 +201,7 @@ func TestCompareDelegationParallelStateReads(t *testing.T) {
 	}
 }
 
-func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
+func TestCompareDelegationAccountVoteVotesProjectionAndBreakdown(t *testing.T) {
 	gtron := rawdb.NewMemoryDatabase()
 	disk := state.NewDatabase(rawdb.WrapKeyValueStore(gtron))
 	sdb, err := state.New(tcommon.Hash{}, disk)
@@ -228,7 +228,7 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 	if bytes.Equal(javaSemantic, gtronSemantic) {
 		t.Fatal("test requires distinct protobuf map-entry ordering")
 	}
-	if err := sdb.WriteCycleAccountVote(1, addr, gtronSemantic); err != nil {
+	if err := sdb.WriteCycleAccountVotes(1, addr, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := java.Put([]byte(fmt.Sprintf("1-%x-account-vote", addr)), javaSemantic); err != nil {
@@ -247,7 +247,11 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sdb.WriteCycleAccountVote(2, addr, gtronDifferent); err != nil {
+	var projectedDifferent corepb.Account
+	if err := proto.Unmarshal(gtronDifferent, &projectedDifferent); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.WriteCycleAccountVotes(2, addr, projectedDifferent.Votes); err != nil {
 		t.Fatal(err)
 	}
 	if err := java.Put([]byte(fmt.Sprintf("2-%x-account-vote", addr)), javaDifferent); err != nil {
@@ -304,6 +308,9 @@ func TestCompareDelegationAccountVoteSemanticDiffAndBreakdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := c.report.Stores[0]
+	if !strings.Contains(result.ComparisonSemantics, "Votes") {
+		t.Fatalf("projection semantics missing: %+v", result)
+	}
 	if result.Compared != 7 || result.Equal != 4 || result.Different != 3 || result.MissingGtron != 0 {
 		t.Fatalf("delegation result=%+v", result)
 	}

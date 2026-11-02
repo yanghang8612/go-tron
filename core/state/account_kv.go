@@ -1915,6 +1915,9 @@ func (s *StateDB) setAccountKVPrepared(owner tcommon.Address, domain kvdomains.K
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
+	if err := rawdb.ValidateStateKVPayload(domain, key, value); err != nil {
+		return err
+	}
 	obj := s.getOrCreateAccountForField(owner, TransactionAccountFieldExistence)
 	var (
 		prevValue  []byte
@@ -1955,6 +1958,9 @@ func (s *StateDB) setAccountKVFinalNoRead(owner tcommon.Address, domain kvdomain
 func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte, journal bool, prevValue []byte, prevExists, prevLoaded bool) error {
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	if err := rawdb.ValidateStateKVPayload(domain, key, value); err != nil {
+		return err
 	}
 	obj := s.getOrCreateAccount(owner)
 	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)

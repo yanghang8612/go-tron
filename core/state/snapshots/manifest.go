@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	CurrentManifestVersion = 4
+	CurrentManifestVersion = 5
 	ManifestVersion        = CurrentManifestVersion
 	ManifestFile           = "manifest.json"
 )
@@ -129,6 +129,10 @@ type SegmentRef struct {
 	Path             string             `json:"path"`
 	Size             uint64             `json:"size"`
 	Checksum         string             `json:"checksum,omitempty"`
+	// SourceBlockHash binds an event segment's inclusive terminal block,
+	// including a terminal block with no logs. It authenticates the canonical
+	// source cut independently of state-history and latest-snapshot progress.
+	SourceBlockHash string `json:"sourceBlockHash,omitempty"`
 	// LookupRoot authenticates the small metadata tree of a paged auxiliary
 	// index. It is independent of the canonical MuHash state commitment.
 	LookupRoot string `json:"lookupRoot,omitempty"`
@@ -717,6 +721,14 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 }
 
 func validateSegmentRef(seg SegmentRef) error {
+	if seg.SourceBlockHash != "" {
+		if seg.Kind != SegmentEventLog {
+			return errors.New("snapshots: source block hash is only valid on event-log segments")
+		}
+		if _, err := parseEventSourceBlockHash(seg.SourceBlockHash); err != nil {
+			return err
+		}
+	}
 	switch seg.Kind {
 	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentSmallSystemHistoryRouting, SegmentMetadataHistoryRouting, SegmentSystemHistoryRouting, SegmentAccountHistoryRouting, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
 	default:

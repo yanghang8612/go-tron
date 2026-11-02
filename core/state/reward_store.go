@@ -338,40 +338,43 @@ func (s *StateDB) WriteCycleBrokerage(cycle int64, addr []byte, rate int) error 
 	return s.writeSystemReward(rawdb.CycleBrokerageStateKey(cycle, addr), buf[:])
 }
 
-func (s *StateDB) ReadCycleAccountVote(cycle int64, addr []byte) []byte {
-	raw, ok, err := s.ReadCycleAccountVoteStrict(cycle, addr)
+// ReadCycleAccountVotes returns the V4 Votes-only snapshot and independent row
+// presence. Empty Votes must never be confused with a missing snapshot.
+func (s *StateDB) ReadCycleAccountVotes(cycle int64, addr []byte) ([]*corepb.Vote, bool) {
+	votes, present, err := s.ReadCycleAccountVotesStrict(cycle, addr)
 	if err != nil {
-		s.recordStateError(fmt.Sprintf("read cycle account vote cycle=%d addr=%x", cycle, addr), err)
-		return nil
+		s.recordStateError(fmt.Sprintf("read cycle account votes cycle=%d addr=%x", cycle, addr), err)
+		return nil, false
 	}
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	return raw
+	return votes, present
 }
 
-func (s *StateDB) ReadCycleAccountVoteStrict(cycle int64, addr []byte) ([]byte, bool, error) {
+func (s *StateDB) ReadCycleAccountVotesStrict(cycle int64, addr []byte) ([]*corepb.Vote, bool, error) {
 	raw, ok, err := s.readSystemRewardWithError(rawdb.CycleAccountVoteStateKey(cycle, addr))
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	account := new(corepb.Account)
-	if err := statecodec.Unmarshal(raw, account); err != nil {
-		return nil, true, fmt.Errorf("state: decode cycle account vote: %w", err)
-	}
-	data, err := proto.Marshal(account)
+	votes, err := statecodec.UnmarshalRewardVotes(raw)
 	if err != nil {
-		return nil, true, fmt.Errorf("state: encode cycle account vote API value: %w", err)
+		return nil, true, fmt.Errorf("state: decode cycle account votes: %w", err)
 	}
-	return data, true, nil
+	return votes, true, nil
 }
 
-func (s *StateDB) WriteCycleAccountVote(cycle int64, addr, data []byte) error {
-	account := new(corepb.Account)
-	if err := proto.Unmarshal(data, account); err != nil {
-		return fmt.Errorf("state: decode cycle account vote API value: %w", err)
+// ReadCycleAccountVoteProjectionStrict is a diagnostic adapter. Its protobuf
+// Account contains Votes only and cannot reconstruct Java's full old Account.
+// The separate bool remains authoritative even when protobuf bytes are empty.
+func (s *StateDB) ReadCycleAccountVoteProjectionStrict(cycle int64, addr []byte) ([]byte, bool, error) {
+	votes, present, err := s.ReadCycleAccountVotesStrict(cycle, addr)
+	if err != nil || !present {
+		return nil, present, err
 	}
-	native, err := statecodec.Marshal(account)
+	data, err := proto.Marshal(&corepb.Account{Votes: votes})
+	return data, true, err
+}
+
+func (s *StateDB) WriteCycleAccountVotes(cycle int64, addr []byte, votes []*corepb.Vote) error {
+	native, err := statecodec.MarshalRewardVotes(votes)
 	if err != nil {
 		return err
 	}

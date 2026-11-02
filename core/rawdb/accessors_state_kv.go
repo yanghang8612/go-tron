@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/statecodec"
 )
 
 const (
@@ -112,7 +113,7 @@ func AppendStateKVLatestValue(dst, value []byte) []byte {
 // canonical latest-state envelope. State commit shares these exact bytes with
 // physical source capture and avoids encoding each update twice.
 func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
-	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+	if err := validateStateKVLatestDomainValue(domain, logicalKey, wrapped); err != nil {
 		return err
 	}
 	if writer, ok := db.(stateKVLatestStructuredWriter); ok {
@@ -125,7 +126,7 @@ func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, ge
 // to writers that advertise an ownership-taking path. Fallback writers retain
 // the normal copying Put semantics.
 func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
-	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+	if err := validateStateKVLatestDomainValue(domain, logicalKey, wrapped); err != nil {
 		return err
 	}
 	if writer, ok := db.(stateKVLatestStructuredOwnedWriter); ok {
@@ -141,7 +142,7 @@ func WriteStateKVLatestEncodedOwned(db ethdb.KeyValueWriter, owner common.Addres
 // encoded value to ownership-aware writers. Batched state commit uses it with
 // key slices packed into one immutable arena.
 func WriteStateKVLatestEncodedOwnedByKey(db ethdb.KeyValueWriter, physicalKey, wrapped []byte) error {
-	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+	if err := ValidateStateKVLatestEntry(physicalKey, wrapped); err != nil {
 		return err
 	}
 	if writer, ok := db.(ownedKeyValueWriter); ok {
@@ -332,6 +333,14 @@ func IterateStateKVLatestDomainRowsContext(ctx context.Context, db ethdb.Iterate
 }
 
 func DecodeStateKVLatestKey(key []byte) (common.Address, uint64, kvdomains.KVDomain, []byte, bool) {
+	owner, generation, domain, logicalKey, ok := decodeStateKVLatestKeyNoCopy(key)
+	if !ok {
+		return common.Address{}, 0, 0, nil, false
+	}
+	return owner, generation, domain, bytes.Clone(logicalKey), true
+}
+
+func decodeStateKVLatestKeyNoCopy(key []byte) (common.Address, uint64, kvdomains.KVDomain, []byte, bool) {
 	headerLen := len(stateKVLatestPrefix) + common.AccountIDLength + 8 + 2
 	if len(key) < headerLen || !bytes.HasPrefix(key, stateKVLatestPrefix) {
 		return common.Address{}, 0, 0, nil, false
@@ -347,7 +356,50 @@ func DecodeStateKVLatestKey(key []byte) (common.Address, uint64, kvdomains.KVDom
 		return common.Address{}, 0, 0, nil, false
 	}
 	off += 2
-	return id.Address(common.AddressPrefixMainnet), generation, domain, append([]byte(nil), key[off:]...), true
+	return id.Address(common.AddressPrefixMainnet), generation, domain, key[off:], true
+}
+
+// ValidateStateKVPayload enforces domain-specific V4 value invariants before
+// staging a generic write. It does not mutate or retain the caller's bytes.
+func ValidateStateKVPayload(domain kvdomains.KVDomain, logicalKey, value []byte) error {
+	if domain == kvdomains.SystemReward && IsCycleAccountVoteStateKey(logicalKey) {
+		if err := statecodec.ValidateRewardVotes(value); err != nil {
+			return fmt.Errorf("state kv latest: invalid V4 reward votes: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateStateKVLatestDomainValue(domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
+	if err := ValidateStateKVLatestValue(wrapped); err != nil {
+		return err
+	}
+	if domain != kvdomains.SystemReward || !IsCycleAccountVoteStateKey(logicalKey) {
+		return nil
+	}
+	if wrapped[0] == stateKVLatestPresencePrefix {
+		return ValidateStateKVPayload(domain, logicalKey, wrapped[1:])
+	}
+	// A present empty native Votes list is eight bytes and therefore uses the
+	// compact-word envelope. Validate it without allocating an expanded slice.
+	var word [common.HashLength]byte
+	width := 8
+	if wrapped[0] == stateKVLatestWordPrefix {
+		width = common.HashLength
+	}
+	copy(word[width-len(wrapped)+1:width], wrapped[1:])
+	return ValidateStateKVPayload(domain, logicalKey, word[:width])
+}
+
+// ValidateStateKVLatestEntry validates both the physical key/envelope and the
+// domain value. Restore and MuHash source folding must reject legacy complete
+// reward Accounts even when supplied through a generic physical write path.
+func ValidateStateKVLatestEntry(physicalKey, wrapped []byte) error {
+	_, _, domain, logicalKey, ok := decodeStateKVLatestKeyNoCopy(physicalKey)
+	if !ok {
+		return fmt.Errorf("state kv latest: invalid physical key %x", physicalKey)
+	}
+	return validateStateKVLatestDomainValue(domain, logicalKey, wrapped)
 }
 
 func DecodeStateKVLatestValue(raw []byte) ([]byte, error) {
