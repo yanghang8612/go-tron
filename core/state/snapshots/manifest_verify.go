@@ -97,6 +97,16 @@ func VerifyRemoteProductionManifest(dir string, expected ChainIdentity) (*Manife
 	if err != nil {
 		return nil, nil, err
 	}
+	// A production import must not accept file coverage that its live manager
+	// will refuse to trust. Preflight every active source anchor before writing
+	// any restored payload; canonical membership is checked at the restored cut.
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentEventLog && ref.normalizedDataset() == SegmentDatasetEventLog {
+			if _, err := parseEventSourceBlockHash(ref.SourceBlockHash); err != nil {
+				return nil, nil, fmt.Errorf("snapshots: event source anchor %q [%d,%d]: %w", ref.Path, ref.FromTxNum, ref.ToTxNum, err)
+			}
+		}
+	}
 	report, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{
 		ExpectedChain:     &expected,
 		RequireRegistered: true,

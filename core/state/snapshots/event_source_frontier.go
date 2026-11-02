@@ -2,11 +2,16 @@ package snapshots
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+// ErrEventLogCompanionRepairRequired identifies a catalog shape that cannot
+// be repaired inside the next freezer demand without retiring a wider range.
+var ErrEventLogCompanionRepairRequired = errors.New("snapshots: event-log companion requires offline rebuild")
 
 // The freezer's target is demand, not authority. An independent event builder
 // may only consume completely executed canonical solid blocks. In particular,
@@ -67,6 +72,7 @@ func (m *Manager) SetEventLogCanonicalVerifier(verify func(uint64, common.Hash) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.eventCanonicalVerifier = verify
+	m.eventCanonicalScope = nil
 }
 
 func parseEventSourceBlockHash(raw string) (common.Hash, error) {
@@ -103,30 +109,50 @@ func verifyEventSourceRefs(refs []SegmentRef, from, to uint64, verify func(uint6
 	return true, nil
 }
 
+// SetEventLogCanonicalSource installs an operation-scoped production verifier.
+// Each request observes Finish/solid once, then checks every intersecting exact
+// terminal hash without retaining a positive proof across requests or reorgs.
+func (m *Manager) SetEventLogCanonicalSource(chain ChainSource) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.eventCanonicalVerifier = nil
+	m.eventCanonicalScope = func() (func(uint64, common.Hash) (bool, error), error) {
+		return newCanonicalEventLogVerificationScope(chain)
+	}
+}
+
 func (m *Manager) eventSourcesCanonical(manifest *Manifest, from, to uint64) (bool, error) {
 	m.mu.RLock()
-	verify := m.eventCanonicalVerifier
+	verify, begin := m.eventCanonicalVerifier, m.eventCanonicalScope
 	m.mu.RUnlock()
+	if begin != nil {
+		var err error
+		verify, err = begin()
+		if err != nil {
+			return false, err
+		}
+	}
 	if verify == nil {
 		return true, nil
 	}
-	return verifyEventSourceRefs(eventLogRefs(manifest), from, to, verify, true)
-}
-
-// NewCanonicalEventLogVerifier binds cold coverage to a fully executed solid
-// canonical segment end. It is separate from file/companion authentication:
-// authenticated remote files alone do not prove which fork this node executed.
-func NewCanonicalEventLogVerifier(chain ChainSource) func(uint64, common.Hash) (bool, error) {
-	r := &Runner{chain: chain}
-	return func(block uint64, expected common.Hash) (bool, error) {
-		if chain == nil || chain.DB() == nil {
+	return visitEventSourceRefs(manifest, from, to, func(ref SegmentRef) (bool, error) {
+		if ref.SourceBlockHash == "" {
 			return false, nil
 		}
-		cap, err := r.independentEventSourceCap(chain.DB())
-		if err != nil || block > cap {
+		hash, err := parseEventSourceBlockHash(ref.SourceBlockHash)
+		if err != nil {
 			return false, err
 		}
-		hash, present, err := r.canonicalHashLookup(chain.DB())(block)
+		return verify(ref.ToTxNum, hash)
+	})
+}
+
+func canonicalEventLogTerminalVerifier(chain ChainSource, cap uint64) func(uint64, common.Hash) (bool, error) {
+	return func(block uint64, expected common.Hash) (bool, error) {
+		if chain == nil || chain.DB() == nil || block > cap {
+			return false, nil
+		}
+		hash, present, err := canonicalEventSourceHash(chain, block)
 		if err != nil || !present {
 			return false, err
 		}
@@ -134,5 +160,48 @@ func NewCanonicalEventLogVerifier(chain ChainSource) func(uint64, common.Hash) (
 			return false, fmt.Errorf("snapshots: event source block %d hash %x does not match canonical hash %x", block, expected, hash)
 		}
 		return true, nil
+	}
+}
+
+// Keep the short-lived read scope independent of the multi-kilobyte Runner;
+// capturing a Runner in each terminal closure would allocate it on every RPC.
+func canonicalEventSourceHash(chain ChainSource, n uint64) (common.Hash, bool, error) {
+	if source, ok := chain.(canonicalHashLookupSource); ok {
+		return source.CanonicalBlockHashStrict(n)
+	}
+	if source, ok := chain.(canonicalHashSource); ok {
+		h, present := source.CanonicalBlockHash(n)
+		return h, present, nil
+	}
+	return rawdb.ReadBlockHashByNumberStrict(chain.DB(), n)
+}
+
+func newCanonicalEventLogVerificationScope(chain ChainSource) (func(uint64, common.Hash) (bool, error), error) {
+	if chain == nil || chain.DB() == nil {
+		return canonicalEventLogTerminalVerifier(nil, 0), nil
+	}
+	finish, present, err := rawdb.ReadVerifiedStageProgressBlockWithHashLookup(chain.DB(), rawdb.StageFinish, func(n uint64) (common.Hash, bool, error) { return canonicalEventSourceHash(chain, n) })
+	if err != nil {
+		return nil, fmt.Errorf("snapshots: %w", err)
+	}
+	cap := uint64(0)
+	if present {
+		if solid := chain.LatestSolidifiedBlockNum(); solid > 0 {
+			cap = min(finish, uint64(solid))
+		}
+	}
+	return canonicalEventLogTerminalVerifier(chain, cap), nil
+}
+
+// NewCanonicalEventLogVerifier is the single-terminal adapter used by callers
+// without an operation scope. Live managers use SetEventLogCanonicalSource so
+// multi-segment requests do not reread Finish for every terminal.
+func NewCanonicalEventLogVerifier(chain ChainSource) func(uint64, common.Hash) (bool, error) {
+	return func(block uint64, expected common.Hash) (bool, error) {
+		verify, err := newCanonicalEventLogVerificationScope(chain)
+		if err != nil {
+			return false, err
+		}
+		return verify(block, expected)
 	}
 }

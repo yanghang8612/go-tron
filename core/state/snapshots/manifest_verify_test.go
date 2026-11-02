@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
@@ -695,10 +696,8 @@ func TestWriteSnapshotInstallProgressCapsEventLogBuildAtContinuousCoverage(t *te
 	ref4 := writeVerifiableEventLogSegment(t, dir, 4, 4)
 	manifest := NewManifest(0, 0, []SegmentRef{ref1, index1, ref4})
 	db := rawdb.NewMemoryDatabase()
-	block2Hash := common.Hash{0x02}
-	if err := rawdb.WriteStateTxRange(db, 2, block2Hash, 2, 2); err != nil {
-		t.Fatalf("WriteStateTxRange block2: %v", err)
-	}
+	block2Hash := seedVerifiableEventLogSourceBoundary(t, db, 2)
+	seedVerifiableEventLogSourceBoundary(t, db, 4)
 
 	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
 		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
@@ -725,10 +724,8 @@ func TestWriteSnapshotInstallProgressCombinesAdjacentEventLogIndexes(t *testing.
 	}
 	manifest := NewManifest(0, 0, []SegmentRef{ref1, index1, ref2, index2})
 	db := rawdb.NewMemoryDatabase()
-	block4Hash := common.Hash{0x04}
-	if err := rawdb.WriteStateTxRange(db, 4, block4Hash, 4, 4); err != nil {
-		t.Fatalf("WriteStateTxRange block4: %v", err)
-	}
+	seedVerifiableEventLogSourceBoundary(t, db, 2)
+	block4Hash := seedVerifiableEventLogSourceBoundary(t, db, 4)
 
 	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
 		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
@@ -750,6 +747,7 @@ func TestWriteSnapshotInstallProgressRequiresEventLogCoverageFromBlockOne(t *tes
 	}
 	manifest := NewManifest(0, 0, []SegmentRef{ref, index})
 	db := rawdb.NewMemoryDatabase()
+	seedVerifiableEventLogSourceBoundary(t, db, 12)
 
 	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
 		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
@@ -764,6 +762,7 @@ func TestWriteSnapshotInstallProgressRequiresEventLogIndexCoverage(t *testing.T)
 	ref := writeVerifiableEventLogSegment(t, dir, 1, 2)
 	manifest := NewManifest(0, 0, []SegmentRef{ref})
 	db := rawdb.NewMemoryDatabase()
+	seedVerifiableEventLogSourceBoundary(t, db, 2)
 
 	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
 		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
@@ -793,8 +792,10 @@ func TestWriteSnapshotInstallProgressPreflightsEventLogBoundaryBeforeWritingStag
 	})
 	db := rawdb.NewMemoryDatabase()
 
+	// The file carries the real source terminal hash, but the target has no
+	// corresponding canonical boundary. Fail before publishing any stages.
 	_, err = WriteSnapshotInstallProgress(db, manifest)
-	if err == nil || !strings.Contains(err.Error(), string(rawdb.StageSnapshotEventLogBuild)) {
+	if err == nil || !strings.Contains(err.Error(), "restored event source canonical boundary unavailable") {
 		t.Fatalf("WriteSnapshotInstallProgress err = %v, want event-log boundary error", err)
 	}
 	for _, stage := range []rawdb.StageID{
@@ -806,6 +807,17 @@ func TestWriteSnapshotInstallProgressPreflightsEventLogBoundaryBeforeWritingStag
 			t.Fatalf("%s progress = %d ok=%v err=%v, want absent after failed preflight", stage, got, ok, readErr)
 		}
 	}
+}
+
+// Recreate exactly the canonical block used by writeVerifiableEventLogSegment;
+// fake height-byte hashes no longer model authenticated event source cuts.
+func seedVerifiableEventLogSourceBoundary(t *testing.T, db ethdb.KeyValueWriter, n uint64) common.Hash {
+	t.Helper()
+	block, _ := eventLogTestBlock(t, n, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatal(err)
+	}
+	return block.Hash()
 }
 
 func writeVerifiableEventLogSegment(t *testing.T, dir string, fromBlock, toBlock uint64) SegmentRef {
@@ -901,17 +913,19 @@ func TestVerifyRestoredSnapshotBoundaryRejectsMismatchedCommitmentMetadata(t *te
 func writeVerifiableHistoryManifest(t *testing.T) (string, ChainIdentity, common.Address) {
 	t.Helper()
 	db := rawdb.NewMemoryDatabase()
+	block1Hash := seedVerifiableEventLogSourceBoundary(t, db, 1)
+	block2Hash := seedVerifiableEventLogSourceBoundary(t, db, 2)
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x77}, common.AccountIDLength)...))
-	if err := rawdb.WriteStateTxRange(db, 1, common.Hash{0x01}, 10, 11); err != nil {
+	if err := rawdb.WriteStateTxRange(db, 1, block1Hash, 10, 11); err != nil {
 		t.Fatalf("write state tx range: %v", err)
 	}
-	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 12, 12); err != nil {
+	if err := rawdb.WriteStateTxRange(db, 2, block2Hash, 12, 12); err != nil {
 		t.Fatalf("write no-change state tx range: %v", err)
 	}
 	for _, change := range []*rawdb.StateDomainChange{
 		{
 			BlockNum:   1,
-			BlockHash:  common.Hash{0x01},
+			BlockHash:  block1Hash,
 			TxNum:      10,
 			Seq:        1,
 			FlatDomain: rawdb.StateFlatDomainKVLatest,
@@ -926,7 +940,7 @@ func writeVerifiableHistoryManifest(t *testing.T) (string, ChainIdentity, common
 		},
 		{
 			BlockNum:   1,
-			BlockHash:  common.Hash{0x01},
+			BlockHash:  block1Hash,
 			TxNum:      11,
 			Seq:        2,
 			FlatDomain: rawdb.StateFlatDomainKVLatest,
@@ -954,7 +968,7 @@ func writeVerifiableHistoryManifest(t *testing.T) (string, ChainIdentity, common
 		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
 		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
-	seedTestMuHashHead(t, db, 2, 12, common.Hash{2})
+	seedTestMuHashHead(t, db, 2, 12, block2Hash)
 	latest, err := NewAggregator(dir).buildLatestSegments(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 12})
 	if err != nil {
 		t.Fatal(err)

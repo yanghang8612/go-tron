@@ -2780,6 +2780,7 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 	if r.cfg.BuildEventLogs {
 		batchBlocks := r.cfg.BatchBlocks
 		eventTargetBlock := publishedBlock
+		eventDemandBlock := publishedBlock
 		if (r.historySyncBudgetActive() || r.cfg.EventLogIndependentFrontier) && r.syncEventLogCatchupEnabled() {
 			if r.cfg.SyncEventLogCatchupBlocks > 0 {
 				batchBlocks = r.cfg.SyncEventLogCatchupBlocks
@@ -2793,6 +2794,7 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 				}
 				if r.cfg.EventLogIndependentFrontier {
 					eventTargetBlock = 0
+					eventDemandBlock = target
 					if ok {
 						cap, err := r.independentEventSourceCap(r.chain.DB())
 						if err != nil {
@@ -2810,7 +2812,15 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 		if next, ok := nextEventLogCatchupRange(manifest, eventTargetBlock, batchBlocks); ok {
 			if r.cfg.EventLogIndependentFrontier {
 				// Repairing an interrupted companion can expand the overlap
-				// component; never let that escape the authenticated source cap.
+				// component. It cannot escape the next segment's demand or the
+				// authenticated source cap; truncating would retire a wider ref.
+				if next.to > eventDemandBlock {
+					requestedFrom := uint64(1)
+					if covered, ok := eventLogBuildBlockFromManifest(manifest); ok && covered < ^uint64(0) {
+						requestedFrom = covered + 1
+					}
+					return plan, fmt.Errorf("%w: requested [%d,%d], connected repair [%d,%d]; rebuild the complete companion offline before resuming", ErrEventLogCompanionRepairRequired, requestedFrom, eventDemandBlock, next.from, next.to)
+				}
 				cap, err := r.independentEventSourceCap(r.chain.DB())
 				if err != nil {
 					return plan, err
@@ -2852,7 +2862,7 @@ func (r *Runner) reconcileEventLogBuildStage(manifest *Manifest) error {
 			return err
 		}
 		manifest = eventManifestAtBlock(manifest, cap)
-		verified, err := verifyEventSourceRefs(eventLogRefs(manifest), 1, cap, NewCanonicalEventLogVerifier(r.chain), true)
+		verified, err := verifyEventSourceRefs(eventLogRefs(manifest), 1, cap, canonicalEventLogTerminalVerifier(r.chain, cap), true)
 		if err != nil || !verified {
 			return err
 		}

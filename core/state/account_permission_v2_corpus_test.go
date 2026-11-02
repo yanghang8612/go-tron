@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -299,6 +300,7 @@ func permissionCorpusPoint(path string, q []permissionCorpusQuery, group int) (m
 		filters := db.Metrics().Filter
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
+		cpuStart := permissionCorpusCPU()
 		start := time.Now()
 		for at := 0; at < len(q); at += group {
 			snapshot := db.NewSnapshot()
@@ -342,18 +344,27 @@ func permissionCorpusPoint(path string, q []permissionCorpusQuery, group int) (m
 			}
 		}
 		elapsed := time.Since(start)
+		cpuElapsed := permissionCorpusCPU() - cpuStart
 		runtime.ReadMemStats(&after)
 		filter := db.Metrics().Filter
 		label := "empty_app_cache"
 		if pass == 1 {
 			label = "warm_app_cache"
 		}
-		out[label] = map[string]any{"wall_ns": elapsed.Nanoseconds(), "sst_read_calls": fs.calls.Load() - calls,
+		out[label] = map[string]any{"wall_ns": elapsed.Nanoseconds(), "process_cpu_ns": cpuElapsed, "sst_read_calls": fs.calls.Load() - calls,
 			"sst_read_bytes": fs.bytes.Load() - n, "bloom_rejections": filter.Hits - filters.Hits,
 			"bloom_may_contain": filter.Misses - filters.Misses, "mallocs": after.Mallocs - before.Mallocs,
 			"allocated_bytes": after.TotalAlloc - before.TotalAlloc, "every_result_verified": true}
 	}
 	return out, nil
+}
+
+func permissionCorpusCPU() int64 {
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		panic(err)
+	}
+	return (usage.Utime.Sec+usage.Stime.Sec)*1_000_000_000 + (int64(usage.Utime.Usec)+int64(usage.Stime.Usec))*1000
 }
 
 func TestAccountPermissionV2FixedCohort(t *testing.T) {
@@ -392,9 +403,9 @@ func TestAccountPermissionV2FixedCohort(t *testing.T) {
 		t.Fatal("unchanged full-key set produced different Bloom filter sizes")
 	}
 	var measurements []map[string]any
-	for round := 0; round < 2; round++ {
+	for round := 0; round < 4; round++ {
 		order := []string{"baseline", "candidate"}
-		if round == 1 {
+		if round%2 == 1 {
 			order = []string{"candidate", "baseline"}
 		}
 		for _, negative := range []bool{false, true} {

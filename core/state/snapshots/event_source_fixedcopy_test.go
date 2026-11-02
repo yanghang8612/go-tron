@@ -129,7 +129,7 @@ func TestIndependentEventFixedCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.SetEventLogCanonicalVerifier(NewCanonicalEventLogVerifier(chain))
+	manager.SetEventLogCanonicalSource(chain)
 	covered, err := manager.EventLogIndexedRangeCovered(from, to)
 	if err != nil || !covered {
 		t.Fatal("actual direct-V2 required range not covered", covered, err)

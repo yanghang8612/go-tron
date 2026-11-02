@@ -9,8 +9,9 @@ import (
 // Only Manager-owned immutable manifests and function-local read views carry
 // this index. Public loaders and clones return mutable, unindexed manifests.
 // Indexes contain row numbers, not duplicate SegmentRefs or owned path strings.
-// At most two uint32 arrays are retained: 8 MiB at the reference limit. Larger
-// catalogs retain the scan path instead of growing an unbounded second cache.
+// The two eager uint32 arrays plus a lazy event-row array retain at most
+// 12 MiB at the reference limit. Larger catalogs retain the scan path instead
+// of growing an unbounded metadata cache.
 const manifestLookupMaxReferences = 1 << 20
 
 type manifestLookup struct {
@@ -18,6 +19,8 @@ type manifestLookup struct {
 	freezer     []uint32 // same descending range order as chainFreezerRefs
 	historyOnce sync.Once
 	history     *historySourceTable
+	eventOnce   sync.Once
+	events      []uint32 // ascending, non-overlapping event source ranges
 }
 
 // manifestLookupView borrows m.Segments. The caller must keep that slice
@@ -85,4 +88,61 @@ func findManifestRef(m *Manifest, path string, matches func(SegmentRef) bool) (S
 		}
 	}
 	return SegmentRef{}, false
+}
+
+// visitEventSourceRefs examines only the intersecting source refs in immutable
+// manager views. The lazily built row-number index avoids adding a full catalog
+// copy/sort to every narrow RPC. Unindexed diagnostic inputs retain a no-copy
+// scan without imposing a new cache above the existing reference limit.
+func visitEventSourceRefs(m *Manifest, from, to uint64, visit func(SegmentRef) (bool, error)) (bool, error) {
+	if m == nil {
+		return true, nil
+	}
+	if m.lookup == nil {
+		for _, ref := range m.Segments {
+			if ref.Kind != SegmentEventLog || ref.normalizedDataset() != SegmentDatasetEventLog || ref.ToTxNum < from || ref.FromTxNum > to {
+				continue
+			}
+			if ok, err := visit(ref); err != nil || !ok {
+				return ok, err
+			}
+		}
+		return true, nil
+	}
+	index := m.lookup
+	index.eventOnce.Do(func() {
+		count := 0
+		for _, ref := range m.Segments {
+			if ref.Kind == SegmentEventLog && ref.normalizedDataset() == SegmentDatasetEventLog {
+				count++
+			}
+		}
+		index.events = make([]uint32, 0, count)
+		for i, ref := range m.Segments {
+			if ref.Kind == SegmentEventLog && ref.normalizedDataset() == SegmentDatasetEventLog {
+				index.events = append(index.events, uint32(i))
+			}
+		}
+		slices.SortFunc(index.events, func(a, b uint32) int {
+			left, right := m.Segments[a], m.Segments[b]
+			if left.FromTxNum < right.FromTxNum {
+				return -1
+			}
+			if left.FromTxNum > right.FromTxNum {
+				return 1
+			}
+			return int(a) - int(b)
+		})
+	})
+	first := sort.Search(len(index.events), func(i int) bool { return m.Segments[index.events[i]].ToTxNum >= from })
+	for _, row := range index.events[first:] {
+		ref := m.Segments[row]
+		if ref.FromTxNum > to {
+			break
+		}
+		if ok, err := visit(ref); err != nil || !ok {
+			return ok, err
+		}
+	}
+	return true, nil
 }

@@ -41,6 +41,7 @@ func (m *Manager) PinHistoryReadView() (*Manager, func(), error) {
 	pinned := newPinnedManager(m.dir, manifest, m.chainVerificationCache)
 	m.mu.RLock()
 	pinned.eventCanonicalVerifier = m.eventCanonicalVerifier
+	pinned.eventCanonicalScope = m.eventCanonicalScope
 	m.mu.RUnlock()
 	return pinned, release, nil
 }

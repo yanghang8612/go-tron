@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -45,5 +46,36 @@ func TestCompactV4VerifiedRestoreRejectsV3BeforeMutation(t *testing.T) {
 				t.Fatal("rejected import mutated empty target", it.Error())
 			}
 		})
+	}
+}
+
+func TestCompactV4MissingEventAnchorRejectedBeforeImportOrStageWrite(t *testing.T) {
+	dir, identity, _, _ := writeVerifiableCommitmentManifest(t)
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := writeVerifiableEventLogSegment(t, dir, 1, 2)
+	ref.SourceBlockHash = ""
+	index, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Segments = append(m.Segments, ref, index)
+	if err := PublishManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	disk := rawdb.NewMemoryDatabase()
+	defer disk.Close()
+	if _, err := RestoreLatestFromVerifiedManifest(disk, dir, identity); err == nil || !strings.Contains(err.Error(), "event source anchor") {
+		t.Fatal("missing event proof accepted or failed after preflight", err)
+	}
+	if _, err := WriteSnapshotInstallProgress(disk, m); err == nil {
+		t.Fatal("missing event anchor published installation progress")
+	}
+	it := disk.NewIterator(nil, nil)
+	defer it.Release()
+	if it.Next() || it.Error() != nil {
+		t.Fatal("rejected event import/install mutated target", it.Error())
 	}
 }

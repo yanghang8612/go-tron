@@ -1,6 +1,8 @@
 package snapshots
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -359,5 +361,48 @@ func TestIndependentEventHistoryBatchPreservesPreparedSuffix(t *testing.T) {
 	manager.SetEventLogCanonicalVerifier(NewCanonicalEventLogVerifier(chain))
 	if covered, err := manager.EventLogIndexedRangeCovered(1, 3); err != nil || !covered {
 		t.Fatal("prepared suffix became unavailable", covered, err)
+	}
+}
+
+func TestIndependentEventRepairBeyondDemandRequiresOfflineRebuild(t *testing.T) {
+	r, chain := independentEventFixture(t)
+	built, err := NewAggregator(r.cfg.Dir).BuildEventLogsWithBuildOptions(chain.db.(*rawdb.ChainDB), 1, 4, EventLogBuildOptions{Version: EventLogSegmentV4Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := *built.Manifest
+	manifest.Segments = eventLogRefs(built.Manifest) // Missing the whole companion.
+	if err := PublishManifest(r.cfg.Dir, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteStageProgress(chain.db.(*rawdb.ChainDB), rawdb.StageSnapshotEventLogBuild); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(r.cfg.Dir + "/" + ManifestFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := eventReplayMetrics.attempts.Snapshot().Count()
+	files, err := os.ReadDir(r.cfg.Dir + "/log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := r.OnePass()
+	if !errors.Is(err, ErrEventLogCompanionRepairRequired) || !strings.Contains(err.Error(), "requested [1,3]") || !strings.Contains(err.Error(), "repair [1,4]") {
+		t.Fatal("unsupported repair did not fail explicitly", result, err)
+	}
+	if result.EventLogBuilt || result.HistoryEventAttempted || result.DerivedSidecarCatchup || eventReplayMetrics.attempts.Snapshot().Count() != attempts {
+		t.Fatal("unsupported repair started a source build", result)
+	}
+	after, readErr := os.ReadFile(r.cfg.Dir + "/" + ManifestFile)
+	if readErr != nil || !bytes.Equal(before, after) {
+		t.Fatal("unsupported repair changed manifest", readErr)
+	}
+	afterFiles, readErr := os.ReadDir(r.cfg.Dir + "/log")
+	if readErr != nil || len(afterFiles) != len(files) {
+		t.Fatal("unsupported repair wrote files", readErr)
+	}
+	if n, ok, readErr := rawdb.ReadStageProgress(chain.db, rawdb.StageSnapshotEventLogBuild); readErr != nil || ok {
+		t.Fatal("unsupported repair advanced stage", n, ok, readErr)
 	}
 }

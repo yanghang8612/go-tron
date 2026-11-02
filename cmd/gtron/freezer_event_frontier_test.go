@@ -80,7 +80,7 @@ func TestDirectV2EventFrontierUnblocksWithoutStateHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.SetEventLogCanonicalVerifier(snapshots.NewCanonicalEventLogVerifier(coldSource))
+	manager.SetEventLogCanonicalSource(coldSource)
 	db.SetEventLogReader(manager)
 	freezer := chainfreezer.New(independentArchiveSource{db: db}, newFreezerStore(f), chainfreezer.Config{
 		Enabled: true, MarginBlocks: 1, V2Enabled: true, DirectV2: true, V2SegmentBlocks: 4, V2FrameBlocks: 2, ExternalizeV2ReceiptLogs: true,
@@ -106,6 +106,23 @@ func TestDirectV2EventFrontierUnblocksWithoutStateHistory(t *testing.T) {
 			infos, _, err := rawdb.ReadTransactionInfosByBlockStrict(db, n)
 			if err != nil || len(infos) != 1 || len(infos[0].Log) != 1 || !bytes.Equal(infos[0].Log[0].Data, []byte{byte(n)}) {
 				t.Fatalf("external receipt %d: %+v %v", n, infos, err)
+			}
+		}
+	}
+	for _, rewrite := range []string{"migrate", "from-reader"} {
+		if rewrite == "migrate" {
+			if _, err := snapshots.MigrateEventLogsV4(dir, snapshots.EventLogV4MigrationOptions{FromBlock: 1, Merge: 2, Publish: true}); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := snapshots.NewAggregator(dir).BuildEventLogsFromReaderWithBuildOptions(manager, 1, 7, snapshots.EventLogBuildOptions{Version: snapshots.EventLogSegmentV4Version}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for n := uint64(1); n < 8; n++ {
+			infos, _, err := rawdb.ReadTransactionInfosByBlockStrict(db, n)
+			if err != nil || len(infos) != 1 || len(infos[0].Log) != 1 || !bytes.Equal(infos[0].Log[0].Data, []byte{byte(n)}) {
+				t.Fatalf("%s lost externalized/pruned receipt %d: %+v %v", rewrite, n, infos, err)
 			}
 		}
 	}

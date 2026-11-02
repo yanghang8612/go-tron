@@ -173,8 +173,10 @@ func BuildEventLogSegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, fr
 }
 
 func BuildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
-	build, err := buildEventLogSegmentFromChainWithOptions(chain, dir, relPath, fromBlock, toBlock, opts)
-	return build.Ref, err
+	return buildAnchoredEventLogFromChain(chain, toBlock, func() (SegmentRef, error) {
+		build, err := buildEventLogSegmentFromChainWithOptions(chain, dir, relPath, fromBlock, toBlock, opts)
+		return build.Ref, err
+	})
 }
 
 func buildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64, _ RestoreETLOptions) (eventLogSegmentBuild, error) {

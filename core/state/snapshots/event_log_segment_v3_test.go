@@ -193,7 +193,7 @@ func TestEventLogV3PreservesTwentyOneByteTronAddress(t *testing.T) {
 func TestEventLogBuildVersionSelectionPreservesLegacyDefault(t *testing.T) {
 	address := common.BytesToAddress(eventLogTestAddress(0x43))
 	row := eventLogV3TestRow(1, 0, 0, address, common.Hash{1}, common.Hash{2}, common.Hash{3}, []byte("payload"))
-	reader := eventLogRowsReader{rows: []EventLog{row}}
+	reader := anchoredEventLogRowsReader{eventLogRowsReader: eventLogRowsReader{rows: []EventLog{row}}, anchors: map[uint64]common.Hash{1: row.BlockHash}}
 
 	legacyDir := t.TempDir()
 	legacy, err := NewAggregator(legacyDir).BuildEventLogsFromReader(reader, 1, 1)
@@ -286,6 +286,8 @@ func TestMigrateEventLogsV4BuildOnlyThenPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Synthetic canonical fixture identities are explicit source metadata.
+	ref1.SourceBlockHash, ref2.SourceBlockHash = common.Hash{11}.Hex(), common.Hash{12}.Hex()
 	idx1, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref1}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -361,6 +363,8 @@ func TestMigrateSingleEventLogV3PreservesCrossingGlobalIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Synthetic canonical fixture identities are explicit source metadata.
+	ref1.SourceBlockHash, ref2.SourceBlockHash = common.Hash{21}.Hex(), common.Hash{22}.Hex()
 	globalIndex, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref1, ref2}, "")
 	if err != nil {
 		t.Fatal(err)

@@ -2667,7 +2667,16 @@ func TestProcessBlockVMFreezeSharedWeightSerializesConflict(t *testing.T) {
 	}
 }
 
-func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T) {
+func TestProcessBlockPublishesVMWithdrawRewardVotesProjection(t *testing.T) {
+	testProcessBlockVMWithdrawRewardVotesProjection(t, false)
+}
+
+func TestProcessBlockVMWithdrawRewardVotesProjectionConflictsOnSameContract(t *testing.T) {
+	testProcessBlockVMWithdrawRewardVotesProjection(t, true)
+}
+
+func testProcessBlockVMWithdrawRewardVotesProjection(t *testing.T, sameContractConflict bool) {
+	t.Helper()
 	base, diskdb := newTestStateWithDB(t)
 	dynProps := base.DynamicProperties()
 	dynProps.SetAllowCreationOfContracts(true)
@@ -2680,21 +2689,27 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 	passVersion3_6_5(base, 27)
 
 	owner := testProcessorAddr(1)
+	secondOwner := testProcessorAddr(3)
 	contractAddr := testProcessorAddr(0x8b)
 	witness := testProcessorAddr(0x8c)
 	base.CreateAccount(owner, corepb.AccountType_Normal)
 	base.AddBalance(owner, 100_000_000)
+	base.CreateAccount(secondOwner, corepb.AccountType_Normal)
+	base.AddBalance(secondOwner, 100_000_000)
 	base.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
 	base.CreateAccount(contractAddr, corepb.AccountType_Contract)
 	base.AddBalance(contractAddr, 1_000)
 	base.SetAllowance(contractAddr, 50)
-	base.SetVotes(contractAddr, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 100}})
+	vote := &corepb.Vote{VoteAddress: witness.Bytes(), VoteCount: 100}
+	vote.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x07})
+	base.SetVotes(contractAddr, []*corepb.Vote{vote})
 	base.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner.Bytes(), ContractAddress: contractAddr.Bytes(),
 	})
-	// WITHDRAWREWARD; POP; STOP. This writes exact account scalar fields and
-	// reward-cursor/account-vote AccountKV rows from inside TVM execution.
-	base.SetCode(contractAddr, []byte{0xd9, 0x50, 0x00})
+	// WITHDRAWREWARD; MSTORE(0); RETURN(0,32). V4 reads only ordered Votes
+	// and presence, so the old full-Account auxiliary range-read barrier no
+	// longer applies. Expose the amount in the receipt to catch stale rewards.
+	base.SetCode(contractAddr, []byte{0xd9, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3})
 	if err := base.WriteBeginCycle(contractAddr.Bytes(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -2719,25 +2734,44 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 	}
 	parallelState.SetDynamicProperties(base.DynamicProperties().Copy())
 
-	tx := makeTestTriggerTx(1, contractAddr, nil)
-	tx.Proto().RawData.FeeLimit = 10_000_000
-	tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+	transactions := []*types.Transaction{makeTestTriggerTx(1, contractAddr, nil)}
+	if sameContractConflict {
+		// Different senders prevent a sender-chain dependency from masking the
+		// contract/reward conflict. Both block-start workers would withdraw 350;
+		// after the first transaction the canonical second must withdraw zero.
+		transactions = append(transactions, makeTestTriggerTx(3, contractAddr, nil))
+	}
+	transactionProtos := make([]*corepb.Transaction, len(transactions))
+	for i, tx := range transactions {
+		tx.Proto().RawData.FeeLimit = 10_000_000
+		tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+		transactionProtos[i] = tx.Proto()
+	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
 			Number: int64(vmSenderChainPublishInterval), Timestamp: 33_000,
 		}},
-		Transactions: []*corepb.Transaction{tx.Proto()},
+		Transactions: transactionProtos,
 	})
-	run := func(statedb *state.StateDB, options processBlockOptions) ([]*corepb.TransactionInfo, error) {
+	beginTxNum, endTxNum, err := tronrawdb.NextStateTxRange(0, uint64(len(transactions)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialHistory, parallelHistory := ethrawdb.NewMemoryDatabase(), ethrawdb.NewMemoryDatabase()
+	t.Cleanup(func() { serialHistory.Close(); parallelHistory.Close() })
+	run := func(statedb *state.StateDB, history ethdb.Database, options processBlockOptions) ([]*corepb.TransactionInfo, *contractpb.BlockBalanceTrace, map[tcommon.Address]int64, error) {
+		statedb.BeginDomainChangeJournalCapture(history, block.Number(), block.Hash(), beginTxNum, endTxNum)
+		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 		infos, _, processErr := processBlockWithOptions(
 			statedb, statedb.DynamicProperties(), block, ethrawdb.NewMemoryDatabase(), nil, 0,
 			params.DefaultBlockNumForEnergyLimit, false, tcommon.Hash{}, nil, nil,
 			nil, forks.NewVersionPassCache(), new(transactionInfoBatch), true, -1, nil,
 			options,
 		)
-		return infos, processErr
+		trace, balances := statedb.FinishBalanceTrace()
+		return infos, trace, balances, processErr
 	}
-	serialInfos, err := run(serialState, processBlockOptions{})
+	serialInfos, serialTrace, serialBalances, err := run(serialState, serialHistory, processBlockOptions{captureBalanceTrace: true, saveInternalTx: true, saveFeaturedInternalTx: true})
 	if err != nil {
 		t.Fatalf("serial VM reward withdrawal: %v", err)
 	}
@@ -2750,12 +2784,66 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 	dualCandidatesBefore := parallelVMDualOracleCandidatesCounter.Snapshot().Count()
 	dualMatchesBefore := parallelVMDualOracleMatchesCounter.Snapshot().Count()
 	dualErrorsBefore := parallelVMDualOracleErrorsCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelVM: true})
+	sealCandidatesBefore := parallelVMWriteSealCandidatesCounter.Snapshot().Count()
+	sealMatchesBefore := parallelVMWriteSealMatchesCounter.Snapshot().Count()
+	sealMismatchesBefore := parallelVMWriteSealMismatchesCounter.Snapshot().Count()
+	auditCandidatesBefore := parallelVMPublishAuditCandidatesCounter.Snapshot().Count()
+	auditMatchesBefore := parallelVMPublishAuditMatchesCounter.Snapshot().Count()
+	auditMismatchesBefore := parallelVMPublishAuditMismatchesCounter.Snapshot().Count()
+	var inspected int
+	parallelInfos, parallelTrace, parallelBalances, err := run(parallelState, parallelHistory, processBlockOptions{
+		parallelVM: true, captureBalanceTrace: true, saveInternalTx: true, saveFeaturedInternalTx: true,
+		speculativePreOracleTestHook: func(family string, txIndex int, result *discardShadowTaskResult) {
+			if family != "VM" || txIndex != 0 {
+				t.Fatalf("unexpected reward publication candidate %s/%d", family, txIndex)
+			}
+			inspected++
+			if result.reads.Unsupported {
+				t.Fatal("Votes projection retained an unsupported range read")
+			}
+			// Check exact dependencies independently of the successful boundary
+			// oracle. Each isolated reward/Votes mutation must invalidate this
+			// block-start result even without any account balance/resource write.
+			keys := []state.TransactionAccessKey{
+				{Kind: state.TransactionAccessAccountKVGeneration, Address: contractAddr},
+				{Kind: state.TransactionAccessAccountKVGeneration, Address: tcommon.SystemAccountAddress},
+				{Kind: state.TransactionAccessAccountField, Address: contractAddr, AccountField: state.TransactionAccountFieldExistence},
+				{Kind: state.TransactionAccessAccountField, Address: contractAddr, AccountField: state.TransactionAccountFieldAllowance},
+				{Kind: state.TransactionAccessAccountField, Address: contractAddr, AccountField: state.TransactionAccountFieldBalance},
+			}
+			for _, logicalKey := range [][]byte{
+				tronrawdb.BeginCycleStateKey(contractAddr.Bytes()),
+				tronrawdb.EndCycleStateKey(contractAddr.Bytes()),
+				tronrawdb.CycleAccountVoteStateKey(10, contractAddr.Bytes()),
+				tronrawdb.WitnessVIStateKey(0, witness.Bytes()),
+				tronrawdb.WitnessVIStateKey(9, witness.Bytes()),
+			} {
+				keys = append(keys, state.TransactionAccessKey{Kind: state.TransactionAccessAccountKV, Address: tcommon.SystemAccountAddress, KVDomain: kvdomains.SystemReward, LogicalKey: string(logicalKey)})
+			}
+			for i := uint32(0); i < uint32(params.MaxVoteNumber); i++ {
+				var key [4]byte
+				binary.BigEndian.PutUint32(key[:], i)
+				keys = append(keys, state.TransactionAccessKey{Kind: state.TransactionAccessAccountKV, Address: contractAddr, KVDomain: kvdomains.AccountVotesAux, LogicalKey: string(key[:])})
+			}
+			for _, key := range keys {
+				if !transactionReadSetCoversKey(result.reads, key) {
+					t.Fatalf("reward candidate omitted exact read dependency %+v", key)
+				}
+				versions := new(versionedAccessShadow)
+				versions.Prepare(2)
+				versions.installRecordedWrite(key, 0)
+				decision := versions.validateBlockStartReadSet(1, nil, *result)
+				if !decision.readConflict || decision.publishable {
+					t.Fatalf("isolated predecessor mutation %+v did not reject stale reward candidate: %+v", key, decision)
+				}
+			}
+		},
+	})
 	if err != nil {
 		t.Fatalf("parallel VM reward withdrawal: %v", err)
 	}
-	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 0 {
-		t.Fatalf("VM reward withdrawal publications = %d, want 0; fallback unavailable/conflict/preflight/public-net/energy=%d/%d/%d/%d/%d",
+	if published := parallelVMPublishedCounter.Snapshot().Count() - publishedBefore; published != 1 {
+		t.Fatalf("VM reward withdrawal publications = %d, want 1; fallback unavailable/conflict/preflight/public-net/energy=%d/%d/%d/%d/%d",
 			published,
 			parallelVMUnavailableFallbackCounter.Snapshot().Count()-unavailableBefore,
 			parallelVMConflictFallbackCounter.Snapshot().Count()-conflictBefore,
@@ -2763,8 +2851,9 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 			parallelVMPublicNetFallbackCounter.Snapshot().Count()-publicNetBefore,
 			parallelVMBlockEnergyFallbackCounter.Snapshot().Count()-blockEnergyBefore)
 	}
-	if fallbacks := parallelVMConflictFallbackCounter.Snapshot().Count() - conflictBefore; fallbacks != 1 {
-		t.Fatalf("VM reward withdrawal version-gate fallbacks = %d, want 1", fallbacks)
+	wantConflicts := int64(len(transactions) - 1)
+	if fallbacks := parallelVMConflictFallbackCounter.Snapshot().Count() - conflictBefore; fallbacks != wantConflicts {
+		t.Fatalf("VM reward withdrawal stale contract/reward fallbacks = %d, want %d", fallbacks, wantConflicts)
 	}
 	if otherFallbacks := parallelVMUnavailableFallbackCounter.Snapshot().Count() - unavailableBefore +
 		parallelVMPreflightFallbackCounter.Snapshot().Count() - preflightBefore +
@@ -2772,17 +2861,69 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 		parallelVMBlockEnergyFallbackCounter.Snapshot().Count() - blockEnergyBefore; otherFallbacks != 0 {
 		t.Fatalf("VM reward withdrawal other fallbacks = %d, want 0", otherFallbacks)
 	}
-	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 0 {
-		t.Fatalf("VM reward withdrawal dual-oracle candidates = %d, want 0 before admission", candidates)
+	if candidates := parallelVMDualOracleCandidatesCounter.Snapshot().Count() - dualCandidatesBefore; candidates != 1 {
+		t.Fatalf("VM reward withdrawal dual-oracle candidates = %d, want 1", candidates)
 	}
-	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 0 {
-		t.Fatalf("VM reward withdrawal dual-oracle matches = %d, want 0 before admission", matches)
+	if matches := parallelVMDualOracleMatchesCounter.Snapshot().Count() - dualMatchesBefore; matches != 1 {
+		t.Fatalf("VM reward withdrawal dual-oracle matches = %d, want 1", matches)
 	}
 	if failures := parallelVMDualOracleErrorsCounter.Snapshot().Count() - dualErrorsBefore; failures != 0 {
 		t.Fatalf("VM reward withdrawal dual-oracle errors = %d, want 0", failures)
 	}
-	if len(serialInfos) != 1 || len(parallelInfos) != 1 || !proto.Equal(serialInfos[0], parallelInfos[0]) {
-		t.Fatalf("VM reward withdrawal receipt mismatch\nserial=%v\nparallel=%v", serialInfos, parallelInfos)
+	if inspected != 1 {
+		t.Fatalf("inspected reward publication candidates = %d, want 1", inspected)
+	}
+	for _, proof := range []struct {
+		name      string
+		got, want int64
+	}{
+		{"write-seal candidates", parallelVMWriteSealCandidatesCounter.Snapshot().Count() - sealCandidatesBefore, 1},
+		{"write-seal matches", parallelVMWriteSealMatchesCounter.Snapshot().Count() - sealMatchesBefore, 1},
+		{"write-seal mismatches", parallelVMWriteSealMismatchesCounter.Snapshot().Count() - sealMismatchesBefore, 0},
+		{"canonical audit candidates", parallelVMPublishAuditCandidatesCounter.Snapshot().Count() - auditCandidatesBefore, 1},
+		{"canonical audit matches", parallelVMPublishAuditMatchesCounter.Snapshot().Count() - auditMatchesBefore, 1},
+		{"canonical audit mismatches", parallelVMPublishAuditMismatchesCounter.Snapshot().Count() - auditMismatchesBefore, 0},
+	} {
+		if proof.got != proof.want {
+			t.Fatalf("reward publication %s = %d, want %d", proof.name, proof.got, proof.want)
+		}
+	}
+	if len(serialInfos) != len(transactions) || len(parallelInfos) != len(transactions) {
+		t.Fatalf("VM reward withdrawal receipt count serial=%d parallel=%d want %d", len(serialInfos), len(parallelInfos), len(transactions))
+	}
+	for i := range serialInfos {
+		if !proto.Equal(serialInfos[i], parallelInfos[i]) {
+			t.Fatalf("VM reward withdrawal tx %d receipt mismatch\nserial=%v\nparallel=%v", i, serialInfos[i], parallelInfos[i])
+		}
+		want := make([]byte, 32)
+		wantAmount := int64(0)
+		if i == 0 {
+			wantAmount = 350
+			binary.BigEndian.PutUint64(want[24:], uint64(wantAmount))
+		}
+		if values := serialInfos[i].GetContractResult(); len(values) != 1 || !bytes.Equal(values[0], want) {
+			t.Fatalf("VM reward withdrawal tx %d return = %x, want %x", i, values, want)
+		}
+		internal := serialInfos[i].GetInternalTransactions()
+		if len(internal) != 1 || string(internal[0].GetNote()) != "withdrawReward" || internal[0].GetRejected() ||
+			len(internal[0].GetCallValueInfo()) != 1 || internal[0].GetCallValueInfo()[0].GetCallValue() != wantAmount {
+			t.Fatalf("VM reward withdrawal tx %d internal receipt = %v, want amount %d", i, internal, wantAmount)
+		}
+	}
+	if !proto.Equal(serialTrace, parallelTrace) || !reflect.DeepEqual(serialBalances, parallelBalances) {
+		t.Fatalf("VM reward withdrawal balance trace differs\nserial=%v/%v\nparallel=%v/%v", serialTrace, serialBalances, parallelTrace, parallelBalances)
+	}
+	for _, property := range []struct {
+		name             string
+		serial, parallel int64
+	}{
+		{"public_net_usage", serialState.DynamicProperties().PublicNetUsage(), parallelState.DynamicProperties().PublicNetUsage()},
+		{"public_net_time", serialState.DynamicProperties().PublicNetTime(), parallelState.DynamicProperties().PublicNetTime()},
+		{"block_energy_usage", serialState.DynamicProperties().BlockEnergyUsage(), parallelState.DynamicProperties().BlockEnergyUsage()},
+	} {
+		if property.serial != property.parallel {
+			t.Fatalf("reward withdrawal %s serial=%d parallel=%d", property.name, property.serial, property.parallel)
+		}
 	}
 	for name, statedb := range map[string]*state.StateDB{"serial": serialState, "parallel": parallelState} {
 		if got := statedb.GetBalance(contractAddr); got != 1_350 {
@@ -2800,8 +2941,8 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 		if got := statedb.ReadEndCycle(contractAddr.Bytes()); got != 11 {
 			t.Fatalf("%s end cycle = %d, want 11", name, got)
 		}
-		if _, present := statedb.ReadCycleAccountVotes(10, contractAddr.Bytes()); !present {
-			t.Fatalf("%s cycle account-vote snapshot is absent", name)
+		if votes, present := statedb.ReadCycleAccountVotes(10, contractAddr.Bytes()); !present || len(votes) != 1 || !proto.Equal(votes[0], vote) {
+			t.Fatalf("%s cycle account-vote snapshot = %v/%t, want original ordered Vote including unknown fields", name, votes, present)
 		}
 	}
 	serialRoot, err := serialState.Commit()
@@ -2814,6 +2955,36 @@ func TestProcessBlockVMWithdrawRewardAccountKVFallsBackBeforeOracle(t *testing.T
 	}
 	if serialRoot != parallelRoot {
 		t.Fatalf("VM reward withdrawal roots differ: serial=%x parallel=%x", serialRoot, parallelRoot)
+	}
+	var serialChanges, parallelChanges []*tronrawdb.StateDomainChange
+	for _, arm := range []struct {
+		db      ethdb.Database
+		changes *[]*tronrawdb.StateDomainChange
+	}{
+		{serialHistory, &serialChanges}, {parallelHistory, &parallelChanges},
+	} {
+		if err := tronrawdb.IterateStateDomainChanges(arm.db, block.Number(), func(change *tronrawdb.StateDomainChange) (bool, error) {
+			*arm.changes = append(*arm.changes, change)
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(serialChanges) == 0 || !reflect.DeepEqual(serialChanges, parallelChanges) {
+		t.Fatalf("reward withdrawal temporal before-images differ\nserial=%+v\nparallel=%+v", serialChanges, parallelChanges)
+	}
+	var sawRewardSnapshot bool
+	for _, change := range parallelChanges {
+		if change.FlatDomain == tronrawdb.StateFlatDomainKVLatest && change.Domain == kvdomains.SystemReward &&
+			change.Owner == tcommon.SystemAccountAddress && bytes.Equal(change.Key, tronrawdb.CycleAccountVoteStateKey(10, contractAddr.Bytes())) {
+			sawRewardSnapshot = true
+			if change.TxNum != beginTxNum || change.PrevExists || len(change.Prev) != 0 {
+				t.Fatalf("new Votes snapshot has wrong historical presence/preimage: %+v", change)
+			}
+		}
+	}
+	if !sawRewardSnapshot {
+		t.Fatal("reward publication did not retain the Votes snapshot creation before-image")
 	}
 }
 
