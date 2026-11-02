@@ -96,6 +96,25 @@ func (s *StateDB) GetAccountFrozenBandwidth(addr tcommon.Address) (int64, error)
 	return s.accountFrozenBandwidthForLimit(obj, true)
 }
 
+// GetAccountFrozenBandwidthForConsensus returns the bandwidth stake used by
+// consensus resource charging after Stake 2.0. Official-genesis state followed
+// by valid consensus transitions has at most one V1 row at index 0; generic
+// account readers and mutations retain their sparse-row compatibility paths.
+func (s *StateDB) GetAccountFrozenBandwidthForConsensus(addr tcommon.Address) (int64, error) {
+	// Retry workers retain the general loader's versioned-boundary refresh.
+	if s.transactionVersionedReader != nil {
+		return s.GetAccountFrozenBandwidth(addr)
+	}
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return 0, nil
+	}
+	if err := s.materializeAccountFrozenBandwidthCanonical(obj); err != nil {
+		return 0, err
+	}
+	return s.accountFrozenBandwidthLoadedTotal(obj, true)
+}
+
 // GetAccountFrozenBandwidthV1 is the pre-Stake-2.0 counterpart of
 // GetAccountFrozenBandwidth. Before proposal #70 activates, valid java-tron
 // state cannot contain V2 freezes, so resource accounting can avoid probing
@@ -133,6 +152,34 @@ func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject, includeV2 boo
 			s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH))
 			frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
 		} else {
+			frozenV2, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	return frozenV1 +
+		acct.AcquiredDelegatedFrozenBandwidth() +
+		frozenV2 +
+		acquiredV2, nil
+}
+
+// accountFrozenBandwidthLoadedTotal computes the consensus-only loaded sum.
+// The general loader retains its original body; differential tests keep these
+// V1/V2/delegation sums and their addition order equivalent.
+func (s *StateDB) accountFrozenBandwidthLoadedTotal(obj *stateObject, includeV2 bool) (int64, error) {
+	acct := obj.account
+	frozenV1 := acct.TotalFrozenBandwidth()
+
+	var frozenV2, acquiredV2 int64
+	if includeV2 {
+		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
+		if obj.accountStakeV2Loaded {
+			s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH))
+			frozenV2 = acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
+		} else {
+			var err error
 			frozenV2, _, err = s.accountFrozenV2Amount(obj, corepb.ResourceCode_BANDWIDTH)
 			if err != nil {
 				return 0, err

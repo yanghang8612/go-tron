@@ -161,7 +161,7 @@ func chargeStakedNet(statedb *state.StateDB, dynProps *state.DynamicProperties, 
 	var frozen int64
 	var err error
 	if dynProps.SupportUnfreezeDelay() {
-		frozen, err = statedb.GetAccountFrozenBandwidth(addr)
+		frozen, err = statedb.GetAccountFrozenBandwidthForConsensus(addr)
 	} else {
 		frozen, err = statedb.GetAccountFrozenBandwidthV1(addr)
 	}
