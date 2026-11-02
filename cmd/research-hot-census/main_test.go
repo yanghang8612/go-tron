@@ -41,7 +41,7 @@ func TestFixedCopyCensusDistinguishesCoverageAndStaging(t *testing.T) {
 	}
 	var solid common.Hash
 	binary.BigEndian.PutUint64(solid[:8], 100000)
-	rawdb.WriteHeadSolidBlockHash(w, solid)
+	check(rawdb.WriteStateExecutionProperties(w, rawdb.StateExecutionProperties{BlockNum: 100000, SolidifiedBlockNum: 100000, BlockHash: solid}))
 	for _, n := range []uint64{30000, 30001, 70000, 99900} {
 		block := types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: int64(n)}}, Transactions: []*corepb.Transaction{{}, {}}})
 		check(rawdb.WriteBlock(w, block))

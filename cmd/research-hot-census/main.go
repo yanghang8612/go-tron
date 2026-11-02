@@ -197,8 +197,16 @@ func main() {
 		}
 	}
 	r.Head = r.Stages[string(rawdb.StageFinish)].BlockNum
-	solid := rawdb.ReadHeadSolidBlockHash(getter)
-	r.Solid = binary.BigEndian.Uint64(solid[:8])
+	// Current-format solidification is a derived dynamic property. The legacy
+	// HeadSolidBlock hash is intentionally absent from fresh databases.
+	execution, e := rawdb.ReadStateExecutionProperties(getter)
+	if e != nil {
+		panic(e)
+	}
+	if uint64(execution.BlockNum) != r.Head {
+		panic("execution properties and Finish are not the same captured cut")
+	}
+	r.Solid = uint64(execution.SolidifiedBlockNum)
 	if s, ok := r.Stages[string(rawdb.StageChainFreezer)]; ok {
 		r.ColdExclusive = s.BlockNum + 1
 	}
