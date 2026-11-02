@@ -68,21 +68,21 @@ func (r *PersistentHistoryReader) materializeHistoricalAccountAux(pb *corepb.Acc
 		}
 	}
 	if r.coldHistory != nil {
-		// The account envelope selects live KV. A missing generation watermark
-		// is normal for generation zero; it must not hide unchanged split rows.
-		// Conversely an orphan watermark must not make a deleted account live.
-		current, exists, err := decodeHotAccountEnvelope(r.hotLatest(), owner)
-		if err != nil {
+		// accountAndCodeFromStateDomain already established that the target
+		// account exists and supplied its envelope's generation. Its retained
+		// rows remain historical candidates even after deletion or recreation:
+		// those transitions do not emit a before-image for every split key.
+		// Validate any current envelope, but never use its presence or generation
+		// to select a different historical account incarnation.
+		if _, _, err := decodeHotAccountEnvelope(r.hotLatest(), owner); err != nil {
 			return err
 		}
-		if exists {
-			for _, domain := range accountSplitDomains {
-				if err := rawdb.IterateStateKVLatest(r.db, owner, current.AccountKVGeneration, domain, nil, func(key, _ []byte) (bool, error) {
-					candidates[domain][string(key)] = struct{}{}
-					return true, nil
-				}); err != nil {
-					return err
-				}
+		for _, domain := range accountSplitDomains {
+			if err := rawdb.IterateStateKVLatest(r.db, owner, generation, domain, nil, func(key, _ []byte) (bool, error) {
+				candidates[domain][string(key)] = struct{}{}
+				return true, nil
+			}); err != nil {
+				return err
 			}
 		}
 	}

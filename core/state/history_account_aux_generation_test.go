@@ -23,7 +23,7 @@ func (s *permissionHistoryCandidateSpy) NewIterator(prefix, start []byte) ethdb.
 	return s.readerDB.NewIterator(prefix, start)
 }
 
-func TestHistoricalAccountAuxCurrentGenerationCandidates(t *testing.T) {
+func TestHistoricalAccountAuxTargetGenerationCandidates(t *testing.T) {
 	owner := testAddr(0xe1)
 	for _, f := range []struct {
 		name           string
@@ -34,7 +34,7 @@ func TestHistoricalAccountAuxCurrentGenerationCandidates(t *testing.T) {
 	}{
 		{name: "gen0-no-watermark", accountExists: true},
 		{name: "recreated-gen1", accountExists: true, generation: 1, watermark: true},
-		{name: "deleted-owner-orphan-watermark", generation: 2, watermark: true},
+		{name: "historical-account-current-deleted", generation: 2, watermark: true},
 		{name: "invalid-current-envelope", accountExists: true, corruptAccount: true, generation: 2, watermark: true},
 	} {
 		t.Run(f.name, func(t *testing.T) {
@@ -87,12 +87,14 @@ func TestHistoricalAccountAuxCurrentGenerationCandidates(t *testing.T) {
 			}
 			spy := &permissionHistoryCandidateSpy{readerDB: disk}
 			reader := NewPersistentHistoryReaderWithColdHistory(spy, nil, 2, new(keyedColdHistoryStub))
-			pb := new(corepb.Account)
+			// The production caller has already decoded an existing historical
+			// account. Current absence does not negate that target's existence.
+			pb := types.NewAccount(owner, corepb.AccountType_Normal).Proto()
 			err = reader.materializeHistoricalAccountAux(pb, owner, f.generation, 1)
 			if (err != nil) != f.corruptAccount {
 				t.Fatalf("historical auxiliary error=%v, corrupt current=%v", err, f.corruptAccount)
 			}
-			wantPermission := f.accountExists && !f.corruptAccount
+			wantPermission := !f.corruptAccount
 			if wantPermission && !proto.Equal(pb.OwnerPermission, permission) || !wantPermission && pb.OwnerPermission != nil {
 				t.Fatalf("historical permission=%v, account exists=%v", pb.OwnerPermission, f.accountExists)
 			}
@@ -106,7 +108,7 @@ func TestHistoricalAccountAuxCurrentGenerationCandidates(t *testing.T) {
 					}
 				}
 				if found != wantPermission {
-					t.Fatalf("domain %v current-generation candidate scan=%v, want=%v", domain, found, wantPermission)
+					t.Fatalf("domain %v target-generation candidate scan=%v, want=%v", domain, found, wantPermission)
 				}
 			}
 		})
