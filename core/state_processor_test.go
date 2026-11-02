@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -3796,10 +3797,9 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 		makeTestTransferTx(3, 1, 2_000_000),
 		makeTestTransferTx(1, 4, 3_000_000),
 	}
-	// Leave enough independent canonical work between the conflicted sender
-	// retry and its next publication boundary for the background incarnation
-	// to complete even under the race detector. Production never waits for the
-	// worker: a result that misses its boundary still falls back to serial.
+	// Retain independent transfers between the conflicted sender and its final
+	// publication target. A test-only boundary handshake below ensures coverage
+	// without relying on this canonical work to outlast the background worker.
 	for id := byte(10); id <= 99; id++ {
 		transactions = append(transactions, makeTestTransferTx(id, id+140, 1_000))
 	}
@@ -3852,9 +3852,41 @@ func testProcessBlockPublishesAsyncSenderRetry(t *testing.T, blockNumber uint64)
 	captureFilteredEmptyBefore := versionedShadowWriteCaptureFilteredEmptyCounter.Snapshot().Count()
 	captureUnsupportedBefore := versionedShadowWriteCaptureUnsupportedCounter.Snapshot().Count()
 	captureErrorsBefore := versionedShadowWriteCaptureErrorsCounter.Snapshot().Count()
-	parallelInfos, err := run(parallelState, processBlockOptions{parallelTransfers: true, captureBalanceTrace: true})
+	targetTxIndex := len(transactions) - 1
+	targetBoundaryCalls := 0
+	parallelInfos, err := run(parallelState, processBlockOptions{
+		parallelTransfers: true, captureBalanceTrace: true,
+		senderRetryBoundaryTestHook: func(txIndex int, retry *discardShadowSenderRetry) {
+			if txIndex != targetTxIndex {
+				return
+			}
+			targetBoundaryCalls++
+			if !retry.async || retry.asyncEvents == nil {
+				t.Fatal("publication target has no async retry worker events")
+			}
+			// Consume real worker results on the canonical goroutine before the
+			// unchanged boundary validation/selection. Never manufacture a result
+			// or use the finish drain, which would discard queued requests.
+			timeout := time.NewTimer(5 * time.Second)
+			defer timeout.Stop()
+			for !retry.available[txIndex] || retry.results[txIndex].incarnation != retry.incarnations[txIndex] {
+				select {
+				case event := <-retry.asyncEvents:
+					retry.consumeAsyncEvent(event, txIndex)
+					if event.prefixError || event.result != nil && event.result.err != nil {
+						t.Fatalf("async retry worker failed before publication target %d: prefixError=%t result=%+v", txIndex, event.prefixError, event.result)
+					}
+				case <-timeout.C:
+					t.Fatalf("timed out waiting for async retry target %d: available=%t result incarnation=%d current=%d active=%d queued=%d errors=%d", txIndex, retry.available[txIndex], retry.results[txIndex].incarnation, retry.incarnations[txIndex], retry.asyncActive, retry.asyncQueue.Len(), retry.stats.actualErrors)
+				}
+			}
+		},
+	})
 	if err != nil {
 		t.Fatalf("parallel process: %v", err)
+	}
+	if targetBoundaryCalls != 1 {
+		t.Fatalf("async retry target boundary hook calls = %d, want 1", targetBoundaryCalls)
 	}
 	if candidates := parallelTransferRetryCandidatesCounter.Snapshot().Count() - retryCandidatesBefore; candidates != 1 {
 		t.Fatalf("async retry publication candidates = %d, want 1", candidates)

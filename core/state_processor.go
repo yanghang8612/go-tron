@@ -992,6 +992,7 @@ type processBlockOptions struct {
 	timing                        *processBlockTiming
 	// Test-only hooks exercise both sides of the publication mutation boundary.
 	// Production always leaves them nil.
+	senderRetryBoundaryTestHook    func(txIndex int, retry *discardShadowSenderRetry)
 	speculativePreOracleTestHook   func(family string, txIndex int, result *discardShadowTaskResult)
 	speculativePostOracleTestHook  func(family string, txIndex int, result *discardShadowTaskResult)
 	speculativePreApplyTestHook    func(family string, txIndex int, writes state.TransactionWriteSet)
@@ -1300,6 +1301,9 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 			vmSenderChainPreexecution.projectBlockEnergyBoundary(i, dynProps, statedb, prevBlockTime, forkPassCache)
 		}
 		if senderRetry != nil {
+			if options.senderRetryBoundaryTestHook != nil {
+				options.senderRetryBoundaryTestHook(i, senderRetry)
+			}
 			senderRetry.observeBoundary(i, tx, statedb, dynProps, versionedShadow, discardCfg)
 		}
 		if vmSenderRetry != nil {
