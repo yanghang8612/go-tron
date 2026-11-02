@@ -1,0 +1,11 @@
+{
+  "utc": "2026-11-02T07:49:22.749060Z",
+  "systemd": "MainPID=21838\nActiveState=active\n",
+  "exe": "/data/gtron/releases/auto-0096c0af878e-6611fc4273c457b4/gtron",
+  "binary_sha256": "6611fc4273c457b47cad2ea47742a2eea0653b50e59fe0b1d74d10105bb41745",
+  "expected_original_binary": true,
+  "meminfo": [
+    "MemAvailable:   11683940 kB",
+    "SwapFree:              0 kB"
+  ]
+}

@@ -1,0 +1,21 @@
+=== RUN   TestAccountPermissionV2HistoryUnwindSnapshotAndContinue
+--- PASS: TestAccountPermissionV2HistoryUnwindSnapshotAndContinue (0.08s)
+=== RUN   TestHistoricalAccountAuxGenerationBoundaries
+=== RUN   TestHistoricalAccountAuxGenerationBoundaries/deleted-at-head
+    history_account_aux_generation_boundary_test.go:107: future gen0 permission rows=0 account rows=1 generation rows=0
+=== RUN   TestHistoricalAccountAuxGenerationBoundaries/recreated-gen1
+    history_account_aux_generation_boundary_test.go:107: future gen0 permission rows=0 account rows=2 generation rows=1
+--- PASS: TestHistoricalAccountAuxGenerationBoundaries (0.10s)
+    --- PASS: TestHistoricalAccountAuxGenerationBoundaries/deleted-at-head (0.04s)
+    --- PASS: TestHistoricalAccountAuxGenerationBoundaries/recreated-gen1 (0.06s)
+=== RUN   TestHistoricalAccountAuxTargetGenerationCandidates
+=== RUN   TestHistoricalAccountAuxTargetGenerationCandidates/gen0-no-watermark
+=== RUN   TestHistoricalAccountAuxTargetGenerationCandidates/recreated-gen1
+=== RUN   TestHistoricalAccountAuxTargetGenerationCandidates/historical-account-current-deleted
+=== RUN   TestHistoricalAccountAuxTargetGenerationCandidates/invalid-current-envelope
+--- PASS: TestHistoricalAccountAuxTargetGenerationCandidates (0.00s)
+    --- PASS: TestHistoricalAccountAuxTargetGenerationCandidates/gen0-no-watermark (0.00s)
+    --- PASS: TestHistoricalAccountAuxTargetGenerationCandidates/recreated-gen1 (0.00s)
+    --- PASS: TestHistoricalAccountAuxTargetGenerationCandidates/historical-account-current-deleted (0.00s)
+    --- PASS: TestHistoricalAccountAuxTargetGenerationCandidates/invalid-current-envelope (0.00s)
+PASS

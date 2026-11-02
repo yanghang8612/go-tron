@@ -1,0 +1,133 @@
+{
+  "product_source": "5e51a44c0d405863f3766fa6a55fee6d9dfc293c",
+  "performance_test_source": "3856d7237eb27be34e9cdf9858f463e309d6bd08",
+  "zip_bytes": 34941,
+  "zip_sha256": "4870a648845154d3ccc6b546dbd110a4317a3a8994d24d991f9b50fcdb4f7e00",
+  "zip_members": 36,
+  "independently_verified_member_digests": 35,
+  "crc_verified": true,
+  "permission_saved_bytes": 3870581,
+  "permission_saved_percent": 32.279942011575834,
+  "point_summary": [
+    {
+      "negative": false,
+      "scope_rows": 1,
+      "cache": "empty_app_cache",
+      "baseline_cpu_us": 18.796799999999998,
+      "baseline_wall_us": 18.99769045,
+      "baseline_read_calls": 6840.0,
+      "candidate_cpu_us": 10.3535,
+      "candidate_wall_us": 10.39254335,
+      "candidate_read_calls": 5367.0,
+      "cpu_change_percent": -44.91881596867551
+    },
+    {
+      "negative": false,
+      "scope_rows": 1,
+      "cache": "warm_app_cache",
+      "baseline_cpu_us": 7.4281,
+      "baseline_wall_us": 7.416066450000001,
+      "baseline_read_calls": 0.0,
+      "candidate_cpu_us": 7.16895,
+      "candidate_wall_us": 7.16132,
+      "candidate_read_calls": 0.0,
+      "cpu_change_percent": -3.4887790955964504
+    },
+    {
+      "negative": false,
+      "scope_rows": 32,
+      "cache": "empty_app_cache",
+      "baseline_cpu_us": 9.7384,
+      "baseline_wall_us": 9.774551800000001,
+      "baseline_read_calls": 6840.0,
+      "candidate_cpu_us": 8.5349,
+      "candidate_wall_us": 8.57337375,
+      "candidate_read_calls": 5367.0,
+      "cpu_change_percent": -12.358292943399329
+    },
+    {
+      "negative": false,
+      "scope_rows": 32,
+      "cache": "warm_app_cache",
+      "baseline_cpu_us": 5.23635,
+      "baseline_wall_us": 5.2294419,
+      "baseline_read_calls": 0.0,
+      "candidate_cpu_us": 5.49795,
+      "candidate_wall_us": 5.6240220999999995,
+      "candidate_read_calls": 0.0,
+      "cpu_change_percent": 4.995846343349863
+    },
+    {
+      "negative": true,
+      "scope_rows": 1,
+      "cache": "empty_app_cache",
+      "baseline_cpu_us": 3.43505,
+      "baseline_wall_us": 3.4309708499999996,
+      "baseline_read_calls": 191.0,
+      "candidate_cpu_us": 1.8813,
+      "candidate_wall_us": 1.87859825,
+      "candidate_read_calls": 176.0,
+      "cpu_change_percent": -45.23223824980713
+    },
+    {
+      "negative": true,
+      "scope_rows": 1,
+      "cache": "warm_app_cache",
+      "baseline_cpu_us": 1.9832999999999998,
+      "baseline_wall_us": 1.9790296,
+      "baseline_read_calls": 0.0,
+      "candidate_cpu_us": 2.75635,
+      "candidate_wall_us": 2.7509585999999997,
+      "candidate_read_calls": 0.0,
+      "cpu_change_percent": 38.97796601623558
+    },
+    {
+      "negative": true,
+      "scope_rows": 32,
+      "cache": "empty_app_cache",
+      "baseline_cpu_us": 0.8331999999999999,
+      "baseline_wall_us": 0.83202535,
+      "baseline_read_calls": 191.0,
+      "candidate_cpu_us": 0.9226,
+      "candidate_wall_us": 0.9169169,
+      "candidate_read_calls": 176.0,
+      "cpu_change_percent": 10.729716754680751
+    },
+    {
+      "negative": true,
+      "scope_rows": 32,
+      "cache": "warm_app_cache",
+      "baseline_cpu_us": 0.6689499999999999,
+      "baseline_wall_us": 0.6681481499999999,
+      "baseline_read_calls": 0.0,
+      "candidate_cpu_us": 0.8151,
+      "candidate_wall_us": 0.81391685,
+      "candidate_read_calls": 0.0,
+      "cpu_change_percent": 21.847671724344142
+    }
+  ],
+  "full_product_command_note": "make test (900s) found one obsolete VM fallback expectation; repaired with exact dependency/conflict/receipt/history/root tests. A later complete snapshots-package run found two metadata/version-fixture omissions; repaired and focused schema/cache + race checks passed. These failed-run logs remain preserved; a final single all-package green invocation was not repeated.",
+  "local_checks_passed": [
+    "corrected VM reward publication/conflict tests (11 cases)",
+    "corrected snapshot schema/cache suite",
+    "race over core/rawdb/state/snapshots/cmd/gtron changed paths",
+    "race over snapshot manifest/cache paths",
+    "go vet ./...",
+    "make gtron-pure"
+  ],
+  "server_checks_passed": [
+    "500000-row permission byte roundtrip and matched L6 controls, four AB/BA rounds",
+    "joint hot/cold history, full/incremental MuHash, unwind/replay, verified snapshot restore and continuation fixture",
+    "65536-block, 6116163-log full raw-source/cold result equality",
+    "64 distributed narrow block queries, first/warm cache, all return values checked",
+    "CGO=1 Sapling build with existing GCC11; binary never deployed",
+    "Final target-generation history regressions + Sapling build at 5e51a44c; four overlay source hashes match local"
+  ],
+  "performance_product_source": "f6af09b1309c9c6ed9a137532ac2b81bbf1073f3",
+  "final_source_overlay_verified_against_local": true,
+  "final_zip_bytes": 16315,
+  "final_zip_sha256": "ce360223dfdcbd8f562d35c2b76e36c46c65e98fa36d8fe98b928a82f3b8e233",
+  "final_zip_members": 13,
+  "final_verified_member_digests": 12,
+  "final_native_binary_sha256": "6f9523067bbf189e91486f840869520bc1aba9cd5c31cb1c25254277c0c028b6"
+}

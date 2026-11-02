@@ -1,0 +1,3 @@
+{"method": "eth_blockNumber", "params": [], "seconds": 0.681368499994278, "returncode": 0, "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x32dbc55\"}\n", "stderr": ""}
+{"method": "eth_getBalance", "params": ["0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1", "0x155"], "seconds": 0.9532621669932269, "returncode": 0, "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x0\"}\n", "stderr": ""}
+{"method": "eth_getBalance", "params": ["0xb87f2be4dede9fc25387f8df7e0944b5cb7900e1", "0x156"], "seconds": 1.0616295830113813, "returncode": 0, "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x6b714021d45c37522e100000\"}\n", "stderr": ""}

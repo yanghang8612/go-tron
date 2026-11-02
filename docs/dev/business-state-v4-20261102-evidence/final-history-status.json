@@ -1,0 +1,28 @@
+{
+  "base_source": "f6af09b1309c9c6ed9a137532ac2b81bbf1073f3",
+  "product_source": "5e51a44c0d405863f3766fa6a55fee6d9dfc293c",
+  "overlay_file_sha256": {
+    "core/state/history_account_aux.go": "6c02b1fb1d9375d001af6052516345fe18af06c25e0cd0d2106e4829cb5b0c3f",
+    "core/state/history_account_aux_generation_boundary_test.go": "bd96754601a2439941ae6bc2f0d302bade030dd1dfa10223909fafa29cd24920",
+    "core/state/history_account_aux_generation_test.go": "dcc2514ce0e9df2a5768a99a1058c19c20bbddcd20a157ab5f775b462d8344f6",
+    "core/state/snapshots/event_source_reuse_test.go": "16caac30dfd5ade12c596a93360fe7a96edd90c912c83de895566eb9db41fb62"
+  },
+  "steps": [
+    {
+      "name": "build-state",
+      "returncode": 0,
+      "seconds": 22.940038442611694
+    },
+    {
+      "name": "history-correctness",
+      "returncode": 0,
+      "seconds": 0.2183527946472168
+    },
+    {
+      "name": "native-build",
+      "returncode": 0,
+      "seconds": 27.474180459976196
+    }
+  ],
+  "finished": true
+}
