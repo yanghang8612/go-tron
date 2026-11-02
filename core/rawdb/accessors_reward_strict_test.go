@@ -3,12 +3,12 @@ package rawdb
 import (
 	"bytes"
 	"errors"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestRewardStrictReadersRoundTripAndAbsentDefaults(t *testing.T) {
