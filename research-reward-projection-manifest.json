@@ -1,0 +1,9 @@
+{
+  "parent": "1885178680049ec38ca43cc4483c5fbaa5f3883d",
+  "files": {
+    "build/benchmarks/20261102-reward-votes-projection/projection_test.go": "9641034993c83cefcb141ec39e5846fdad2658147ee2a3fa63f8d80701bcfa7e",
+    "build/benchmarks/20261102-reward-votes-projection/frozen-source.json": "6370b538383390df05d5672295c7076f13e4c7621a0aa0fdbb98e06313391ac4",
+    "build/benchmarks/20261102-reward-votes-projection/main.go": "9068323981603d89f165f9c4b7c4c64bd5d26170d49caefa787ae0dd0003ac14",
+    "build/benchmarks/20261102-reward-votes-projection/projection.go": "71f962b036d2adc2668676b893cfbc7d416fe591055743680c2f50748de14c43"
+  }
+}

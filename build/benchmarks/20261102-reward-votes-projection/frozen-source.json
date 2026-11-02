@@ -1,0 +1,15 @@
+{
+  "scope": "Offline new-semantic-model Votes-only projection; not lossless full Account compression and not a production MuHash proof",
+  "source_sha256": {
+    "main.go": "9068323981603d89f165f9c4b7c4c64bd5d26170d49caefa787ae0dd0003ac14",
+    "projection.go": "71f962b036d2adc2668676b893cfbc7d416fe591055743680c2f50748de14c43",
+    "projection_test.go": "9641034993c83cefcb141ec39e5846fdad2658147ee2a3fa63f8d80701bcfa7e"
+  },
+  "required_runtime_sources": [
+    "main.go",
+    "projection.go"
+  ],
+  "prior_source_directory_untouched": "build/benchmarks/20261102-reward-state-compact",
+  "same_input_sha256": "512ccfce04f593357cf8423031de0dd53c1a2709d47ca8e409c6d516dc708cc3",
+  "baseline_results_sha256": "eaa0b262f516e7cf9051704189af3ebc6f14802853bfab402f501f0bff381260"
+}
