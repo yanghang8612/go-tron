@@ -1,0 +1,11 @@
+{
+  "parent": "8dcd5a44d54dc84531169a3cf2b391f52cb5df99",
+  "files": {
+    "build/benchmarks/20261102-account-kv-compact/cursor-control/source-manifest.json": "f9c4d6238d1069c81cbbbeefe5ae2cc8b20c6674e73e6ebdf084e9fb3b3ca9bb",
+    "build/benchmarks/20261102-account-kv-compact/cursor-control/resource_codec.go": "2a5feda4eb821bb29a7256dfaaccf883d60b79ee8ac658a3bb3f574d97b44ae8",
+    "build/benchmarks/20261102-account-kv-compact/cursor-control/README.md": "a7ad60ed1228701cd70fd50fbb05071b140d309791da491e513e03c8ebf93193",
+    "build/benchmarks/20261102-account-kv-compact/cursor-control/bundle_reader.go": "2fb2e9d5c510f57c10e7dfd525660e93236785d3f8a25898a68cb4cafdb003e1",
+    "build/benchmarks/20261102-account-kv-compact/cursor-control/main.go": "08118579945a60d10ac51bc9f037e9c0f71e46f88543b462ec0cf2811b1a7877",
+    "build/benchmarks/20261102-account-kv-compact/cursor-control/main_test.go": "90381cb44cb2f2e1193a0f3caa56554f5833377767cc440029f78caf4b1b7f4a"
+  }
+}

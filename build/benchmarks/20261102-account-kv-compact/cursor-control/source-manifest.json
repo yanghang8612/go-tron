@@ -1,0 +1,34 @@
+{
+  "frozen_original_research_commit": "ed33556bd99b45067e7712bb2f935ec4177219b3",
+  "base_production_source": "0096c0af878ea37fc784e0abade8b55454899a0f",
+  "new_directory": "/Users/asuka/.codex/worktrees/chaindata-business-compact-20261102/go-tron/build/benchmarks/20261102-account-kv-compact/cursor-control",
+  "files": {
+    "main.go": "08118579945a60d10ac51bc9f037e9c0f71e46f88543b462ec0cf2811b1a7877",
+    "resource_codec.go": "2a5feda4eb821bb29a7256dfaaccf883d60b79ee8ac658a3bb3f574d97b44ae8",
+    "bundle_reader.go": "2fb2e9d5c510f57c10e7dfd525660e93236785d3f8a25898a68cb4cafdb003e1",
+    "main_test.go": "90381cb44cb2f2e1193a0f3caa56554f5833377767cc440029f78caf4b1b7f4a",
+    "README.md": "a7ad60ed1228701cd70fd50fbb05071b140d309791da491e513e03c8ebf93193"
+  },
+  "new_runtime_sources": [
+    "main.go",
+    "resource_codec.go",
+    "bundle_reader.go"
+  ],
+  "local_validation": {
+    "go_test": "passed 1.488s",
+    "race": "passed 3.887s",
+    "real_l6_ingestion": true,
+    "baseline_negative_bloom_rejection_fixture_at_least_90_percent": true,
+    "unchanged_exact_get_cannot_read_non_anchor_bundle_member": true
+  },
+  "original_sources_unchanged": {
+    "build/benchmarks/20261102-account-kv-compact/census/main.go": "59131c2c47806b0e5ce9e718804fabb4c7652623805cbde6c126eb7e37fd0a21",
+    "build/benchmarks/20261102-account-kv-compact/census/main_test.go": "d9a015221c26c54d4962261da27d0fcbf62b37a14e338ebeb486624b92d313a8",
+    "build/benchmarks/20261102-account-kv-compact/main.go": "b80e4366b810d2f6996ae64a03c8da612c213d294c4eb5bb6b5b21c097e36a2e",
+    "build/benchmarks/20261102-account-kv-compact/owner_bundle.go": "ee98809ec2b47286f64037040539a2e77d8e5a7d480e4ee952dc53c4145bccb0",
+    "build/benchmarks/20261102-account-kv-compact/owner_bundle_test.go": "cf0ed86def36d20bdb4193a6adeefea8a986fb4b694e43418f9a79f75c64fa97",
+    "build/benchmarks/20261102-account-kv-compact/pipeline_test.go": "33a51193c41e33f4777e7e5dfbdd8025e3d3debce88c8b249e560f9680646c5d",
+    "build/benchmarks/20261102-account-kv-compact/resource_codec.go": "2a5feda4eb821bb29a7256dfaaccf883d60b79ee8ac658a3bb3f574d97b44ae8",
+    "build/benchmarks/20261102-account-kv-compact/resource_codec_test.go": "dc1c35d83e2d83d1546c348c9e35e7984718756a7a0704e610363a98b08de5b4"
+  }
+}
