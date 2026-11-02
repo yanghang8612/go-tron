@@ -4,15 +4,17 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-// Recheck the final reader against an already measured immutable event pair.
-// This avoids repeating the expensive source scan/build after metadata-only
-// fixes. Both source DB and prior catalog are read-only; results use a new dir.
+// Recheck narrow queries distributed over an already measured immutable pair.
+// The original full-segment source/cold comparison need not be repeated after
+// metadata-only fixes. Every sampled result still uses its own raw-source oracle.
 func TestIndependentEventFixedPairFinalReader(t *testing.T) {
 	catalog := os.Getenv("GTRON_EVENT_REUSE_CATALOG")
 	if catalog == "" {
@@ -37,7 +39,7 @@ func TestIndependentEventFixedPairFinalReader(t *testing.T) {
 	if err := json.Unmarshal(data, &prior); err != nil {
 		t.Fatal(err)
 	}
-	if !prior.Equal || prior.Source == "" || prior.From == 0 || prior.To < prior.From || prior.Digest == "" {
+	if !prior.Equal || prior.Source == "" || prior.From == 0 || prior.To < prior.From || prior.To-prior.From >= 65536 || prior.Digest == "" {
 		t.Fatal("missing prior full-range oracle")
 	}
 	catalog, err = filepath.EvalSymlinks(catalog)
@@ -54,7 +56,7 @@ func TestIndependentEventFixedPairFinalReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = filepath.Join(parent, filepath.Base(out))
-	if filepath.Dir(out) == catalog || out == catalog {
+	if out == catalog || strings.HasPrefix(out, catalog+string(os.PathSeparator)) {
 		t.Fatal("new result must be outside prior immutable catalog")
 	}
 	if err := os.Mkdir(out, 0700); err != nil {
@@ -76,20 +78,45 @@ func TestIndependentEventFixedPairFinalReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.SetEventLogCanonicalSource(chain)
+	type oracle struct {
+		block, rows uint64
+		digest      string
+	}
+	var queries []oracle
+	sourceStarted, sourceCPU := time.Now(), eventPerfCPU()
+	for i := uint64(0); i < 64; i++ {
+		block := prior.From + (prior.To-prior.From)*i/63
+		digest, rows, err := eventPerfDigest(func(fn func(EventLog) (bool, error)) error {
+			return (eventLogV3ChainReader{chain: chainDB}).IterateEventLogs(block, block, EventLogFilter{}, fn)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		queries = append(queries, oracle{block, rows, digest})
+	}
+	sourceWallNS, sourceCPUNS := time.Since(sourceStarted).Nanoseconds(), eventPerfCPU()-sourceCPU
 	var results []map[string]any
 	for pass := 0; pass < 2; pass++ {
-		started, cpu := time.Now(), eventPerfCPU()
-		digest, rows, err := eventPerfDigest(func(fn func(EventLog) (bool, error)) error {
-			return manager.IterateEventLogs(prior.From, prior.To, EventLogFilter{}, fn)
-		})
-		wall, cpuNS := time.Since(started).Nanoseconds(), eventPerfCPU()-cpu
-		if err != nil || digest != prior.Digest || rows != prior.Rows {
-			t.Fatal("final reader differs from original raw-source oracle", rows, err)
+		var latencies []int64
+		var queryResults []map[string]any
+		for _, q := range queries {
+			started, cpu := time.Now(), eventPerfCPU()
+			digest, rows, err := eventPerfDigest(func(fn func(EventLog) (bool, error)) error {
+				return manager.IterateEventLogs(q.block, q.block, EventLogFilter{}, fn)
+			})
+			wall, cpuNS := time.Since(started).Nanoseconds(), eventPerfCPU()-cpu
+			if err != nil || digest != q.digest || rows != q.rows {
+				t.Fatal("final narrow reader differs from raw-source oracle", q.block, rows, err)
+			}
+			latencies = append(latencies, wall)
+			queryResults = append(queryResults, map[string]any{"block": q.block, "wall_ns": wall, "process_cpu_ns": cpuNS, "log_rows": rows, "digest": digest, "all_return_values_equal": true})
 		}
-		results = append(results, map[string]any{"pass": pass, "wall_ns": wall, "process_cpu_ns": cpuNS, "log_rows": rows, "digest": digest, "all_return_values_equal": true})
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		results = append(results, map[string]any{"pass": pass, "p50_wall_ns": latencies[len(latencies)/2], "max_wall_ns": latencies[len(latencies)-1], "queries": queryResults, "all_return_values_equal": true})
 	}
 	report := map[string]any{"catalog": catalog, "source_chaindata": prior.Source, "from_block": prior.From, "to_block": prior.To, "results": results,
-		"scope": "Final production reader; first/warm application cache; existing full-range raw-source oracle; OS cache uncontrolled; not HTTP or whole-genesis throughput"}
+		"source_query_wall_ns": sourceWallNS, "source_query_process_cpu_ns": sourceCPUNS, "sample_blocks": len(queries), "original_full_range_log_rows": prior.Rows, "original_full_range_digest": prior.Digest,
+		"scope": "Final production reader; 64 narrow block queries distributed over the full immutable segment, every value checked against raw source; first/warm application cache; OS cache uncontrolled; not HTTP or a second whole-segment scan"}
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		t.Fatal(err)
