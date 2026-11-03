@@ -109,6 +109,8 @@ type shard struct {
 	countHot  int64
 	countCold int64
 	countTest int64
+
+	activity ResidentActivity
 }
 
 func (c *shard) Get(id uint64, fileNum base.DiskFileNum, offset uint64) Handle {
@@ -148,6 +150,7 @@ func (c *shard) Set(id uint64, fileNum base.DiskFileNum, offset uint64, value *V
 		if c.metaAdd(k, e) {
 			value.ref.trace("add-cold")
 			c.sizeCold += e.size
+			c.activity.AddedBytes += e.size
 			c.countCold++
 		} else {
 			value.ref.trace("skip-cold")
@@ -160,6 +163,11 @@ func (c *shard) Set(id uint64, fileNum base.DiskFileNum, offset uint64, value *V
 		e.setValue(value)
 		e.referenced.Store(true)
 		delta := int64(len(value.buf)) - e.size
+		if delta >= 0 {
+			c.activity.ResizeGrowBytes += delta
+		} else {
+			c.activity.ResizeShrinkBytes -= delta
+		}
 		e.size = int64(len(value.buf))
 		if e.ptype == etHot {
 			value.ref.trace("add-hot")
@@ -168,11 +176,12 @@ func (c *shard) Set(id uint64, fileNum base.DiskFileNum, offset uint64, value *V
 			value.ref.trace("add-cold")
 			c.sizeCold += delta
 		}
-		c.evict()
+		c.evict(reasonClock)
 
 	default:
 		// cache entry was a test page
 		c.sizeTest -= e.size
+		c.activity.PromotionGhostRemovedBytes += e.size
 		c.countTest--
 		c.metaDel(e).release()
 		c.metaCheck(e)
@@ -189,6 +198,7 @@ func (c *shard) Set(id uint64, fileNum base.DiskFileNum, offset uint64, value *V
 		if c.metaAdd(k, e) {
 			value.ref.trace("add-hot")
 			c.sizeHot += e.size
+			c.activity.AddedBytes += e.size
 			c.countHot++
 		} else {
 			value.ref.trace("skip-hot")
@@ -240,7 +250,7 @@ func (c *shard) Delete(id uint64, fileNum base.DiskFileNum, offset uint64) {
 		if e == nil {
 			return
 		}
-		deletedValue = c.metaEvict(e)
+		deletedValue = c.metaEvict(e, reasonDelete)
 		c.checkConsistency()
 	}()
 	// Now that the mutex has been dropped, release the reference which will
@@ -251,14 +261,14 @@ func (c *shard) Delete(id uint64, fileNum base.DiskFileNum, offset uint64) {
 // EvictFile evicts all of the cache values for the specified file.
 func (c *shard) EvictFile(id uint64, fileNum base.DiskFileNum) {
 	fkey := key{fileKey{id, fileNum}, 0}
-	for c.evictFileRun(fkey) {
+	for first := true; c.evictFileRun(fkey, first); first = false {
 		// Sched switch to give another goroutine an opportunity to acquire the
 		// shard mutex.
 		runtime.Gosched()
 	}
 }
 
-func (c *shard) evictFileRun(fkey key) (moreRemaining bool) {
+func (c *shard) evictFileRun(fkey key, first bool) (moreRemaining bool) {
 	// If most of the file's blocks are held in the block cache, evicting all
 	// the blocks may take a while. We don't want to block the entire cache
 	// shard, forcing concurrent readers to wait until we're finished. We drop
@@ -266,6 +276,9 @@ func (c *shard) evictFileRun(fkey key) (moreRemaining bool) {
 	// goroutines an opportunity to make progress.
 	const blocksPerMutexAcquisition = 5
 	c.mu.Lock()
+	if first {
+		c.activity.FileEvictShardCalls++
+	}
 
 	// Releasing a value may result in free-ing it back to the memory allocator.
 	// This can have a nontrivial cost that we'd prefer to not pay while holding
@@ -289,7 +302,7 @@ func (c *shard) evictFileRun(fkey key) (moreRemaining bool) {
 	// b is the current head of the doubly linked list, and n is the entry after b.
 	for b, n := blocks, (*entry)(nil); len(obsoleteValues) < cap(obsoleteValues); b = n {
 		n = b.fileLink.next
-		obsoleteValues = append(obsoleteValues, c.metaEvict(b))
+		obsoleteValues = append(obsoleteValues, c.metaEvict(b, reasonFile))
 		if b == n {
 			// b == n represents the case where b was the last entry remaining
 			// in the doubly linked list, which is why it pointed at itself. So
@@ -305,6 +318,8 @@ func (c *shard) evictFileRun(fkey key) (moreRemaining bool) {
 func (c *shard) Free() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.activity.RemovedOtherBytes += c.sizeHot + c.sizeCold
+	c.activity.OtherGhostRemovedBytes += c.sizeTest
 
 	// NB: we use metaDel rather than metaEvict in order to avoid the expensive
 	// metaCheck call when the "invariants" build tag is specified.
@@ -316,12 +331,25 @@ func (c *shard) Free() {
 
 	c.blocks.free()
 	c.files.free()
+	c.sizeHot = 0
+	c.sizeCold = 0
+	c.sizeTest = 0
+	c.countHot = 0
+	c.countCold = 0
+	c.countTest = 0
 }
 
 func (c *shard) Reserve(n int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reservedSize += int64(n)
+	if n >= 0 {
+		c.activity.ReserveShardCalls++
+		c.activity.ReserveAddedBytes += int64(n)
+	} else {
+		c.activity.ReleaseShardCalls++
+		c.activity.ReserveReleasedBytes -= int64(n)
+	}
 
 	// Changing c.reservedSize will either increase or decrease
 	// the targetSize. But we want coldTarget to be in the range
@@ -332,7 +360,7 @@ func (c *shard) Reserve(n int) {
 		c.coldTarget = targetSize
 	}
 
-	c.evict()
+	c.evict(reasonReserve)
 	c.checkConsistency()
 }
 
@@ -358,7 +386,7 @@ func (c *shard) targetSize() int64 {
 // Add the entry to the cache, returning true if the entry was added and false
 // if it would not fit in the cache.
 func (c *shard) metaAdd(key key, e *entry) bool {
-	c.evict()
+	c.evict(reasonClock)
 	if e.size > c.targetSize() {
 		// The entry is larger than the target cache size.
 		return false
@@ -494,7 +522,14 @@ func (c *shard) metaCheck(e *entry) {
 	}
 }
 
-func (c *shard) metaEvict(e *entry) (evictedValue *Value) {
+func (c *shard) metaEvict(e *entry, reason evictionReason) (evictedValue *Value) {
+	if e.ptype != etTest {
+		c.accountRemoval(e.size, reason)
+	} else if reason == reasonFile {
+		c.activity.FileGhostRemovedBytes += e.size
+	} else {
+		c.activity.DeleteGhostRemovedBytes += e.size
+	}
 	switch e.ptype {
 	case etHot:
 		c.sizeHot -= e.size
@@ -512,13 +547,13 @@ func (c *shard) metaEvict(e *entry) (evictedValue *Value) {
 	return evictedValue
 }
 
-func (c *shard) evict() {
+func (c *shard) evict(reason evictionReason) {
 	for c.targetSize() <= c.sizeHot+c.sizeCold && c.handCold != nil {
-		c.runHandCold(c.countCold, c.sizeCold)
+		c.runHandCold(c.countCold, c.sizeCold, reason)
 	}
 }
 
-func (c *shard) runHandCold(countColdDebug, sizeColdDebug int64) {
+func (c *shard) runHandCold(countColdDebug, sizeColdDebug int64, reason evictionReason) {
 	// countColdDebug and sizeColdDebug should equal c.countCold and
 	// c.sizeCold. They're parameters only to aid in debugging of
 	// cockroachdb/cockroach#70154. Since they're parameters, their
@@ -539,6 +574,7 @@ func (c *shard) runHandCold(countColdDebug, sizeColdDebug int64) {
 			c.sizeHot += e.size
 			c.countHot++
 		} else {
+			c.accountRemoval(e.size, reason)
 			e.setValue(nil)
 			e.ptype = etTest
 			c.sizeCold -= e.size
@@ -546,7 +582,7 @@ func (c *shard) runHandCold(countColdDebug, sizeColdDebug int64) {
 			c.sizeTest += e.size
 			c.countTest++
 			for c.targetSize() < c.sizeTest && c.handTest != nil {
-				c.runHandTest()
+				c.runHandTest(reason)
 			}
 		}
 	}
@@ -554,13 +590,13 @@ func (c *shard) runHandCold(countColdDebug, sizeColdDebug int64) {
 	c.handCold = c.handCold.next()
 
 	for c.targetSize()-c.coldTarget <= c.sizeHot && c.handHot != nil {
-		c.runHandHot()
+		c.runHandHot(reason)
 	}
 }
 
-func (c *shard) runHandHot() {
+func (c *shard) runHandHot(reason evictionReason) {
 	if c.handHot == c.handTest && c.handTest != nil {
-		c.runHandTest()
+		c.runHandTest(reason)
 		if c.handHot == nil {
 			return
 		}
@@ -582,7 +618,7 @@ func (c *shard) runHandHot() {
 	c.handHot = c.handHot.next()
 }
 
-func (c *shard) runHandTest() {
+func (c *shard) runHandTest(reason evictionReason) {
 	if c.sizeCold > 0 && c.handTest == c.handCold && c.handCold != nil {
 		// sizeCold is > 0, so assert that countCold == 0. See the
 		// comment above count{Hot,Cold,Test}.
@@ -590,7 +626,7 @@ func (c *shard) runHandTest() {
 			panic(fmt.Sprintf("pebble: mismatch %d cold size, %d cold count", c.sizeCold, c.countCold))
 		}
 
-		c.runHandCold(c.countCold, c.sizeCold)
+		c.runHandCold(c.countCold, c.sizeCold, reason)
 		if c.handTest == nil {
 			return
 		}
@@ -598,6 +634,7 @@ func (c *shard) runHandTest() {
 
 	e := c.handTest
 	if e.ptype == etTest {
+		c.activity.ClockGhostRemovedBytes += e.size
 		c.sizeTest -= e.size
 		c.countTest--
 		c.coldTarget -= e.size
@@ -633,6 +670,11 @@ type ClockMetrics struct {
 
 // Metrics holds metrics for the cache.
 type Metrics struct {
+	SourceID                            uint64
+	ReservedBytes, EffectiveTargetBytes int64
+	Activity                            ResidentActivity
+	ConservationErrorBytes              int64
+	ConservationMismatchShards          int64
 	// The number of bytes inuse by the cache.
 	Size int64
 	// The count of objects (blocks or tables) in the cache.
@@ -681,6 +723,8 @@ type Metrics struct {
 // eases finding where a leak has occurred. These two facilities are usually
 // used in combination by specifying `-tags invariants,tracing`. Note that
 // "tracing" produces a significant slowdown, while "invariants" does not.
+var sourceIDs atomic.Uint64
+
 type Cache struct {
 	refs    atomic.Int64
 	maxSize int64
@@ -692,6 +736,7 @@ type Cache struct {
 		sync.Mutex
 		msgs []string
 	}
+	sourceID uint64
 }
 
 // New creates a new cache of the specified size. Memory for the cache is
@@ -736,8 +781,9 @@ func New(size int64) *Cache {
 
 func newShards(size int64, shards int) *Cache {
 	c := &Cache{
-		maxSize: size,
-		shards:  make([]shard, shards),
+		sourceID: sourceIDs.Add(1),
+		maxSize:  size,
+		shards:   make([]shard, shards),
 	}
 	c.refs.Store(1)
 	c.idAlloc.Store(1)
@@ -913,12 +959,21 @@ func (c *Cache) Reserve(n int) func() {
 // cache sample is not atomic across shards.
 func (c *Cache) Metrics() Metrics {
 	var m Metrics
+	m.SourceID = c.sourceID
 	m.Clock.Shards = int64(len(c.shards))
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.RLock()
 		m.Count += int64(s.blocks.Count())
 		m.Size += s.sizeHot + s.sizeCold
+		m.Activity.add(s.activity)
+		m.ReservedBytes += s.reservedSize
+		m.EffectiveTargetBytes += s.targetSize()
+		residual := s.sizeHot + s.sizeCold - s.activity.Balance()
+		m.ConservationErrorBytes += residual
+		if residual != 0 {
+			m.ConservationMismatchShards++
+		}
 		m.Clock.HotCount += s.countHot
 		m.Clock.ColdCount += s.countCold
 		m.Clock.TestCount += s.countTest

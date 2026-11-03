@@ -35,6 +35,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/metrics"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -169,6 +170,10 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	all := metrics.DefaultRegistry.GetAll()
+	// One immutable owner-meter snapshot per cache, not independent registry gauges.
+	for name, snapshot := range pebbledb.CacheCausalitySnapshots() {
+		all[name] = map[string]interface{}{"snapshot": snapshot}
+	}
 	selected := make(map[string]map[string]interface{}, len(all))
 	for name, values := range all {
 		matched := len(prefixes) == 0
