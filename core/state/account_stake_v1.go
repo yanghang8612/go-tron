@@ -410,10 +410,10 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) (err e
 }
 
 // materializeAccountFrozenBandwidthCanonical caches java-tron's consensus
-// shape with one index-0 point read. Starting from official genesis, valid
-// consensus transitions retain at most one V1 row at index 0. Consensus resource
-// charging therefore does not need the general loader's index-1 compatibility
-// probe. Full account materialization and mutations retain the sparse-row scan.
+// shape with one index-0 point read. FreezeBalance validation has always
+// enforced MAX_FROZEN_NUMBER == 1, so pre-Stake-2.0 resource accounting does
+// not need the index-1 compatibility probe used by the general fast loader.
+// Full account materialization and mutation paths retain the sparse-row scan.
 func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) (err error) {
 	if obj == nil || obj.account == nil {
 		return nil
