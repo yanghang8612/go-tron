@@ -1015,10 +1015,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	db.liveCompSizeGauge = metrics.GetOrRegisterGauge(namespace+"compact/live/size", nil)
 	db.liveIterGauge = metrics.GetOrRegisterGauge(namespace+"iter/count", nil)
 	if acquireSpaceMetrics(db) {
-		ownerMetrics := newEngineSpaceMetrics(namespace)
-		spaceMetricsOwners.Lock()
-		db.engineSpace = ownerMetrics
-		spaceMetricsOwners.Unlock()
+		db.engineSpace = newEngineSpaceMetrics(namespace)
 		// New creates a distinct cache for this DB. The namespace lease ensures
 		// auxiliary opens cannot publish another cache's capacity here.
 		db.engineSpace.blockCacheCapacityBytes.Update(opt.Cache.MaxSize())

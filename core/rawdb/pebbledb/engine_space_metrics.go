@@ -18,8 +18,6 @@ import (
 // include files retained by Pebble's WAL recycler. Metadata covers only the
 // OPTIONS/MANIFEST sizes included by Pebble's own DiskSpaceUsage formula.
 type engineSpaceMetrics struct {
-	namespace                 string
-	causality                 cacheCausalityPublication
 	sampledAt                 *metrics.Gauge
 	diskBytes                 *metrics.Gauge
 	sstCurrentFiles           *metrics.Gauge
@@ -53,7 +51,6 @@ func newEngineSpaceMetrics(namespace string) *engineSpaceMetrics {
 		return metrics.GetOrRegisterGauge(prefix+name, nil)
 	}
 	return &engineSpaceMetrics{
-		namespace:                 namespace,
 		sampledAt:                 gauge("sampled_at"),
 		diskBytes:                 gauge("disk/bytes"),
 		sstCurrentFiles:           gauge("sst/current/files"),
@@ -118,7 +115,6 @@ func (m *engineSpaceMetrics) update(stats *pebble.Metrics) {
 	// capacity or the entire native allocation footprint (e.g. cache metadata).
 	m.blockCacheBytes.Update(stats.BlockCache.Size)
 	m.blockCacheClock.update(stats.BlockCache)
-	m.publishCacheCausality(stats.BlockCache)
 	m.compactionInProgressBytes.Update(stats.Compact.InProgressBytes)
 
 	// Pebble v1.1.5 keeps OPTIONS/MANIFEST sizes private. Its DiskSpaceUsage
