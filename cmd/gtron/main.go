@@ -1185,6 +1185,7 @@ func gtron(ctx *cli.Context) error {
 	}
 	if cfg.MetricsEnabled {
 		stack.RegisterLifecycle(metricsapi.NewNodeCollector(metricsapi.NodeSources{
+			RefreshMaintenanceMetrics: rawdbfreezer.RefreshV2WorkMetrics,
 			HeadBlock: func() uint64 {
 				return bc.CurrentBlock().Number()
 			},

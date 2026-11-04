@@ -772,7 +772,16 @@ func writeV2SegmentProfileWithWorkers(path string, start, count uint64, frameBlo
 	return writeV2SegmentProfileWithCheckpoint(path, start, count, frameBlocks, codec, level, read, dictionaryRead, workers, 0, nil)
 }
 
-func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error), workers int, windowRecords uint64, checkpoint func() error) error {
+func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frameBlocks, codec uint32, level zstd.EncoderLevel, read, dictionaryRead func(uint64) ([]byte, error), workers int, windowRecords uint64, checkpoint func() error) (resultErr error) {
+	v2Work.add(v2SegmentsStarted, 1)
+	segmentSucceeded := false
+	defer func() {
+		if segmentSucceeded {
+			v2Work.add(v2SegmentsCompleted, 1)
+		} else {
+			v2Work.add(v2SegmentsFailed, 1)
+		}
+	}()
 	if count == 0 || frameBlocks == 0 {
 		return errors.New("ancient V2: empty segment dimensions")
 	}
@@ -805,6 +814,8 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 	buffer := make([]byte, 0, 4<<20)
 	var written uint64
 	readFrame := func() (uint64, uint32, error) {
+		span := v2Work.begin(v2StageRead)
+		defer span.end()
 		first := written
 		records := uint32(0)
 		buffer = buffer[:0]
@@ -821,6 +832,8 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 			records++
 			written++
 		}
+		v2Work.add(v2ReadFrames, 1)
+		v2Work.add(v2ReadRaw, int64(len(buffer)))
 		return first, records, nil
 	}
 	var (
@@ -829,7 +842,9 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 		dictionaryEncoder  *zstd.Encoder
 	)
 	if codec == v2CodecBodiesTrainedDict {
+		span := v2Work.begin(v2StageTrain)
 		dictionary, err = trainV2BodiesDictionary(start, count, level, dictionaryRead)
+		span.end()
 		if err != nil {
 			if !errors.Is(err, errV2BodiesDictionaryUnavailable) {
 				return err
@@ -838,6 +853,7 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 			// enough repeated sequences to train entropy tables. Keep freezing
 			// deterministic and fail-safe by retaining the previous raw-history
 			// codec for only those segments.
+			v2Work.add(v2DictionaryFallbacks, 1)
 			codec = v2CodecBodiesRawDict
 		}
 	}
@@ -885,13 +901,20 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 		return err
 	}
 	writeEncodedFrame := func(frame v2EncodedFrame) error {
+		span := v2Work.begin(v2StageWrite)
+		defer span.end()
 		position, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
 		}
-		if _, err := file.Write(frame.compressed); err != nil {
+		n, err := file.Write(frame.compressed)
+		v2Work.add(v2WriteReturned, int64(n))
+		if err != nil {
 			return err
 		}
+		v2Work.add(v2WriteFrames, 1)
+		v2Work.add(v2WriteRaw, int64(frame.rawBytes))
+		v2Work.add(v2WriteCompressed, int64(len(frame.compressed)))
 		frames = append(frames, v2FrameEntry{
 			firstRecord:     frame.first,
 			records:         frame.records,
@@ -948,7 +971,10 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 	} else {
 		for written < count {
 			if checkpoint != nil && windowRecords > 0 && written%windowRecords == 0 {
-				if err := checkpoint(); err != nil {
+				span := v2Work.begin(v2StageCheckpoint)
+				err := checkpoint()
+				span.end()
+				if err != nil {
 					return err
 				}
 			}
@@ -961,6 +987,8 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 			}
 		}
 	}
+	span := v2Work.begin(v2StageFinalize)
+	defer span.end()
 	table := make([]byte, len(frames)*v2FrameEntrySize)
 	for i, frame := range frames {
 		entry := table[i*v2FrameEntrySize : (i+1)*v2FrameEntrySize]
@@ -1003,7 +1031,11 @@ func writeV2SegmentProfileWithCheckpoint(path string, start, count uint64, frame
 	if err := os.Rename(tempName, path); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	segmentSucceeded = true
+	return nil
 }
 
 // trainV2BodiesDictionary samples immutable block bodies from evenly spaced
@@ -1112,7 +1144,14 @@ func v2ManifestName(start, count uint64) string {
 	return fmt.Sprintf("%020d-%020d.json", start, start+count)
 }
 
-func publishV2Manifest(base string, manifest v2Manifest) error {
+func publishV2Manifest(base string, manifest v2Manifest) (resultErr error) {
+	span := v2Work.begin(v2StageManifest)
+	defer span.end()
+	defer func() {
+		if resultErr != nil {
+			v2Work.add(v2ManifestFailures, 1)
+		}
+	}()
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err

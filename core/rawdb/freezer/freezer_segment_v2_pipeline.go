@@ -38,16 +38,44 @@ func encodeV2Frame(encoder *zstd.Encoder, raw v2RawFrame) v2EncodedFrame {
 }
 
 func encodeV2FrameInto(encoder *zstd.Encoder, raw v2RawFrame, dst []byte) v2EncodedFrame {
+	span := v2Work.begin(v2StageEncode)
+	v2Work.mu.Lock()
+	v2Work.values[v2EncodeStartedFrames]++
+	v2Work.values[v2EncodeStartedRaw] += int64(len(raw.data))
+	v2Work.values[v2EncodingRaw] += int64(len(raw.data))
+	v2Work.values[v2EncodingRawCap] += int64(cap(raw.data))
+	v2Work.values[v2EncodingDstCap] += int64(cap(dst))
+	v2Work.mu.Unlock()
+	completed := false
+	defer func() {
+		v2Work.mu.Lock()
+		v2Work.values[v2EncodingRaw] -= int64(len(raw.data))
+		v2Work.values[v2EncodingRawCap] -= int64(cap(raw.data))
+		v2Work.values[v2EncodingDstCap] -= int64(cap(dst))
+		if !completed {
+			v2Work.values[v2EncodeAbortedFrames]++
+		}
+		v2Work.mu.Unlock()
+		span.end()
+	}()
 	compressed := encoder.EncodeAll(raw.data, dst[:0])
-	return v2EncodedFrame{first: raw.first, records: raw.records, rawBytes: uint64(len(raw.data)),
-		compressed: compressed, checksum: crc32.Checksum(compressed, v2CRC)}
+	frame := v2EncodedFrame{first: raw.first, records: raw.records, rawBytes: uint64(len(raw.data)), compressed: compressed, checksum: crc32.Checksum(compressed, v2CRC)}
+	v2Work.mu.Lock()
+	v2Work.values[v2EncodeCompletedFrames]++
+	v2Work.values[v2EncodeCompletedRaw] += int64(len(raw.data))
+	v2Work.values[v2EncodeCompletedCompressed] += int64(len(compressed))
+	v2Work.mu.Unlock()
+	completed = true
+	return frame
 }
 
 type v2FrameEncodeJob struct {
-	raw       v2RawFrame
-	dst       []byte
-	footprint uint64
-	done      chan v2EncodedFrame
+	raw                        v2RawFrame
+	dst                        []byte
+	footprint                  uint64
+	done                       chan v2EncodedFrame
+	workStage                  int
+	workDstCap, workCompressed int64
 }
 
 // v2FrameOutputPool is private to the ordered writer. It caps idle capacity,
@@ -106,6 +134,8 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 	jobs := make(chan *v2FrameEncodeJob, workers)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
+	var pending []*v2FrameEncodeJob
+	var observedInputPool, observedOutputPool int64
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func(index int) {
@@ -117,26 +147,45 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 					return
 				default:
 				}
+				v2Work.startJob(job)
 				encoded := encodeV2FrameInto(encoder, job.raw, job.dst)
+				v2Work.ready(job, encoded)
 				job.done <- encoded
 			}
 		}(i)
 	}
-	defer func() { close(stop); close(jobs); wg.Wait() }()
-	var pending []*v2FrameEncodeJob
+	defer func() {
+		close(stop)
+		close(jobs)
+		wg.Wait()
+		for _, job := range pending {
+			v2Work.release(job, true)
+		}
+		v2Work.add(v2IdleInputCap, -observedInputPool)
+		v2Work.add(v2IdleOutputCap, -observedOutputPool)
+	}()
 	var inputBytes uint64
 	var reusable [][]byte
 	var reusableBytes uint64
 	// Only the ordered writer accesses this pool. A job exclusively owns its
 	// destination until write returns successfully; workers never recycle it.
 	var reusableOutput v2FrameOutputPool
+	observePools := func() {
+		input, output := int64(reusableBytes), int64(reusableOutput.bytes)
+		v2Work.add(v2IdleInputCap, input-observedInputPool)
+		v2Work.add(v2IdleOutputCap, output-observedOutputPool)
+		observedInputPool, observedOutputPool = input, output
+	}
 	drain := func() error {
 		job := pending[0]
 		encoded := <-job.done
 		pending[0] = nil
 		pending = pending[1:]
 		inputBytes -= job.footprint
-		if err := write(encoded); err != nil {
+		v2Work.writing(job)
+		err := write(encoded)
+		v2Work.release(job, err != nil)
+		if err != nil {
 			return err
 		}
 		job.dst = nil
@@ -147,6 +196,7 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 			reusableBytes += job.footprint
 		}
 		job.raw.data = nil
+		observePools()
 		return nil
 	}
 	for i := uint64(0); i < frames; i++ {
@@ -161,7 +211,10 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 					return err
 				}
 			}
-			if err := checkpoint(); err != nil {
+			span := v2Work.begin(v2StageCheckpoint)
+			err := checkpoint()
+			span.end()
+			if err != nil {
 				return err
 			}
 		}
@@ -179,6 +232,7 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 		} else {
 			buffer = make([]byte, 0, 64<<10)
 		}
+		observePools()
 		raw, err := read(buffer)
 		if err != nil {
 			return err
@@ -197,7 +251,9 @@ func writeV2FramePipelineWithCheckpoint(workers int, frames uint64, primary *zst
 			continue
 		}
 		dst := reusableOutput.take()
+		observePools()
 		job := &v2FrameEncodeJob{raw: raw, dst: dst, footprint: footprint, done: make(chan v2EncodedFrame, 1)}
+		v2Work.admit(job)
 		pending = append(pending, job)
 		inputBytes += footprint
 		jobs <- job

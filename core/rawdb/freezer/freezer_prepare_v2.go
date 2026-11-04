@@ -175,6 +175,8 @@ func (r *v2PreparedReader) reserve(item *v2PreparationInput) bool {
 		if ok {
 			r.ownedRows++
 			r.ownedBytes += item.footprint
+			v2Work.add(v2PrepareOwnedRows, 1)
+			v2Work.add(v2PrepareOwnedCap, int64(item.footprint))
 		}
 		r.mu.Unlock()
 		if ok {
@@ -197,6 +199,8 @@ func (r *v2PreparedReader) release(item *v2PreparationInput) {
 	r.mu.Lock()
 	r.ownedRows--
 	r.ownedBytes -= item.footprint
+	v2Work.add(v2PrepareOwnedRows, -1)
+	v2Work.add(v2PrepareOwnedCap, -int64(item.footprint))
 	r.mu.Unlock()
 	r.recycle(item)
 	select {
@@ -221,7 +225,9 @@ func (r *v2PreparedReader) produce(start uint64) {
 			return
 		}
 		item.number = number
+		span := v2Work.begin(v2StagePrepareLoad)
 		item.data, item.body, item.err = r.load(number)
+		span.end()
 		item.footprint = uint64(cap(item.data)) + uint64(cap(item.body))
 		if !r.reserve(item) {
 			r.recycle(item)
@@ -254,7 +260,9 @@ func (r *v2PreparedReader) work() {
 		if err := r.ctx.Err(); err != nil {
 			item.err = err
 		} else {
+			span := v2Work.begin(v2StagePrepareTransform)
 			item.result, item.err = r.prepare(item.number, item.data, item.body)
+			span.end()
 		}
 		item.data, item.body = nil, nil
 		item.ready <- struct{}{}

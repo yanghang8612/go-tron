@@ -345,6 +345,7 @@ type Database struct {
 	engineSpace        *engineSpaceMetrics
 	diskSpace          *diskSpaceObserver
 	compactionBounds   *compactionBoundsObserver
+	maintenanceWork    *maintenanceWorkObserver
 }
 
 // pointReadView holds Database's lifecycle read lock across a short burst of
@@ -718,6 +719,7 @@ func (d *Database) onCompactionBegin(info pebble.CompactionInfo) {
 		d.nonLevel0Comp.Add(1)
 	}
 	d.activeComp++
+	d.maintenanceWork.compactionBegin(info)
 }
 
 func (d *Database) onCompactionEnd(info pebble.CompactionInfo) {
@@ -727,6 +729,7 @@ func (d *Database) onCompactionEnd(info pebble.CompactionInfo) {
 		panic("should not happen")
 	}
 	d.activeComp--
+	d.maintenanceWork.end(info.JobID, false, info.Err)
 	d.compactionBounds.observe(info)
 }
 
@@ -875,6 +878,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		quitChan:         make(chan chan error),
 		namespace:        namespace,
 		compactionBounds: newCompactionBoundsObserver(namespace, spaceRanges),
+		maintenanceWork:  newMaintenanceWorkObserver(namespace),
 
 		// Use asynchronous write mode by default. Otherwise, the overhead of frequent fsync
 		// operations can be significant, especially on platforms with slow fsync performance
@@ -928,6 +932,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 		EventListener: &pebble.EventListener{
 			CompactionBegin: db.onCompactionBegin,
 			CompactionEnd:   db.onCompactionEnd,
+			FlushBegin:      func(info pebble.FlushInfo) { db.maintenanceWork.begin(info.JobID, true, info.InputBytes) },
+			FlushEnd:        func(info pebble.FlushInfo) { db.maintenanceWork.end(info.JobID, true, info.Err) },
+			TableCreated:    db.maintenanceWork.tableCreated,
 			WriteStallBegin: db.onWriteStallBegin,
 			WriteStallEnd:   db.onWriteStallEnd,
 		},
@@ -1050,6 +1057,7 @@ func (d *Database) Close() error {
 		d.quitChan = nil
 	}
 	err := d.db.Close()
+	d.maintenanceWork.publish(nil, true)
 	releaseSpaceMetrics(d)
 	return err
 }
@@ -1350,6 +1358,7 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		d.compTimeMeter.Mark(compTimes[i%2] - compTimes[(i-1)%2])
 		d.compReadMeter.Mark(compReads[i%2] - compReads[(i-1)%2])
 		d.compWriteMeter.Mark(compWrites[i%2] - compWrites[(i-1)%2])
+		d.maintenanceWork.publish(stats, false)
 		d.diskSizeGauge.Update(int64(stats.DiskSpaceUsage()))
 		d.engineSpace.update(stats)
 		d.diskReadMeter.Mark(0) // pebble doesn't track non-compaction reads

@@ -13,13 +13,15 @@ const defaultCollectionInterval = 3 * time.Second
 // Function fields keep this package independent of the chain, P2P and sync
 // implementations and make the collection loop cheap to test.
 type NodeSources struct {
-	HeadBlock           func() uint64
-	SolidifiedBlock     func() int64
-	ConnectedPeers      func() int
-	HandshakedPeers     func() int
-	PendingTransactions func() int
-	Syncing             func() bool
-	SyncRemainingBlocks func() (int64, bool)
+	// RefreshMaintenanceMetrics publishes open spans without adding a goroutine.
+	RefreshMaintenanceMetrics func()
+	HeadBlock                 func() uint64
+	SolidifiedBlock           func() int64
+	ConnectedPeers            func() int
+	HandshakedPeers           func() int
+	PendingTransactions       func() int
+	Syncing                   func() bool
+	SyncRemainingBlocks       func() (int64, bool)
 }
 
 // NodeCollector periodically publishes the most useful operator-level node
@@ -91,6 +93,9 @@ func (c *NodeCollector) Stop() error {
 }
 
 func (c *NodeCollector) collect() {
+	if c.sources.RefreshMaintenanceMetrics != nil {
+		c.sources.RefreshMaintenanceMetrics()
+	}
 	var head int64
 	if c.sources.HeadBlock != nil {
 		head = clampUint64(c.sources.HeadBlock())
