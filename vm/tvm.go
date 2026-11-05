@@ -946,6 +946,13 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	if err == nil && internal && len(ret) == 0 && !tvm.cfg.MultiSign {
 		err = ErrLegacyCreateEmptyCode
 	}
+	// Program.createContractImpl checks hReturn's EF prefix before handling a
+	// constructor REVERT. Its resulting InvalidCode exception skips both the
+	// refund and return-data publication. Top-level VMActuator explicitly skips
+	// this check for REVERT, so keep that separate entry behavior intact.
+	if internal && err == ErrExecutionReverted && tvm.cfg.London && len(ret) != 0 && ret[0] == 0xEF {
+		err = ErrInvalidCode
+	}
 
 	if err != nil {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
@@ -1399,6 +1406,17 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
+	// readOnly blocks mutating opcodes, but interpreter bookkeeping still
+	// updates ContractState for dynamic energy. Like Java's child Repository,
+	// discard those writes (including successful descendants) on frame failure.
+	snap := tvm.StateDB.Snapshot()
+	logSnap := tvm.LogSnapshot()
+	defer func() {
+		if outErr != nil {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+		}
+	}()
 
 	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
@@ -1476,6 +1494,13 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	}
 	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
+	}
+	// internalValue is the message endowment: CALLCODE supplies its value,
+	// DELEGATECALL supplies zero. Java checks this against the context balance
+	// before executing ordinary code or a precompile. The inherited call value
+	// is independent and may exceed the balance during a DELEGATECALL.
+	if tvm.StateDB.GetBalance(context) < internalValue {
+		return nil, energy, ErrInsufficientBalance
 	}
 
 	// Delegated code shares its caller's address/storage context, but not its
