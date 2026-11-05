@@ -29,11 +29,12 @@ type maintenanceWorkObserver struct {
 	values, published   map[string]int64
 	gauges              map[string]*metrics.Gauge
 	closed              bool
+	opening             bool
 }
 
 var maintenanceWorkEpoch = time.Now().UnixNano()
 var maintenanceWorkFields = []string{
-	"maintenance/work/schema", "maintenance/work/epoch_unix_nanos", "maintenance/work/refresh_unix_nanos", "maintenance/work/active_instances", "maintenance/work/invalid_events",
+	"maintenance/work/schema", "maintenance/work/epoch_unix_nanos", "maintenance/work/refresh_unix_nanos", "maintenance/work/active_instances", "maintenance/work/invalid_events", "maintenance/work/startup_unscoped_table_created",
 	"compact/work/started_jobs", "compact/work/finished_jobs", "compact/work/failed_jobs", "compact/work/started_input_sst_bytes", "compact/work/finished_input_sst_bytes", "compact/work/active_jobs", "compact/work/active_input_sst_bytes", "compact/work/before_first_output_jobs", "compact/work/output_created_jobs", "compact/work/output_files_created", "compact/work/busy_wall_nanos", "compact/work/job_wall_nanos",
 	"flush/work/started_jobs", "flush/work/finished_jobs", "flush/work/failed_jobs", "flush/work/started_input_memory_bytes", "flush/work/finished_input_memory_bytes", "flush/work/active_jobs", "flush/work/active_input_memory_bytes", "flush/work/before_first_output_jobs", "flush/work/output_created_jobs", "flush/work/output_files_created", "flush/work/busy_wall_nanos", "flush/work/job_wall_nanos",
 	"flush/work/engine_active_jobs", "flush/work/engine_iterated_bytes", "flush/work/engine_work_wall_nanos", "flush/work/engine_idle_wall_nanos",
@@ -49,6 +50,31 @@ func newMaintenanceWorkObserver(namespace string) *maintenanceWorkObserver {
 	o.gauges["maintenance/work/epoch_unix_nanos"].Update(maintenanceWorkEpoch)
 	o.values["maintenance/work/active_instances"] = 1
 	return o
+}
+
+// observeOpen brackets only the actual Pebble.Open call. Callbacks and the
+// window transition use the same mutex; no observer lock crosses an engine call.
+// A failed/panicking constructor has no meter goroutine to join: retire just its
+// observer contribution, never call partial Database.Close.
+func (o *maintenanceWorkObserver) observeOpen(open func() (*pebble.DB, error)) (db *pebble.DB, err error) {
+	o.mu.Lock()
+	o.opening = true
+	o.mu.Unlock()
+	successful := false
+	defer func() {
+		o.mu.Lock()
+		o.opening = false
+		if !successful {
+			o.values["maintenance/work/active_instances"] = 0
+		}
+		o.mu.Unlock()
+		if !successful {
+			o.publish(nil, true)
+		}
+	}()
+	db, err = open()
+	successful = err == nil && db != nil
+	return db, err
 }
 func (o *maintenanceWorkObserver) begin(id int, flush bool, input uint64) {
 	if o == nil {
@@ -122,6 +148,12 @@ func (o *maintenanceWorkObserver) tableCreated(info pebble.TableCreateInfo) {
 	}
 	job, ok := jobs[info.JobID]
 	if !ok {
+		// WAL replay creates flush tables without FlushBegin/End. Count only
+		// this known Open-window event; do not invent input, jobs or wall time.
+		if !o.closed && o.opening && info.Reason == "flushing" {
+			o.values["maintenance/work/startup_unscoped_table_created"]++
+			return
+		}
 		o.values["maintenance/work/invalid_events"]++
 		return
 	}
@@ -190,10 +222,11 @@ func (o *maintenanceWorkObserver) publish(stats *pebble.Metrics, close bool) {
 			values[group.p+"job_wall_nanos"] += now.Sub(job.began).Nanoseconds()
 		}
 	}
-	if close {
+	if close || o.closed {
 		// DB.Close has already joined its own jobs. Preserve cumulative work, remove
 		// only this instance's live contribution; never clear another instance.
-		if len(o.comp)+len(o.flush) > 0 {
+		if !o.closed && len(o.comp)+len(o.flush) > 0 {
+			o.values["maintenance/work/invalid_events"]++
 			values["maintenance/work/invalid_events"]++
 		}
 		for _, k := range []string{"maintenance/work/active_instances", "compact/work/active_jobs", "compact/work/active_input_sst_bytes", "compact/work/before_first_output_jobs", "compact/work/output_created_jobs", "flush/work/active_jobs", "flush/work/active_input_memory_bytes", "flush/work/before_first_output_jobs", "flush/work/output_created_jobs", "flush/work/engine_active_jobs"} {

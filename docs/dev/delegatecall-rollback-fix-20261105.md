@@ -73,7 +73,7 @@
 
 在独立 `trial/datadir` 实际写入这些记录并同步、关闭、重新打开后，原始只读整段逆向检查通过。修复原生程序随后使用 `--sync.restart-from 58435296 --sync.restart-require-incremental --sync.restart-only` 完成实际回退并干净退出（269.510 秒），目标状态根为 `273afcd75c2fb78c64b2a817711cb50811e2df2daef505d5b18830e68b02b217`，与保存的偏差前根完全相同。
 
-随后独立运行 `--sync.replay-stored-to 58435595 --sync.replay-audit <new-file>`，使用正式 DPoS engine、原生 Sapling 构建及完整冷读取路径，离线重放 299 块 / 58,698 笔交易后干净退出。纯重放 154.938 秒，含审计 156.729 秒；进程含启动约 165.561 秒。H58,435,595 修复后内部根为 `7d474a647a648ba20d231c68a00607b0b39d2042a9954d271cbb0997f5bdf23a8d`。
+随后独立运行 `--sync.replay-stored-to 58435595 --sync.replay-audit <new-file>`，使用正式 DPoS engine、原生 Sapling 构建及完整冷读取路径，离线重放 299 块 / 58,698 笔交易后干净退出。纯重放 154.938 秒，含审计 156.729 秒；进程含启动约 165.561 秒。H58,435,595 修复后内部根为 `7d47447a648ba20d231c68a00607b0b39d2042a9954d271cbb0997f5bdf23a8d`。
 
 - H58,435,297 的原错误交易：SUCCESS、零日志。
 - H58,435,577 的兑换交易：返回到账金额 412,242,252 sun、9 条日志。
@@ -84,7 +84,7 @@
 
 获取发布/启动互锁并停止原服务后，再次核对原库的 HEAD/hash/root 和副本的验收 identity；原数据目录整体保留为 `original-datadir-before-recovery`，将已验收副本原子改名到正式 datadir，保留相同 nodekey。正式服务不携带一次性回退/重放参数。
 
-发布程序为 `/data/gtron/releases/sync-stall-5f33cf61-a278c627da02/gtron`，源提交 `5f33cf617e39c54a338bbb6d95bff25d012aacf5`，SHA-256 `a278c627da02d68f94d3247c2219ed4a5a7b04d06c14f666b5914296624f9fe6`。仅切换服务执行文件，并同步更新既有 shared-history reader 保护的程序路径、校验和和源版本 pin；space/staging/reader guards 均保留，端口与运行参数沿用原布局。旧程序、两个原配置 drop-in 和 reader marker 已保存，自动部署单元保持 inactive。
+发布程序为 `/data/gtron/releases/sync-stall-5f33cf61-a278c627da02/gtron`，源提交 `5f33cf617e39c54a338bbb6d95bff25d012aacf5`，SHA-256 `a278c627da02d68f94d3247c2219ea4a5a7b04d06c14f6b6b5914296624f9fe6`。仅切换服务执行文件，并同步更新既有 shared-history reader 保护的程序路径、校验和和源版本 pin；space/staging/reader guards 均保留，端口与运行参数沿用原布局。旧程序、两个原配置 drop-in 和 reader marker 已保存，自动部署单元保持 inactive。
 
 首次切换检查遇到旧 systemd 对 inactive timer 的非零返回码，脚本在数据切换前自动恢复原服务；修正返回码兼容后切换成功。正式进程 PID 21350 已验证实际 executable 为上述修复程序。
 

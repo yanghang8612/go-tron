@@ -985,7 +985,9 @@ func New(file string, cache int, handles int, namespace string, readonly bool, t
 	}
 
 	// Open the db and recover any potential corruptions
-	innerDB, err := pebble.Open(file, opt)
+	innerDB, err := db.maintenanceWork.observeOpen(func() (*pebble.DB, error) {
+		return pebble.Open(file, opt)
+	})
 	if err != nil {
 		return nil, err
 	}
