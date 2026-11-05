@@ -138,6 +138,15 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if got := rawdb.ReadLatestPbftBlockNum(diskdb); got != 5 {
 		t.Fatalf("precondition latest PBFT = %d, want 5", got)
 	}
+	// An operator requiring a bounded rewind must not silently take this
+	// fixture's reset+genesis replay path. Reject before changing the cut.
+	err = bc.RestartSyncFromHeightWithOptions(2, genesis, nil, nil, RestartSyncOptions{RequireIncremental: true})
+	if err == nil || !strings.Contains(err.Error(), "incremental unwind required") {
+		t.Fatalf("required incremental rewind did not reject missing history: %v", err)
+	}
+	if bc.CurrentBlock().Hash() != blocks[5].Hash() || bc.HeadStateRoot() != originalHeadRoot || rawdb.ReadLatestPbftBlockNum(diskdb) != 5 {
+		t.Fatal("refused incremental rewind changed current state")
+	}
 
 	var progress []coreRestartEvent
 	err = bc.RestartSyncFromHeight(2, genesis, nil, func(p RestartSyncProgress) {
@@ -429,9 +438,9 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 	// Invoke RestartSyncFromHeight(2) via the incremental path.
 	// -------------------------------------------------------------------
 	var progress []coreRestartEvent
-	err = bc.RestartSyncFromHeight(2, genesis, nil, func(p RestartSyncProgress) {
+	err = bc.RestartSyncFromHeightWithOptions(2, genesis, nil, func(p RestartSyncProgress) {
 		progress = append(progress, coreRestartEvent{phase: p.Phase, block: p.Block})
-	})
+	}, RestartSyncOptions{RequireIncremental: true})
 	if err != nil {
 		t.Fatalf("RestartSyncFromHeight: %v", err)
 	}

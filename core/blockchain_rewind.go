@@ -38,6 +38,13 @@ type RestartSyncProgress struct {
 	Target uint64
 }
 
+// RestartSyncOptions constrains an offline recovery operation.
+type RestartSyncOptions struct {
+	// RequireIncremental forbids resetting materialized state and replaying
+	// from genesis when the bounded inverse-delta path is unavailable.
+	RequireIncremental bool
+}
+
 // ReplayStoredBlocksToHeight advances materialized state from the current head
 // using canonical block bytes that are already present in the hot database or
 // freezer. It is an offline startup operation for resuming an interrupted
@@ -214,6 +221,12 @@ func (bc *BlockChain) insertStoredBlocks(blocks []*types.Block) error {
 // overwrite ring, so within ~65536 blocks all stale slots are replaced.
 // This matches the acceptable behaviour documented in the gap-6 slice-2 spec.
 func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genesis, ancient rawdb.AncientWriter, progressFn func(RestartSyncProgress)) error {
+	return bc.RestartSyncFromHeightWithOptions(height, genesis, ancient, progressFn, RestartSyncOptions{})
+}
+
+// RestartSyncFromHeightWithOptions applies the same restart operation with
+// explicit recovery constraints, checked before any reset fallback.
+func (bc *BlockChain) RestartSyncFromHeightWithOptions(height uint64, genesis *params.Genesis, ancient rawdb.AncientWriter, progressFn func(RestartSyncProgress), opts RestartSyncOptions) error {
 	if bc == nil {
 		return errors.New("restart sync: nil blockchain")
 	}
@@ -290,6 +303,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		}
 		emit("done", height)
 		return nil
+	}
+	if opts.RequireIncremental {
+		return errors.New("restart sync: incremental unwind required but complete same-cycle source history is unavailable")
 	}
 
 	// Conservative reset+replay path (always correct; taken when history is off

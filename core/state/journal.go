@@ -364,6 +364,19 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.accountTronPowerLoaded = false
 }
 
+// kvGenerationHistoryChange retains the physical before-image of the counter
+// that account deletion writes at commit, even for generation zero. The
+// account journal restores deletion itself; truncating this entry on revert
+// drops its history intent without mutating a counter that is not written yet.
+type kvGenerationHistoryChange struct {
+	address    tcommon.Address
+	previous   uint64
+	prevExists bool
+}
+
+func (kvGenerationHistoryChange) revert(map[tcommon.Address]*stateObject, map[tcommon.Address]*types.Witness) {
+}
+
 // transientStorageChange records a single EIP-1153 transient storage write for
 // revert. It captures the StateDB.transientStorage map by reference (maps are
 // reference types) rather than the *StateDB, because the journal revert

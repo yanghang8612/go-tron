@@ -356,6 +356,14 @@ var (
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
 	}
+	syncRestartRequireIncrementalFlag = &cli.BoolFlag{
+		Name:  "sync.restart-require-incremental",
+		Usage: "Refuse sync.restart-from when inverse-delta rewind is unavailable; never reset or replay from genesis",
+	}
+	syncRestartOnlyFlag = &cli.BoolFlag{
+		Name:  "sync.restart-only",
+		Usage: "Offline: complete sync.restart-from, close the databases and exit before starting listeners",
+	}
 	syncImportBatchFlag = &cli.IntFlag{
 		Name:    "sync.import-batch",
 		Usage:   "Maximum staged block bodies imported per local sync pass (1-1024; wire fetch batch stays 100)",
@@ -501,6 +509,8 @@ var app = &cli.App{
 		freezerTxIndexDisableFlag,
 		freezerDirectV2DisableFlag,
 		syncRestartFromFlag,
+		syncRestartRequireIncrementalFlag,
+		syncRestartOnlyFlag,
 		syncImportBatchFlag,
 		syncETLTempDirFlag,
 		syncETLBufferMiBFlag,
@@ -639,6 +649,11 @@ func initCmd(ctx *cli.Context) error {
 }
 
 func gtron(ctx *cli.Context) error {
+	for _, name := range []string{syncRestartRequireIncrementalFlag.Name, syncRestartOnlyFlag.Name} {
+		if ctx.Bool(name) && !ctx.IsSet(syncRestartFromFlag.Name) {
+			return fmt.Errorf("--%s requires --%s", name, syncRestartFromFlag.Name)
+		}
+	}
 	postingPrune, err := postingPruneEnabled(os.Getenv("GTRON_POSTING_PRUNE"))
 	if err != nil {
 		return err
@@ -960,9 +975,13 @@ func gtron(ctx *cli.Context) error {
 	}
 	if ctx.IsSet("sync.restart-from") {
 		target := ctx.Uint64("sync.restart-from")
+		var restartAncient rawdb.AncientWriter
+		if ancientStore != nil {
+			restartAncient = ancientStore
+		}
 		lastProgress := uint64(0)
 		log.Info("Historical sync restart requested", "target", target, "currentHead", bc.CurrentBlock().Number())
-		if err := bc.RestartSyncFromHeight(target, genesis, ancientStore, func(p core.RestartSyncProgress) {
+		if err := bc.RestartSyncFromHeightWithOptions(target, genesis, restartAncient, func(p core.RestartSyncProgress) {
 			switch p.Phase {
 			case "replay":
 				if p.Block == p.Target || p.Block-lastProgress >= 10000 {
@@ -972,7 +991,7 @@ func gtron(ctx *cli.Context) error {
 			default:
 				log.Info("Historical sync restart phase", "phase", p.Phase, "block", p.Block, "target", p.Target)
 			}
-		}); err != nil {
+		}, core.RestartSyncOptions{RequireIncremental: ctx.Bool(syncRestartRequireIncrementalFlag.Name)}); err != nil {
 			// A failed --sync.restart-from leaves a partial materialized image.
 			// Release the stores without calling bc.Close so no additional
 			// partial buffer state is flushed; the operator re-runs the command.
@@ -980,6 +999,11 @@ func gtron(ctx *cli.Context) error {
 			return err
 		}
 		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
+		if ctx.Bool(syncRestartOnlyFlag.Name) {
+			closeErr := bc.Close()
+			closeStores()
+			return errors.Join(closeErr, storesCloseErr)
+		}
 	}
 	// Create transaction pool
 	pool := txpool.New()

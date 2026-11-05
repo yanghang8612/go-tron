@@ -39,6 +39,26 @@ type generationDomainJournalTouch struct {
 	prevExist bool
 }
 
+// Deletion always persists a generation tombstone, including generation zero
+// whose physical counter may not exist yet. Account creation followed by
+// deletion can have no net account/KV journal change, so the account history
+// cannot stand in for this separate physical source row.
+func (s *StateDB) journalDeletedAccountGeneration(obj *stateObject) error {
+	if obj == nil || !s.changeSet.enabled || s.changeSet.captureAtCommit {
+		return nil
+	}
+	previous, present := obj.accountKVGeneration, obj.accountKVGenerationDirty
+	if !present {
+		var err error
+		previous, present, err = s.readStateKVGeneration(obj.address)
+		if err != nil {
+			return err
+		}
+	}
+	s.journal.append(kvGenerationHistoryChange{address: obj.address, previous: previous, prevExists: present})
+	return nil
+}
+
 func (s *StateDB) collectKVJournalTouch(kvs map[string]kvDomainJournalTouch, e *kvChange) {
 	if e == nil {
 		return
@@ -196,6 +216,15 @@ func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb
 				addr:      e.address,
 				prev:      e.prevGeneration,
 				prevExist: e.prevGenerationExists,
+			}
+		case kvGenerationHistoryChange:
+			if _, ok := generations[e.address]; ok {
+				continue
+			}
+			generations[e.address] = generationDomainJournalTouch{
+				addr:      e.address,
+				prev:      e.previous,
+				prevExist: e.prevExists,
 			}
 		}
 	}

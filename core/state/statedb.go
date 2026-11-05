@@ -3549,6 +3549,10 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
+	if err := s.journalDeletedAccountGeneration(obj); err != nil {
+		s.recordStateError("capture self-destruct generation history", err)
+		return
+	}
 	prevCode := append([]byte(nil), s.GetCode(addr)...)
 	var prevMeta *contractpb.SmartContract
 	if meta := s.GetContract(addr); meta != nil {
@@ -3578,6 +3582,10 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 func (s *StateDB) DeleteAccount(addr tcommon.Address) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
+		return
+	}
+	if err := s.journalDeletedAccountGeneration(obj); err != nil {
+		s.recordStateError("capture deleted account generation history", err)
 		return
 	}
 	s.recordBalanceTraceChange(addr, -obj.account.Balance())
