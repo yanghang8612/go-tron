@@ -1,4 +1,6 @@
-# DELEGATECALL / CALLCODE 失败回滚修复
+# 同步停滞与回退不一致修复
+
+修复已部署，主网节点已跨过原故障高度 H58,435,596 并恢复同步。原失败交易现为 SUCCESS；2026-11-05 05:24 UTC 观察高度 H58,438,863，同步 active、paused=false，11 个 peer。下文区分最初失败的预检、根因修正及实际恢复结果；最初的 No-Go 结论已由后续副本验证解除。
 
 ## 问题与修正
 
@@ -47,7 +49,7 @@
 
 服务器已保留停机一致的热库/历史库诊断副本：`/data/gtron/repair-delegatecall-20261105-01a1a984/checkpoint/datadir/gtron`。9,015 个不可变 SST 使用硬链接，其他 12 个文件独立复制，共 2,199,451 字节；目录和可变元数据独立。该副本包含已经偏离的 H58,435,595 状态，**不是修复后的数据，也不是包含 cold/ancient 文件的完整恢复备份**。预检源码及日志保存在同一操作目录，后续可在副本继续检查，避免反复停原服务。
 
-最终 HTTP 检查仍为 H58,435,595，区块 ID `00000000037ba80b156e9a956f9e8e2391e356981b8056a1d97bb9997573ec40`；原 `gtron.service` 已恢复 active。修复见[草稿 PR #4](https://github.com/yanghang8612/go-tron/pull/4)，尚未部署，节点尚未恢复同步。
+首轮结束时 HTTP 检查仍为 H58,435,595，区块 ID `00000000037ba80b156e9a956f9e8e2391e356981b8056a1d97bb9997573ec40`；原 `gtron.service` 已恢复 active。当时[草稿 PR #4](https://github.com/yanghang8612/go-tron/pull/4) 尚未部署，节点尚未恢复同步。
 
 ## 回退不一致的根因与修复
 
@@ -61,4 +63,33 @@
 
 恢复增加两个显式约束：`--sync.restart-require-incremental` 在逆向历史不可用时拒绝操作，禁止回落到 genesis reset+replay；`--sync.restart-only` 完成回退、关闭数据库后立即退出，不启动网络/API。修复无 ancient 数据库时向 rewind 传入 typed-nil writer 的崩溃。CLI 集成测试从真实持久化区块执行离线回退，在所有监听端口已被占用时仍成功，关闭后可重新打开数据库并验证目标 HEAD。
 
-当前补丁验证：`go test ./core -count=1 -timeout 900s` 通过（312.186 秒），`core/state`、`vm`、`actuator` 全包通过；generation 专项 race 通过。实际副本重放及线上恢复结果在完成后另记。
+当前补丁验证：`go test ./core -count=1 -timeout 900s` 通过（312.186 秒），`core/state`、`vm`、`actuator` 全包通过；generation 专项 race 通过。新增离线选项后 CLI 整包重跑通过（106.202 秒），纯 Go 构建通过。服务器在 `5f33cf617e39c54a338bbb6d95bff25d012aacf5` 上重跑 Sapling-tagged VM、actuator、state 测试，通过（3.123 / 0.147 / 5.420 秒）；原生 CGO/Sapling 构建通过。
+
+## 完整副本的恢复验证
+
+服务器操作目录为 `/data/gtron/repair-delegatecall-20261105-01a1a984`。`full-backup/datadir` 包含停机一致的完整 datadir：360,322 个不可变 SST、冷 segment/accessor/routing/index 文件使用硬链接，924 个可变文件独立复制，共 239,456,177 字节。所有目录独立，ancient V1 文件、manifest、WAL、CURRENT 等可变元数据均不共享 inode。此前仅包含热库的 checkpoint 继续保留。
+
+历史修复工具首先校验原 HEAD、源根、目标 hash/root、每个追加序号、计数器原值、对应区块 hash 和 tx-range，然后在一次性覆盖层中逐块验证全部 299 个保存的状态根。只有全部通过才用正式 rawdb accessor 追加 59 条缺失历史及其 posting index；不修改账户余额、合约存储或状态根。计划 SHA-256 为 `57304463fa124cfa4f8b9d847b5d4a4f7ba73794027143f9ecbaf7399b42c83`。
+
+在独立 `trial/datadir` 实际写入这些记录并同步、关闭、重新打开后，原始只读整段逆向检查通过。修复原生程序随后使用 `--sync.restart-from 58435296 --sync.restart-require-incremental --sync.restart-only` 完成实际回退并干净退出（269.510 秒），目标状态根为 `273afcd75c2fb78c64b2a817711cb50811e2df2daef505d5b18830e68b02b217`，与保存的偏差前根完全相同。
+
+随后独立运行 `--sync.replay-stored-to 58435595 --sync.replay-audit <new-file>`，使用正式 DPoS engine、原生 Sapling 构建及完整冷读取路径，离线重放 299 块 / 58,698 笔交易后干净退出。纯重放 154.938 秒，含审计 156.729 秒；进程含启动约 165.561 秒。H58,435,595 修复后内部根为 `7d474a647a648ba20d231c68a00607b0b39d2042a9954d271cbb0997f5bdf23a8d`。
+
+- H58,435,297 的原错误交易：SUCCESS、零日志。
+- H58,435,577 的兑换交易：返回到账金额 412,242,252 sun、9 条日志。
+- 两笔交易的返回值、完整日志、Energy、Net 和费用逐项对照 TronGrid 规范回执，全部相同；仅将空返回结果的 nil/空字节表示归一化。
+- 对重放后的新历史再次只读逐块逆向：595 → 296 的 299 个边界全部命中各自重新保存的前块根（7.950 秒）。该检查使用新代码实际生成的历史，未再追加补救记录。
+
+## 正式服务切换与验收
+
+获取发布/启动互锁并停止原服务后，再次核对原库的 HEAD/hash/root 和副本的验收 identity；原数据目录整体保留为 `original-datadir-before-recovery`，将已验收副本原子改名到正式 datadir，保留相同 nodekey。正式服务不携带一次性回退/重放参数。
+
+发布程序为 `/data/gtron/releases/sync-stall-5f33cf61-a278c627da02/gtron`，源提交 `5f33cf617e39c54a338bbb6d95bff25d012aacf5`，SHA-256 `a278c627da02d68f94d3247c2219ed4a5a7b04d06c14f666b5914296624f9fe6`。仅切换服务执行文件，并同步更新既有 shared-history reader 保护的程序路径、校验和和源版本 pin；space/staging/reader guards 均保留，端口与运行参数沿用原布局。旧程序、两个原配置 drop-in 和 reader marker 已保存，自动部署单元保持 inactive。
+
+首次切换检查遇到旧 systemd 对 inactive timer 的非零返回码，脚本在数据切换前自动恢复原服务；修正返回码兼容后切换成功。正式进程 PID 21350 已验证实际 executable 为上述修复程序。
+
+HTTP 验收确认原故障交易 `df123ff628596254ffebd3813fc3a577a59c2f8608a45dc311942da303cf7ca1` 在 H58,435,596 执行 SUCCESS。2026-11-05 05:22 UTC 首次观察为 H58,436,021，`syncInfo.active=true`、`paused=false`、8 个 peer，已越过原暂停点。恢复的是持续同步能力，尚未追平主网。
+
+05:24 UTC 第二次观察为 H58,438,863，`active=true`、`paused=false`、11 个 peer；两次 `lastInsertTime` 相隔 139.553 秒，HEAD 推进 2,842 块。独立 `getnowblock` 同时返回 H58,438,862 / `00000000037bb4cefff50b146f0c9ca5da2625ef655b5e62c39abc20882e9b44`，一块差异来自两个请求取样时刻不同。
+
+完整审计和工具保留在上述服务器操作目录：`generation-repair-plan.json`、`apply_generation_repair.go`、`trial-replay-audit.jsonl`、`trial-canonical-comparison.json`、`trial-replay-inverse.log`、`promotion-result.json`、`release-config-backup/`。原库、完整备份及最初的热库诊断 checkpoint 均继续保留。
