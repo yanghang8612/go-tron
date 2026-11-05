@@ -1478,12 +1478,24 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 		return nil, energy, ErrDepthExceeded
 	}
 
+	// Delegated code shares its caller's address/storage context, but not its
+	// rollback boundary. java-tron's callToAddress uses a child Repository for
+	// DELEGATECALL and CALLCODE and commits it only on success. In particular,
+	// a caller may catch the failure and finish SUCCESS after the delegate has
+	// already made successful nested calls and emitted logs.
+	snap := tvm.StateDB.Snapshot()
+	logSnap := tvm.LogSnapshot()
+
 	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {
 		ret, energyUsed, success, err := runPrecompile(tvm, p, caller, input, energy)
 		if err != nil {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, 0, err
 		}
 		if !success {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
 			return ret, 0, errPrecompileFailure
 		}
 		remaining := energy - energyUsed
@@ -1522,6 +1534,8 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 
 	if err != nil {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
+		tvm.RevertLogs(logSnap)
+		tvm.StateDB.RevertToSnapshot(snap)
 		// A transfer failure here means the delegated code (running in the
 		// parent, non-readOnly context) issued a CALL/CALLTOKEN that moved
 		// TRX/TRC10 to the context address itself (caller == addr). Mirror
