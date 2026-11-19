@@ -14,8 +14,9 @@ is at most 2ms, and no hard/stall/device/L0/severe pressure exists. This is a
 carryover, not a new promotion from a reused observation. Subsequent ordinary
 recovery still requires two/three good samples. Any loss of evidence revokes the
 carryover immediately; restoring the same observation cannot reacquire it.
-Existing recovery deadlines are not shortened. Expose recovery carryover as a
-separate gauge without changing reason bit meanings.
+The carryover preserves the installed recovery deadline. The November update
+below describes a separate completion-based release. Expose recovery carryover
+as a separate gauge without changing reason bit meanings.
 
 ## Immutable internal manifest loads
 
@@ -43,3 +44,33 @@ publication. Run debt carryover transition/protection tests and related full
 packages/race checks. Instrument event replay passes, overflow and retained
 bytes before choosing a new cache budget. Any further LSM or event change must
 be justified by fixed-input work and preserve strict source authentication.
+
+
+## November 19 maintenance update
+
+After a successful, completed throughput pass, the metadata observer can
+release its recovery earlier when current level-3 capacity is supported by two
+new comparable healthy engine and device samples observed after completion.
+Recalculate from the original work cost and completion time. Check that the
+new interval has elapsed before changing either the absolute deadline or the
+same attempt's forced-busy retry interval. Request one normal pass, which
+rechecks independent gates and current resource conditions. Failure, pending
+outer maintenance, the moderate lane, configured cooldown and a preexisting
+independent deadline retain their protection. A newly armed observation starts
+a fresh healthy sample sequence.
+
+Each manifest loader still authenticates exact current file bytes. Identical
+concurrent loads can share an immutable validated decode outside the resident
+cache lock. Local publication and budget changes supersede earlier decode
+installation. Public views stay detached. Progress-only publication can
+reuse a validated immutable over-budget view after checking the observed
+encoding. Existing normal publication handles legacy and disabled-cache
+cases.
+
+For mature account routing catalogs, a busy maintenance pass may combine up to
+128 uncovered source attempts under the existing dictionary-key budget. A
+sufficiently large backlog can proceed immediately, and a small outstanding
+tail continues through exact-pair query fallback while it accumulates.
+This amortizes rewriting the singleton when enough sources fit. The routing
+file format, source authentication, strict verification and canonical read
+fallback remain in force.
