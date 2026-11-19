@@ -90,10 +90,9 @@ func (r *Runner) cancelResultBusyHistoryObservation(result *PassResult) {
 
 // ObserveBusyHistoryResources only refreshes bounded load/resource observations.
 // It never acquires a maintenance lease, reads history/manifest/catalog files,
-// records a pass or density, or changes a maintenance deadline. A true wake is
+// records a pass or density. A true wake is
 // consumed once and only requests a normal full pass; that pass must revalidate
-// its current watermarks, space, storage and shared-gate admission. Recovery-only
-// observations use a separate metadata-only probe and can never emit that wake.
+// its current watermarks, space, storage and shared-gate admission.
 func (r *Runner) ObserveBusyHistoryResources(ctx context.Context) (wake bool, retryAfter time.Duration) {
 	if r == nil {
 		return false, 0
@@ -143,7 +142,7 @@ func (r *Runner) ObserveBusyHistoryResources(ctx context.Context) (wake bool, re
 		return false, r.nextBusyHistoryObservation.Sub(now)
 	}
 	if r.historyObservationRecovery {
-		return false, r.observeHistoryRecoveryResources(ctx, id, now)
+		return r.observeHistoryRecoveryResources(ctx, id, now)
 	}
 	started := now
 	r.busyHistoryObservationMetrics.checks.Inc(1)

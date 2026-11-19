@@ -420,10 +420,14 @@ func boolGauge(value bool) int64 {
 }
 
 func (s *historyLoadState) dutyPPM() uint64 {
-	if s.debtModerateReady(time.Now()) {
+	return s.dutyPPMAt(time.Now())
+}
+
+func (s *historyLoadState) dutyPPMAt(now time.Time) uint64 {
+	if s.debtModerateReady(now) {
 		return 600_000
 	}
-	if s.cpuBurstReady(time.Now()) {
+	if s.cpuBurstReady(now) {
 		if s.level == 3 {
 			return 900_000
 		}

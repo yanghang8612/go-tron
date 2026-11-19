@@ -256,6 +256,8 @@ type Config struct {
 
 // PassResult describes a single cold snapshot builder pass.
 type PassResult struct {
+	historyPriorRecoveryDeadline int64
+
 	HistoryPressure       HistoryPressure
 	HistoryPressureActive bool
 	HistorySpaceDeferred  bool
@@ -745,8 +747,9 @@ type Runner struct {
 	historyReadMetrics            historyReadExecutionMetrics
 	busyHistoryObservationPending atomic.Uint64 // generation; zero means canceled/consumed
 	busyHistoryObservationSerial  uint64        // guarded by passMu
-	historyObservationRecovery    bool          // guarded by passMu; never emits a full-pass wake
-	nextBusyHistoryObservation    time.Time     // guarded by passMu; observation cadence only
+	historyObservationRecovery    bool          // guarded by passMu
+	recoveryWindow                historyRecoveryWindow
+	nextBusyHistoryObservation    time.Time // guarded by passMu; observation cadence only
 	busyHistoryObservationMetrics busyHistoryObservationMetrics
 	historyRecoveryMetrics        historyRecoveryObservationMetrics
 	compactionBudget              historyCompactionBudgetState
@@ -1210,6 +1213,7 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 	if r.throughputCatchup() && (result.HistoryBuildAttempted || result.HistoryEventAttempted) {
 		r.maintenanceSerial++
 		result.historyMaintenanceID = r.maintenanceSerial
+		result.historyPriorRecoveryDeadline = r.historyNotBefore.Load()
 		result.historyCompletionPending = true
 		if deferCompletion {
 			r.pendingMaintenanceID = result.historyMaintenanceID

@@ -45,6 +45,8 @@ var (
 // destructive verification gates remain independent and are never cached here.
 type manifestDecodeCache struct {
 	mu            sync.Mutex
+	flight        *manifestDecodeFlight
+	revision      uint64 // invalidate cache installation after publication or explicit clear
 	data          []byte
 	manifest      *Manifest
 	productionErr error
@@ -52,6 +54,30 @@ type manifestDecodeCache struct {
 	budget        uint64
 	publication   bool
 	stringSlack   uint64 // owned publication-block capacity beyond string lengths
+}
+
+// One outstanding decoder bounds transient JSON decoding memory. Identical
+// readers can use its validated result even when it cannot become resident.
+type manifestDecodeFlight struct {
+	data          []byte
+	done          chan struct{}
+	shared        bool // another observer may return this flight result
+	manifest      *Manifest
+	err           error
+	productionErr error
+}
+
+func manifestLoadResult(m *Manifest, err, productionErr error, production, readOnly bool) (*Manifest, error) {
+	if err != nil {
+		return nil, err
+	}
+	if production && productionErr != nil {
+		return nil, productionErr
+	}
+	if !readOnly {
+		m = cloneDecodedManifest(m)
+	}
+	return m, nil
 }
 
 // A budget of zero disables the cache. Parse both settings even when disabled,
@@ -86,7 +112,7 @@ func manifestCacheConfiguredBudget() (uint64, error) {
 }
 
 func loadManifestFile(dir string, production bool) (*Manifest, error) {
-	return loadManifestFileMode(dir, production, false)
+	return loadManifestFileMode(dir, production, false, nil)
 }
 
 // loadProductionManifestReadOnly may borrow the cache's immutable generation.
@@ -95,10 +121,10 @@ func loadManifestFile(dir string, production bool) (*Manifest, error) {
 // resident pointer, never its contents, so an older borrowed view stays valid.
 // Every load still authenticates all current file bytes, including cache hits.
 func loadProductionManifestReadOnly(dir string) (*Manifest, error) {
-	return loadManifestFileMode(dir, true, true)
+	return loadManifestFileMode(dir, true, true, nil)
 }
 
-func loadManifestFileMode(dir string, production, readOnly bool) (*Manifest, error) {
+func loadManifestFileMode(dir string, production, readOnly bool, evidence *manifestProgressEvidence) (*Manifest, error) {
 	budget, err := manifestCacheConfiguredBudget()
 	if err != nil {
 		return nil, err
@@ -108,6 +134,8 @@ func loadManifestFileMode(dir string, production, readOnly bool) (*Manifest, err
 	loadedManifestCache.mu.Lock()
 	loadedManifestCache.resizeLocked(budget)
 	cachedData, cachedManifest := loadedManifestCache.data, loadedManifestCache.manifest
+	cachedProductionErr, cachedPublication, cachedCharge := loadedManifestCache.productionErr, loadedManifestCache.publication, loadedManifestCache.charge
+	revision, cachedStringSlack := loadedManifestCache.revision, loadedManifestCache.stringSlack
 	loadedManifestCache.mu.Unlock()
 	// Always read the current file. Equal size, timestamp, generation, inode,
 	// or checksum is not enough to reuse a previously validated object.
@@ -123,16 +151,14 @@ func loadManifestFileMode(dir string, production, readOnly bool) (*Manifest, err
 			return nil, err
 		}
 		if equal {
-			loadedManifestCache.mu.Lock()
-			if loadedManifestCache.manifest == cachedManifest {
-				m, hitErr := loadedManifestCache.hitLocked(production, readOnly)
-				loadedManifestCache.mu.Unlock()
-				return m, hitErr
+			// These exact bytes were validated before the read began. An
+			// intervening publication cannot change the observed generation.
+			recordManifestCacheHit(cachedPublication, cachedCharge)
+			if evidence != nil {
+				evidence.validUTF8 = utf8.Valid(cachedData)
+				evidence.stringSlack = cachedStringSlack
 			}
-			loadedManifestCache.mu.Unlock()
-			// Publication changed the resident while the file was read. Retain the
-			// exact bytes observed by this load, rather than reopening the path.
-			data = bytes.Clone(cachedData)
+			return manifestLoadResult(cachedManifest, nil, cachedProductionErr, production, readOnly)
 		}
 	} else {
 		data, err = os.ReadFile(path)
@@ -147,7 +173,10 @@ func loadManifestFileMode(dir string, production, readOnly bool) (*Manifest, err
 		}
 		return decodeManifest(data)
 	}
-	return loadedManifestCache.decodeMode(data, production, budget, readOnly)
+	if evidence != nil {
+		evidence.validUTF8 = utf8.Valid(data)
+	}
+	return loadedManifestCache.decodeObserved(data, production, budget, readOnly, revision, evidence)
 }
 
 // readManifestAgainstCache reads through EOF even on a mismatch, including
@@ -227,48 +256,81 @@ func (c *manifestDecodeCache) decodeOwned(data []byte, production bool, budget u
 
 func (c *manifestDecodeCache) decodeMode(data []byte, production bool, budget uint64, readOnly bool) (*Manifest, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.resizeLocked(budget)
-	if c.manifest != nil && bytes.Equal(data, c.data) {
-		return c.hitLocked(production, readOnly)
-	}
-	manifestCacheMisses.Inc(1)
-	// An old entry is no longer useful for these bytes. In particular, do not
-	// retain it indefinitely when the growing replacement exceeds the budget.
-	c.clearLocked()
-	manifestCacheCandidate.Update(0)
-	m, err := decodeManifest(data)
-	if err != nil {
-		return nil, err
-	}
-	productionErr := m.ValidateProduction()
-	if readOnly {
-		// The decoder owns this generation exclusively. Unlike the public load
-		// path, no mutable result escapes, so transferring it avoids a catalog
-		// clone. Charge the actual growable decoder slice capacities.
-		c.retainReadOnlyDecodedLocked(data, m, productionErr)
-	} else {
-		c.retainDecodedLocked(data, m, productionErr, false)
-	}
-	if production && productionErr != nil {
-		return nil, productionErr
-	}
-	return m, nil
+	revision := c.revision
+	c.mu.Unlock()
+	return c.decodeObserved(data, production, budget, readOnly, revision, nil)
 }
 
-func (c *manifestDecodeCache) hitLocked(production, readOnly bool) (*Manifest, error) {
+func (c *manifestDecodeCache) decodeObserved(data []byte, production bool, budget uint64, readOnly bool, revision uint64, evidence *manifestProgressEvidence) (*Manifest, error) {
+	for {
+		c.mu.Lock()
+		if c.manifest != nil && bytes.Equal(data, c.data) {
+			m, err, publication, charge := c.manifest, c.productionErr, c.publication, c.charge
+			if evidence != nil {
+				evidence.stringSlack = c.stringSlack
+			}
+			c.mu.Unlock()
+			recordManifestCacheHit(publication, charge)
+			return manifestLoadResult(m, nil, err, production, readOnly)
+		}
+		if flight := c.flight; flight != nil {
+			flight.shared = true
+			c.mu.Unlock()
+			same := bytes.Equal(data, flight.data)
+			<-flight.done
+			if same {
+				return manifestLoadResult(flight.manifest, flight.err, flight.productionErr, production, readOnly)
+			}
+			continue
+		}
+
+		flight := &manifestDecodeFlight{data: data, done: make(chan struct{})}
+		c.flight = flight
+		c.mu.Unlock()
+
+		manifestCacheMisses.Inc(1)
+		m, err := decodeManifest(data)
+		var productionErr error
+		if err == nil {
+			productionErr = m.ValidateProduction()
+		}
+
+		c.mu.Lock()
+		var detached *Manifest
+		if c.revision == revision && c.budget == budget {
+			// Do not keep an old entry indefinitely when the observed
+			// replacement is invalid or larger than the cache budget.
+			c.clearLocked()
+			manifestCacheCandidate.Update(0)
+			if err == nil && budget != 0 {
+				if readOnly {
+					c.retainReadOnlyDecodedLocked(data, m, productionErr)
+				} else if c.retainDecodedLocked(data, m, productionErr, false) {
+					detached, m = m, c.manifest
+				}
+			}
+		}
+		if !readOnly && !flight.shared && detached == nil {
+			detached = m
+		}
+		flight.manifest, flight.err, flight.productionErr = m, err, productionErr
+		c.flight = nil
+		close(flight.done)
+		c.mu.Unlock()
+		if detached != nil {
+			return manifestLoadResult(detached, err, productionErr, production, true)
+		}
+		return manifestLoadResult(m, err, productionErr, production, readOnly)
+	}
+}
+
+func recordManifestCacheHit(publication bool, charge uint64) {
 	manifestCacheHits.Inc(1)
-	if c.publication {
+	if publication {
 		manifestCachePublicationHits.Inc(1)
 	}
-	manifestCacheCandidate.Update(int64(c.charge))
-	if production && c.productionErr != nil {
-		return nil, c.productionErr
-	}
-	if readOnly {
-		return c.manifest, nil
-	}
-	return cloneDecodedManifest(c.manifest), nil
+	manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))
 }
 
 // A successful local publisher already normalized, sorted and validated m and
@@ -292,6 +354,7 @@ func rememberPublishedManifest(data []byte, m *Manifest) {
 func (c *manifestDecodeCache) retainPublished(data []byte, m *Manifest, budget uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.revision++
 	c.resizeLocked(budget)
 	// An idempotent progress publication, or a reader that won the race after
 	// rename, may already have populated these exact bytes. Keep its detached
@@ -472,7 +535,10 @@ func clonePublishedRefStrings(refs []SegmentRef) uint64 {
 }
 
 func (c *manifestDecodeCache) resizeLocked(budget uint64) {
-	c.budget = budget
+	if c.budget != budget {
+		c.revision++
+		c.budget = budget
+	}
 	manifestCacheBudget.Update(manifestCacheMetricBytes(budget))
 	if budget == 0 || c.charge > budget {
 		c.clearLocked()
@@ -490,6 +556,7 @@ func manifestCacheMetricBytes(value uint64) int64 {
 func (c *manifestDecodeCache) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.revision++
 	c.clearLocked()
 }
 

@@ -30,6 +30,11 @@ const (
 	accountRoutingMaxMetadataBytes    = 16 << 20
 	accountRoutingMaxFileBytes        = uint64(64 << 30)
 	accountRoutingNewDictionaryKeys   = uint64(8_000_000)
+	// Coalesce two refreshes when rewriting at least about 29 MB of old
+	// logical rows. Deferral is limited to a minority of the live catalog.
+	accountRoutingLargeRows       = 1_000_000
+	accountRoutingLargeBatch      = 2 * systemHistoryRoutingMaxNewSources
+	accountRoutingLargeMinSources = 4 * accountRoutingLargeBatch
 )
 
 var accountRoutingMagic = [8]byte{'G', 'T', 'A', 'C', 'R', 'T', '0', '1'}
@@ -584,7 +589,6 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 	if manifest == nil || maxNew < 1 {
 		return ref, false, nil
 	}
-	maxNew = min(maxNew, systemHistoryRoutingMaxNewSources)
 	var old *accountHistoryRoutingReader
 	if oldRef, ok := accountRoutingRef(manifest, 0, ^uint64(0)); ok {
 		old, err = openAccountHistoryRouting(ctx, dir, oldRef)
@@ -593,6 +597,10 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 		}
 		defer old.Close()
 	}
+	return buildAccountHistoryRoutingContext(ctx, dir, manifest, min(maxNew, systemHistoryRoutingMaxNewSources), old)
+}
+
+func buildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int, old *accountHistoryRoutingReader) (ref SegmentRef, built bool, err error) {
 	collector, err := etl.NewCollector(etl.Options{TempDir: filepath.Join(dir, "etl"), BufferLimit: 32 << 20})
 	if err != nil {
 		return ref, false, err
@@ -874,10 +882,19 @@ func refreshAccountHistoryRoutingContext(ctx context.Context, dir string, busy b
 			uncovered++
 		}
 	}
-	if count < systemHistoryRoutingMaxNewSources && old == nil || uncovered == 0 || busy && uncovered < systemHistoryRoutingMaxNewSources {
+	maxNew := systemHistoryRoutingMaxNewSources
+	if busy && old != nil && old.metadata.header.rows >= accountRoutingLargeRows &&
+		count >= accountRoutingLargeMinSources &&
+		len(old.metadata.covered) <= systemHistoryRoutingMaxSources-accountRoutingLargeBatch {
+		// A full batch can run immediately even with a large backlog. Wait to
+		// coalesce a partial batch only below one quarter of this catalog.
+		// The existing dictionary budget and exact pair fallback apply to both.
+		maxNew = accountRoutingLargeBatch
+	}
+	if count < systemHistoryRoutingMaxNewSources && old == nil || uncovered == 0 || busy && uncovered < maxNew {
 		return false, nil
 	}
-	ref, built, err := BuildAccountHistoryRoutingContext(ctx, dir, manifest, systemHistoryRoutingMaxNewSources)
+	ref, built, err := buildAccountHistoryRoutingContext(ctx, dir, manifest, maxNew, old)
 	if err != nil || !built {
 		return false, err
 	}

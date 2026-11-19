@@ -33,18 +33,22 @@ func (r *Runner) throughputCatchup() bool {
 }
 
 func (r *Runner) throughputRecovery(work time.Duration, failed bool) time.Duration {
+	return r.throughputRecoveryAt(work, failed, time.Now())
+}
+
+func (r *Runner) throughputRecoveryAt(work time.Duration, failed bool, now time.Time) time.Duration {
 	// Target history duty (not total device duty). An oversized complete block
 	// retains its real recovery cost even when it cannot be split further.
 	// Only optional merge cost is excluded; clipping expensive ordinary work
 	// would silently raise online history duty when density increases.
-	duty := r.historyLoad.dutyPPM()
+	duty := r.historyLoad.dutyPPMAt(now)
 	budget := float64(max(time.Duration(0), work)) * float64(1_000_000-duty) / float64(duty)
 	recovery := time.Duration(math.MaxInt64)
 	if budget < float64(math.MaxInt64) {
 		recovery = time.Duration(budget)
 	}
 	minimum := max(3*time.Second, r.cfg.CatchupHeavyWorkCooldown)
-	if r.historyLoad.cpuBurstReady(time.Now()) && r.cfg.CatchupHeavyWorkCooldown <= 3*time.Second {
+	if r.historyLoad.cpuBurstReady(now) && r.cfg.CatchupHeavyWorkCooldown <= 3*time.Second {
 		minimum = historyCPUBurstRecovery
 	}
 	recovery = max(recovery, minimum)
@@ -142,6 +146,16 @@ func (r *Runner) completeHistoryMaintenance(result *PassResult, started, complet
 	r.pendingMaintenanceID = 0
 	r.completedMaintenanceID = result.historyMaintenanceID
 	r.applyThroughputRecovery(result, started, completed, passErr)
+	r.recoveryWindow = historyRecoveryWindow{}
+	if passErr == nil && !result.HistoryModerateL0 && result.HistoryMinRecovery > 0 {
+		own := historyRecoveryDeadline(completed, result.HistoryMinRecovery).UnixNano()
+		if own > result.historyPriorRecoveryDeadline && r.historyNotBefore.Load() == own {
+			r.recoveryWindow = historyRecoveryWindow{
+				completed: completed, cost: result.HistoryRecoveryCost,
+				deadline: own, floor: result.historyPriorRecoveryDeadline, forced: result.HistoryForcedBusy,
+			}
+		}
+	}
 	if result.HistoryModerateL0 && result.HistoryBuildAttempted && result.Built && passErr == nil && r.historyLoad.moderateL0.completed != nil {
 		r.historyLoad.moderateL0.completed.Inc(1)
 	}

@@ -1592,7 +1592,7 @@ func loadCurrentProductionManifest(dir string) (*Manifest, os.FileInfo, error) {
 			}
 			return nil, nil, err
 		}
-		manifest, err := LoadProductionManifest(dir)
+		manifest, err := loadProductionManifestReadOnly(dir)
 		if err != nil {
 			return nil, nil, err
 		}

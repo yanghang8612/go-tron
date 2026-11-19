@@ -389,3 +389,65 @@ func TestSnapshotLifecycleResourceObservationDoesNotRepeatMaintenance(t *testing
 		}
 	})
 }
+
+func TestSnapshotLifecycleRecoveryObservationWakesTheOrderedPass(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		db := rawdb.NewMemoryDatabase()
+		defer db.Close()
+		dir := t.TempDir()
+		for n := uint64(1); n <= 12; n++ {
+			writeSnapPruningChange(t, db, n, n, n)
+		}
+		sample := func(await time.Duration) maintenance.StoragePressure {
+			now := time.Now()
+			return maintenance.StoragePressure{
+				Available: true, SampledAt: now, L0Sublevels: 2, L0CompactionThreshold: 8,
+				L0StopWritesThreshold: 192, MemTableCount: 1, MemTableStopWritesThreshold: 4,
+				DeviceAvailable: true, DeviceSampledAt: now, DeviceAwait: await,
+			}
+		}
+		var outerCalls, recoverySamples atomic.Int64
+		l := NewSnapshotLifecycle(&fakePruneChain{db: db, solidified: 13, syncRemaining: 1000, syncRemainingOK: true}, SnapshotLifecycleConfig{
+			Interval: time.Hour,
+			Snapshot: snapshots.Config{
+				Dir: dir, Enabled: true, HistoryWindow: 1, BatchBlocks: 8, BatchTxNums: 8, HistoryCatchupMode: snapshots.HistoryCatchupThroughput,
+				DeferHistoryBuildWhileSyncing: true, MaxDeferredHistoryBlocks: 2, MaxBusyDeferredHistoryBlocks: 4,
+				HeavyWorkGate: maintenance.NewHeavyWorkGate(), SyncBuildReady: func() bool { return false },
+				HistoryLoadProbe: func() maintenance.StoragePressure { return sample(3 * time.Millisecond) },
+				HistoryRecoveryLoadProbe: func() maintenance.StoragePressure {
+					recoverySamples.Add(1)
+					return sample(time.Millisecond)
+				},
+			},
+			Pruner: PrunerConfig{Policy: SnapPolicy(1, 1), SnapshotDir: dir},
+			ChainFreezerBuild: func() (snapshots.ChainFreezerSnapshotPassResult, error) {
+				if outerCalls.Add(1) == 1 {
+					time.Sleep(56 * time.Second)
+				}
+				return snapshots.ChainFreezerSnapshotPassResult{}, nil
+			},
+		})
+		if err := l.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer l.Stop()
+		synctest.Wait()
+		time.Sleep(56 * time.Second)
+		synctest.Wait()
+		first := l.builder.Snapshot()
+		if first.LastPublishedBlock == 0 || first.ForcedBusyBuilds != 1 || recoverySamples.Load() != 0 {
+			t.Fatalf("first lifecycle did not publish and complete in order: %+v calls=%d samples=%d", first, outerCalls.Load(), recoverySamples.Load())
+		}
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		if l.builder.Snapshot().LastPublishedBlock != first.LastPublishedBlock || recoverySamples.Load() > 1 {
+			t.Fatal("observation published before comparable post-completion samples")
+		}
+		time.Sleep(5*time.Second + time.Millisecond)
+		synctest.Wait()
+		next := l.builder.Snapshot()
+		if next.LastPublishedBlock <= first.LastPublishedBlock || recoverySamples.Load() != 2 {
+			t.Fatalf("ordinary lifecycle did not progress after early wake: published=%d→%d calls=%d samples=%d", first.LastPublishedBlock, next.LastPublishedBlock, outerCalls.Load(), recoverySamples.Load())
+		}
+	})
+}

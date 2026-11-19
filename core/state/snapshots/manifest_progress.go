@@ -3,8 +3,14 @@ package snapshots
 import (
 	"encoding/json"
 	"os"
-	"unicode/utf8"
 )
+
+// Captured with the exact validated file observation. Decoded strings own
+// their storage; only a publisher's retained entry carries extra capacity.
+type manifestProgressEvidence struct {
+	validUTF8   bool
+	stringSlack uint64
+}
 
 // The only mutations allowed here are monotonic progress fields. The production
 // loader authenticates the complete current file and validates its catalog.
@@ -21,7 +27,8 @@ func updateManifestPruneProgressWithSync(dir string, blockNum, txNum, indexBlock
 	}
 	manifestPublicationMu.Lock()
 	defer manifestPublicationMu.Unlock()
-	prior, err := loadProductionManifestReadOnly(dir)
+	var evidence manifestProgressEvidence
+	prior, err := loadManifestFileMode(dir, true, true, &evidence)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -41,15 +48,10 @@ func updateManifestPruneProgressWithSync(dir string, blockNum, txNum, indexBlock
 		// Reconfirm durability even when current bytes already contain this cursor.
 		return syncDir(dir)
 	}
-	// Trusted reuse is optional: disabled/rejected/replaced cache generations
-	// retain the ordinary public validation/ownership path.
-	budget, configErr := manifestCacheConfiguredBudget()
-	c := &loadedManifestCache
-	c.mu.Lock()
-	trusted := configErr == nil && budget != 0 && prior.Generation != 0 && prior.PublishedUnix != 0 && c.manifest == prior && c.productionErr == nil && utf8.Valid(c.data)
-	stringSlack := c.stringSlack
-	c.mu.Unlock()
-	if !trusted {
+	// Cache admission is not part of validation or ownership. An over-budget
+	// decode is still a private immutable catalog. Use the normal publisher
+	// for disabled caching, legacy headers and noncanonical UTF-8 input.
+	if !evidence.validUTF8 || prior.Generation == 0 || prior.PublishedUnix == 0 {
 		owned := cloneDecodedManifest(prior)
 		owned.Progress = &next
 		return publishManifestLockedWithSync(dir, owned, syncDir)
@@ -64,7 +66,7 @@ func updateManifestPruneProgressWithSync(dir string, blockNum, txNum, indexBlock
 	if err := writeManifestBytesWithSync(dir, data, syncDir); err != nil {
 		return err
 	}
-	rememberManifestProgress(data, &m, stringSlack)
+	rememberManifestProgress(data, &m, evidence.stringSlack)
 	return nil
 }
 
@@ -78,6 +80,7 @@ func rememberManifestProgress(data []byte, m *Manifest, stringSlack uint64) {
 	c := &loadedManifestCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.revision++
 	c.resizeLocked(budget)
 	charge := manifestCacheChargeWithStringSlack(data, m, stringSlack)
 	manifestCacheCandidate.Update(manifestCacheMetricBytes(charge))

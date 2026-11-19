@@ -352,3 +352,97 @@ func TestHistoryRecoveryObservationDoesNotInventFreshSamples(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoryRecoveryObservationReleasesCompletedWorkOnlyWithHealthyEvidence(t *testing.T) {
+	for _, scenario := range []string{"healthy", "step-pressure", "stale-device", "prior-floor", "outer-failure", "disabled-control"} {
+		t.Run(scenario, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := busyResourceFixture(t)
+				r.cfg.MaxBusyDeferredHistoryBlocks = 2
+				r.cfg.HistoryLoadProbe = func() maintenance.StoragePressure {
+					p := healthyHistoryLoad(time.Now())
+					p.DeviceAwait = 3 * time.Millisecond // 33.3% during the completed work.
+					return p
+				}
+				var observed int
+				r.cfg.HistoryRecoveryLoadProbe = func() maintenance.StoragePressure {
+					observed++
+					p := healthyHistoryLoad(time.Now())
+					switch {
+					case scenario == "step-pressure" && observed == 2:
+						p.MemTableCount = int64(p.MemTableStopWritesThreshold)
+					case scenario == "stale-device":
+						p.DeviceSampledAt = p.DeviceSampledAt.Add(-time.Minute)
+					}
+					return p
+				}
+				start := time.Now()
+				first, err := r.OnePassWithDeferredMaintenanceContext(context.Background(), func(context.Context, PassResult) error {
+					if scenario == "prior-floor" {
+						r.extendHistoryNotBefore(start.Add(100 * time.Second))
+					}
+					return nil
+				})
+				if err != nil || !first.Built || !first.HistoryRecoveryObservation {
+					t.Fatalf("initial build: %+v %v", first, err)
+				}
+				time.Sleep(5 * time.Second)
+				if wake, _ := r.ObserveBusyHistoryResources(context.Background()); wake || observed != 0 {
+					t.Fatalf("pending completion was observed: wake=%t samples=%d", wake, observed)
+				}
+				time.Sleep(51 * time.Second)
+				// Like an independent metadata probe, advance the engine sample
+				// sequence while the maintenance clock passes.
+				r.refreshHistoryLoad(time.Now())
+				var outerErr error
+				if scenario == "outer-failure" {
+					outerErr = errors.New("outer prune")
+				}
+				r.CompleteHistoryMaintenance(&first, start, outerErr)
+				finished := time.Now()
+				deadline := r.historyNotBefore.Load()
+				if first.HistoryMaintenanceDuration != 56*time.Second || time.Unix(0, deadline).Sub(finished) < 110*time.Second {
+					t.Fatalf("missing full recovery: %s/%s", first.HistoryMaintenanceDuration, time.Unix(0, deadline).Sub(finished))
+				}
+				if scenario == "disabled-control" {
+					r.recoveryWindow = historyRecoveryWindow{}
+				}
+				if scenario == "outer-failure" {
+					if wake, retry := r.ObserveBusyHistoryResources(context.Background()); wake || retry != 0 || r.historyNotBefore.Load() != deadline {
+						t.Fatal("failure acquired an early wake")
+					}
+					return
+				}
+				for i := 1; i <= 3; i++ {
+					time.Sleep(5 * time.Second)
+					wake, _ := r.ObserveBusyHistoryResources(context.Background())
+					want := scenario == "healthy" && i == 2
+					if wake != want || (!want && r.historyNotBefore.Load() != deadline) {
+						t.Fatalf("sample %d wake=%t want=%t deadline=%s window=%+v level=%d reasons=%v", i, wake, want, time.Unix(0, r.historyNotBefore.Load()), r.recoveryWindow, r.historyLoad.level, r.historyLoad.reasons)
+					}
+					if wake {
+						break
+					}
+				}
+				if scenario == "disabled-control" {
+					time.Sleep(time.Until(time.Unix(0, deadline)))
+					next, err := r.OnePass()
+					if err != nil || !next.Built {
+						t.Fatalf("ordinary admission after original deadline: %+v %v", next, err)
+					}
+					t.Logf("control admitted the next build after %s", time.Since(finished))
+				}
+				if scenario == "healthy" {
+					t.Log("healthy samples admitted the next build after 10s")
+					if wake, retry := r.ObserveBusyHistoryResources(context.Background()); wake || retry != 0 {
+						t.Fatal("recovery emitted a second wake")
+					}
+					next, err := r.OnePass()
+					if err != nil || !next.Built {
+						t.Fatalf("ordinary admission after early wake: %+v %v", next, err)
+					}
+				}
+			})
+		})
+	}
+}
