@@ -445,3 +445,56 @@ func TestHistoryLoadReasonMetricsDebtAndSimultaneousPressure(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountHistoryRoutingExpansionRechecksResourceHeadroom(t *testing.T) {
+	for _, mode := range []string{"healthy", "hard", "stale", "memory", "no-probe", "initially-recovering", "idle"} {
+		t.Run(mode, func(t *testing.T) {
+			r := throughputFixture(t)
+			now := time.Now()
+			r.historyLoad.level, r.historyLoad.good = 3, 3
+			r.historyLoad.sample, r.historyLoad.lastAccepted = healthyHistoryLoad(now), now
+			if mode == "initially-recovering" {
+				r.historyLoad.level = 2
+			}
+			storageChecks, resourceChecks := 0, 0
+			if mode != "no-probe" {
+				r.cfg.HistoryRecoveryLoadProbe = func() maintenance.StoragePressure {
+					storageChecks++
+					p := healthyHistoryLoad(time.Now())
+					switch mode {
+					case "hard":
+						p.MemTableCount = int64(p.MemTableStopWritesThreshold)
+					case "stale":
+						p.DeviceSampledAt = p.DeviceSampledAt.Add(-time.Minute)
+					}
+					return p
+				}
+			}
+			r.cfg.BusyHistoryBuildReady = func() bool {
+				resourceChecks++
+				return mode != "memory"
+			}
+			permit := r.accountRoutingExpansion(mode != "idle")
+			if storageChecks != 0 || resourceChecks != 0 {
+				t.Fatal("reprobed before additional dictionary work")
+			}
+			eligible := mode != "no-probe" && mode != "initially-recovering" && mode != "idle"
+			if (permit != nil) != eligible {
+				t.Fatalf("expansion callback available=%t want=%t", permit != nil, eligible)
+			}
+			if !eligible {
+				return
+			}
+			if got := permit(); got != (mode == "healthy") || storageChecks != 1 {
+				t.Fatalf("expansion=%t storageChecks=%d mode=%s", got, storageChecks, mode)
+			}
+			if mode == "healthy" || mode == "memory" {
+				if resourceChecks != 1 {
+					t.Fatal("independent CPU/memory evidence missing")
+				}
+			} else if resourceChecks != 0 {
+				t.Fatal("continued checking after storage red light")
+			}
+		})
+	}
+}

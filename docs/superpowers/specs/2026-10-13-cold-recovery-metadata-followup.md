@@ -67,10 +67,12 @@ reuse a validated immutable over-budget view after checking the observed
 encoding. Existing normal publication handles legacy and disabled-cache
 cases.
 
-For mature account routing catalogs, a busy maintenance pass may combine up to
-128 uncovered source attempts under the existing dictionary-key budget. A
-sufficiently large backlog can proceed immediately, and a small outstanding
-tail continues through exact-pair query fallback while it accumulates.
-This amortizes rewriting the singleton when enough sources fit. The routing
-file format, source authentication, strict verification and canonical read
-fallback remain in force.
+A busy account route refresh can double its dictionary allowance after opening
+an existing table of at least 128 million rows. An admitted healthy level-3
+pass checks current engine/device pressure and independent CPU/memory headroom
+again when a dictionary first needs the extra allowance. A rejected expansion
+preserves the ordinary build and its full recovery accounting. The build still
+attempts at most 64 new pairs, uses the existing bounded ETL buffer and may
+publish more authenticated pairs in one singleton rewrite. The routing file
+format, source authentication, strict verification and canonical fallback
+remain in force.

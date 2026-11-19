@@ -461,3 +461,77 @@ func TestAccountHistoryRoutingRejectsNonSHA256MetadataRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountHistoryRoutingAdditionalAllowancePreservesCoverageOnRedLight(t *testing.T) {
+	ctx := context.Background()
+	for _, healthy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("healthy=%t", healthy), func(t *testing.T) {
+			dir, original, queries := accountRoutingFixture(t, 9)
+			m := addAccountRoutingFixture(t, dir, original, 1)
+			old, err := openAccountHistoryRouting(ctx, dir, mustAccountRoutingRef(t, m))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			probes := 0
+			budget := accountRoutingDictionaryBudget{remaining: 3, extra: 3, permitExtra: func() bool {
+				probes++
+				return healthy
+			}}
+			ref, built, err := buildAccountHistoryRoutingContext(ctx, dir, m, 64, old, budget)
+			if err != nil || !built || probes != 1 {
+				t.Fatalf("ordinary eligible pair was lost: built=%t probes=%d err=%v", built, probes, err)
+			}
+			updated, err := NewAggregator(dir).Integrate(1, 3, []SegmentRef{ref})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckAccountHistoryRouting(dir, ref); err != nil {
+				t.Fatal(err)
+			}
+			got, err := openAccountHistoryRouting(ctx, dir, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer got.Close()
+			want := 2
+			if healthy {
+				want = 3
+			}
+			if len(got.metadata.covered) != want {
+				t.Fatalf("coverage=%d want=%d", len(got.metadata.covered), want)
+			}
+			reader, err := OpenPinnedManager(dir, updated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oracle, err := OpenPinnedManager(dir, original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := reader.FirstStateDomainChangesContext(ctx, 2, 3, queries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := oracle.FirstStateDomainChangesContext(ctx, 2, 3, queries)
+			if err != nil || !reflect.DeepEqual(a, b) {
+				t.Fatalf("query fallback differs: observed %v expected %v err=%v", a, b, err)
+			}
+		})
+	}
+}
+
+func TestAccountHistoryRoutingDeniedExpansionStillAcceptsASmallerSource(t *testing.T) {
+	calls := 0
+	budget := accountRoutingDictionaryBudget{remaining: 8, extra: 8, permitExtra: func() bool { calls++; return false }}
+	if !budget.fits(5) || calls != 0 {
+		t.Fatal("probed before extra allowance was needed")
+	}
+	budget.remaining -= 5
+	if budget.fits(12) || calls != 0 {
+		t.Fatal("probed for a source that does not fit either tier")
+	}
+	if budget.fits(5) || calls != 1 || !budget.fits(3) || budget.fits(4) || calls != 1 {
+		t.Fatal("red light did not preserve ordinary budget or probe only once")
+	}
+}

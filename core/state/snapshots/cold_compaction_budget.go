@@ -5,6 +5,8 @@ import (
 	"math"
 	"os"
 	"time"
+
+	"github.com/tronprotocol/go-tron/core/maintenance"
 )
 
 const (
@@ -120,6 +122,28 @@ func historyCompactionRecovery(work time.Duration, failed bool) time.Duration {
 	return recovery
 }
 
+func (r *Runner) accountRoutingHealthy(now time.Time) bool {
+	p := r.historyLoad.sample
+	return r.historyLoad.level == 3 && r.historyLoad.reasons == 0 && r.historyLoad.cpuBurstReady(now) &&
+		p.L0CompactionThreshold > 0 && p.L0Sublevels < p.L0CompactionThreshold
+}
+
+// This is an allowance for a busy, already admitted optional merge. The
+// independent metadata probe and CPU/memory check run only when a dictionary
+// would exceed the ordinary budget. They never open or extend the heavy lease.
+func (r *Runner) accountRoutingExpansion(busy bool) func() bool {
+	if !busy || r.cfg.HistoryRecoveryLoadProbe == nil || r.cfg.BusyHistoryBuildReady == nil ||
+		!r.accountRoutingHealthy(time.Now()) {
+		return nil
+	}
+	return func() bool {
+		p := r.cfg.HistoryRecoveryLoadProbe()
+		r.refreshHistoryLoadFromProbe(time.Now(), func() maintenance.StoragePressure { return p })
+		return r.accountRoutingHealthy(time.Now()) && r.cfg.BusyHistoryBuildReady() &&
+			r.accountRoutingHealthy(time.Now())
+	}
+}
+
 func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total HistoryCompactionResult, err error) {
 	if r == nil || !r.cfg.Enabled {
 		return total, nil
@@ -223,7 +247,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		if built {
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
-		built, routeErr = refreshAccountHistoryRoutingContext(ctx, r.cfg.Dir, busy)
+		built, routeErr = refreshAccountHistoryRoutingWithExpansionContext(ctx, r.cfg.Dir, busy, r.accountRoutingExpansion(busy))
 		if routeErr != nil {
 			return total, routeErr
 		}

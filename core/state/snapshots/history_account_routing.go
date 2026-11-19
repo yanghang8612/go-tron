@@ -19,22 +19,19 @@ import (
 )
 
 const (
-	accountRoutingHeaderBytes         = 64
-	accountRoutingPageBytes           = 4096
-	accountRoutingKeyBytes            = 21
-	accountRoutingRecordBytes         = accountRoutingKeyBytes + 8
-	accountRoutingDirectoryEntryBytes = accountRoutingKeyBytes + sha256.Size
-	accountRoutingPageRecords         = accountRoutingPageBytes / accountRoutingRecordBytes
-	accountRoutingDirectoryEntries    = accountRoutingPageBytes / accountRoutingDirectoryEntryBytes
-	accountRoutingMaxRows             = uint64(1 << 30)
-	accountRoutingMaxMetadataBytes    = 16 << 20
-	accountRoutingMaxFileBytes        = uint64(64 << 30)
-	accountRoutingNewDictionaryKeys   = uint64(8_000_000)
-	// Coalesce two refreshes when rewriting at least about 29 MB of old
-	// logical rows. Deferral is limited to a minority of the live catalog.
-	accountRoutingLargeRows       = 1_000_000
-	accountRoutingLargeBatch      = 2 * systemHistoryRoutingMaxNewSources
-	accountRoutingLargeMinSources = 4 * accountRoutingLargeBatch
+	accountRoutingHeaderBytes            = 64
+	accountRoutingPageBytes              = 4096
+	accountRoutingKeyBytes               = 21
+	accountRoutingRecordBytes            = accountRoutingKeyBytes + 8
+	accountRoutingDirectoryEntryBytes    = accountRoutingKeyBytes + sha256.Size
+	accountRoutingPageRecords            = accountRoutingPageBytes / accountRoutingRecordBytes
+	accountRoutingDirectoryEntries       = accountRoutingPageBytes / accountRoutingDirectoryEntryBytes
+	accountRoutingMaxRows                = uint64(1 << 30)
+	accountRoutingMaxMetadataBytes       = 16 << 20
+	accountRoutingMaxFileBytes           = uint64(64 << 30)
+	accountRoutingNewDictionaryKeys      = uint64(8_000_000)
+	accountRoutingExpandedDictionaryKeys = uint64(16_000_000)
+	accountRoutingExpansionMinRows       = uint64(128_000_000)
 )
 
 var accountRoutingMagic = [8]byte{'G', 'T', 'A', 'C', 'R', 'T', '0', '1'}
@@ -580,6 +577,26 @@ func accountRoutingDictionaryCost(dir string, ref SegmentRef) (uint64, error) {
 	return h.keyCount, err
 }
 
+type accountRoutingDictionaryBudget struct {
+	remaining   uint64
+	extra       uint64
+	permitExtra func() bool
+}
+
+func (b *accountRoutingDictionaryBudget) fits(cost uint64) bool {
+	if cost > b.remaining && cost-b.remaining <= b.extra && b.permitExtra != nil {
+		// Delay the fresh probe until a source actually needs the additional
+		// allowance. If it is denied, small subsequent sources can still fit
+		// the ordinary budget. Charge only after authenticated collection.
+		permit := b.permitExtra
+		b.permitExtra = nil
+		if permit() {
+			b.remaining += b.extra
+		}
+	}
+	return cost <= b.remaining
+}
+
 // BuildAccountHistoryRoutingContext writes a self-contained auxiliary object.
 // It never changes canonical state/history, advances frontiers, or publishes.
 func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int) (ref SegmentRef, built bool, err error) {
@@ -597,10 +614,10 @@ func BuildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 		}
 		defer old.Close()
 	}
-	return buildAccountHistoryRoutingContext(ctx, dir, manifest, min(maxNew, systemHistoryRoutingMaxNewSources), old)
+	return buildAccountHistoryRoutingContext(ctx, dir, manifest, min(maxNew, systemHistoryRoutingMaxNewSources), old, accountRoutingDictionaryBudget{remaining: accountRoutingNewDictionaryKeys})
 }
 
-func buildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int, old *accountHistoryRoutingReader) (ref SegmentRef, built bool, err error) {
+func buildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest *Manifest, maxNew int, old *accountHistoryRoutingReader, budget accountRoutingDictionaryBudget) (ref SegmentRef, built bool, err error) {
 	collector, err := etl.NewCollector(etl.Options{TempDir: filepath.Join(dir, "etl"), BufferLimit: 32 << 20})
 	if err != nil {
 		return ref, false, err
@@ -611,7 +628,6 @@ func buildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 	var ids [][32]byte
 	from, to := ^uint64(0), uint64(0)
 	attempted, added := 0, 0
-	remaining := accountRoutingNewDictionaryKeys
 	for _, history := range manifest.Segments {
 		if err := contextError(ctx); err != nil {
 			return ref, false, err
@@ -640,7 +656,7 @@ func buildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 			if e != nil {
 				return ref, false, e
 			}
-			if cost > remaining {
+			if !budget.fits(cost) {
 				continue
 			}
 			e = iterateHistoryRoutingSourceKeys(ctx, dir, history, accessor, func(key []byte) error {
@@ -655,7 +671,7 @@ func buildAccountHistoryRoutingContext(ctx context.Context, dir string, manifest
 			if e != nil {
 				return ref, false, e
 			}
-			remaining -= cost
+			budget.remaining -= cost
 			added++
 		}
 		ids = append(ids, id)
@@ -845,6 +861,10 @@ func CheckAccountHistoryRouting(dir string, ref SegmentRef) error {
 }
 
 func refreshAccountHistoryRoutingContext(ctx context.Context, dir string, busy bool) (bool, error) {
+	return refreshAccountHistoryRoutingWithExpansionContext(ctx, dir, busy, nil)
+}
+
+func refreshAccountHistoryRoutingWithExpansionContext(ctx context.Context, dir string, busy bool, permitExtra func() bool) (bool, error) {
 	if !historyReadLeaseGate.TryRLock() {
 		return false, nil
 	}
@@ -882,19 +902,17 @@ func refreshAccountHistoryRoutingContext(ctx context.Context, dir string, busy b
 			uncovered++
 		}
 	}
-	maxNew := systemHistoryRoutingMaxNewSources
-	if busy && old != nil && old.metadata.header.rows >= accountRoutingLargeRows &&
-		count >= accountRoutingLargeMinSources &&
-		len(old.metadata.covered) <= systemHistoryRoutingMaxSources-accountRoutingLargeBatch {
-		// A full batch can run immediately even with a large backlog. Wait to
-		// coalesce a partial batch only below one quarter of this catalog.
-		// The existing dictionary budget and exact pair fallback apply to both.
-		maxNew = accountRoutingLargeBatch
-	}
-	if count < systemHistoryRoutingMaxNewSources && old == nil || uncovered == 0 || busy && uncovered < maxNew {
+	if count < systemHistoryRoutingMaxNewSources && old == nil || uncovered == 0 || busy && uncovered < systemHistoryRoutingMaxNewSources {
 		return false, nil
 	}
-	ref, built, err := buildAccountHistoryRoutingContext(ctx, dir, manifest, maxNew, old)
+	budget := accountRoutingDictionaryBudget{remaining: accountRoutingNewDictionaryKeys}
+	if busy && old != nil && old.metadata.header.rows >= accountRoutingExpansionMinRows &&
+		old.metadata.header.rows <= accountRoutingMaxRows-accountRoutingExpandedDictionaryKeys &&
+		len(old.metadata.covered) <= systemHistoryRoutingMaxSources-systemHistoryRoutingMaxNewSources {
+		budget.extra = accountRoutingExpandedDictionaryKeys - accountRoutingNewDictionaryKeys
+		budget.permitExtra = permitExtra
+	}
+	ref, built, err := buildAccountHistoryRoutingContext(ctx, dir, manifest, systemHistoryRoutingMaxNewSources, old, budget)
 	if err != nil || !built {
 		return false, err
 	}
