@@ -71,7 +71,8 @@ A busy account route refresh can double its dictionary allowance after opening
 an existing table of at least 128 million rows. An admitted healthy level-3
 pass checks current engine/device pressure and independent CPU/memory headroom
 again when a dictionary first needs the extra allowance. A rejected expansion
-preserves the ordinary build and its full recovery accounting. The build still
+preserves the ordinary build and its full recovery accounting. When no route
+was published, the rejection ends the pass before any leaf merge. The build still
 attempts at most 64 new pairs, uses the existing bounded ETL buffer and may
 publish more authenticated pairs in one singleton rewrite. The routing file
 format, source authentication, strict verification and canonical fallback

@@ -860,11 +860,19 @@ func CheckAccountHistoryRouting(dir string, ref SegmentRef) error {
 	return checkAccountHistoryRoutingContext(context.Background(), dir, manifest, ref)
 }
 
-func refreshAccountHistoryRoutingContext(ctx context.Context, dir string, busy bool) (bool, error) {
-	return refreshAccountHistoryRoutingWithExpansionContext(ctx, dir, busy, nil)
+type accountRoutingRefreshLimits struct {
+	baseKeys, extraKeys, expansionMinRows uint64
 }
 
-func refreshAccountHistoryRoutingWithExpansionContext(ctx context.Context, dir string, busy bool, permitExtra func() bool) (bool, error) {
+func defaultAccountRoutingRefreshLimits() accountRoutingRefreshLimits {
+	return accountRoutingRefreshLimits{
+		baseKeys:         accountRoutingNewDictionaryKeys,
+		extraKeys:        accountRoutingExpandedDictionaryKeys - accountRoutingNewDictionaryKeys,
+		expansionMinRows: accountRoutingExpansionMinRows,
+	}
+}
+
+func refreshAccountHistoryRoutingWithExpansionContext(ctx context.Context, dir string, busy bool, permitExtra func() bool, limits accountRoutingRefreshLimits) (bool, error) {
 	if !historyReadLeaseGate.TryRLock() {
 		return false, nil
 	}
@@ -905,11 +913,11 @@ func refreshAccountHistoryRoutingWithExpansionContext(ctx context.Context, dir s
 	if count < systemHistoryRoutingMaxNewSources && old == nil || uncovered == 0 || busy && uncovered < systemHistoryRoutingMaxNewSources {
 		return false, nil
 	}
-	budget := accountRoutingDictionaryBudget{remaining: accountRoutingNewDictionaryKeys}
-	if busy && old != nil && old.metadata.header.rows >= accountRoutingExpansionMinRows &&
+	budget := accountRoutingDictionaryBudget{remaining: limits.baseKeys}
+	if busy && old != nil && old.metadata.header.rows >= limits.expansionMinRows &&
 		old.metadata.header.rows <= accountRoutingMaxRows-accountRoutingExpandedDictionaryKeys &&
 		len(old.metadata.covered) <= systemHistoryRoutingMaxSources-systemHistoryRoutingMaxNewSources {
-		budget.extra = accountRoutingExpandedDictionaryKeys - accountRoutingNewDictionaryKeys
+		budget.extra = limits.extraKeys
 		budget.permitExtra = permitExtra
 	}
 	ref, built, err := buildAccountHistoryRoutingContext(ctx, dir, manifest, systemHistoryRoutingMaxNewSources, old, budget)

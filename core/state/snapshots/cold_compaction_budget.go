@@ -144,7 +144,11 @@ func (r *Runner) accountRoutingExpansion(busy bool) func() bool {
 	}
 }
 
-func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total HistoryCompactionResult, err error) {
+func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (HistoryCompactionResult, error) {
+	return r.compactHistoryWithRoutingLimits(ctx, catchingUp, defaultAccountRoutingRefreshLimits())
+}
+
+func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp bool, routingLimits accountRoutingRefreshLimits) (total HistoryCompactionResult, err error) {
 	if r == nil || !r.cfg.Enabled {
 		return total, nil
 	}
@@ -197,7 +201,7 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 	defer func() {
 		if busy && (total.Merged || total.RoutingBuilt || err != nil || total.Deferred) {
 			total.Recovery = historyCompactionRecovery(time.Since(started), err != nil)
-			if err == nil && !total.Merged && !total.RoutingBuilt {
+			if err == nil && !total.Merged && !total.RoutingBuilt && total.DeferReason != "import-load" {
 				// The cheap manifest hint cannot see oversized logical values or
 				// record counts. Do not prioritize the same empty selection after
 				// every newly published leaf when the detailed budget rejects it.
@@ -247,12 +251,26 @@ func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (total His
 		if built {
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
-		built, routeErr = refreshAccountHistoryRoutingWithExpansionContext(ctx, r.cfg.Dir, busy, r.accountRoutingExpansion(busy))
+		var expansionDenied bool
+		permitExtra := r.accountRoutingExpansion(busy)
+		if permitExtra != nil {
+			check := permitExtra
+			permitExtra = func() bool {
+				expansionDenied = !check()
+				return !expansionDenied
+			}
+		}
+		built, routeErr = refreshAccountHistoryRoutingWithExpansionContext(ctx, r.cfg.Dir, busy, permitExtra, routingLimits)
 		if routeErr != nil {
 			return total, routeErr
 		}
 		if built {
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+		}
+		if expansionDenied {
+			// A fresh storage or CPU/memory rejection supersedes this pass's
+			// initial admission. Do not start a different heavy job.
+			return HistoryCompactionResult{Deferred: true, DeferReason: "import-load"}, nil
 		}
 	}
 	if r.compactionBudget.outerMetrics == nil {

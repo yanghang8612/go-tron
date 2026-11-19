@@ -137,7 +137,7 @@ func routingBudgetBenchmarkQuery(n uint64, domain rawdb.StateFlatDomain) StateHi
 	return StateHistoryQuery{FlatDomain: domain, Owner: addr}
 }
 
-func buildRoutingBudgetBenchmarkHistory(b *testing.B, dir string, tx, first, count uint64) []SegmentRef {
+func buildRoutingBudgetBenchmarkHistory(b testing.TB, dir string, tx, first, count uint64) []SegmentRef {
 	b.Helper()
 	db := rawdb.NewMemoryDatabase()
 	defer db.Close()
