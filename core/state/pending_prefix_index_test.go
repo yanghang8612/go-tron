@@ -484,3 +484,129 @@ func TestPendingPrefixOwnerArenaAppendIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestFrozenBandwidthPendingPrefixBypassLifecycle(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	defer db.Close()
+	w := newAccountKVLatestDomainBatch(db, zeroGeneration, nil, nil)
+	owner := pruneTestOwner(9)
+	domain := kvdomains.AccountFrozenBandwidthAux
+	durableKey, sparseKey, secondDurableKey := []byte{0, 0, 0, 0}, []byte{0, 0, 0, 17}, []byte{0, 0, 1, 9}
+
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, domain, secondDurableKey, []byte("second")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, domain, durableKey, []byte("durable")); err != nil {
+		t.Fatal(err)
+	}
+	w.commitBlock = 10
+	for i := 0; i < 300; i++ {
+		w.rememberPut(pruneTestOwner(100+i), 0, kvdomains.ContractStorage, []byte("unrelated"), []byte("value"))
+	}
+	check := func(wantBypassed bool, want ...prefixRow) {
+		t.Helper()
+		beforeBypassed := accountKVV1PendingOverlaySkipped.Snapshot().Count()
+		beforeSearched := accountKVV1PendingOverlaySearched.Snapshot().Count()
+		rows := prefixResults(t, w, owner, 0, domain, nil, false)
+		if got := prefixResults(t, w, owner, 0, domain, nil, true); !reflect.DeepEqual(rows, got) || !reflect.DeepEqual(rows, want) {
+			t.Fatalf("rows=%v legacy=%v want=%v", rows, got, want)
+		}
+		skipped := accountKVV1PendingOverlaySkipped.Snapshot().Count() - beforeBypassed
+		searched := accountKVV1PendingOverlaySearched.Snapshot().Count() - beforeSearched
+		if skipped+searched != 1 || (skipped == 1) != wantBypassed {
+			t.Fatalf("skipped=%d searched=%d want bypass=%t", skipped, searched, wantBypassed)
+		}
+	}
+	second := prefixRow{string(secondDurableKey), "second"}
+	check(true, prefixRow{string(durableKey), "durable"}, second)
+	for _, callbackError := range []error{nil, errors.New("callback failure")} {
+		calls := 0
+		err := w.iterateLatestPrefix(owner, 0, domain, nil, func(key, value []byte) (bool, error) {
+			calls++
+			if !bytes.Equal(key, durableKey) || string(value) != "durable" {
+				t.Fatalf("first durable callback = %x/%s", key, value)
+			}
+			return false, callbackError
+		})
+		if calls != 1 || !errors.Is(err, callbackError) {
+			t.Fatalf("early stop callbacks=%d err=%v want %v", calls, err, callbackError)
+		}
+	}
+	if w.pendingPrefixScans != 0 {
+		t.Fatal("absent V1 query advanced index construction")
+	}
+	w.commitBlock = 2
+	w.rememberPutOwned(owner, 0, domain, sparseKey, []byte("staged"))
+	w.rememberDeleteOwned(owner, 0, domain, durableKey)
+	w.rememberPut(owner, 0, domain, sparseKey, []byte("overwritten"))
+	w.rememberDelete(owner, 0, domain, sparseKey)
+	w.rememberPutOwned(owner, 0, domain, sparseKey, []byte("staged"))
+	if w.pendingFrozenBandwidth != 2 {
+		t.Fatalf("staged puts and tombstones=%d want 2 after overwrite, delete and reinsert", w.pendingFrozenBandwidth)
+	}
+	check(false, prefixRow{string(sparseKey), "staged"}, second)
+	w.prunePending(1)
+	check(false, prefixRow{string(sparseKey), "staged"}, second)
+
+	w.deepAsync = true
+	w.prunePending(2)
+	check(false, prefixRow{string(sparseKey), "staged"}, second)
+	if err := rawdb.DeleteStateKVLatest(db, owner, 0, domain, durableKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 0, domain, sparseKey, []byte("staged")); err != nil {
+		t.Fatal(err)
+	}
+	otherOwner := pruneTestOwner(20)
+	w.commitBlock = 3
+	w.rememberPut(otherOwner, 0, domain, sparseKey, []byte("other owner"))
+	w.commitBlock = 4
+	w.rememberPut(owner, 1, domain, sparseKey, []byte("other generation"))
+	w.prunePending(2)
+	if w.pendingFrozenBandwidth != 2 {
+		t.Fatalf("durable prune retained %d V1 entries, want 2", w.pendingFrozenBandwidth)
+	}
+	check(false, prefixRow{string(sparseKey), "staged"}, second)
+	for _, other := range []struct {
+		owner         tcommon.Address
+		generation    uint64
+		cutoff        uint64
+		value         string
+		wantRemaining int
+	}{
+		{otherOwner, 0, 3, "other owner", 1},
+		{owner, 1, 4, "other generation", 0},
+	} {
+		want := []prefixRow{{string(sparseKey), other.value}}
+		if got := prefixResults(t, w, other.owner, other.generation, domain, nil, false); !reflect.DeepEqual(got, want) {
+			t.Fatalf("owner=%x generation=%d pending rows=%v want %v", other.owner, other.generation, got, want)
+		}
+		if err := rawdb.WriteStateKVLatest(db, other.owner, other.generation, domain, sparseKey, []byte(other.value)); err != nil {
+			t.Fatal(err)
+		}
+		w.prunePending(other.cutoff)
+		if w.pendingFrozenBandwidth != other.wantRemaining {
+			t.Fatalf("prune %d retained %d V1 entries, want %d", other.cutoff, w.pendingFrozenBandwidth, other.wantRemaining)
+		}
+		check(other.wantRemaining == 0, prefixRow{string(sparseKey), "staged"}, second)
+	}
+
+	w.rememberDelete(owner, 0, domain, sparseKey)
+	check(false, second)
+	w.clearPending()
+	if w.pendingFrozenBandwidth != 0 {
+		t.Fatal("clear retained V1 overlay hint")
+	}
+	w.rememberPut(owner, 0, kvdomains.SystemReward, []byte("unrelated"), []byte("value"))
+	check(true, prefixRow{string(sparseKey), "staged"}, second)
+
+	failure := errors.New("durable iterator failed")
+	w.latestStore = &pendingPrefixErrorStore{w.latestStore, failure}
+	err := w.iterateLatestPrefix(owner, 0, domain, nil, func([]byte, []byte) (bool, error) {
+		t.Fatal("durable iterator failure exposed a row")
+		return false, nil
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("durable iterator err=%v want %v", err, failure)
+	}
+}

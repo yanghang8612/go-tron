@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
@@ -190,10 +191,16 @@ type accountKVLatestBatch struct {
 	// Stable readers may share a writer through StateDB.Copy. This mutex only
 	// protects lazy index publication; pending writes remain execution-confined.
 	// Keep this metadata last so existing hot fields retain their layout.
-	pendingPrefixMu    sync.Mutex
-	pendingPrefixScans uint8
-	pendingPrefixes    map[tcommon.AccountID][]accountKVPendingPrefixKey
+	pendingPrefixMu        sync.Mutex
+	pendingPrefixScans     uint8
+	pendingFrozenBandwidth int // includes both puts and tombstones
+	pendingPrefixes        map[tcommon.AccountID][]accountKVPendingPrefixKey
 }
+
+var (
+	accountKVV1PendingOverlaySkipped  = metrics.NewRegisteredCounter("state/account_kv/frozen_bandwidth/pending_overlay_skipped", nil)
+	accountKVV1PendingOverlaySearched = metrics.NewRegisteredCounter("state/account_kv/frozen_bandwidth/pending_overlay_searched", nil)
+)
 
 type accountKVLatestPending struct {
 	value   []byte
@@ -737,6 +744,9 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		}
 		if !w.deepAsync || w.kvPendingDurable(k, e) {
 			delete(w.pending, k)
+			if k.domain == kvdomains.AccountFrozenBandwidthAux {
+				w.pendingFrozenBandwidth--
+			}
 			prunedKV = true
 		}
 	}
@@ -846,6 +856,7 @@ func (w *accountKVLatestBatch) clearPending() {
 		return
 	}
 	w.pending = nil
+	w.pendingFrozenBandwidth = 0
 	w.pendingPrefixes = nil
 	w.pendingPrefixScans = 0
 	w.accountPending = nil
@@ -1079,6 +1090,35 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 	}); err != nil {
 		return err
 	}
+	w.mergePendingPrefix(owner, generation, domain, prefix, entries)
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return nil
+}
+
+// mergePendingPrefix applies pending puts and tombstones over durable rows.
+// The presence hint only suppresses the pending search; callers still emit
+// the durable rows they collected before reaching this method.
+func (w *accountKVLatestBatch) mergePendingPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, entries map[string][]byte) {
+	if domain == kvdomains.AccountFrozenBandwidthAux && len(w.pending) != 0 {
+		if w.pendingFrozenBandwidth == 0 {
+			accountKVV1PendingOverlaySkipped.Inc(1)
+			return
+		}
+		accountKVV1PendingOverlaySearched.Inc(1)
+	}
 	ownerID := owner.AccountID()
 	logicalPrefix := string(prefix)
 	group := accountKVLatestPendingGroup{owner: ownerID, generation: generation, domain: domain}
@@ -1111,21 +1151,6 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 			entries[mapKey] = append([]byte(nil), pending.value...)
 		}
 	}
-	keys := make([]string, 0, len(entries))
-	for key := range entries {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
-		if err != nil {
-			return err
-		}
-		if !cont {
-			return nil
-		}
-	}
-	return nil
 }
 
 // pendingPrefixKeys amortizes a full overlay walk across repeated prefix
@@ -1173,10 +1198,18 @@ func (w *accountKVLatestBatch) pendingPrefixKeys(group accountKVLatestPendingGro
 }
 
 func (w *accountKVLatestBatch) indexPendingKey(key accountKVLatestPendingMapKey) {
+	isFrozenBandwidth := key.domain == kvdomains.AccountFrozenBandwidthAux
+	if w.pendingPrefixes == nil && !isFrozenBandwidth {
+		return
+	}
+	if _, exists := w.pending[key]; exists {
+		return
+	}
+	if isFrozenBandwidth {
+		w.pendingFrozenBandwidth++
+	}
 	if w.pendingPrefixes != nil {
-		if _, exists := w.pending[key]; !exists {
-			w.pendingPrefixes[key.owner] = append(w.pendingPrefixes[key.owner], key.prefixKey())
-		}
+		w.pendingPrefixes[key.owner] = append(w.pendingPrefixes[key.owner], key.prefixKey())
 	}
 }
 
