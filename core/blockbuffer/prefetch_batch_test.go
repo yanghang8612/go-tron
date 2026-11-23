@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/pointread"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -85,6 +86,7 @@ type prefetchSnapshotGate struct {
 	ethdb.KeyValueStore
 	before           bool
 	started, release chan struct{}
+	lookups          int
 }
 
 func (d *prefetchSnapshotGate) NewPointReadSnapshot() (pointread.Snapshot, error) {
@@ -97,7 +99,10 @@ func (d *prefetchSnapshotGate) NewPointReadSnapshot() (pointread.Snapshot, error
 		close(d.started)
 		<-d.release
 	}
-	return s, err
+	if err != nil {
+		return nil, err
+	}
+	return &prefetchCountedSnapshot{s, &d.lookups}, nil
 }
 
 func TestPrefetchBatchFlushCannotPublishStaleSnapshot(t *testing.T) {
@@ -113,7 +118,7 @@ func TestPrefetchBatchFlushCannotPublishStaleSnapshot(t *testing.T) {
 						t.Error(err)
 					}
 				}()
-				key := []byte("state-prefetch-flush-race")
+				key := prefetchTestStateKey()
 				if err := disk.Put(key, []byte("old")); err != nil {
 					t.Fatal(err)
 				}
@@ -122,7 +127,19 @@ func TestPrefetchBatchFlushCannotPublishStaleSnapshot(t *testing.T) {
 				b.SetBaseReadCacheSize(1 << 20)
 				done := make(chan error, 1)
 				go func() {
-					done <- b.PrefetchBatch([][]byte{key}, func(_ int, _ []byte, _ bool, err error) error { return err })
+					done <- b.PrefetchBatch([][]byte{key}, func(_ int, value []byte, present bool, err error) error {
+						want, wantPresent := "old", true
+						if before {
+							want, wantPresent = "new", !deletion
+							if deletion {
+								want = ""
+							}
+						}
+						if err != nil || present != wantPresent || string(value) != want {
+							return fmt.Errorf("pinned row = %q/%t/%v, want %q/%t", value, present, err, want, wantPresent)
+						}
+						return nil
+					})
 				}()
 				<-gate.started
 				b.BeginBlock(bufHash(1), 1)
@@ -138,9 +155,18 @@ func TestPrefetchBatchFlushCannotPublishStaleSnapshot(t *testing.T) {
 				if err := b.FlushUpTo(1, disk); err != nil {
 					t.Fatal(err)
 				}
+				if !before {
+					// Offer a newer cache value to the older pinned snapshot.
+					if _, err := b.Prefetch(key); err != nil && (!deletion || !b.IsKeyNotFound(err)) {
+						t.Error(err)
+					}
+				}
 				close(gate.release)
 				if err := <-done; err != nil {
 					t.Fatal(err)
+				}
+				if gate.lookups != 1 {
+					t.Fatalf("concurrent flush issued %d cursor views, want 1", gate.lookups)
 				}
 				value, err := b.GetNoCopyCached(key)
 				if deletion {
@@ -216,5 +242,104 @@ func BenchmarkStatePrefetchBatchPebble(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+type prefetchCountedSnapshot struct {
+	pointread.Snapshot
+	lookups *int
+}
+
+func (s *prefetchCountedSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
+	cursor, err := s.Snapshot.NewCursor(prefix)
+	if err != nil {
+		return nil, err
+	}
+	return &prefetchCountedCursor{cursor, s.lookups}, nil
+}
+
+type prefetchCountedCursor struct {
+	pointread.Cursor
+	lookups *int
+}
+
+func (c *prefetchCountedCursor) View(key []byte, fn func([]byte) error) (bool, error) {
+	(*c.lookups)++
+	return c.Cursor.View(key, fn)
+}
+
+func prefetchTestStateKey() []byte {
+	return append([]byte("state-code-v1-"), make([]byte, common.HashLength)...)
+}
+
+func TestPrefetchBatchRechecksSameSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name                                  string
+		value                                 []byte
+		fill, busyBefore, busyAfter, stateKey bool
+		wantLookups                           int
+	}{
+		{name: "present", value: []byte("cached"), fill: true, stateKey: true},
+		{name: "empty", value: []byte{}, fill: true, stateKey: true},
+		{name: "negative", fill: true, stateKey: true},
+		{name: "uncached", value: []byte("disk"), stateKey: true, wantLookups: 1},
+		{name: "unsupported-domain", value: []byte("disk"), fill: true, wantLookups: 1},
+		{name: "busy-at-capture", value: []byte("disk"), fill: true, busyBefore: true, stateKey: true, wantLookups: 1},
+		{name: "busy-at-hit", value: []byte("disk"), fill: true, busyAfter: true, stateKey: true, wantLookups: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := disk.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			key := []byte("other-prefetch-key")
+			if tc.stateKey {
+				key = prefetchTestStateKey()
+			}
+			if tc.value != nil {
+				if err := disk.Put(key, tc.value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gate := &prefetchSnapshotGate{KeyValueStore: disk, started: make(chan struct{}), release: make(chan struct{})}
+			b := New(gate)
+			b.SetBaseReadCacheSize(1 << 20)
+			if tc.busyBefore {
+				b.flushMu.Lock()
+				defer b.flushMu.Unlock()
+			}
+			stop := errors.New("stop prefetch")
+			done := make(chan error, 1)
+			calls := 0
+			go func() {
+				done <- b.PrefetchBatch([][]byte{key}, func(i int, value []byte, present bool, err error) error {
+					calls++
+					if err != nil || i != 0 || present != (tc.value != nil) || !bytes.Equal(value, tc.value) {
+						return fmt.Errorf("row %d = %q/%t/%v", i, value, present, err)
+					}
+					return stop
+				})
+			}()
+			<-gate.started
+			if tc.fill {
+				_, err = b.Prefetch(key)
+			}
+			if tc.busyAfter {
+				b.flushMu.Lock()
+				defer b.flushMu.Unlock()
+			}
+			close(gate.release)
+			if err != nil && (tc.value != nil || !b.IsKeyNotFound(err)) {
+				t.Error(err)
+			}
+			if err := <-done; !errors.Is(err, stop) || calls != 1 || gate.lookups != tc.wantLookups {
+				t.Fatalf("batch = %v, callbacks = %d, cursor views = %d (want %d)", err, calls, gate.lookups, tc.wantLookups)
+			}
+		})
 	}
 }

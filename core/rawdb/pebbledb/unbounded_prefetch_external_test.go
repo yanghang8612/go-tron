@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 )
@@ -18,7 +19,10 @@ func TestUnboundedPrefetchBatchReadErrorRetryAndLastClose(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			ioErr := errors.New("prefetch transient read")
-			keys := [][]byte{[]byte("a"), []byte("b")}
+			keys := [][]byte{
+				append([]byte("state-code-v1-"), bytes.Repeat([]byte("a"), common.HashLength)...),
+				append([]byte("state-code-v1-"), bytes.Repeat([]byte("b"), common.HashLength)...),
+			}
 			values := [][]byte{bytes.Repeat([]byte("a"), 8192), bytes.Repeat([]byte("b"), 8192)}
 			disk, fail := pebbledb.NewFaultGetCursorTestDB(t, keys, values, errors.Join(pebble.ErrNotFound, ioErr))
 			buffer := blockbuffer.New(disk)
@@ -33,6 +37,13 @@ func TestUnboundedPrefetchBatchReadErrorRetryAndLastClose(t *testing.T) {
 						t.Fatalf("error became miss/value: %t/%v", present, err)
 					}
 					fail(false)
+					if !last {
+						// Even though row 1 is now resident, its real View
+						// must clear the earlier sticky cursor error.
+						if _, err := buffer.Prefetch(keys[1]); err != nil {
+							t.Fatal(err)
+						}
+					}
 				} else {
 					if !present || !bytes.Equal(value, values[id]) {
 						t.Fatal("successful callback changed")

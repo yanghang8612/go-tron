@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -54,6 +55,13 @@ func (p *StatePrefetchPlan) AddCode(hash common.Hash) int {
 		return -1
 	}
 	return p.add(stateCodeKey(hash), false)
+}
+
+// IsStatePrefetchKey recognizes the physical key shapes produced by the plan.
+func IsStatePrefetchKey(key []byte) bool {
+	return len(key) == len(stateAccountLatestPrefix)+common.AccountIDLength && bytes.HasPrefix(key, stateAccountLatestPrefix) ||
+		len(key) >= len(stateKVLatestPrefix)+common.AccountIDLength+8+2 && bytes.HasPrefix(key, stateKVLatestPrefix) ||
+		len(key) == len(stateCodePrefix)+common.HashLength && bytes.HasPrefix(key, stateCodePrefix)
 }
 
 func (p *StatePrefetchPlan) Execute(db ethdb.KeyValueReader, visit func(int, []byte, bool, error) error) error {

@@ -7,11 +7,16 @@ import (
 
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/tronprotocol/go-tron/core/pointread"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 var (
-	prefetchBatchCounter        = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/batches", nil)
-	prefetchBatchDurableCounter = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/durable_rows", nil)
+	prefetchBatchCounter         = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/batches", nil)
+	prefetchBatchDurableCounter  = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/durable_rows", nil)
+	prefetchRecheckAttempts      = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/recheck_attempts", nil)
+	prefetchRecheckEligible      = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/recheck_eligible", nil)
+	prefetchRecheckCachedPresent = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/recheck_cached_present", nil)
+	prefetchRecheckCachedAbsent  = metrics.NewRegisteredCounter("blockbuffer/state_prefetch/recheck_cached_absent", nil)
 )
 
 type pendingPrefetch struct {
@@ -68,6 +73,15 @@ func (b *Buffer) PrefetchBatch(keys [][]byte, visit func(int, []byte, bool, erro
 		return nil
 	}
 	slices.SortFunc(pending, func(a, c pendingPrefetch) int { return bytes.Compare(keys[a.index], keys[c.index]) })
+	// A flush may expose durable writes before publishing their cache version,
+	// and a multi-group flush advances the version only once. Require a
+	// quiescent flush boundary before the snapshot and again at any reuse.
+	stableVersion := b.flushMu.TryLock()
+	var version uint64
+	if stableVersion {
+		version = cache.version.Load()
+		b.flushMu.Unlock()
+	}
 	snapshot, err := factory.NewPointReadSnapshot()
 	if err != nil {
 		return err
@@ -79,8 +93,33 @@ func (b *Buffer) PrefetchBatch(keys [][]byte, visit func(int, []byte, bool, erro
 	}
 	defer func() { result = errors.Join(result, cursor.Close()) }()
 	prefetchBatchCounter.Inc(1)
+	// Count visited pending rows, including fallbacks. Eligible rows have a
+	// captured version and a state-plan key whose durable writes go through
+	// the buffer's flush path. A hit also needs matching live metadata.
+	var attempts, eligible, cachedPresent, cachedAbsent int64
+	defer func() {
+		prefetchRecheckAttempts.Inc(attempts)
+		prefetchRecheckEligible.Inc(eligible)
+		prefetchRecheckCachedPresent.Inc(cachedPresent)
+		prefetchRecheckCachedAbsent.Inc(cachedAbsent)
+	}()
 	for _, request := range pending {
 		key := keys[request.index]
+		attempts++
+		if stableVersion && rawdb.IsStatePrefetchKey(key) {
+			eligible++
+			if value, cached := b.recheckPrefetch(cache, key, request.epoch, version); cached {
+				if value != nil {
+					cachedPresent++
+				} else {
+					cachedAbsent++
+				}
+				if err := visit(request.index, value, value != nil, nil); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		prefetchBatchDurableCounter.Inc(1)
 		// Run visit inside the cursor callback; neither a Pebble-backed value
 		// nor a newly recycled cache allocation may escape its ownership scope.
@@ -94,7 +133,11 @@ func (b *Buffer) PrefetchBatch(keys [][]byte, visit func(int, []byte, bool, erro
 			return visitErr
 		}
 		if readErr != nil || !present {
-			if readErr == nil {
+			if readErr != nil {
+				// A subsequent cursor View can clear its previous positioning
+				// error. After a failed View, preserve the original retry path.
+				stableVersion = false
+			} else {
 				cache.prefetchMissingIfEpoch(key, request.epoch)
 			}
 			if err := visit(request.index, nil, false, readErr); err != nil {
@@ -103,4 +146,35 @@ func (b *Buffer) PrefetchBatch(keys [][]byte, visit func(int, []byte, bool, erro
 		}
 	}
 	return nil
+}
+
+// recheckPrefetch may reuse only a row installed at the captured quiescent
+// version and before any subsequent flush or key invalidation. Any contention
+// falls back to the original cursor. Acquiring flushMu while holding a shard
+// is safe only via TryLock: a flusher can hold flushMu while waiting on it.
+func (b *Buffer) recheckPrefetch(cache *baseReadCache, key []byte, epoch baseReadCacheEpoch, version uint64) ([]byte, bool) {
+	if cache.version.Load() != version {
+		return nil, false
+	}
+	shard := &cache.shards[baseReadCacheShardIndex(key)]
+	if !shard.mu.TryRLock() {
+		return nil, false
+	}
+	defer shard.mu.RUnlock()
+	entry, ok := shard.entries[string(key)]
+	if !ok || entry.version != version || cache.invalidations[epoch.slot].Load() != epoch.value || !b.flushMu.TryLock() {
+		return nil, false
+	}
+	defer b.flushMu.Unlock()
+	view := b.readView.Load()
+	if view == nil || view.baseReadCache != cache || cache.version.Load() != version ||
+		cache.invalidations[epoch.slot].Load() != epoch.value {
+		return nil, false
+	}
+	entry.reference(baseReadCacheReferencePrefetch)
+	value := entry.value
+	if value != nil {
+		entry.exposed.Store(true)
+	}
+	return value, true
 }
