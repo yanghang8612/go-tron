@@ -121,8 +121,8 @@ func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResourc
 		s.recordStateError(fmt.Sprintf("decode delegated resource key=%x", key), fmt.Errorf("empty value"))
 		return nil
 	}
-	dr := &rawdb.DelegatedResource{}
-	if err := json.Unmarshal(data, dr); err != nil {
+	dr, err := decodeDelegatedResource(data)
+	if err != nil {
 		s.recordStateError(fmt.Sprintf("decode delegated resource key=%x", key), err)
 		return nil
 	}
@@ -134,8 +134,8 @@ func (s *StateDB) readDelegatedResourceByKeyStrict(key []byte, context string) (
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	dr := &rawdb.DelegatedResource{}
-	if err := json.Unmarshal(data, dr); err != nil {
+	dr, err := decodeDelegatedResource(data)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode %s: %w", context, err)
 	}
 	return dr, true, nil
