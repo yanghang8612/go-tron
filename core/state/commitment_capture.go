@@ -23,7 +23,8 @@ func (d *DomainCommitmentState) recordPhysicalBefore(key, value []byte, exists b
 	if d == nil {
 		return nil
 	}
-	if _, err := rawdb.StateCommitmentElementFamily(key); err != nil {
+	family, err := rawdb.StateCommitmentElementFamily(key)
+	if err != nil {
 		return err
 	}
 	if d.before == nil {
@@ -40,13 +41,13 @@ func (d *DomainCommitmentState) recordPhysicalBefore(key, value []byte, exists b
 		ownedBefore = bytes.Clone(value)
 	}
 	d.before[string(key)] = rawdb.StateCommitmentDelta{BeforeExists: exists, Before: ownedBefore}
-	if owner, ok := rawdb.DecodeStateKVGenerationKey(key); ok {
-		d.recordKVGenerationTouch(owner)
-		return nil
-	}
 	// KV touch identity and owned post-image are recorded by the temporal
 	// mutation recorder; pre-capture must not replace its owned logical key.
-	if _, _, _, _, ok := rawdb.DecodeStateKVLatestKey(key); ok {
+	if family == rawdb.StateCommitmentFamilyKVLatest {
+		return nil
+	}
+	if owner, ok := rawdb.DecodeStateKVGenerationKey(key); ok {
+		d.recordKVGenerationTouch(owner)
 		return nil
 	}
 

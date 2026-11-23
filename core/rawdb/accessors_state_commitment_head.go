@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/muhash3072"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 const StateCommitmentHeadVersion uint16 = 3
@@ -141,6 +142,10 @@ func CloneStateCommitmentDelta(d StateCommitmentDelta) StateCommitmentDelta {
 	}
 	return d
 }
+
+// StateCommitmentFamilyKVLatest is the element discriminator for rooted KV rows.
+const StateCommitmentFamilyKVLatest byte = 3
+
 func StateCommitmentElementFamily(key []byte) (byte, error) {
 	if bytes.HasPrefix(key, stateAccountLatestPrefix) && len(key) == len(stateAccountLatestPrefix)+common.AccountIDLength {
 		return 1, nil
@@ -148,8 +153,12 @@ func StateCommitmentElementFamily(key []byte) (byte, error) {
 	if _, ok := DecodeStateKVGenerationKey(key); ok {
 		return 2, nil
 	}
-	if _, _, _, _, ok := DecodeStateKVLatestKey(key); ok {
-		return 3, nil
+	// Only the registered domain is needed here. The public decoder also
+	// reads the owner/generation and owns a copy of the logical key.
+	headerLen := len(stateKVLatestPrefix) + common.AccountIDLength + 8 + 2
+	if len(key) >= headerLen && bytes.HasPrefix(key, stateKVLatestPrefix) &&
+		kvdomains.IsRegistered(kvdomains.KVDomain(binary.BigEndian.Uint16(key[headerLen-2:headerLen]))) {
+		return StateCommitmentFamilyKVLatest, nil
 	}
 	return 0, fmt.Errorf("invalid latest-domain commitment source key %x", key)
 }
@@ -161,7 +170,7 @@ func EncodeStateCommitmentElement(key, value []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if family == 3 {
+	if family == StateCommitmentFamilyKVLatest {
 		if err := ValidateStateKVLatestValue(value); err != nil {
 			return nil, err
 		}
@@ -177,7 +186,7 @@ func AppendStateCommitmentElement(dst, key, value []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if family == 3 {
+	if family == StateCommitmentFamilyKVLatest {
 		if err := ValidateStateKVLatestValue(value); err != nil {
 			return nil, err
 		}
@@ -226,6 +235,25 @@ func StateCommitmentDeltaID(deltas []StateCommitmentDelta) common.Hash {
 // CoalesceStateCommitmentDeltas retains first-before/last-after and validates
 // intermediate captures. Caller data is copied before retention.
 func CoalesceStateCommitmentDeltas(input []StateCommitmentDelta) ([]StateCommitmentDelta, error) {
+	for i := 1; i < len(input); i++ {
+		if bytes.Compare(input[i-1].Key, input[i].Key) >= 0 {
+			return coalesceUnorderedStateCommitmentDeltas(input)
+		}
+	}
+	out := make([]StateCommitmentDelta, 0, len(input))
+	for _, d := range input {
+		if _, err := StateCommitmentElementFamily(d.Key); err != nil {
+			return nil, err
+		}
+		if d.BeforeExists == d.AfterExists && (!d.BeforeExists || bytes.Equal(d.Before, d.After)) {
+			continue
+		}
+		out = append(out, CloneStateCommitmentDelta(d))
+	}
+	return out, nil
+}
+
+func coalesceUnorderedStateCommitmentDeltas(input []StateCommitmentDelta) ([]StateCommitmentDelta, error) {
 	byKey := make(map[string]*StateCommitmentDelta, len(input))
 	for _, d := range input {
 		if _, err := StateCommitmentElementFamily(d.Key); err != nil {
