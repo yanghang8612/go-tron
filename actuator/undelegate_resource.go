@@ -137,17 +137,13 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 		if err := ctx.State.DeleteDelegatedResourceV2(ownerAddr, receiverAddr, false); err != nil {
 			return nil, err
 		}
-	} else {
-		if err := ctx.State.WriteDelegatedResourceV2(ownerAddr, receiverAddr, false, dr); err != nil {
-			return nil, err
+		if ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true) == nil {
+			if err := ctx.State.WriteDrAccountIndexUnDelegate(true, ownerAddr[:], receiverAddr[:]); err != nil {
+				return nil, err
+			}
 		}
-	}
-
-	if ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false) == nil &&
-		ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true) == nil {
-		if err := ctx.State.WriteDrAccountIndexUnDelegate(true, ownerAddr[:], receiverAddr[:]); err != nil {
-			return nil, err
-		}
+	} else if err := ctx.State.WriteDelegatedResourceV2(ownerAddr, receiverAddr, false, dr); err != nil {
+		return nil, err
 	}
 
 	return &Result{Fee: 0, ContractRet: 1}, nil

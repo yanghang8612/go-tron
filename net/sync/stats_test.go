@@ -557,3 +557,45 @@ func TestStats_RecordBlock(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyP95WindowSamples(t *testing.T) {
+	s := NewStats()
+	now := time.Unix(100, 0)
+	s.InitSession(now)
+	for ms := 20; ms >= 1; ms-- {
+		s.AddApplyBlockWithTxs(1, core.ApplyStats{
+			Execute: time.Duration(ms)*time.Millisecond - 125*time.Microsecond,
+			Persist: 125 * time.Microsecond,
+		})
+	}
+	got, emit := s.RecordBlocks(20, 20, time.Second, now.Add(time.Second), time.Second)
+	if !emit || got.ApplyP95 != 19*time.Millisecond || got.ApplyP95Samples != 20 {
+		t.Fatalf("first window: emit=%v p95=%s samples=%d", emit, got.ApplyP95, got.ApplyP95Samples)
+	}
+	if got := s.SnapshotAndReset(now.Add(time.Second)); got.ApplyP95 != 0 || got.ApplyP95Samples != 0 {
+		t.Fatalf("empty window: p95=%s samples=%d", got.ApplyP95, got.ApplyP95Samples)
+	}
+
+	for i := 0; i <= maxApplyP95Samples; i++ {
+		s.AddApplyBlock(core.ApplyStats{Execute: time.Second})
+	}
+	got = s.SnapshotAndReset(now.Add(2 * time.Second))
+	if got.ApplyBlocks != maxApplyP95Samples+1 || got.ApplyP95 != 0 || got.ApplyP95Samples != 0 {
+		t.Fatalf("overflow: blocks=%d p95=%s samples=%d", got.ApplyBlocks, got.ApplyP95, got.ApplyP95Samples)
+	}
+	s.AddApplyBlock(core.ApplyStats{Execute: 250 * time.Microsecond})
+	got = s.SnapshotAndReset(now.Add(3 * time.Second))
+	if got.ApplyP95 != 250*time.Microsecond || got.ApplyP95Samples != 1 {
+		t.Fatalf("post-overflow: p95=%s samples=%d", got.ApplyP95, got.ApplyP95Samples)
+	}
+	s.AddApplyBlock(core.ApplyStats{Execute: time.Second})
+	s.EndSession(now.Add(3 * time.Second))
+	if got := s.SnapshotAndReset(now.Add(3 * time.Second)); got.ApplyP95Samples != 0 {
+		t.Fatalf("ended session: p95 samples=%d", got.ApplyP95Samples)
+	}
+	s.AddApplyBlock(core.ApplyStats{Execute: time.Second})
+	s.InitSession(now.Add(4 * time.Second))
+	if got := s.SnapshotAndReset(now.Add(4 * time.Second)); got.ApplyP95Samples != 0 {
+		t.Fatalf("fresh session: p95 samples=%d", got.ApplyP95Samples)
+	}
+}

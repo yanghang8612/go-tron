@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,10 @@ type Snapshot struct {
 	TotalTxs          int           // session-wide transaction count
 	ApplyBlocks       int           // blocks represented by ApplyStats
 	ApplyTxs          int           // transactions represented by ApplyStats
+	// ApplyP95 is the nearest-rank percentile of successful per-block
+	// ApplyStats.Total samples in this reporting window.
+	ApplyP95        time.Duration
+	ApplyP95Samples int // zero for an empty or overflowed window
 
 	// ApplyStats is the per-block execution telemetry reported by
 	// BlockChain.applyBlock via the AddApplyStatsHook callback. Summing across
@@ -68,6 +73,10 @@ type speedSample struct {
 	elapsed time.Duration
 }
 
+// Cap memory even when successful apply callbacks arrive without a progress
+// report. An overflowed window publishes no percentile.
+const maxApplyP95Samples = 8192
+
 // Stats wraps the rolling-window accumulator behind its own mutex. SyncService
 // holds a *Stats and forwards onApplyStats / drain-time bookkeeping into the
 // AddX methods. Emission of the throttled "Sync import progress" line is
@@ -78,10 +87,11 @@ type speedSample struct {
 // onApplyStats path is the only writer that does NOT also hold ss.mu, which is
 // safe because Stats serializes its own state.
 type Stats struct {
-	mu            sync.Mutex
-	cur           Snapshot
-	speedSamples  []speedSample
-	trackingStart time.Time
+	mu             sync.Mutex
+	cur            Snapshot
+	applyDurations []time.Duration
+	speedSamples   []speedSample
+	trackingStart  time.Time
 }
 
 // NewStats returns a fresh zero-valued accumulator. Both startTime and
@@ -97,6 +107,7 @@ func (s *Stats) InitSession(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cur = Snapshot{StartTime: now, TotalStart: now}
+	s.applyDurations = s.applyDurations[:0]
 	if s.trackingStart.IsZero() {
 		s.trackingStart = now
 	}
@@ -177,6 +188,7 @@ func (s *Stats) EndSession(now time.Time) {
 		})
 		s.pruneSpeedSamplesLocked(now)
 	}
+	s.applyDurations = s.applyDurations[:0]
 	s.cur.StartTime = time.Time{}
 	s.cur.Blocks = 0
 	s.cur.Txs = 0
@@ -290,6 +302,9 @@ func (s *Stats) AddApplyBlockWithTxs(txs int, a core.ApplyStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cur.ApplyBlocks++
+	if len(s.applyDurations) < maxApplyP95Samples {
+		s.applyDurations = append(s.applyDurations, a.Total())
+	}
 	if txs > 0 {
 		s.cur.ApplyTxs += txs
 	}
@@ -430,6 +445,14 @@ func (s *Stats) SnapshotAndReset(now time.Time) Snapshot {
 
 func (s *Stats) snapshotAndResetLocked(now time.Time) Snapshot {
 	snap := s.cur
+	count := len(s.applyDurations)
+	if count != 0 && count == snap.ApplyBlocks {
+		slices.Sort(s.applyDurations)
+		// ceil(0.95 * count) - 1 without floating point.
+		snap.ApplyP95 = s.applyDurations[count-count/20-1]
+		snap.ApplyP95Samples = count
+	}
+	s.applyDurations = s.applyDurations[:0]
 	s.cur.StartTime = now
 	s.cur.Blocks = 0
 	s.cur.Txs = 0

@@ -392,6 +392,8 @@ func TestSyncImportWindowObservationSeparatesWorkAndSupply(t *testing.T) {
 			Hooks: 20 * time.Millisecond,
 		},
 	}
+	s.ApplyP95 = 99*time.Millisecond + 250*time.Microsecond
+	s.ApplyP95Samples = s.ApplyBlocks
 	got := newSyncImportWindowObservation(s, 2*time.Second)
 	for name, check := range map[string]struct{ got, want float64 }{
 		"blocks/s":                 {got.BlocksPerSec, 5},
@@ -415,6 +417,7 @@ func TestSyncImportWindowObservationSeparatesWorkAndSupply(t *testing.T) {
 		"apply coverage":           {got.ApplyCoverageRatio, 1},
 		"import ms/block":          {got.ImportMillisPerBlock, 80},
 		"apply ms/block":           {got.ApplyMillisPerBlock, 80},
+		"apply p95 ms/block":       {got.ApplyP95Millis, 99.25},
 		"import overhead/block":    {got.ImportOverheadMillisPerBlock, 0},
 		"outside tx ms/block":      {got.OutsideTxMillisPerBlock, 50},
 		"execute fixed ms/block":   {got.ExecuteFixedMillisPerBlock, 10},

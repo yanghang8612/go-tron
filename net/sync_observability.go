@@ -35,6 +35,7 @@ type syncImportWindowObservation struct {
 	ApplyCoverageRatio                  float64
 	ImportMillisPerBlock                float64
 	ApplyMillisPerBlock                 float64
+	ApplyP95Millis                      float64
 	ImportOverheadMillisPerBlock        float64
 	OutsideTxMillisPerBlock             float64
 	ExecuteFixedMillisPerBlock          float64
@@ -94,6 +95,8 @@ var syncImportWindowMetrics = struct {
 	applyCoverageRatio                  *metrics.GaugeFloat64
 	importMillisPerBlock                *metrics.GaugeFloat64
 	applyMillisPerBlock                 *metrics.GaugeFloat64
+	applyP95Millis                      *metrics.GaugeFloat64
+	applyP95Samples                     *metrics.Gauge
 	importOverheadMillisPerBlock        *metrics.GaugeFloat64
 	outsideTxMillisPerBlock             *metrics.GaugeFloat64
 	executeFixedMillisPerBlock          *metrics.GaugeFloat64
@@ -156,6 +159,8 @@ var syncImportWindowMetrics = struct {
 	applyCoverageRatio:                  metrics.NewRegisteredGaugeFloat64("sync/import/window/apply_sample_coverage_ratio", nil),
 	importMillisPerBlock:                metrics.NewRegisteredGaugeFloat64("sync/import/window/import_milliseconds_per_block", nil),
 	applyMillisPerBlock:                 metrics.NewRegisteredGaugeFloat64("sync/import/window/apply_milliseconds_per_block", nil),
+	applyP95Millis:                      metrics.NewRegisteredGaugeFloat64("sync/import/window/apply_p95_milliseconds_per_block", nil),
+	applyP95Samples:                     metrics.NewRegisteredGauge("sync/import/window/apply_p95_sample_blocks", nil),
 	importOverheadMillisPerBlock:        metrics.NewRegisteredGaugeFloat64("sync/import/window/import_overhead_milliseconds_per_block", nil),
 	outsideTxMillisPerBlock:             metrics.NewRegisteredGaugeFloat64("sync/import/window/outside_transaction_milliseconds_per_block", nil),
 	executeFixedMillisPerBlock:          metrics.NewRegisteredGaugeFloat64("sync/import/window/execute_fixed_milliseconds_per_block", nil),
@@ -221,6 +226,9 @@ func newSyncImportWindowObservation(s tsync.Snapshot, elapsed time.Duration) syn
 		out.TxsPerBlock = float64(s.Txs) / blocks
 		out.ApplyCoverageRatio = float64(applyBlocks) / blocks
 		out.ImportMillisPerBlock = durationMillisPer(s.ExecElapsed, s.Blocks)
+	}
+	if s.ApplyP95Samples > 0 {
+		out.ApplyP95Millis = durationMillisPer(s.ApplyP95, 1)
 	}
 	if applyBlocks > 0 {
 		out.EnergyPerBlock = float64(s.ApplyStats.EnergyUsageTotal) / float64(applyBlocks)
@@ -338,6 +346,8 @@ func updateSyncImportWindowMetrics(now time.Time, elapsed time.Duration, sample 
 	m.applyCoverageRatio.Update(obs.ApplyCoverageRatio)
 	m.importMillisPerBlock.Update(obs.ImportMillisPerBlock)
 	m.applyMillisPerBlock.Update(obs.ApplyMillisPerBlock)
+	m.applyP95Millis.Update(obs.ApplyP95Millis)
+	m.applyP95Samples.Update(int64(sample.ApplyP95Samples))
 	m.importOverheadMillisPerBlock.Update(obs.ImportOverheadMillisPerBlock)
 	m.outsideTxMillisPerBlock.Update(obs.OutsideTxMillisPerBlock)
 	m.executeFixedMillisPerBlock.Update(obs.ExecuteFixedMillisPerBlock)
