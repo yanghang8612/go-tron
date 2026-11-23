@@ -51,7 +51,7 @@ func writeResState(statedb *state.StateDB, addr tcommon.Address, resource corepb
 // committed transferUsage — so the shared helper must use the form matching its
 // caller's java path.
 func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperties, receiver tcommon.Address, resource corepb.ResourceCode, unDelegateBalance, now int64, tvmForm bool) (transfer, recvRawWindow int64, recvOptimized bool) {
-	acct, v1Deferred := statedb.AccountDelegationUsageReference(receiver, resource, !tvmForm)
+	acct := statedb.AccountDelegationResourceReference(receiver, resource)
 	if acct == nil {
 		return 0, 0, false
 	}
@@ -63,16 +63,13 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 	if resource == corepb.ResourceCode_BANDWIDTH {
 		totalLimit = dp.TotalNetLimit()
 		totalWeight = dp.TotalNetWeight()
+		totalFrozen = acct.TotalFrozenBandwidth() + acct.AcquiredDelegatedFrozenBandwidth() + statedb.GetFrozenV2Amount(receiver, resource) + acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
-		if !v1Deferred {
-			totalFrozen = acct.TotalFrozenBandwidth()
-		}
-		totalFrozen += acct.AcquiredDelegatedFrozenBandwidth() + statedb.GetFrozenV2Amount(receiver, resource) + acquiredV2
 	} else {
 		totalLimit = dp.TotalEnergyCurrentLimit()
 		totalWeight = dp.TotalEnergyWeight()
+		totalFrozen = acct.FrozenEnergyAmount() + acct.AcquiredDelegatedFrozenEnergy() + statedb.GetFrozenV2Amount(receiver, resource) + acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 		acquiredV2 = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
-		totalFrozen = acct.FrozenEnergyAmount() + acct.AcquiredDelegatedFrozenEnergy() + statedb.GetFrozenV2Amount(receiver, resource) + acquiredV2
 	}
 
 	// Per-account window recovery (usage arg = 0 → pure recovery + window renorm).
@@ -84,15 +81,7 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 	// acquired=0 and SKIPS the proportional usage transfer — transferUsage stays 0
 	// and the receiver keeps its full recovered usage. The caller's
 	// SubAcquiredDelegatedFrozenV2 already clamps the balance to 0 (== setAcquired(0)).
-	canTransfer := acquiredV2 >= unDelegateBalance && recovered > 0
-	if canTransfer && v1Deferred {
-		ownV1, ok := statedb.AccountDelegationFrozenBandwidth(receiver)
-		if !ok {
-			return 0, 0, false
-		}
-		totalFrozen += ownV1
-	}
-	if canTransfer && totalFrozen > 0 {
+	if acquiredV2 >= unDelegateBalance && totalFrozen > 0 && recovered > 0 {
 		var maxTransfer int64
 		if tvmForm {
 			// java UnDelegateResourceProcessor: (ub/TRX) * limit / weight (left-to-right).

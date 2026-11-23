@@ -1197,56 +1197,23 @@ func (s *StateDB) AccountResourceReference(addr tcommon.Address) *types.Account 
 // replaces a full GetAccount and must retain arbitrary sparse physical rows.
 // V2 balances remain point-addressable via GetFrozenV2Amount.
 func (s *StateDB) AccountDelegationResourceReference(addr tcommon.Address, resource corepb.ResourceCode) *types.Account {
-	account, _ := s.accountDelegationResourceReference(addr, resource, false)
-	return account
-}
-
-// AccountDelegationUsageReference reads usage and acquired balances while
-// deferring the V1 bandwidth prefix in serialized execution. Preserve the
-// existing full-prefix dependency for transaction access capture and replay.
-func (s *StateDB) AccountDelegationUsageReference(addr tcommon.Address, resource corepb.ResourceCode, allowDeferV1 bool) (*types.Account, bool) {
-	deferV1 := allowDeferV1 && resource == corepb.ResourceCode_BANDWIDTH && s.transactionAccess == nil && s.transactionVersionedReader == nil
-	return s.accountDelegationResourceReference(addr, resource, deferV1)
-}
-
-// AccountDelegationFrozenBandwidth reads the complete V1 bandwidth balance,
-// including sparse rows. Callers use this when the usage calculation needs it.
-func (s *StateDB) AccountDelegationFrozenBandwidth(addr tcommon.Address) (int64, bool) {
-	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
-	if obj == nil || obj.deleted {
-		return 0, false
-	}
-	if err := s.materializeAccountFrozenBandwidth(obj); err != nil {
-		return 0, false
-	}
-	return obj.account.TotalFrozenBandwidth(), true
-}
-
-func (s *StateDB) accountDelegationResourceReference(addr tcommon.Address, resource corepb.ResourceCode, deferV1 bool) (*types.Account, bool) {
 	s.recordAccountFieldRead(addr, TransactionAccountFieldExistence)
 	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
 	if obj == nil || obj.deleted {
-		return nil, false
+		return nil
 	}
-	if !deferV1 && resource == corepb.ResourceCode_BANDWIDTH {
+	if resource == corepb.ResourceCode_BANDWIDTH {
 		if err := s.materializeAccountFrozenBandwidth(obj); err != nil {
-			return nil, false
+			return nil
 		}
 	}
 	if _, _, err := s.accountFrozenV2Amount(obj, resource); err != nil {
-		return nil, false
+		return nil
 	}
 	if err := s.materializeAccountResource(obj); err != nil {
-		return nil, false
+		return nil
 	}
-	deferV1 = deferV1 && obj.accountFrozenBandwidthMode != accountFrozenBandwidthComplete
-	if deferV1 && obj.accountFrozenBandwidthMode != accountFrozenBandwidthDeferredComplete {
-		delegationV1DeferredCounter.Inc(1)
-		// A following fast or canonical reader must see the same sparse rows
-		// it would have seen after an eager complete projection.
-		obj.accountFrozenBandwidthMode = accountFrozenBandwidthDeferredComplete
-	}
-	return obj.account, deferV1
+	return obj.account
 }
 
 // AccountSnapshotReferenceInto refreshes snapshot with a cacheable view of the

@@ -8,7 +8,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -16,18 +15,6 @@ import (
 )
 
 var accountTronPowerKey = []byte{0x00}
-
-// Each transition displaces one eager complete-prefix materialization. Each
-// later complete materialization of a deferred object pays one scan back.
-// The difference in counter deltas counts prefix scans avoided so far,
-// including pending deferrals that may materialize after the interval. A
-// materialization of a marker carried into the interval reduces that delta.
-// State copies inherit the marker. Each complete scan of a copy is counted.
-// These count logical prefix scans, including scans of in-memory overlays.
-var (
-	delegationV1DeferredCounter  = metrics.NewRegisteredCounter("state/delegation_v1/deferred_prefix_scans", nil)
-	delegationV1RescannedCounter = metrics.NewRegisteredCounter("state/delegation_v1/materialized_deferred_prefix_scans", nil)
-)
 
 // The second, unexposed element identifies pool-owned backing. It lets cache
 // invalidation validate the slice before returning it even if a caller has
@@ -55,8 +42,6 @@ const (
 	accountFrozenBandwidthCanonical uint8 = iota + 1
 	accountFrozenBandwidthFast
 	accountFrozenBandwidthComplete
-	// A prior projection would have established full-prefix visibility.
-	accountFrozenBandwidthDeferredComplete
 )
 
 type accountFrozenBandwidthPoint struct {
@@ -368,9 +353,6 @@ func (s *StateDB) materializeAccountFrozenBandwidth(obj *stateObject) (err error
 			err = s.recordStateError(fmt.Sprintf("materialize account frozen bandwidth %s", obj.address.Hex()), err)
 		}
 	}()
-	if obj.accountFrozenBandwidthMode == accountFrozenBandwidthDeferredComplete {
-		delegationV1RescannedCounter.Inc(1)
-	}
 	rows, err := s.accountFrozenBandwidthRows(obj)
 	if err != nil {
 		clearAccountFrozenBandwidthCache(obj)
@@ -404,9 +386,6 @@ func (s *StateDB) materializeAccountFrozenBandwidthFast(obj *stateObject) (err e
 	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(1))
-	if obj.accountFrozenBandwidthMode == accountFrozenBandwidthDeferredComplete {
-		return s.materializeAccountFrozenBandwidth(obj)
-	}
 	if obj.accountFrozenBandwidthLoaded && obj.accountFrozenBandwidthMode != accountFrozenBandwidthCanonical {
 		if obj.accountFrozenBandwidthMode == accountFrozenBandwidthComplete {
 			s.recordAccountKVPrefixRead(obj.address)
@@ -448,9 +427,6 @@ func (s *StateDB) materializeAccountFrozenBandwidthCanonical(obj *stateObject) (
 	// current transaction dependent on the canonical physical row as well.
 	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
-	if obj.accountFrozenBandwidthMode == accountFrozenBandwidthDeferredComplete {
-		return s.materializeAccountFrozenBandwidth(obj)
-	}
 	if obj.accountFrozenBandwidthLoaded {
 		if obj.accountFrozenBandwidthMode == accountFrozenBandwidthComplete {
 			s.recordAccountKVPrefixRead(obj.address)
