@@ -61,7 +61,8 @@ func javaHashMapOrderChecked(entries []tcommon.Address) (out []tcommon.Address, 
 		copy(out, entries)
 		return out, true
 	}
-	hm := newJavaHashMap()
+	hm := newJavaHashMap(func(key tcommon.Address) int32 { return byteStringHashCode(key[:]) }, nil,
+		func(a, b tcommon.Address) int { return bytes.Compare(a[:], b[:]) })
 	for i := range entries {
 		hm.put(entries[i])
 	}
@@ -102,38 +103,43 @@ func javaHashSpread(h int32) int32 {
 // iteration order are modelled: the singly-linked `next` chain (what entrySet
 // walks), the `prev` back-link (maintained by tree splice/move), the red-black
 // child/parent/color pointers, and a `tree` flag.
-type jhmNode struct {
+type jhmNode[K comparable] struct {
 	hash int32
-	key  tcommon.Address
-	next *jhmNode
-	prev *jhmNode
+	key  K
+	next *jhmNode[K]
+	prev *jhmNode[K]
 
-	left   *jhmNode
-	right  *jhmNode
-	parent *jhmNode
+	left   *jhmNode[K]
+	right  *jhmNode[K]
+	parent *jhmNode[K]
 	red    bool
 	tree   bool
 }
 
-type javaHashMap struct {
-	tab             []*jhmNode
+type javaHashMap[K comparable] struct {
+	hashCode        func(K) int32
+	compare         func(K, K) int
+	fallbackCompare func(K, K) int
+	tab             []*jhmNode[K]
 	cap             int
 	size            int
 	threshold       int
 	identityHashTie bool
 }
 
-func newJavaHashMap() *javaHashMap { return &javaHashMap{} }
+func newJavaHashMap[K comparable](hashCode func(K) int32, compare, fallbackCompare func(K, K) int) *javaHashMap[K] {
+	return &javaHashMap[K]{hashCode: hashCode, compare: compare, fallbackCompare: fallbackCompare}
+}
 
-func (m *javaHashMap) put(key tcommon.Address) {
-	h := javaHashSpread(byteStringHashCode(key[:]))
+func (m *javaHashMap[K]) put(key K) {
+	h := javaHashSpread(m.hashCode(key))
 	if m.cap == 0 {
 		m.resize()
 	}
 	i := int(h) & (m.cap - 1)
 	p := m.tab[i]
 	if p == nil {
-		m.tab[i] = &jhmNode{hash: h, key: key}
+		m.tab[i] = &jhmNode[K]{hash: h, key: key}
 	} else if p.tree {
 		if existing := m.putTreeVal(i, p, h, key); existing != nil {
 			return // key already present (not expected: caller pre-dedups)
@@ -143,7 +149,7 @@ func (m *javaHashMap) put(key tcommon.Address) {
 		cur := p
 		for {
 			if cur.next == nil {
-				newn := &jhmNode{hash: h, key: key, prev: cur}
+				newn := &jhmNode[K]{hash: h, key: key, prev: cur}
 				cur.next = newn
 				if binCount >= jhmTreeifyThreshold-1 {
 					m.treeifyBin(i)
@@ -163,7 +169,7 @@ func (m *javaHashMap) put(key tcommon.Address) {
 	}
 }
 
-func (m *javaHashMap) resize() {
+func (m *javaHashMap[K]) resize() {
 	oldCap := m.cap
 	oldThr := m.threshold
 	var newCap, newThr int
@@ -176,7 +182,7 @@ func (m *javaHashMap) resize() {
 	}
 	m.cap = newCap
 	m.threshold = newThr
-	newTab := make([]*jhmNode, newCap)
+	newTab := make([]*jhmNode[K], newCap)
 	if oldCap > 0 {
 		for j := 0; j < oldCap; j++ {
 			e := m.tab[j]
@@ -189,7 +195,7 @@ func (m *javaHashMap) resize() {
 			} else if e.tree {
 				m.split(e, newTab, j, oldCap)
 			} else {
-				var loHead, loTail, hiHead, hiTail *jhmNode
+				var loHead, loTail, hiHead, hiTail *jhmNode[K]
 				cur := e
 				for cur != nil {
 					nxt := cur.next
@@ -229,7 +235,7 @@ func (m *javaHashMap) resize() {
 // treeifyBin mirrors HashMap.treeifyBin: below MIN_TREEIFY_CAPACITY it resizes
 // instead of building a tree; otherwise it marks the bin's nodes as tree nodes
 // (preserving the existing next chain) and treeifies them.
-func (m *javaHashMap) treeifyBin(index int) {
+func (m *javaHashMap[K]) treeifyBin(index int) {
 	if m.cap < jhmMinTreeifyCapacity {
 		m.resize()
 		return
@@ -249,8 +255,8 @@ func (m *javaHashMap) treeifyBin(index int) {
 // treeify mirrors TreeNode.treeify: insert each bin node (in next-chain order)
 // into a red-black tree comparing by hash (with the checked identity-hash
 // boundary on an exact collision), then moveRootToFront.
-func (m *javaHashMap) treeify(head *jhmNode, index int) {
-	var root *jhmNode
+func (m *javaHashMap[K]) treeify(head *jhmNode[K], index int) {
+	var root *jhmNode[K]
 	x := head
 	for x != nil {
 		nxt := x.next
@@ -300,7 +306,7 @@ func (m *javaHashMap) treeify(head *jhmNode, index int) {
 // insert splice the new node into the bin's prev/next chain right after its tree
 // parent (xp.next = x; x.prev = xp; ...), then rebalance and moveRootToFront.
 // Returns the existing node if the key is already present (nil on insert).
-func (m *javaHashMap) putTreeVal(index int, head *jhmNode, h int32, key tcommon.Address) *jhmNode {
+func (m *javaHashMap[K]) putTreeVal(index int, head *jhmNode[K], h int32, key K) *jhmNode[K] {
 	root := head
 	for root.parent != nil {
 		root = root.parent
@@ -325,7 +331,7 @@ func (m *javaHashMap) putTreeVal(index int, head *jhmNode, h int32, key tcommon.
 			p = p.right
 		}
 		if p == nil {
-			x := &jhmNode{hash: h, key: key, tree: true}
+			x := &jhmNode[K]{hash: h, key: key, tree: true}
 			xpn := xp.next
 			xp.next = x
 			x.prev = xp
@@ -349,8 +355,8 @@ func (m *javaHashMap) putTreeVal(index int, head *jhmNode, h int32, key tcommon.
 // split mirrors TreeNode.split: walk the tree bin's next chain, partition into
 // lo/hi preserving order, then untreeify a half at or below UNTREEIFY_THRESHOLD
 // else (only when the bin actually split) re-treeify it.
-func (m *javaHashMap) split(b *jhmNode, newTab []*jhmNode, index, oldCap int) {
-	var loHead, loTail, hiHead, hiTail *jhmNode
+func (m *javaHashMap[K]) split(b *jhmNode[K], newTab []*jhmNode[K], index, oldCap int) {
+	var loHead, loTail, hiHead, hiTail *jhmNode[K]
 	lc, hc := 0, 0
 	e := b
 	for e != nil {
@@ -402,10 +408,10 @@ func (m *javaHashMap) split(b *jhmNode, newTab []*jhmNode, index, oldCap int) {
 // untreeify mirrors TreeNode.untreeify: rebuild a plain singly-linked bin from a
 // tree bin's next chain (java allocates fresh Node replacements; we mirror that
 // to drop the tree flag and child pointers).
-func (m *javaHashMap) untreeify(head *jhmNode) *jhmNode {
-	var hd, tl *jhmNode
+func (m *javaHashMap[K]) untreeify(head *jhmNode[K]) *jhmNode[K] {
+	var hd, tl *jhmNode[K]
 	for q := head; q != nil; q = q.next {
-		n := &jhmNode{hash: q.hash, key: q.key}
+		n := &jhmNode[K]{hash: q.hash, key: q.key}
 		if tl == nil {
 			hd = n
 		} else {
@@ -423,15 +429,18 @@ func (m *javaHashMap) untreeify(head *jhmNode) *jhmNode {
 // nodes. Record the unreproducible boundary and use byte order only to complete
 // the in-memory simulation without a process-killing panic; the checked caller
 // rejects the VM operation rather than publishing this fallback order.
-func (m *javaHashMap) jhmTieBreak(a, b tcommon.Address) int {
+func (m *javaHashMap[K]) jhmTieBreak(a, b K) int {
+	if m.compare != nil {
+		return m.compare(a, b)
+	}
 	m.identityHashTie = true
-	if bytes.Compare(a[:], b[:]) <= 0 {
+	if m.fallbackCompare(a, b) <= 0 {
 		return -1
 	}
 	return 1
 }
 
-func (m *javaHashMap) moveRootToFront(index int, root *jhmNode) {
+func (m *javaHashMap[K]) moveRootToFront(index int, root *jhmNode[K]) {
 	if root == nil {
 		return
 	}
@@ -454,7 +463,7 @@ func (m *javaHashMap) moveRootToFront(index int, root *jhmNode) {
 	}
 }
 
-func (m *javaHashMap) rotateLeft(root, p *jhmNode) *jhmNode {
+func (m *javaHashMap[K]) rotateLeft(root, p *jhmNode[K]) *jhmNode[K] {
 	if p == nil {
 		return root
 	}
@@ -479,7 +488,7 @@ func (m *javaHashMap) rotateLeft(root, p *jhmNode) *jhmNode {
 	return root
 }
 
-func (m *javaHashMap) rotateRight(root, p *jhmNode) *jhmNode {
+func (m *javaHashMap[K]) rotateRight(root, p *jhmNode[K]) *jhmNode[K] {
 	if p == nil {
 		return root
 	}
@@ -504,7 +513,7 @@ func (m *javaHashMap) rotateRight(root, p *jhmNode) *jhmNode {
 	return root
 }
 
-func (m *javaHashMap) balanceInsertion(root, x *jhmNode) *jhmNode {
+func (m *javaHashMap[K]) balanceInsertion(root, x *jhmNode[K]) *jhmNode[K] {
 	x.red = true
 	for {
 		xp := x.parent
@@ -574,8 +583,8 @@ func (m *javaHashMap) balanceInsertion(root, x *jhmNode) *jhmNode {
 
 // iterationOrder walks the bucket table in index order, each bin along its
 // next chain — exactly java HashMap's entrySet() / HashIterator.
-func (m *javaHashMap) iterationOrder() []tcommon.Address {
-	out := make([]tcommon.Address, 0, m.size)
+func (m *javaHashMap[K]) iterationOrder() []K {
+	out := make([]K, 0, m.size)
 	for b := 0; b < m.cap; b++ {
 		for e := m.tab[b]; e != nil; e = e.next {
 			out = append(out, e.key)

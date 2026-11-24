@@ -290,6 +290,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	}
 	cfg.ValidateDeploymentHashes = cfg.StakeV2TimeGuard
 	cfg.StorageAliasCheck = ctx.PassVersion(forks.Version4822(ctx.isNile()) + 1)
+	cfg.ShareLegacyStorage = !energyLimitHardForkActive(ctx)
 	cfg.Tracer = ctx.Tracer
 	tokenID := int64(0)
 	tokenValue := int64(0)
@@ -403,6 +404,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 		cfg.Deadline = time.Now().Add(time.Duration(ctx.DynProps.MaxCpuTimeOfOneTx()) * time.Millisecond)
 	}
 	cfg.StorageAliasCheck = ctx.PassVersion(forks.Version4822(ctx.isNile()) + 1)
+	cfg.ShareLegacyStorage = !energyLimitHardForkActive(ctx)
 	cfg.Tracer = ctx.Tracer
 	tokenID := int64(0)
 	tokenValue := int64(0)

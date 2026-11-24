@@ -190,11 +190,14 @@ func repairMainnetCOSTMissedReward(statedb *state.StateDB, blockNum uint64, bloc
 		statedb.GetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot) != mainnetCOSTMissedRewardBadStorageValue {
 		return false
 	}
+	row := statedb.LegacyTVMStorageRowKey(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot)
+	if err := statedb.WriteLegacyTVMStorageRow(mainnetCOSTMissedRewardContract, row, mainnetCOSTMissedRewardStorageValue, nil); err != nil {
+		return false
+	}
 	statedb.AddBalance(mainnetCOSTMissedRewardRecipient, mainnetCOSTMissedRewardAmount)
 	statedb.AddBalance(mainnetCOSTMissedRewardContract, -mainnetCOSTMissedRewardAmount)
 	statedb.AddBalance(mainnetCOSTMissedRewardPayer, -mainnetCOSTMissedRewardEnergyFee)
 	statedb.AddSettlementBalance(blackhole, mainnetCOSTMissedRewardEnergyFee)
-	statedb.SetState(mainnetCOSTMissedRewardContract, mainnetCOSTMissedRewardStorageSlot, mainnetCOSTMissedRewardStorageValue)
 	return true
 }
 

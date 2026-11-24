@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -168,4 +169,54 @@ func writeOptimizedStorage(s *StateDB, addr tcommon.Address, key []byte, legacy,
 		return s.DeleteAccountKV(addr, kvdomains.ContractStorage, legacy[:])
 	}
 	return nil
+}
+
+// LegacyTVMStorageRowKey resolves a logical slot against current contract metadata.
+func (s *StateDB) LegacyTVMStorageRowKey(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash {
+	return s.storageRowKey(addr, slot)
+}
+
+// ReadLegacyTVMStorageRow reads the backing row before the current TVM frame's
+// slot cache is published. Present zero values remain distinguishable from misses.
+func (s *StateDB) ReadLegacyTVMStorageRow(addr tcommon.Address, slot, key tcommon.Hash) (tcommon.Hash, []byte, bool, error) {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
+	if obj == nil || obj.deleted {
+		return tcommon.Hash{}, nil, false, nil
+	}
+	if _, physical := lookupKVEntry(obj.kvDirty, kvdomains.ContractStorage, key[:]); !physical {
+		if _, dirty := obj.dirtyStorage[slot]; dirty {
+			s.recordStorageRead(addr, slot)
+			row := obj.storage[slot]
+			// The logical overlay is not the physical before-image.
+			return row.value, nil, row.exists, nil
+		}
+	}
+	raw, exists, err := s.getAccountKVForDecodingFromObject(obj, addr, kvdomains.ContractStorage, key[:])
+	if err != nil || !exists {
+		return tcommon.Hash{}, nil, exists, err
+	}
+	value, err := decodeStorageValueHash("read legacy TVM row", raw)
+	if err != nil {
+		return tcommon.Hash{}, nil, false, s.recordStateError("read legacy TVM row", err)
+	}
+	return value, bytes.Clone(raw), true, nil
+}
+
+// WriteLegacyTVMStorageRow publishes a physical row at the root VM commit.
+// The optional before-image carries exact bytes captured by the normal SLOAD.
+func (s *StateDB) WriteLegacyTVMStorageRow(addr tcommon.Address, key, value tcommon.Hash, before []byte) error {
+	if err := s.Error(); err != nil {
+		return err
+	}
+	if value == (tcommon.Hash{}) {
+		return s.DeleteAccountKV(addr, kvdomains.ContractStorage, key[:])
+	}
+	if before != nil {
+		err := s.setAccountKVWithPrev(addr, kvdomains.ContractStorage, key[:], value[:], true, before, true, true)
+		if err != nil {
+			return s.recordStateError("write legacy TVM row", err)
+		}
+		return nil
+	}
+	return s.SetAccountKV(addr, kvdomains.ContractStorage, key[:], value[:])
 }

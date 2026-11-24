@@ -1699,6 +1699,13 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serial VM process: %v", err)
 	}
+	// Legacy TVM execution publishes by physical row. Identify the exact
+	// first transaction's slot so both hooks exercise the production write set.
+	row := base.LegacyTVMStorageRowKey(contract1, tcommon.Hash{})
+	storageKey := state.TransactionAccessKey{
+		Kind: state.TransactionAccessAccountKV, Address: contract1,
+		KVDomain: kvdomains.ContractStorage, LogicalKey: string(row[:]),
+	}
 	var preApplyCorruptions int
 	_, _, _, err = run(preApplyCorruptState, ethrawdb.NewMemoryDatabase(), processBlockOptions{
 		parallelVM:          true,
@@ -1707,16 +1714,13 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 			if family != "VM" || txIndex != 0 {
 				return
 			}
-			for key, value := range writes {
-				if key.Kind != state.TransactionAccessStorage || len(value.Value) != tcommon.HashLength {
-					continue
-				}
-				value.Value = append([]byte(nil), value.Value...)
-				value.Value[len(value.Value)-1] ^= 1
-				writes[key] = value
-				preApplyCorruptions++
-				return
+			value, ok := writes[storageKey]
+			if !ok || !value.Exists || !bytes.Equal(value.Value, storageInput(1)) {
+				t.Fatalf("VM pre-apply hook missing the expected physical storage write: %+v", value)
 			}
+			value.Value = storageInput(9)
+			writes[storageKey] = value
+			preApplyCorruptions++
 		},
 	})
 	if !errors.Is(err, errSpeculativePublicationAudit) {
@@ -1778,13 +1782,11 @@ func TestProcessBlockPublishesVMSenderChainCohort(t *testing.T) {
 			if family != "VM" || txIndex != 0 {
 				return
 			}
-			for key := range writes {
-				if key.Kind == state.TransactionAccessStorage {
-					delete(writes, key)
-					postApplyCorruptions++
-					return
-				}
+			if value, ok := writes[storageKey]; !ok || !value.Exists || !bytes.Equal(value.Value, storageInput(1)) {
+				t.Fatalf("VM post-apply hook missing the expected physical storage write: %+v", value)
 			}
+			delete(writes, storageKey)
+			postApplyCorruptions++
 		},
 	})
 	if !errors.Is(err, errSpeculativePublicationAudit) {

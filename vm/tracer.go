@@ -70,6 +70,14 @@ func (in *Interpreter) newScope(mem *Memory, stack *Stack, contract *Contract) *
 			if in.tvm == nil || in.tvm.StateDB == nil {
 				return tcommon.Hash{}
 			}
+			for frame := in.tvm.legacyStorage; frame != nil; frame = frame.parent {
+				if cache := frame.caches[contract.Address]; cache != nil {
+					if row, exists := cache.rows[key]; exists {
+						return row.value
+					}
+					break
+				}
+			}
 			if in.tvm.cfg.OptimizeStorage {
 				value, _ := in.tvm.StateDB.GetStateStrict(contract.Address, key)
 				return value

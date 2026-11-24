@@ -65,6 +65,21 @@ go test ./cmd/gtron -run '^TestJava4824StorageProposalReplay$' -count=1
 
 使用 Go 1.25.5 构建了带 Sapling 的 `gtron`。冻结代码后运行 `make test`，含测试的 64 个包全部通过，另有 17 个包无测试文件。`go vet ./...`、影响范围内的竞态检测、Sapling 标签下的执行器与 TVM 定向测试均通过。`make conformance-replay` 的合成样本通过 5 块，允许差异清单命中 0 项。
 
+## 主网交易与旧版存储提交顺序
+
+2026-08-19 11:50:51（北京时间），主网第 **85,480,074** 块中，交易 `b5e06b0e4b620b4d5d66fc709650cf0b41d742039a78ba3f803be0c69657a8c5` 成功部署 `V0StorageCollisionProbe`，地址为 `TGBpa57B3uuRTzdpDwg3WW5h1QdxwS3UzR`。区块头版本为 36，对应 4.8.2 的主网版本号。收据记录能量 28,505，能量费 2.8505 TRX、带宽费 0.485 TRX，共 3.3355 TRX。交易早于 4.8.2.3 和 4.8.2.4 的正式发布，分析适用当时的旧存储路径。[交易](https://tronscan.org/transaction/b5e06b0e4b620b4d5d66fc709650cf0b41d742039a78ba3f803be0c69657a8c5/overview) · [固化收据](https://api.trongrid.io/walletsolidity/gettransactioninfobyid?value=b5e06b0e4b620b4d5d66fc709650cf0b41d742039a78ba3f803be0c69657a8c5)
+
+构造代码对两个不同的逻辑槽分别写入 22 和 0，两者对应同一条 V0 物理存储行。部署日志中的 32 字节数据为十进制 22，反映构造执行期间的观察。部署留下的 12 字节运行时代码只读取存储。11 月 24 日用 TronGrid `eth_getStorageAt(latest)` 查询这两个已使用的位置，都返回了 32 字节零。读取前节点头为 88,274,872。指定部署高度时服务返回 `-32602`，只支持 `latest`。当前读数与提交时最后删除该行相符，公开收据没有记录缓存遍历轨迹，亦未取得该块刚提交时的存储快照。[TronGrid 存储查询](https://developers.tron.network/reference/eth_getstorageat) · [部署元数据](https://api.trongrid.io/wallet/getcontract?value=414433701a678936b5c1f01ea38a6bc7e1294726bb)
+
+| 情形 | Java 旧版提交语义 |
+|---|---|
+| 同一个逻辑槽被反复写入 | 缓存只保留一个条目。最终值为零时删除，为非零时写入。 |
+| 两个逻辑槽对应同一物理行 | 缓存中有两个条目。根 `Repository` 提交时，`Storage.commit()` 按该 `HashMap` 的实际遍历顺序处理脏行。先写后删最终为空，先删后写最终保留非零值。Java 没有规定“删除优先”或“最后执行的 SSTORE 优先”。 |
+
+原 Go 实现（`876054cda`）在 TVM 中按逻辑槽缓存，区块提交时将脏槽按字节序排序，再依次生成物理行变更。本例按旧 Go 的排序也是先写 22、后删，因此没有证据表明这笔交易本身产生了持久状态分歧。该排序方法对其他键集、缓存复制与同一区块内的后续读取无法保证 Java 顺序。修复将旧布局的物理行决议移到成功的交易执行边界，保留子调用成功合并与失败回滚，以及新版治理参数使用的独立路径。[Java Storage](https://github.com/tronprotocol/java-tron/blob/GreatVoyage-v4.8.2/actuator/src/main/java/org/tron/core/vm/program/Storage.java#L86-L105) · [Java Repository](https://github.com/tronprotocol/java-tron/blob/GreatVoyage-v4.8.2/actuator/src/main/java/org/tron/core/vm/repository/RepositoryImpl.java#L1050-L1058)
+
+回归测试分别检查最后一次物理操作为删除和写入的结果，并验证子调用回滚、外层提交和同一区块内后续交易的读取。另有用例先预热逻辑槽缓存，再提交物理行，确认复用同一个 StateDB 跨块读取时能看到新值。[提交顺序与调用帧测试](../../vm/legacy_storage_test.go) · [物理行与缓存测试](../../core/state/tvm_storage_test.go)
+
 ## 仍有差距及验证边界
 
 - **已运行节点的升级。** 新规则会改变部分交易的执行或 Go 内部状态承诺。若旧节点曾越过相应 SR 投票或交易并按旧逻辑计算状态，应从最早受影响区块之前、已核验的状态重放。直接替换二进制不能重建已漏记的治理票、元数据或存储行。本次未对现网数据库做迁移，也没有在主网或 Nile 历史数据上连续跨越全部激活点重放。

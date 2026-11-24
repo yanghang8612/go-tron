@@ -63,6 +63,7 @@ type TVMConfig struct {
 	// checks. The caller loads it from the rooted SR fork votes.
 	StakeV2TimeGuard bool
 	// These gates are sourced from the software fork votes.
+	ShareLegacyStorage       bool // before the historical energy-limit fork
 	StorageAliasCheck        bool // 4.8.2.3, protects the legacy row key format
 	ValidateDeploymentHashes bool // 4.8.2.2, protects top-level code deposit
 

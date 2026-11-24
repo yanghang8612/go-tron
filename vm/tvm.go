@@ -63,6 +63,7 @@ type TVM struct {
 	EnergyPenaltyTotal uint64
 
 	storage             *state.TVMStorage
+	legacyStorage       *legacyStorageFrame
 	cfg                 TVMConfig
 	interpreter         *Interpreter
 	newContracts        map[tcommon.Address]bool
@@ -867,6 +868,9 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		defer func() { tvm.captureFrameEnd(tracer, data, energy-leftover, outErr) }()
 	}
 	snap := tvm.StateDB.Snapshot()
+	if !tvm.cfg.OptimizeStorage {
+		defer tvm.enterLegacyStorageFrame(snap, &outErr)()
+	}
 	logSnap := tvm.LogSnapshot()
 	internalTxSnap := tvm.InternalTransactionSnapshot()
 
@@ -1113,6 +1117,9 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	}
 
 	snap := tvm.StateDB.Snapshot()
+	if !tvm.cfg.OptimizeStorage {
+		defer tvm.enterLegacyStorageFrame(snap, &outErr)()
+	}
 	logSnap := tvm.LogSnapshot()
 	internalTxSnap := tvm.InternalTransactionSnapshot()
 
@@ -1238,6 +1245,9 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	}
 
 	snap := tvm.StateDB.Snapshot()
+	if !tvm.cfg.OptimizeStorage {
+		defer tvm.enterLegacyStorageFrame(snap, &outErr)()
+	}
 	logSnap := tvm.LogSnapshot()
 	internalTxSnap := tvm.InternalTransactionSnapshot()
 
@@ -1430,6 +1440,9 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	// updates ContractState for dynamic energy. Like Java's child Repository,
 	// discard those writes (including successful descendants) on frame failure.
 	snap := tvm.StateDB.Snapshot()
+	if !tvm.cfg.OptimizeStorage {
+		defer tvm.enterLegacyStorageFrame(snap, &outErr)()
+	}
 	logSnap := tvm.LogSnapshot()
 	defer func() {
 		if outErr != nil {
@@ -1529,6 +1542,9 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	// a caller may catch the failure and finish SUCCESS after the delegate has
 	// already made successful nested calls and emitted logs.
 	snap := tvm.StateDB.Snapshot()
+	if !tvm.cfg.OptimizeStorage {
+		defer tvm.enterLegacyStorageFrame(snap, &outErr)()
+	}
 	logSnap := tvm.LogSnapshot()
 
 	if p := getPrecompile(addr, tvm.cfg, tvm.GenesisHash); p != nil {

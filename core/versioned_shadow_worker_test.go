@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -2315,8 +2316,10 @@ func TestVMCanonicalBoundarySerialVerificationRejectsMutatedStorageWrite(t *test
 		t.Fatalf("trace-disabled oracle admitted an unauthenticated trace: %+v", verification)
 	}
 	result.balanceTrace = nil
+	row := base.LegacyTVMStorageRowKey(contractAddr, tcommon.Hash{})
 	storageKey := state.TransactionAccessKey{
-		Kind: state.TransactionAccessStorage, Address: contractAddr, StorageKey: tcommon.Hash{},
+		Kind: state.TransactionAccessAccountKV, Address: contractAddr,
+		KVDomain: kvdomains.ContractStorage, LogicalKey: string(row[:]),
 	}
 	storageWrite, ok := result.writes[storageKey]
 	if !ok {

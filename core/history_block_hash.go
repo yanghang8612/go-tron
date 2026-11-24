@@ -75,14 +75,8 @@ func writeHistoryBlockHash(statedb *state.StateDB, dynProps *state.DynamicProper
 		_ = statedb.DeleteAccountKV(historyStorageAddress, domain, oldKey[:])
 		return
 	}
-	// Pre-warm the storage cache so that the SetState journal entry captures
-	// the real disk pre-value rather than zero. The TVM normally pre-warms
-	// via opSload before opSstore; this direct write path bypasses that.
-	// Without this pre-warm, once the BlockHashHistory ring wraps
-	// (block >= 8192), temporal history would record zero pre-values for ring
-	// slots instead of the prior-cycle hash.
-	_ = statedb.GetState(historyStorageAddress, slotKey)
-	statedb.SetState(historyStorageAddress, slotKey, parentHash)
+	row := state.LegacyStorageRowKey(historyStorageAddress, slotKey, nil)
+	_ = statedb.WriteLegacyTVMStorageRow(historyStorageAddress, row, parentHash, nil)
 }
 
 func uint64ToDataWord(v uint64) tcommon.Hash {

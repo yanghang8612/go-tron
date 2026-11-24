@@ -3177,6 +3177,15 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		s.storageObservability.accountMissingZero++
 		return tcommon.Hash{}, false
 	}
+	// The legacy TVM publishes physical rows at transaction boundaries.
+	// Consult its current overlay before using a clean logical-slot cache.
+	if len(obj.kvDirty) > 0 {
+		row := s.storageRowKeyForObject(obj, key)
+		if entry, ok := lookupKVEntry(obj.kvDirty, kvdomains.ContractStorage, row[:]); ok {
+			value := tcommon.BytesToHash(entry.val)
+			return value, !entry.deleted && value != (tcommon.Hash{})
+		}
+	}
 	slot, cached := obj.storage[key]
 	if cached {
 		if s.transactionVersionedReader == nil {
@@ -3955,12 +3964,13 @@ type accountCommitPlan struct {
 	// Storage staging only needs per-kind totals after preparation. Keeping
 	// counters here avoids retaining one result object (and a duplicate value)
 	// for every dirty slot until mutation statistics are summarized.
-	storagePuts        int
-	storageDeletes     int
-	storageNoops       int
-	kvPlan             *accountKVCommitPlan
-	hadKVDirty         bool
-	accountLatestDirty bool
+	storagePuts          int
+	storageDeletes       int
+	storageNoops         int
+	kvPlan               *accountKVCommitPlan
+	hadKVDirty           bool
+	physicalStorageDirty bool
+	accountLatestDirty   bool
 	// accountProtoSize is measured without marshaling during the first commit
 	// pass, then reused to append the protobuf directly into the value arena.
 	accountProtoSize int
@@ -4095,6 +4105,18 @@ func (s *StateDB) prepareAccountCommitPlanWithArena(addr tcommon.Address, obj *s
 		}
 	}
 
+	// Physical legacy rows may update one or more logical cache entries.
+	// Record their presence before staging typed storage below, then discard
+	// any now-stale typed observation when this commit succeeds.
+	if len(obj.storage) > 0 {
+		for composite := range obj.kvDirty {
+			domain, key, ok := splitKVCompositeKeyView([]byte(composite))
+			if ok && domain == kvdomains.ContractStorage && len(key) == tcommon.HashLength {
+				plan.physicalStorageDirty = true
+				break
+			}
+		}
+	}
 	if len(obj.dirtyStorage) > 0 {
 		storageKeys := make([]tcommon.Hash, 0, len(obj.dirtyStorage))
 		for key := range obj.dirtyStorage {
@@ -4462,6 +4484,9 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 	}
 	if plan.hadKVDirty {
 		obj.releaseKVDirty()
+	}
+	if plan.physicalStorageDirty {
+		obj.releaseStorage()
 	}
 	if obj.codeDirty {
 		obj.codeDirty = false

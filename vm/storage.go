@@ -8,6 +8,9 @@ import (
 )
 
 func (tvm *TVM) readStorage(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool, error) {
+	if tvm.legacyStorage != nil {
+		return tvm.readLegacyStorage(addr, key)
+	}
 	if !tvm.cfg.StorageAliasCheck && !tvm.cfg.OptimizeStorage {
 		value, exists := tvm.StateDB.GetStateWithExist(addr, key)
 		return value, exists, nil
@@ -26,6 +29,10 @@ func (tvm *TVM) readStorage(addr tcommon.Address, key tcommon.Hash) (tcommon.Has
 }
 
 func (tvm *TVM) writeStorage(addr tcommon.Address, key, value tcommon.Hash) error {
+	if tvm.legacyStorage != nil {
+		tvm.writeLegacyStorage(addr, key, value)
+		return nil
+	}
 	if tvm.storage == nil {
 		tvm.StateDB.SetState(addr, key, value)
 		return nil

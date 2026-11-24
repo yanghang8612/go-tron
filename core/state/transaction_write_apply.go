@@ -136,8 +136,9 @@ func validateTransactionAccountFieldPostImages(writes TransactionWriteSet, addre
 // logical post-images while staging different rooted rows.
 func validateTransactionWritePhysicalAliases(writes TransactionWriteSet) error {
 	type addressFamilies struct {
-		metadata bool
-		storage  bool
+		metadata        bool
+		storage         bool
+		physicalStorage bool
 	}
 	var byAddress map[tcommon.Address]addressFamilies
 	for key, value := range writes {
@@ -170,12 +171,18 @@ func validateTransactionWritePhysicalAliases(writes TransactionWriteSet) error {
 						return fmt.Errorf("apply transaction writes: invalid optimized contract storage row")
 					}
 				case tcommon.HashLength:
-					if value.Exists {
-						return fmt.Errorf("apply transaction writes: contract storage account-KV is owned by the typed cache")
+					if value.Exists && len(value.Value) != tcommon.HashLength {
+						return fmt.Errorf("apply transaction writes: invalid legacy contract storage row")
 					}
 				default:
 					return fmt.Errorf("apply transaction writes: invalid contract storage row key")
 				}
+				if byAddress == nil {
+					byAddress = make(map[tcommon.Address]addressFamilies, 1)
+				}
+				families := byAddress[key.Address]
+				families.physicalStorage = true
+				byAddress[key.Address] = families
 			case kvdomains.WitnessCapsule:
 				return fmt.Errorf("apply transaction writes: witness capsule account-KV is owned by the typed cache")
 			case kvdomains.SystemDynamicProperty:
@@ -214,6 +221,8 @@ func validateTransactionWritePhysicalAliases(writes TransactionWriteSet) error {
 	}
 	for address, families := range byAddress {
 		switch {
+		case families.storage && families.physicalStorage:
+			return fmt.Errorf("apply transaction writes: mixed logical and physical storage writes for %s", address.Hex())
 		case families.metadata && families.storage:
 			return fmt.Errorf("apply transaction writes: contract %s metadata+storage order is not representable", address.Hex())
 		}

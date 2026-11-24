@@ -36,6 +36,9 @@ func (s *StateDB) GetStateStrict(addr tcommon.Address, key tcommon.Hash) (tcommo
 	context := fmt.Sprintf("live storage value generation %d", obj.accountKVGeneration)
 	read := func(domain kvdomains.KVDomain, row []byte) ([]byte, bool, error) {
 		if domain == kvdomains.ContractStorage && len(row) == tcommon.HashLength {
+			if _, current := lookupKVEntry(obj.kvDirty, domain, row); current {
+				return s.getAccountKVForDecoding(addr, domain, row)
+			}
 			if slot, ok := obj.storage[key]; ok {
 				return bytes.Clone(slot.value[:]), true, nil
 			}

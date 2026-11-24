@@ -80,3 +80,71 @@ func TestTVMStorageMigrationModes(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyStoragePhysicalOverlayWinsOverCleanLogicalCache(t *testing.T) {
+	s := newTestStateDB(t)
+	addr := testAddr(1)
+	slot := tcommon.Hash{31: 5}
+	initial, next := tcommon.Hash{31: 7}, tcommon.Hash{31: 8}
+	s.SetState(addr, slot, initial)
+	root, err := s.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err = New(root, s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetState(addr, slot); got != initial {
+		t.Fatalf("prewarm storage = %x, want %x", got, initial)
+	}
+	row := s.LegacyTVMStorageRowKey(addr, slot)
+	snap := s.Snapshot()
+	if err := s.WriteLegacyTVMStorageRow(addr, row, next, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.FinalizeTransaction()
+	if got, exists := s.GetStateWithExist(addr, slot); got != next || !exists {
+		t.Fatalf("logical read after publication = %x, exists=%v", got, exists)
+	}
+	if got, err := s.GetStateStrict(addr, slot); err != nil || got != next {
+		t.Fatalf("strict read after publication = %x, err=%v", got, err)
+	}
+	if err := s.WriteLegacyTVMStorageRow(addr, row, tcommon.Hash{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, exists := s.GetStateWithExist(addr, slot); got != (tcommon.Hash{}) || exists {
+		t.Fatalf("logical read after delete = %x, exists=%v", got, exists)
+	}
+	s.RevertToSnapshot(snap)
+	if got := s.GetState(addr, slot); got != initial {
+		t.Fatalf("logical cache after rollback = %x, want %x", got, initial)
+	}
+	if err := s.WriteLegacyTVMStorageRow(addr, row, next, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetState(addr, slot); got != next {
+		t.Fatalf("logical cache after block commit = %x, want %x", got, next)
+	}
+}
+
+func TestLegacyStorageRejectsMixedTransactionWriteFamilies(t *testing.T) {
+	addr := testAddr(1)
+	slot := tcommon.Hash{31: 5}
+	row := LegacyStorageRowKey(addr, slot, nil)
+	value := tcommon.Hash{31: 7}
+	writes := TransactionWriteSet{
+		{Kind: TransactionAccessStorage, Address: addr, StorageKey: slot}: {
+			Exists: true, Value: value[:],
+		},
+		{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: kvdomains.ContractStorage, LogicalKey: string(row[:])}: {
+			Exists: true, Value: value[:],
+		},
+	}
+	if err := validateTransactionWritePhysicalAliases(writes); err == nil {
+		t.Fatal("mixed writes to the same storage row were accepted")
+	}
+}

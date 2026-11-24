@@ -390,6 +390,7 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	cfg.StakeV2TimeGuard = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	cfg.ShareLegacyStorage = dp.LatestBlockHeaderNumber() < b.chain.Config().EnergyLimitForkBlockNum()
 	cfg.StorageAliasCheck = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion+1,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	timeout := b.constantCallTimeout
@@ -504,6 +505,7 @@ func (b *TronBackend) TraceCallContext(ctx context.Context, from, to *tcommon.Ad
 	stakeGuardVersion := forks.Version4822(b.chain.effectiveGenesisHash() == params.NileGenesisHash)
 	tvmCfg.StakeV2TimeGuard = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	tvmCfg.ShareLegacyStorage = dp.LatestBlockHeaderNumber() < b.chain.Config().EnergyLimitForkBlockNum()
 	tvmCfg.StorageAliasCheck = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion+1,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	tvmCfg.Tracer = tracer
