@@ -45,7 +45,7 @@ func TestTronAPIBoundHandlersUseArchiveBackends(t *testing.T) {
 		"handleGetNextMaintenanceTime":             {"NextMaintenanceTime", "NextMaintenanceTimeAt"},
 		"handleGetPaginatedAssetIssueList":         {"GetAssetIssueListPaginated", "GetAssetIssueListPaginatedAt"},
 		"handleGetPaginatedExchangeList":           {"ListExchangesPaginated", "ListExchangesPaginatedAt"},
-		"handleGetPaginatedNowWitnessList":         {"ListWitnesses", "ListWitnessesAt"},
+		"handleGetPaginatedNowWitnessList":         {"GetPaginatedNowWitnessList", "GetPaginatedNowWitnessListAt"},
 		"handleGetPaginatedProposalList":           {"ListProposalsPaginated", "ListProposalsPaginatedAt"},
 		"handleGetProposalById":                    {"GetProposalByID", "GetProposalByIDAt"},
 		"handleGetReward":                          {"GetReward", "GetRewardAt"},
@@ -56,6 +56,7 @@ func TestTronAPIBoundHandlersUseArchiveBackends(t *testing.T) {
 	}
 	expectedBoundGate := map[string][]string{
 		"handleGetBlockByIDAtBound":           nil,
+		"handleGetTransactionCountByBlockNum": {"GetBlockByNumber"},
 		"handleGetBlockByLimitNextAtBound":    nil,
 		"handleGetAccountBalance":             {"GetAccountBalanceTrace"},
 		"handleGetBlockBalanceTrace":          {"GetBlockBalanceTrace"},
@@ -218,6 +219,7 @@ func TestSolidityBoundWrappersCallExpectedHandlers(t *testing.T) {
 		"getPbftProposalByID":                     {method: "handleGetProposalById", bound: "pbftBoundNum"},
 		"getPbftProposals":                        {method: "handleListProposals", bound: "pbftBoundNum"},
 		"getPbftReward":                           {method: "handleGetReward", bound: "pbftBoundNum"},
+		"getPbftTransactionCountByBlockNum":       {method: "handleGetTransactionCountByBlockNum", bound: "pbftBoundNum"},
 		"getPbftTransactionByID":                  {method: "handleGetTransactionByIDAtBound", bound: "pbftBoundNum"},
 		"getPbftTransactionInfoByID":              {method: "handleGetTransactionInfoByIDAtBound", bound: "pbftBoundNum"},
 		"getPbftTransactionReceiptByID":           {method: "handleGetTransactionInfoByIDAtBound", bound: "pbftBoundNum"},
@@ -263,6 +265,7 @@ func TestSolidityBoundWrappersCallExpectedHandlers(t *testing.T) {
 		"getSolidProposalByID":                    {method: "handleGetProposalById", bound: "solidBoundNum"},
 		"getSolidProposals":                       {method: "handleListProposals", bound: "solidBoundNum"},
 		"getSolidReward":                          {method: "handleGetReward", bound: "solidBoundNum"},
+		"getSolidTransactionCountByBlockNum":      {method: "handleGetTransactionCountByBlockNum", bound: "solidBoundNum"},
 		"getSolidTransactionByID":                 {method: "handleGetTransactionByIDAtBound", bound: "solidBoundNum"},
 		"getSolidTransactionInfoByID":             {method: "handleGetTransactionInfoByIDAtBound", bound: "solidBoundNum"},
 		"getSolidTransactionReceiptByID":          {method: "handleGetTransactionInfoByIDAtBound", bound: "solidBoundNum"},

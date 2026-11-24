@@ -2,6 +2,7 @@ package vm
 
 import (
 	"errors"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -137,7 +138,9 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	// Select that stable mode once per frame so its per-op loop does not keep
 	// sampling tracer state, dynamic-energy bookkeeping and trace operands that
 	// are provably unused for the whole frame.
-	if tracer == nil && !dynamicEnergy {
+	deadline := in.tvmConfig.Deadline
+	checkDeadline := !deadline.IsZero()
+	if tracer == nil && !dynamicEnergy && !checkDeadline {
 		return in.runBaseEnergy(contract, mem, stack, code, codeLen, table)
 	}
 	for {
@@ -230,6 +233,10 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 			}
 		}
 
+		if checkDeadline && time.Now().After(deadline) {
+			return nil, cpuTimeoutError("CPU timeout for '" + opNameForError(op) + "' operation executing")
+		}
+
 		// Snapshot the PRE-execute operand stack: CaptureState is emitted AFTER
 		// the opcode runs (so the exact energy delta is known), but the trace must
 		// still show the operands the opcode consumed — exactly java-tron's
@@ -267,6 +274,9 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 
 		// Terminal opcodes
 		if op == STOP || op == RETURN || op == REVERT || op == SELFDESTRUCT {
+			if checkDeadline && in.tvmConfig.EnergyAdjustment && in.tvm.Depth == 1 && time.Now().After(deadline) {
+				return nil, cpuTimeoutError("CPU timeout for '" + opNameForError(op) + "(TX_LAST_OP)' operation executing")
+			}
 			if dynamicEnergy {
 				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 			}

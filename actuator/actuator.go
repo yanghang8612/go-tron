@@ -118,24 +118,26 @@ func (ctx *Context) PassVersion(version int32) bool {
 	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
 		return false
 	}
-	if ctx.passVersion(version) {
-		return true
+	// Callers use mainnet numbering for the 4.8.0.1 and 4.8.1 releases.
+	// Nile assigned them the opposite wire values and quorum rates.
+	if ctx.isNile() {
+		switch version {
+		case 33:
+			version = 34
+		case 34:
+			version = 33
+		}
 	}
+	return ctx.passVersion(version)
+}
 
-	// Nile activated the release-v4.8.1 feature set while java-tron's enum
-	// still assigned VERSION_4_8_1 the wire value 33. Upstream later inserted
-	// VERSION_4_8_0_1 at 33 and renumbered VERSION_4_8_1 to 34 before merging
-	// that release to master. Historical Nile blocks therefore legitimately
-	// gate v4.8.1 behavior on 33 (not 34); mainnet was never deployed with the
-	// old numbering and must continue to require 34.
-	if version == 34 && ctx.isNile() {
-		return forks.PassVersionFromStoreWithRate(ctx.State, 33, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval(), 80)
-	}
-	return false
+// PassVersion4822 checks the 4.8.2.2 release fork for this transaction's chain.
+func (ctx *Context) PassVersion4822() bool {
+	return ctx.PassVersion(forks.Version4822(ctx.isNile()))
 }
 
 func (ctx *Context) passVersion(version int32) bool {
-	return ctx.ForkPassCache.Pass(ctx.State, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+	return ctx.ForkPassCache.Pass(ctx.State, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval(), ctx.isNile())
 }
 
 func (ctx *Context) isNile() bool {

@@ -33,13 +33,23 @@ func TestTronBackendGetChainParametersJavaKeySet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := state.ChainParameterKeys()
+	var want []string
+	for _, key := range state.ChainParameterKeys() {
+		if key != "getAllowFnDsa512" && key != "getAllowMlDsa44" {
+			want = append(want, key)
+		}
+	}
 	if len(got) != len(want) {
 		t.Fatalf("GetChainParameters returned %d entries, want %d", len(got), len(want))
 	}
 	for i, key := range want {
 		if got[i].Key != key {
 			t.Fatalf("entry %d: got key %q, want %q", i, got[i].Key, key)
+		}
+		if key == "getAdaptiveResourceLimitTargetRatio" {
+			if raw := bc.DynProps().AdaptiveResourceLimitTargetRatio(); raw != 14400 || got[i].Value != 10 {
+				t.Fatalf("adaptive ratio stored=%d API=%d, want 14400 and 10", raw, got[i].Value)
+			}
 		}
 	}
 

@@ -396,15 +396,17 @@ func applyTransactionWithScratch(statedb *state.StateDB, dynProps *state.Dynamic
 	// blocks as VERSION_4_8_0_1 rejects canonical pre-rollout transactions
 	// (first observed at Nile block 63,172,360). Mainnet keeps upstream's v33
 	// gate. java-tron evaluates the gate against the previous block timestamp.
-	exchangeRejected := forkPassCache.Pass(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval())
-	if genesisHash == params.NileGenesisHash {
-		// Nile wire v34 is VERSION_4_8_0_1 at a 70% quorum; mainnet wire
-		// v34 is VERSION_4_8_1 at 80%. The common version table describes
-		// mainnet, so evaluate this Nile-only gate with its deployed rate.
-		exchangeRejected = forks.PassVersionFromStoreWithRate(statedb, 34, prevBlockTime, dynProps.MaintenanceTimeInterval(), 70)
-	}
-	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract && exchangeRejected {
-		return nil, ErrExchangeRejected
+	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract && !dynProps.AllowHardenExchangeCalculation() {
+		var exchangeRejected bool
+		if genesisHash == params.NileGenesisHash {
+			// Nile wire v34 is VERSION_4_8_0_1 at a 70% quorum.
+			exchangeRejected = forks.PassVersionFromStore(statedb, 34, prevBlockTime, dynProps.MaintenanceTimeInterval(), true)
+		} else {
+			exchangeRejected = forkPassCache.Pass(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval())
+		}
+		if exchangeRejected {
+			return nil, ErrExchangeRejected
+		}
 	}
 	// java-tron Manager.validateCommon applies the synthetic "clear ret +
 	// two MAX_RESULT_SIZE_IN_TX slots" size gate to pending transactions,

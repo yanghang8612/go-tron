@@ -171,6 +171,8 @@ var defaultProps = map[string]int64{
 	"allow_update_account_name":                     0,
 	"allow_harden_resource_calculation":             0,
 	"allow_harden_exchange_calculation":             0,
+	"allow_optimize_tvm_storage":                    0,
+	"allow_optimize_tvm_storage_key":                0,
 	"allow_fn_dsa_512":                              0,
 	"allow_ml_dsa_44":                               0,
 	"consensus_logic_optimization":                  0,
@@ -2192,4 +2194,12 @@ func (dp *DynamicProperties) BandwidthPriceHistoryDone() int64 {
 }
 func (dp *DynamicProperties) SetBandwidthPriceHistoryDone(v int64) {
 	dp.Set("bandwidth_price_history_done", v)
+}
+
+func (dp *DynamicProperties) AllowOptimizeTvmStorage() bool {
+	return dp.readInt("allow_optimize_tvm_storage") == 1
+}
+
+func (dp *DynamicProperties) AllowOptimizeTvmStorageKey() bool {
+	return dp.readInt("allow_optimize_tvm_storage_key") == 1
 }

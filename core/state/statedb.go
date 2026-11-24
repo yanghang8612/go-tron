@@ -260,6 +260,10 @@ type StateDB struct {
 	// a deliberate mid-transaction diagnostic cannot silently lose TSTORE state.
 	transientStorage map[transientStorageKey]tcommon.Hash
 
+	// selfDestructMarks tracks successful SELFDESTRUCTs for the current TVM
+	// transaction, including restricted operations that keep the account.
+	selfDestructMarks map[tcommon.Address]struct{}
+
 	// domainChangeNoJournal mirrors block-final writes that intentionally
 	// bypass the snapshot/revert journal but still need temporal change rows.
 	domainChangeNoJournal []journalChange
@@ -2128,6 +2132,26 @@ func (s *StateDB) FinalizeTransaction() {
 	// transaction. clear() on a nil map is a no-op, and it preserves the map
 	// header so any journal entries still referencing it stay valid.
 	clear(s.transientStorage)
+	clear(s.selfDestructMarks)
+}
+
+// MarkTVMSelfDestruct records a successful SELFDESTRUCT in the current frame.
+// The marker is reverted with its enclosing frame and discarded at the
+// transaction boundary.
+func (s *StateDB) MarkTVMSelfDestruct(addr tcommon.Address) {
+	if s.HasTVMSelfDestructMark(addr) {
+		return
+	}
+	if s.selfDestructMarks == nil {
+		s.selfDestructMarks = make(map[tcommon.Address]struct{})
+	}
+	s.journal.append(tvmSelfDestructMarkChange{marks: s.selfDestructMarks, address: addr})
+	s.selfDestructMarks[addr] = struct{}{}
+}
+
+func (s *StateDB) HasTVMSelfDestructMark(addr tcommon.Address) bool {
+	_, ok := s.selfDestructMarks[addr]
+	return ok
 }
 
 // transientStorageKey identifies an EIP-1153 transient storage slot by
@@ -3743,6 +3767,7 @@ func (s *StateDB) newCopyBase(accountHint int) *StateDB {
 		dirtyObjects:            make(map[tcommon.Address]struct{}, accountHint),
 		journal:                 newJournal(),
 		transientStorage:        maps.Clone(s.transientStorage),
+		selfDestructMarks:       maps.Clone(s.selfDestructMarks),
 		dynProps:                s.dynProps,
 		originRoot:              s.originRoot,
 		accountKVIndexStore:     s.accountKVIndexStore,

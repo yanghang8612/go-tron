@@ -9,6 +9,9 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+// MaxSyncChainIDs is the maximum locator length accepted by java-tron.
+const MaxSyncChainIDs = 30
+
 // BuildChainSummary creates an exponentially-spaced list of block IDs
 // from `chain`, used in SYNC_BLOCK_CHAIN messages. The result is in
 // ascending order (oldest first, newest last) — matching java-tron's
@@ -21,7 +24,7 @@ func BuildChainSummary(chain *core.BlockChain) []types.BlockID {
 	head := chain.CurrentBlock()
 	headNum := head.Number()
 
-	summary := make([]types.BlockID, 0, 32)
+	summary := make([]types.BlockID, 0, MaxSyncChainIDs)
 	step := uint64(1)
 	num := headNum
 
@@ -32,7 +35,9 @@ func BuildChainSummary(chain *core.BlockChain) []types.BlockID {
 		if num == 0 {
 			break
 		}
-		if num < step {
+		if num < step || len(summary) == MaxSyncChainIDs-1 {
+			// Keep the genesis entry within the protocol limit even after
+			// the chain has grown beyond the normal logarithmic window.
 			num = 0
 		} else {
 			num -= step

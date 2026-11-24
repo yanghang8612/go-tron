@@ -5,10 +5,11 @@ type Config struct {
 	P2PPort int
 	// DiscoverPort is the UDP port used by Kademlia discovery. 0 → reuse P2PPort
 	// (java-tron's default; UDP and TCP share the same port number).
-	DiscoverPort int
-	HTTPPort     int
-	JSONRPCPort  int
-	GRPCPort     int // gRPC Wallet service port; 0 = disabled
+	DiscoverPort             int
+	HTTPPort                 int
+	JSONRPCPort              int
+	GRPCPort                 int // gRPC Wallet service port; 0 = disabled
+	GRPCMaxConcurrentStreams int64
 	// PProfPort enables the runtime debug/pprof HTTP server when > 0. Default
 	// off — pprof exposes process internals and is not authenticated.
 	PProfPort int
@@ -31,6 +32,9 @@ type Config struct {
 	SyncETLTempDir   string
 	SyncETLBufferMiB uint64
 	SyncETLBatchMiB  uint64
+
+	// ConstantCallTimeoutMs is the local TVM constant-call budget. Zero uses the chain limit.
+	ConstantCallTimeoutMs int64
 
 	// VM receipt persistence mirrors java-tron's node-local vm.save* options.
 	// These do not affect block execution or consensus state.

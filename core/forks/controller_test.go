@@ -48,7 +48,7 @@ func TestForkController_UpdateMarksLowerVersionsUpgradeHigherDowngrade(t *testin
 	fc.Update(32, 5, 27)
 
 	// Expect: versions 6..32 slot 5 = upgrade; 33,34,35 slot 5 = downgrade.
-	for _, vp := range KnownVersions {
+	for _, vp := range fc.versions() {
 		got := fc.Stats(vp.Value)[5]
 		if vp.Value <= 32 {
 			if got != VoteUpgrade {
@@ -306,8 +306,8 @@ func TestForkController_UpdateBatchesReadsAndSkipsNoopWrites(t *testing.T) {
 	if store.batchReads != 1 {
 		t.Fatalf("first update batch reads = %d, want 1", store.batchReads)
 	}
-	if store.writes != len(KnownVersions) {
-		t.Fatalf("first update writes = %d, want %d", store.writes, len(KnownVersions))
+	if store.writes != len(fc.versions()) {
+		t.Fatalf("first update writes = %d, want %d", store.writes, len(fc.versions()))
 	}
 
 	store.writes = 0
@@ -351,5 +351,33 @@ func TestForkController_Reset_BoundaryTimestampSensitivity(t *testing.T) {
 	fcCur.Reset(aligned, maintenanceInterval, 27)
 	if !fcCur.Pass(35, blockTimeAfterFork(35), maintenanceInterval) {
 		t.Fatal("sanity: Reset at >= aligned with rate met keeps the bitmap")
+	}
+}
+
+func TestRelease4822NetworkQuorums(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	mainnet := NewForkController(db)
+	nile := NewForkController(db, true)
+	now := blockTimeAfterFork(37)
+	for i := 0; i < 19; i++ {
+		nile.Update(40, i, 27)
+	}
+	for _, tc := range []struct {
+		version       int32
+		mainnet, nile bool
+	}{
+		{33, true, false},
+		{34, false, true},
+		{37, true, false},
+	} {
+		if got := mainnet.Pass(tc.version, now, maintenanceInterval); got != tc.mainnet {
+			t.Errorf("mainnet version %d at 19/27 votes: got %v, want %v", tc.version, got, tc.mainnet)
+		}
+		if got := nile.Pass(tc.version, now, maintenanceInterval); got != tc.nile {
+			t.Errorf("Nile version %d at 19/27 votes: got %v, want %v", tc.version, got, tc.nile)
+		}
+	}
+	if !nile.Pass(38, now, maintenanceInterval) || !nile.Pass(40, now, maintenanceInterval) || mainnet.Pass(40, now, maintenanceInterval) {
+		t.Fatal("Nile 4.8.2.2 and 4.8.2.4 have 70% quorums; wire version 40 is Nile-only")
 	}
 }

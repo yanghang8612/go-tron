@@ -96,9 +96,10 @@ func buildFreezeBlock() *types.Block {
 // single tx in the freeze block: SUCCESS result, one log, fixed energy usage.
 func buildFreezeTxInfo() *corepb.TransactionInfo {
 	return &corepb.TransactionInfo{
-		Result:         corepb.TransactionInfo_SUCESS,
-		BlockNumber:    int64(freezeBlockNumber),
-		BlockTimeStamp: 1_700_000_000_000,
+		Result:          corepb.TransactionInfo_SUCESS,
+		BlockNumber:     int64(freezeBlockNumber),
+		BlockTimeStamp:  1_700_000_000_000,
+		ContractAddress: common.FromHex(freezeContractAddr21),
 		Receipt: &corepb.ResourceReceipt{
 			EnergyUsageTotal: 31000,
 		},

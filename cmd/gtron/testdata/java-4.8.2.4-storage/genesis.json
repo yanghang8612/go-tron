@@ -1,0 +1,60 @@
+{
+  "chain_id": 9999,
+  "p2p_version": 0,
+  "block_num_for_energy_limit": 0,
+  "timestamp_ms": 0,
+  "parent_hash": "0xe58f33f9baf9305dc6f82b9f1934ea8f0ade2defb951258d50167028c780351f",
+  "accounts": [
+    {
+      "address": "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC",
+      "balance": "99000000000000000",
+      "name": "Zion"
+    },
+    {
+      "address": "TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy",
+      "balance": "-9223372036854775808",
+      "name": "Blackhole"
+    }
+  ],
+  "witnesses": [
+    {
+      "address": "TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC",
+      "vote_count": 100,
+      "url": "http://test.io"
+    }
+  ],
+  "dynamic_properties": {
+    "maintenance_time_interval": 90000,
+    "allow_creation_of_contracts": 1,
+    "allow_multi_sign": 1,
+    "allow_delegate_resource": 1,
+    "allow_same_token_name": 1,
+    "allow_tvm_transfer_trc10": 1,
+    "allow_tvm_constantinople": 1,
+    "allow_tvm_solidity059": 1,
+    "allow_shielded_trc20_transaction": 1,
+    "allow_tvm_istanbul": 1,
+    "change_delegation": 1,
+    "allow_blackhole_optimization": 1,
+    "allow_tvm_vote": 1,
+    "unfreeze_delay_days": 1,
+    "allow_tvm_london": 1,
+    "allow_asset_optimization": 1,
+    "allow_new_reward": 1,
+    "memo_fee": 1000000,
+    "allow_delegate_optimization": 1,
+    "allow_dynamic_energy": 1,
+    "dynamic_energy_threshold": 50000,
+    "dynamic_energy_increase_factor": 2000,
+    "dynamic_energy_max_factor": 34000,
+    "allow_tvm_shanghai": 1,
+    "allow_old_reward_opt": 1,
+    "allow_energy_adjustment": 1,
+    "allow_strict_math": 1,
+    "allow_tvm_cancun": 1,
+    "allow_optimized_return_value_of_chain_id": 1,
+    "proposal_expire_time": 60000,
+    "allow_higher_limit_for_max_cpu_time_of_one_tx": 1,
+    "consensus_logic_optimization": 1
+  }
+}

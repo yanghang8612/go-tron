@@ -73,9 +73,9 @@ func (c *VersionPassCache) BlockScope() *VersionPassCache {
 // BlockScope returns false for the rest of that block. A nil cache degrades to
 // the plain uncached call. Calling Pass on the root cache preserves the legacy
 // true-only behaviour.
-func (c *VersionPassCache) Pass(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
+func (c *VersionPassCache) Pass(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64, nile ...bool) bool {
 	if c == nil {
-		return PassVersionFromStore(store, version, latestBlockTime, maintenanceIntervalMs)
+		return PassVersionFromStore(store, version, latestBlockTime, maintenanceIntervalMs, nile...)
 	}
 	root := c.root()
 	root.mu.Lock()
@@ -92,7 +92,7 @@ func (c *VersionPassCache) Pass(store ForkStatsReader, version int32, latestBloc
 			return false
 		}
 	}
-	passed := PassVersionFromStore(store, version, latestBlockTime, maintenanceIntervalMs)
+	passed := PassVersionFromStore(store, version, latestBlockTime, maintenanceIntervalMs, nile...)
 	if passed {
 		root.mu.Lock()
 		if root.passed == nil {

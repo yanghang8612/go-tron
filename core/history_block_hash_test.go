@@ -181,3 +181,38 @@ func TestWriteHistoryBlockHashCapturesRingPreValue(t *testing.T) {
 			got.Hex(), priorHash.Hex())
 	}
 }
+
+func TestWriteHistoryBlockHashMigratesOptimizedStorage(t *testing.T) {
+	for _, flag := range []string{"allow_optimize_tvm_storage", "allow_optimize_tvm_storage_key"} {
+		t.Run(flag, func(t *testing.T) {
+			db := ethrawdb.NewMemoryDatabase()
+			statedb, err := state.New(tcommon.Hash{}, state.NewDatabase(db))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dp := state.NewDynamicProperties()
+			deployHistoryBlockHash(statedb, dp)
+			legacy := tcommon.HexToHash("1234")
+			writeHistoryBlockHash(statedb, dp, 1, legacy)
+			if _, err := statedb.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			dp.Set(flag, 1)
+			slot := uint64ToDataWord(0)
+			parent := tcommon.HexToHash("9876")
+			writeHistoryBlockHash(statedb, dp, historyServeWindow+1, parent)
+			key := state.OptimizedStorageRowKey(historyStorageAddress, slot, nil)
+			old := state.LegacyStorageRowKey(historyStorageAddress, slot, nil)
+			raw, exists, err := statedb.GetAccountKV(historyStorageAddress, kvdomains.ContractStorage, key)
+			if err != nil || !exists || !bytes.Equal(raw, parent[:]) {
+				t.Fatalf("optimized row = %x, %t, %v; want %x", raw, exists, err, parent)
+			}
+			if _, exists, err := statedb.GetAccountKV(historyStorageAddress, kvdomains.ContractStorage, old[:]); err != nil || exists {
+				t.Fatalf("legacy row exists = %t, %v", exists, err)
+			}
+			if got, err := statedb.GetStateStrict(historyStorageAddress, slot); err != nil || got != parent {
+				t.Fatalf("strict value = %x, %v; want %x", got, err, parent)
+			}
+		})
+	}
+}

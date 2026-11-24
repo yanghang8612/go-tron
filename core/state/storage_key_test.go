@@ -201,3 +201,19 @@ func (r *storageKeyLatestReader) KVLatest(owner tcommon.Address, generation uint
 	}
 	return append([]byte(nil), r.value...), len(r.value) > 0, nil
 }
+
+func TestStorageKeysUseNonemptyZeroTransactionHash(t *testing.T) {
+	addr := testAddr(1)
+	slot := tcommon.Hash{31: 5}
+	meta := &contractpb.SmartContract{TrxHash: make([]byte, 32)}
+	addrHash := tcommon.Keccak256(append(addr.Bytes(), meta.GetTrxHash()...))
+	slotHash := tcommon.Keccak256(append(addrHash.Bytes(), slot[:]...))
+	wantLegacy := append(addrHash.Bytes()[:16], slot[16:]...)
+	wantOptimized := append(addrHash.Bytes()[:16], slotHash[:]...)
+	if got := LegacyStorageRowKey(addr, slot, meta); !bytes.Equal(got[:], wantLegacy) {
+		t.Fatalf("legacy key = %x, want %x", got, wantLegacy)
+	}
+	if got := OptimizedStorageRowKey(addr, slot, meta); !bytes.Equal(got, wantOptimized) {
+		t.Fatalf("optimized key = %x, want %x", got, wantOptimized)
+	}
+}

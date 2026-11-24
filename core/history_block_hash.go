@@ -6,6 +6,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -62,6 +63,18 @@ func writeHistoryBlockHash(statedb *state.StateDB, dynProps *state.DynamicProper
 	}
 	slot := (blockNum - 1) % historyServeWindow
 	slotKey := uint64ToDataWord(slot)
+	if dynProps.AllowOptimizeTvmStorage() || dynProps.AllowOptimizeTvmStorageKey() {
+		// java-tron writes this system slot without consulting contract metadata
+		// or performing an SLOAD, so the write replaces any legacy row.
+		const domain = kvdomains.ContractStorage
+		key := state.OptimizedStorageRowKey(historyStorageAddress, slotKey, nil)
+		if err := statedb.SetAccountKV(historyStorageAddress, domain, key, parentHash[:]); err != nil {
+			return
+		}
+		oldKey := state.LegacyStorageRowKey(historyStorageAddress, slotKey, nil)
+		_ = statedb.DeleteAccountKV(historyStorageAddress, domain, oldKey[:])
+		return
+	}
 	// Pre-warm the storage cache so that the SetState journal entry captures
 	// the real disk pre-value rather than zero. The TVM normally pre-warms
 	// via opSload before opSstore; this direct write path bypasses that.

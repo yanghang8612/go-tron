@@ -2647,13 +2647,13 @@ func assertDynamicPropertyRoutesUseBound(t *testing.T, prefix string, stub *isol
 		t.Fatalf("getburntrx status: %d", resp.StatusCode)
 	}
 	var burn struct {
-		Num int64 `json:"num"`
+		BurnTrxAmount int64 `json:"burnTrxAmount"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&burn); err != nil {
 		t.Fatal(err)
 	}
-	if burn.Num != 123456 {
-		t.Fatalf("burn trx = %d, want 123456", burn.Num)
+	if burn.BurnTrxAmount != 123456 {
+		t.Fatalf("burn trx = %d, want 123456", burn.BurnTrxAmount)
 	}
 	if stub.burnAtBlock != wantBlock {
 		t.Fatalf("GetBurnTrxAt block = %d, want %d", stub.burnAtBlock, wantBlock)
@@ -3698,4 +3698,14 @@ func assertStakeResourceRoutesUseBound(t *testing.T, prefix string, stub *isolat
 	if stub.liveAvailableCalls != 0 {
 		t.Fatalf("live GetAvailableUnfreezeCount called %d times, want 0", stub.liveAvailableCalls)
 	}
+}
+
+func (b *isolationStubBackend) GetPaginatedNowWitnessList(offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnesses()
+	return tronapi.WitnessPage(witnesses, offset, limit), err
+}
+
+func (b *isolationStubBackend) GetPaginatedNowWitnessListAt(blockNum uint64, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnessesAt(blockNum)
+	return tronapi.WitnessPage(witnesses, offset, limit), err
 }

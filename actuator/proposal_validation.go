@@ -249,6 +249,16 @@ func validateProposalParameter(ctx *Context, id, value int64) error {
 			return fmt.Errorf("allow_harden_exchange_calculation has already been set to %d", value)
 		}
 		return nil
+	case 99:
+		if dp.AllowOptimizeTvmStorage() {
+			return errors.New("allow_optimize_tvm_storage has already been activated")
+		}
+		return validateProposalOne(id, value)
+	case 102:
+		if dp.AllowOptimizeTvmStorageKey() {
+			return errors.New("allow_optimize_tvm_storage_key has already been activated")
+		}
+		return validateProposalOne(id, value)
 	case 1000:
 		if err := validateProposalZeroOrOne(id, value); err != nil {
 			return err
@@ -327,12 +337,22 @@ func validateProposalForkGate(ctx *Context, id, value int64) error {
 			return fmt.Errorf("bad chain parameter id %d", id)
 		}
 		return nil
+	case 1000, 1001:
+		if !ctx.isNile() {
+			return fmt.Errorf("bad chain parameter id %d", id)
+		}
 	case 39:
 		if isHistoricalNileShieldedTrc20Activation(ctx) {
 			return nil
 		}
 	}
 	version, ok := proposalRequiredVersion[id]
+	switch id {
+	case 99:
+		version, ok = forks.Version4822(ctx.isNile())+1, true
+	case 102:
+		version, ok = forks.Version4822(ctx.isNile())+2, true
+	}
 	if !ok {
 		return nil
 	}

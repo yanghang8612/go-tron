@@ -159,10 +159,8 @@ var MainnetChainConfig = &ChainConfig{
 
 var NileChainConfig = &ChainConfig{
 	ChainID: 3448148188,
-	// Nile's PQ1 build advertises VERSION_4_8_2_PQ1 while mainnet remains on
-	// VERSION_4_8_2. Keep this chain-specific: version 37 and its PQ proposals
-	// are Nile-only until java-tron deploys them elsewhere.
-	BlockVersion:           37,
+	// Nile's PQ1 builds use a distinct SR version sequence.
+	BlockVersion:           40,
 	GenesisHash:            NileGenesisHash,
 	P2PVersion:             201910292,
 	P2PPort:                18888,

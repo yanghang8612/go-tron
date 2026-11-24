@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -176,6 +177,11 @@ var (
 		Name:  "grpc.port",
 		Usage: "gRPC Wallet service port (0 = disabled)",
 		Value: 50051,
+	}
+	grpcMaxConcurrentStreamsFlag = &cli.Int64Flag{
+		Name:  "grpc.max-concurrent-streams",
+		Usage: "Maximum concurrent gRPC calls per connection (0 uses the default of 100)",
+		Value: grpcapi.DefaultMaxConcurrentStreams,
 	}
 	pprofPortFlag = &cli.IntFlag{
 		Name:  "pprof.port",
@@ -399,6 +405,10 @@ var (
 		Usage:   "Enable sparse speculative VM publication with canonical-boundary serial verification and serial fallback",
 		EnvVars: []string{"GTRON_EXEC_PARALLEL_VM"},
 	}
+	vmConstantCallTimeoutFlag = &cli.Int64Flag{
+		Name:  "vm.constant-call-timeout-ms",
+		Usage: "TVM constant-call timeout in milliseconds (zero uses max_cpu_time_of_one_tx)",
+	}
 	vmSaveInternalTxFlag = &cli.BoolFlag{
 		Name:    "vm.save-internal-tx",
 		Usage:   "Persist VM internal transactions in TransactionInfo (java-tron vm.saveInternalTx)",
@@ -432,6 +442,7 @@ var app = &cli.App{
 		httpPortFlag,
 		jsonrpcPortFlag,
 		grpcPortFlag,
+		grpcMaxConcurrentStreamsFlag,
 		pprofPortFlag,
 		pprofAddrFlag,
 		metricsEnabledFlag,
@@ -518,6 +529,7 @@ var app = &cli.App{
 		syncAsyncCommitFlag,
 		execParallelTransfersFlag,
 		execParallelVMFlag,
+		vmConstantCallTimeoutFlag,
 		vmSaveInternalTxFlag,
 		vmSaveFeaturedInternalTxFlag,
 		vmSaveCancelAllUnfreezeV2DetailsFlag,
@@ -670,6 +682,12 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	cfg := makeConfig(ctx)
+	if cfg.ConstantCallTimeoutMs < 0 || cfg.ConstantCallTimeoutMs > math.MaxInt64/int64(time.Millisecond) {
+		return fmt.Errorf("--%s must be between 0 and %d", vmConstantCallTimeoutFlag.Name, math.MaxInt64/int64(time.Millisecond))
+	}
+	if cfg.GRPCMaxConcurrentStreams < 0 || cfg.GRPCMaxConcurrentStreams > math.MaxInt32 {
+		return fmt.Errorf("--%s must be between 0 and %d", grpcMaxConcurrentStreamsFlag.Name, math.MaxInt32)
+	}
 	if err := validateMetricsConfig(cfg); err != nil {
 		return err
 	}
@@ -1006,7 +1024,9 @@ func gtron(ctx *cli.Context) error {
 		}
 	}
 	// Create transaction pool
-	pool := txpool.New()
+	pool := txpool.NewWithExchangePolicy(func() bool {
+		return bc.DynProps().AllowHardenExchangeCalculation()
+	})
 
 	// Create DPoS engine and wire it into the chain for header verification
 	// in applyBlock (signature recovery, scheduled-witness match, post-fork
@@ -1017,6 +1037,7 @@ func gtron(ctx *cli.Context) error {
 
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
+	backend.SetConstantCallTimeout(time.Duration(cfg.ConstantCallTimeoutMs) * time.Millisecond)
 	bc.SetStateCodeColdHistory(stateSnapshotManager)
 	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
 	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
@@ -1038,7 +1059,7 @@ func gtron(ctx *cli.Context) error {
 	}
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
 	jrpcServer := jsonrpc.NewServer(backend, cfg.JSONRPCPort)
-	grpcServer := grpcapi.NewServer(backend, fmt.Sprintf(":%d", cfg.GRPCPort))
+	grpcServer := grpcapi.NewServerWithMaxConcurrentStreams(backend, fmt.Sprintf(":%d", cfg.GRPCPort), uint32(cfg.GRPCMaxConcurrentStreams))
 
 	// Create P2P layer
 	broadcaster := tnet.NewBroadcastService(nil)
@@ -1222,7 +1243,10 @@ func gtron(ctx *cli.Context) error {
 			Syncing:             syncService.IsSyncing,
 			SyncRemainingBlocks: syncService.SyncRemainingBlocks,
 		}))
-		stack.RegisterLifecycle(metricsapi.NewServer(fmt.Sprintf("%s:%d", cfg.MetricsAddr, cfg.MetricsPort)))
+		chainMetrics := metricsapi.NewChainMetrics()
+		bc.AddBlockHook(chainMetrics.ObserveBlock)
+		bc.SetWitnessSetObserver(chainMetrics.ObserveWitnessSet)
+		stack.RegisterLifecycle(metricsapi.NewServerWithChainMetrics(fmt.Sprintf("%s:%d", cfg.MetricsAddr, cfg.MetricsPort), chainMetrics))
 	}
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)

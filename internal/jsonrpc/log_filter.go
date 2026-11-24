@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 )
@@ -28,10 +29,25 @@ func parseLogFilterJSON(raw json.RawMessage, resolveLatest func() uint64) (LogFi
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return LogFilter{}, fmt.Errorf("invalid filter: %w", err)
 	}
-	return logFilterFromArgs(obj, resolveLatest)
+	return logFilterFromArgs(obj, resolveLatest, nil)
 }
 
-func logFilterFromArgs(obj logFilterArgs, resolveLatest func() uint64) (LogFilter, error) {
+func logFilterFromArgs(obj logFilterArgs, resolveLatest, resolveFinalized func() uint64) (LogFilter, error) {
+	if resolveFinalized == nil &&
+		(strings.EqualFold(obj.FromBlock, "finalized") || strings.EqualFold(obj.ToBlock, "finalized")) {
+		return LogFilter{}, &invalidParamsError{message: "invalid block range"}
+	}
+	parseRangeBound := func(tag string) (uint64, error) {
+		if strings.EqualFold(tag, "finalized") {
+			return resolveFinalized(), nil
+		}
+		height, err := parseBlockParam(tag)
+		if height == ^uint64(0) && resolveLatest != nil {
+			height = resolveLatest()
+		}
+		return height, err
+	}
+
 	filter := LogFilter{}
 	if obj.BlockHash != "" {
 		var h common.Hash
@@ -39,22 +55,16 @@ func logFilterFromArgs(obj logFilterArgs, resolveLatest func() uint64) (LogFilte
 		filter.BlockHash = &h
 	} else {
 		if obj.FromBlock != "" {
-			n, err := parseBlockParam(obj.FromBlock)
+			n, err := parseRangeBound(obj.FromBlock)
 			if err != nil {
 				return filter, fmt.Errorf("invalid fromBlock: %w", err)
-			}
-			if n == ^uint64(0) && resolveLatest != nil {
-				n = resolveLatest()
 			}
 			filter.FromBlock = &n
 		}
 		if obj.ToBlock != "" {
-			n, err := parseBlockParam(obj.ToBlock)
+			n, err := parseRangeBound(obj.ToBlock)
 			if err != nil {
 				return filter, fmt.Errorf("invalid toBlock: %w", err)
-			}
-			if n == ^uint64(0) && resolveLatest != nil {
-				n = resolveLatest()
 			}
 			filter.ToBlock = &n
 		}
@@ -83,6 +93,10 @@ func logFilterFromArgs(obj logFilterArgs, resolveLatest func() uint64) (LogFilte
 					copy(h[:], common.FromHex(single))
 					filter.Topics[i] = []common.Hash{h}
 				} else if json.Unmarshal(rt, &multi) == nil {
+					const maxSubTopics = 1000
+					if len(multi) > maxSubTopics {
+						return filter, &invalidParamsError{message: fmt.Sprintf("exceed max topics: %d", maxSubTopics)}
+					}
 					for _, s := range multi {
 						var h common.Hash
 						copy(h[:], common.FromHex(s))
@@ -94,6 +108,51 @@ func logFilterFromArgs(obj logFilterArgs, resolveLatest func() uint64) (LogFilte
 	}
 
 	return filter, nil
+}
+
+// MaxLogBlockRange is the default block-number difference for log scans.
+const MaxLogBlockRange = 5000
+
+func rpcLogFilter(obj logFilterArgs, head uint64, resolveFinalized func() uint64) (LogFilter, error) {
+	if obj.BlockHash != "" && (obj.FromBlock != "" || obj.ToBlock != "") {
+		return LogFilter{}, &invalidParamsError{message: "cannot specify both BlockHash and FromBlock/ToBlock, choose one or the other"}
+	}
+	if strings.EqualFold(obj.FromBlock, "latest") {
+		obj.FromBlock = "latest"
+	}
+	if strings.EqualFold(obj.ToBlock, "latest") {
+		// An open end follows the head when a stored filter is queried.
+		obj.ToBlock = ""
+	}
+	filter, err := logFilterFromArgs(obj, func() uint64 { return head }, resolveFinalized)
+	if err != nil || filter.BlockHash != nil {
+		return filter, err
+	}
+	if filter.FromBlock == nil {
+		from := head
+		if filter.ToBlock != nil {
+			from = min(from, *filter.ToBlock)
+		}
+		filter.FromBlock = &from
+	}
+	if filter.ToBlock != nil && *filter.FromBlock > *filter.ToBlock {
+		return LogFilter{}, &invalidParamsError{message: "please verify: fromBlock <= toBlock"}
+	}
+	return filter, nil
+}
+
+func validateLogBlockRange(filter LogFilter, head uint64) error {
+	if filter.BlockHash != nil || filter.FromBlock == nil {
+		return nil
+	}
+	to := head
+	if filter.ToBlock != nil {
+		to = min(to, *filter.ToBlock)
+	}
+	if to > *filter.FromBlock && to-*filter.FromBlock > MaxLogBlockRange {
+		return &invalidParamsError{message: fmt.Sprintf("exceed max block range: %d", MaxLogBlockRange)}
+	}
+	return nil
 }
 
 // parseLogFilterObject parses a websocket eth_subscribe log filter. It is kept

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -38,13 +40,16 @@ func NewAPI(backend Backend) *API {
 	return &API{backend: backend}
 }
 
-func (api *API) RegisterRoutes(mux *http.ServeMux) {
+func (api *API) RegisterRoutes(root *http.ServeMux) {
+	mux := http.NewServeMux()
 	mux.HandleFunc("/wallet/getnowblock", api.getNowBlock)
 	mux.HandleFunc("/wallet/getblockbynum", api.getBlockByNum)
 	mux.HandleFunc("/wallet/getaccount", api.getAccount)
 	mux.HandleFunc("/wallet/broadcasttransaction", api.broadcastTransaction)
 	mux.HandleFunc("/wallet/getnodeinfo", api.getNodeInfo)
 	mux.HandleFunc("/wallet/gettransactioncountinpool", api.getTxPoolCount)
+	mux.HandleFunc("/wallet/getpendingsize", api.getPendingSize)
+	mux.HandleFunc("/wallet/gettransactioncountbyblocknum", api.getTransactionCountByBlockNum)
 	mux.HandleFunc("/wallet/getcontract", api.getContract)
 	mux.HandleFunc("/wallet/triggerconstantcontract", api.triggerConstantContract)
 
@@ -173,9 +178,10 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/gettransactionreceiptbyid", api.getTransactionReceiptById)
 	mux.HandleFunc("/wallet/validateaddress", api.validateAddress)
 
+	root.Handle("/wallet/", withTronJSONOptions(mux))
 	// M8.1: /walletsolidity/ and /walletpbft/ confirmation-depth variants
-	api.RegisterSolidityRoutes(mux)
-	api.RegisterPbftRoutes(mux)
+	api.RegisterSolidityRoutes(root)
+	api.RegisterPbftRoutes(root)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +379,7 @@ func (api *API) getTxPoolCount(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeTronJSON(w http.ResponseWriter, msg proto.Message) {
-	data, err := marshalTronJSON(msg)
+	data, err := responseTronJSON(w).marshal(msg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -383,7 +389,7 @@ func writeTronJSON(w http.ResponseWriter, msg proto.Message) {
 }
 
 func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
-	data, err := MarshalBlock(msg)
+	data, err := json.Marshal(responseTronJSON(w).block(msg))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -552,7 +558,7 @@ func writeTransactionJSON(w http.ResponseWriter, tx *corepb.Transaction) {
 		http.Error(w, "nil transaction", http.StatusInternalServerError)
 		return
 	}
-	result := marshalMessage(tx.ProtoReflect())
+	result := responseTronJSON(w).marshalMessage(tx.ProtoReflect())
 	addTxComputedFields(result, tx.ProtoReflect())
 	data, _ := json.Marshal(result)
 	w.Header().Set("Content-Type", "application/json")
@@ -690,7 +696,7 @@ func (api *API) triggerSmartContract(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	if tx != nil {
-		txResult := marshalMessage(tx.ProtoReflect())
+		txResult := responseTronJSON(w).marshalMessage(tx.ProtoReflect())
 		addTxComputedFields(txResult, tx.ProtoReflect())
 		resp["transaction"] = txResult
 	}
@@ -917,7 +923,7 @@ func (api *API) writeTransactionInfoByBlockNum(w http.ResponseWriter, num uint64
 	}
 	var result []map[string]interface{}
 	for _, info := range infos {
-		m := marshalMessage(info.ProtoReflect())
+		m := responseTronJSON(w).marshalMessage(info.ProtoReflect())
 		result = append(result, m)
 	}
 	if result == nil {
@@ -1004,18 +1010,10 @@ func (api *API) writeBlockRange(w http.ResponseWriter, start, end uint64) {
 }
 
 func writeBlockListJSON(w http.ResponseWriter, blocks []*types.Block) {
-	var blockList []map[string]interface{}
-	for _, b := range blocks {
-		data, err := MarshalBlock(b.Proto())
-		if err != nil {
-			continue
-		}
-		var m map[string]interface{}
-		json.Unmarshal(data, &m)
-		blockList = append(blockList, m)
-	}
-	if blockList == nil {
-		blockList = []map[string]interface{}{}
+	blockList := make([]map[string]any, 0, len(blocks))
+	opts := responseTronJSON(w)
+	for _, block := range blocks {
+		blockList = append(blockList, opts.block(block.Proto()))
 	}
 	resp := map[string]interface{}{
 		"block": blockList,
@@ -1248,7 +1246,7 @@ func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data, _ := json.Marshal(res)
+	data, _ := responseTronJSON(w).marshalInt64Fields(res)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1278,7 +1276,7 @@ func (api *API) handleGetChainParameters(w http.ResponseWriter, r *http.Request,
 	resp := map[string]interface{}{
 		"chainParameter": params,
 	}
-	data, _ := json.Marshal(resp)
+	data, _ := responseTronJSON(w).marshalInt64Fields(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1308,7 +1306,7 @@ func (api *API) handleListWitnesses(w http.ResponseWriter, r *http.Request, boun
 	resp := map[string]interface{}{
 		"witnesses": witnesses,
 	}
-	data, _ := json.Marshal(resp)
+	data, _ := responseTronJSON(w).marshalInt64Fields(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1319,77 +1317,68 @@ func (api *API) getPaginatedNowWitnessList(w http.ResponseWriter, r *http.Reques
 
 func (api *API) handleGetPaginatedNowWitnessList(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	var body struct {
-		Offset int `json:"offset"`
-		Limit  int `json:"limit"`
+		Offset  int64 `json:"offset"`
+		Limit   int64 `json:"limit"`
+		Visible bool  `json:"visible"`
 	}
 	if r.Method == http.MethodGet {
-		if v := r.URL.Query().Get("offset"); v != "" {
-			offset, err := strconv.Atoi(v)
-			if err != nil {
-				http.Error(w, "invalid offset", http.StatusBadRequest)
-				return
-			}
-			body.Offset = offset
+		query := r.URL.Query()
+		var err error
+		body.Offset, err = strconv.ParseInt(query.Get("offset"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid offset", http.StatusBadRequest)
+			return
 		}
-		if v := r.URL.Query().Get("limit"); v != "" {
-			limit, err := strconv.Atoi(v)
-			if err != nil {
-				http.Error(w, "invalid limit", http.StatusBadRequest)
-				return
-			}
-			body.Limit = limit
+		body.Limit, err = strconv.ParseInt(query.Get("limit"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
 		}
+		body.Visible = strings.EqualFold(query.Get("visible"), "true")
 	} else if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if body.Limit <= 0 {
-		body.Limit = 20
-	}
-	if body.Offset < 0 {
-		http.Error(w, "invalid offset", http.StatusBadRequest)
+	if body.Limit <= 0 || body.Offset < 0 {
+		writeEmptyJSON(w)
 		return
 	}
-	var (
-		witnesses []*WitnessInfo
-		err       error
-	)
+	var witnesses []*WitnessInfo
+	var err error
 	if boundFn == nil {
-		witnesses, err = api.backend.ListWitnesses()
+		witnesses, err = api.backend.GetPaginatedNowWitnessList(body.Offset, body.Limit)
 	} else {
 		blockNum, ok := resolveBound(w, boundFn)
 		if !ok {
 			return
 		}
-		witnesses, err = api.backend.ListWitnessesAt(blockNum)
+		witnesses, err = api.backend.GetPaginatedNowWitnessListAt(blockNum, body.Offset, body.Limit)
+	}
+	if errors.Is(err, ErrWitnessMaintenance) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"Error": "class org.tron.core.exception.MaintenanceUnavailableException : " + err.Error()})
+		return
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	witnesses = paginateWitnessInfos(witnesses, body.Offset, body.Limit)
-	resp := map[string]interface{}{
-		"witnesses": witnesses,
+	if len(witnesses) == 0 {
+		writeEmptyJSON(w)
+		return
 	}
-	data, _ := json.Marshal(resp)
+	rows := make([]map[string]any, 0, len(witnesses))
+	opts := responseTronJSON(w)
+	for _, witness := range witnesses {
+		pb := witness.Proto()
+		row := opts.marshalMessage(pb.ProtoReflect())
+		if body.Visible && len(pb.Address) > 0 {
+			row["address"] = crypto.AddressToBase58(common.BytesToAddress(pb.Address))
+		}
+		rows = append(rows, row)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
-}
-
-func paginateWitnessInfos(witnesses []*WitnessInfo, offset, limit int) []*WitnessInfo {
-	if limit <= 0 || offset >= len(witnesses) {
-		return []*WitnessInfo{}
-	}
-	remaining := len(witnesses) - offset
-	if limit > remaining {
-		limit = remaining
-	}
-	end := offset + limit
-	out := witnesses[offset:end]
-	if out == nil {
-		return []*WitnessInfo{}
-	}
-	return out
+	json.NewEncoder(w).Encode(map[string]any{"witnesses": rows})
 }
 
 func (api *API) getNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
@@ -1414,7 +1403,7 @@ func (api *API) handleGetNextMaintenanceTime(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	resp := map[string]int64{"num": t}
+	resp := map[string]any{"num": responseTronJSON(w).int64(t)}
 	data, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -1442,9 +1431,7 @@ func (api *API) handleGetBurnTrx(w http.ResponseWriter, r *http.Request, boundFn
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data, _ := json.Marshal(map[string]int64{"num": burned})
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	writeInt64JSON(w, "burnTrxAmount", burned)
 }
 
 func (api *API) getBandwidthPrices(w http.ResponseWriter, r *http.Request) {
@@ -1617,7 +1604,8 @@ func (api *API) handleListProposals(w http.ResponseWriter, r *http.Request, boun
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"proposals": proposals})
+	data, _ := responseTronJSON(w).marshalInt64Fields(map[string]any{"proposals": proposals})
+	w.Write(append(data, '\n'))
 }
 
 func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
@@ -1653,7 +1641,7 @@ func (api *API) handleGetDelegatedResource(w http.ResponseWriter, r *http.Reques
 	if list == nil {
 		list = []*DelegatedResourceInfo{}
 	}
-	data, _ := json.Marshal(map[string]interface{}{"delegatedResource": list})
+	data, _ := responseTronJSON(w).marshalInt64Fields(map[string]interface{}{"delegatedResource": list})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1681,7 +1669,7 @@ func (api *API) handleGetDelegatedResourceV2(w http.ResponseWriter, r *http.Requ
 	if list == nil {
 		list = []*DelegatedResourceInfo{}
 	}
-	data, _ := json.Marshal(map[string]interface{}{"delegatedResource": list})
+	data, _ := responseTronJSON(w).marshalInt64Fields(map[string]interface{}{"delegatedResource": list})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1909,7 +1897,7 @@ func (api *API) handleGetAvailableUnfreezeCount(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data, _ := json.Marshal(info)
+	data, _ := responseTronJSON(w).marshalInt64Fields(info)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -1921,7 +1909,20 @@ func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
 func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn blockBoundFunc) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
-	if addrStr == "" {
+	if r.Method == http.MethodGet {
+		if strings.TrimSpace(addrStr) == "" {
+			writeInt64JSON(w, "reward", 0)
+			return
+		}
+		// java-tron's Util.getAddress detects hex and Base58Check on GET
+		// independently of the visible flag.
+		switch {
+		case strings.HasPrefix(addrStr, "41"):
+			visible = false
+		case strings.HasPrefix(addrStr, "T"):
+			visible = true
+		}
+	} else if addrStr == "" {
 		var body struct {
 			Address string `json:"address"`
 			Visible bool   `json:"visible"`
@@ -1955,7 +1956,11 @@ func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data, _ := json.Marshal(info)
+	var result any = info
+	if info != nil && responseTronJSON(w) {
+		result = map[string]any{"reward": responseTronJSON(w).int64(info.Reward)}
+	}
+	data, _ := json.Marshal(result)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -2039,7 +2044,7 @@ func (api *API) getTransactionListFromPending(w http.ResponseWriter, r *http.Req
 	}
 	var result []map[string]interface{}
 	for _, tx := range txs {
-		m := marshalMessage(tx.ProtoReflect())
+		m := responseTronJSON(w).marshalMessage(tx.ProtoReflect())
 		addTxComputedFields(m, tx.ProtoReflect())
 		result = append(result, m)
 	}
@@ -2194,7 +2199,7 @@ func (api *API) handleGetAssetIssueList(w http.ResponseWriter, r *http.Request, 
 	}
 	var list []map[string]any
 	for _, a := range assets {
-		list = append(list, marshalMessage(a.ProtoReflect()))
+		list = append(list, responseTronJSON(w).marshalMessage(a.ProtoReflect()))
 	}
 	if list == nil {
 		list = []map[string]any{}
@@ -2240,7 +2245,7 @@ func (api *API) handleGetPaginatedAssetIssueList(w http.ResponseWriter, r *http.
 	}
 	var list []map[string]any
 	for _, a := range assets {
-		list = append(list, marshalMessage(a.ProtoReflect()))
+		list = append(list, responseTronJSON(w).marshalMessage(a.ProtoReflect()))
 	}
 	if list == nil {
 		list = []map[string]any{}
@@ -2493,7 +2498,7 @@ func writeMarketOrderListJSON(w http.ResponseWriter, orders []*corepb.MarketOrde
 		if o == nil {
 			continue
 		}
-		list = append(list, marshalMessage(o.ProtoReflect()))
+		list = append(list, responseTronJSON(w).marshalMessage(o.ProtoReflect()))
 	}
 	if list == nil {
 		list = []map[string]any{}

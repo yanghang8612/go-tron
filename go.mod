@@ -7,6 +7,7 @@ require (
 	github.com/VictoriaMetrics/fastcache v1.13.0
 	github.com/cloudflare/circl v1.6.3
 	github.com/cockroachdb/pebble v1.1.5
+	github.com/consensys/gnark-crypto v0.18.1
 	github.com/deckarep/golang-set/v2 v2.6.0
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1
 	github.com/erigontech/fastkeccak v0.1.1-0.20260408010752-08e7b6602268
@@ -18,6 +19,8 @@ require (
 	github.com/holiman/uint256 v1.3.2
 	github.com/klauspost/compress v1.17.11
 	github.com/mr-tron/base58 v1.3.0
+	github.com/prometheus/client_golang v1.15.0
+	github.com/prometheus/common v0.42.0
 	github.com/urfave/cli/v2 v2.27.7
 	go.opentelemetry.io/otel v1.40.0
 	golang.org/x/crypto v0.50.0
@@ -40,7 +43,6 @@ require (
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
-	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.5.0 // indirect
 	github.com/emicklei/dot v1.6.2 // indirect
@@ -59,9 +61,7 @@ require (
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.4.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_golang v1.15.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
-	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect

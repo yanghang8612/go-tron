@@ -10,6 +10,21 @@ import (
 	"github.com/tronprotocol/go-tron/vm/tracers"
 )
 
+// FilterBlockEvent contains logs captured from a single block's receipts
+// while that block is still addressable, including logs from an orphan.
+type FilterBlockEvent struct {
+	Block   *types.Block
+	Logs    []*RPCLog
+	Removed bool
+}
+
+// FilterEventBackend publishes block events as ordered batches. A reorg batch
+// contains removed blocks followed by replacement blocks in one delivery.
+type FilterEventBackend interface {
+	SubscribeFilterEvents(chan<- []FilterBlockEvent, func() bool)
+	UnsubscribeFilterEvents(chan<- []FilterBlockEvent)
+}
+
 // LogFilter selects logs across a block range with optional address/topic constraints.
 type LogFilter struct {
 	FromBlock *uint64
@@ -149,6 +164,7 @@ type Backend interface {
 	// Chain metadata
 	ChainID() int64
 	BlockNumber() uint64
+	SolidifiedBlockNum() uint64
 
 	// Block queries — same signatures as tronapi.Backend, already on TronBackend
 	GetBlockByNumber(num uint64) (*types.Block, error)
@@ -200,6 +216,7 @@ type Backend interface {
 
 	// Node metadata
 	GasPrice() int64 // energy fee in SUN per energy unit
+	GasPriceAt(timestamp int64) (int64, error)
 	PeerCount() int
 	SyncInfo() *tronapi.SyncInfo
 	FreezerStatus() (*FreezerStatus, error)

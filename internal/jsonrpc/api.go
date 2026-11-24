@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"github.com/tronprotocol/go-tron/common"
@@ -217,7 +218,11 @@ func (api *API) ethNewFilter(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	lf, err := parseLogFilterJSON(p[0], api.backend.BlockNumber)
+	var args logFilterArgs
+	if err := json.Unmarshal(p[0], &args); err != nil {
+		return nil, fmt.Errorf("invalid filter: %w", err)
+	}
+	lf, err := rpcLogFilter(args, api.backend.BlockNumber(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -249,11 +254,7 @@ func (api *API) ethGetFilterLogs(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	logs, ok := api.filters.GetFilterLogs(p[0])
-	if !ok {
-		return nil, fmt.Errorf("filter not found")
-	}
-	return logs, nil
+	return api.filters.GetFilterLogs(p[0])
 }
 
 func (api *API) ethEstimateGas(params json.RawMessage) (interface{}, error) {
@@ -261,12 +262,7 @@ func (api *API) ethEstimateGas(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	var txObj struct {
-		From  string `json:"from"`
-		To    string `json:"to"`
-		Data  string `json:"data"`
-		Value string `json:"value"`
-	}
+	var txObj callArgs
 	if err := json.Unmarshal(p[0], &txObj); err != nil {
 		return nil, fmt.Errorf("invalid tx object: %w", err)
 	}
@@ -280,7 +276,10 @@ func (api *API) ethEstimateGas(params json.RawMessage) (interface{}, error) {
 		a := common.BytesToAddress(common.FromHex(txObj.To))
 		to = &a
 	}
-	data := common.FromHex(txObj.Data)
+	data, err := txObj.callData()
+	if err != nil {
+		return nil, err
+	}
 	var value int64
 	if txObj.Value != "" && txObj.Value != "0x0" && txObj.Value != "0x" {
 		value, _ = strconv.ParseInt(txObj.Value, 0, 64)
@@ -402,6 +401,13 @@ func isBlockHashParam(s string) bool {
 	return len(s) == 66 && s[0:2] == "0x"
 }
 
+func parseBlockLookupParam(tag string, solidifiedBlockNum func() uint64) (uint64, error) {
+	if strings.EqualFold(tag, "finalized") {
+		return solidifiedBlockNum(), nil
+	}
+	return parseBlockParam(strings.ToLower(tag))
+}
+
 func blockByNumberOrHash(backend Backend, blockParam string) (*types.Block, error) {
 	if isBlockHashParam(blockParam) {
 		var hash common.Hash
@@ -415,7 +421,7 @@ func blockByNumberOrHash(backend Backend, blockParam string) (*types.Block, erro
 		}
 		return block, nil
 	}
-	num, err := parseBlockParam(blockParam)
+	num, err := parseBlockLookupParam(blockParam, backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -575,12 +581,7 @@ func (api *API) ethCall(params json.RawMessage) (interface{}, error) {
 		return nil, fmt.Errorf("invalid params")
 	}
 
-	var txObj struct {
-		From  string `json:"from"`
-		To    string `json:"to"`
-		Data  string `json:"data"`
-		Value string `json:"value"`
-	}
+	var txObj callArgs
 	if err := json.Unmarshal(p[0], &txObj); err != nil {
 		return nil, fmt.Errorf("invalid tx object: %w", err)
 	}
@@ -601,7 +602,10 @@ func (api *API) ethCall(params json.RawMessage) (interface{}, error) {
 		return nil, err
 	}
 
-	data := common.FromHex(txObj.Data)
+	data, err := txObj.callData()
+	if err != nil {
+		return nil, err
+	}
 
 	var value int64
 	if txObj.Value != "" && txObj.Value != "0x0" && txObj.Value != "0x" {
@@ -638,7 +642,7 @@ func (api *API) ethGetBlockByNumber(params json.RawMessage) (interface{}, error)
 		json.Unmarshal(p[1], &fullTx)
 	}
 
-	num, err := parseBlockParam(blockTag)
+	num, err := parseBlockLookupParam(blockTag, api.backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -691,7 +695,7 @@ func (api *API) ethGetBlockTransactionCountByNumber(params json.RawMessage) (int
 	}
 	var blockTag string
 	json.Unmarshal(p[0], &blockTag)
-	num, err := parseBlockParam(blockTag)
+	num, err := parseBlockLookupParam(blockTag, api.backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -846,7 +850,7 @@ func (api *API) ethGetTransactionByBlockNumberAndIndex(params json.RawMessage) (
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	num, err := parseBlockParam(p[0])
+	num, err := parseBlockLookupParam(p[0], api.backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -923,11 +927,22 @@ func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, e
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err
 	}
-	logIndexBase, err := api.receiptLogIndexBase(block, index, info)
+	var progress receiptProgress
+	if index > 0 {
+		infos, err := api.backend.GetTransactionInfoByBlockNum(block.Number())
+		if err != nil {
+			return nil, err
+		}
+		progress, err = receiptProgressFromInfos(block, index, infos)
+		if err != nil {
+			return nil, err
+		}
+	}
+	price, err := api.backend.GasPriceAt(block.Timestamp())
 	if err != nil {
 		return nil, err
 	}
-	return receiptToRPCWithLogTimestamp(hash, tx, info, block, index, logIndexBase), nil
+	return receiptToRPC(hash, block.Transactions()[index], info, block, index, progress, price), nil
 }
 func (api *API) ethGetBlockReceipts(params json.RawMessage) (interface{}, error) {
 	var p []string
@@ -945,8 +960,16 @@ func (api *API) ethGetLogs(params json.RawMessage) (interface{}, error) {
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
-	filter, err := parseLogFilterJSON(p[0], api.backend.BlockNumber)
+	var args logFilterArgs
+	if err := json.Unmarshal(p[0], &args); err != nil {
+		return nil, fmt.Errorf("invalid filter: %w", err)
+	}
+	head := api.backend.BlockNumber()
+	filter, err := rpcLogFilter(args, head, api.backend.SolidifiedBlockNum)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateLogBlockRange(filter, head); err != nil {
 		return nil, err
 	}
 	logs, err := api.backend.GetLogs(filter)
@@ -1048,7 +1071,7 @@ func transactionByBlockIndex(block *types.Block, index uint64) interface{} {
 }
 
 func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error) {
-	if block == nil {
+	if block == nil || block.Number() == 0 {
 		return nil, nil
 	}
 	txs := block.Transactions()
@@ -1062,8 +1085,12 @@ func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error
 	if len(infos) != len(txs) {
 		return nil, fmt.Errorf("transaction info count %d does not match block transaction count %d for block %d", len(infos), len(txs), block.Number())
 	}
+	price, err := backend.GasPriceAt(block.Timestamp())
+	if err != nil {
+		return nil, err
+	}
 	out := make([]interface{}, 0, len(txs))
-	logIndexBase := uint64(0)
+	var progress receiptProgress
 	for i, tx := range txs {
 		if tx == nil {
 			return nil, fmt.Errorf("block %d transaction %d is nil", block.Number(), i)
@@ -1078,46 +1105,45 @@ func blockReceiptsToRPC(backend Backend, block *types.Block) (interface{}, error
 		if err := validateTransactionInfoID(hash, infos[i], fmt.Sprintf("block %d transaction %d", block.Number(), i)); err != nil {
 			return nil, err
 		}
-		out = append(out, receiptToRPC(hash, tx.Proto(), infos[i], block, i, logIndexBase))
-		logIndexBase += uint64(len(infos[i].GetLog()))
+		out = append(out, receiptToRPC(hash, tx, infos[i], block, i, progress, price))
+		progress.add(infos[i])
 	}
 	return out, nil
 }
 
-func (api *API) receiptLogIndexBase(block *types.Block, txIndex int, info *corepb.TransactionInfo) (uint64, error) {
-	if txIndex <= 0 || len(info.GetLog()) == 0 {
-		return 0, nil
-	}
-	infos, err := api.backend.GetTransactionInfoByBlockNum(block.Number())
-	if err != nil {
-		return 0, err
-	}
-	return receiptLogIndexBaseFromInfos(block, txIndex, infos)
+type receiptProgress struct {
+	logIndex uint64
+	energy   uint64
 }
 
-func receiptLogIndexBaseFromInfos(block *types.Block, txIndex int, infos []*corepb.TransactionInfo) (uint64, error) {
+func (p *receiptProgress) add(info *corepb.TransactionInfo) {
+	p.logIndex += uint64(len(info.GetLog()))
+	p.energy += uint64(info.GetReceipt().GetEnergyUsageTotal())
+}
+
+func receiptProgressFromInfos(block *types.Block, txIndex int, infos []*corepb.TransactionInfo) (receiptProgress, error) {
 	txs := block.Transactions()
 	if len(infos) != len(txs) {
-		return 0, fmt.Errorf("transaction info count %d does not match block transaction count %d for block %d", len(infos), len(txs), block.Number())
+		return receiptProgress{}, fmt.Errorf("transaction info count %d does not match block transaction count %d for block %d", len(infos), len(txs), block.Number())
 	}
-	var base uint64
+	var progress receiptProgress
 	for i := 0; i < txIndex; i++ {
 		if txs[i] == nil {
-			return 0, fmt.Errorf("block %d transaction %d is nil", block.Number(), i)
+			return receiptProgress{}, fmt.Errorf("block %d transaction %d is nil", block.Number(), i)
 		}
 		if infos[i] == nil {
-			return 0, fmt.Errorf("block %d transaction info %d is nil", block.Number(), i)
+			return receiptProgress{}, fmt.Errorf("block %d transaction info %d is nil", block.Number(), i)
 		}
 		hash := txs[i].Hash()
 		if err := validateTransactionInfoBlockNumber(block.Number(), infos[i], fmt.Sprintf("block %d transaction %d", block.Number(), i)); err != nil {
-			return 0, err
+			return receiptProgress{}, err
 		}
 		if err := validateTransactionInfoID(hash, infos[i], fmt.Sprintf("block %d transaction %d", block.Number(), i)); err != nil {
-			return 0, err
+			return receiptProgress{}, err
 		}
-		base += uint64(len(infos[i].GetLog()))
+		progress.add(infos[i])
 	}
-	return base, nil
+	return progress, nil
 }
 
 func transactionReceiptLookupError(hash common.Hash) error {
@@ -1182,43 +1208,16 @@ func validateTransactionInfoBlockNumber(blockNum uint64, info *corepb.Transactio
 }
 
 // receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.
-func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.TransactionInfo, block *types.Block, index int, logIndexBase uint64) map[string]interface{} {
-	// Extract the sender address from the transaction.
-	from := "0x0000000000000000000000000000000000000000"
-	if len(tx.GetRawData().GetContract()) > 0 {
-		c := tx.RawData.Contract[0]
-		switch c.Type {
-		case corepb.Transaction_Contract_TriggerSmartContract:
-			var msg contractpb.TriggerSmartContract
-			if c.Parameter.UnmarshalTo(&msg) == nil {
-				from = hex20(msg.OwnerAddress)
-			}
-		case corepb.Transaction_Contract_CreateSmartContract:
-			var msg contractpb.CreateSmartContract
-			if c.Parameter.UnmarshalTo(&msg) == nil {
-				from = hex20(msg.OwnerAddress)
-			}
-		case corepb.Transaction_Contract_TransferContract:
-			var msg contractpb.TransferContract
-			if c.Parameter.UnmarshalTo(&msg) == nil {
-				from = hex20(msg.OwnerAddress)
-			}
-		}
+func receiptToRPC(hash common.Hash, tx *types.Transaction, info *corepb.TransactionInfo, block *types.Block, index int, progress receiptProgress, price int64) map[string]interface{} {
+	owner, _, _ := tx.ContractOwnerAddress()
+	to := receiptRecipient(tx)
+	var contractAddress any
+	if tx.ContractType() == corepb.Transaction_Contract_CreateSmartContract {
+		contractAddress = receiptAddress(info.GetContractAddress())
 	}
-
 	status := "0x1"
 	if info.Result == corepb.TransactionInfo_FAILED {
 		status = "0x0"
-	}
-
-	var contractAddr interface{} = nil
-	if len(info.ContractAddress) > 0 {
-		contractAddr = hex20(info.ContractAddress)
-	}
-
-	var toAddr interface{} = "0x0000000000000000000000000000000000000000"
-	if len(tx.GetRawData().GetContract()) > 0 && tx.RawData.Contract[0].Type == corepb.Transaction_Contract_CreateSmartContract {
-		toAddr = nil
 	}
 
 	energyUsed := int64(0)
@@ -1238,10 +1237,11 @@ func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.Transac
 			"topics":           topics,
 			"data":             hexBytes(l.Data),
 			"blockNumber":      hexUint64(block.Number()),
+			"blockTimestamp":   hexUint64(uint64(block.Timestamp() / 1000)),
 			"transactionHash":  hexHash(hash),
 			"transactionIndex": hexUint64(uint64(index)),
 			"blockHash":        hexHash(block.Hash()),
-			"logIndex":         hexUint64(logIndexBase + uint64(li)),
+			"logIndex":         hexUint64(progress.logIndex + uint64(li)),
 			"removed":          false,
 		})
 	}
@@ -1251,27 +1251,17 @@ func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.Transac
 		"transactionIndex":  hexUint64(uint64(index)),
 		"blockHash":         hexHash(block.Hash()),
 		"blockNumber":       hexUint64(block.Number()),
-		"from":              from,
-		"to":                toAddr,
-		"cumulativeGasUsed": hexUint64(uint64(energyUsed)),
+		"from":              receiptAddress(owner),
+		"to":                receiptAddress(to),
+		"cumulativeGasUsed": hexUint64(progress.energy + uint64(energyUsed)),
+		"effectiveGasPrice": hexUint64(uint64(price)),
 		"gasUsed":           hexUint64(uint64(energyUsed)),
-		"contractAddress":   contractAddr,
+		"contractAddress":   contractAddress,
 		"logs":              logs,
 		"logsBloom":         "0x" + zeroBloom(),
 		"status":            status,
 		"type":              "0x0",
 	}
-}
-
-// receiptToRPCWithLogTimestamp adds the java-tron-compatible timestamp field
-// exposed by eth_getTransactionReceipt. eth_getBlockReceipts intentionally
-// keeps the frozen Ethereum batch-receipt shape without this extension.
-func receiptToRPCWithLogTimestamp(hash common.Hash, tx *corepb.Transaction, info *corepb.TransactionInfo, block *types.Block, index int, logIndexBase uint64) map[string]interface{} {
-	receipt := receiptToRPC(hash, tx, info, block, index, logIndexBase)
-	for _, entry := range receipt["logs"].([]map[string]interface{}) {
-		entry["blockTimestamp"] = hexUint64(uint64(block.Timestamp() / 1000))
-	}
-	return receipt
 }
 
 // blockToRPC converts a types.Block to the Ethereum JSON block object.

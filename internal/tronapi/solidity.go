@@ -11,10 +11,12 @@ import (
 // RegisterSolidityRoutes registers /walletsolidity/ and /walletpbft/ prefixed endpoints.
 // Most handlers are identical to /wallet/ and are registered by reference.
 // Only block-returning endpoints differ: they clamp to the solid/pbft head.
-func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
+func (api *API) RegisterSolidityRoutes(root *http.ServeMux) {
+	mux := http.NewServeMux()
 	// Block queries — variant-specific (return solid block)
 	mux.HandleFunc("/walletsolidity/getnowblock", api.getSolidNowBlock)
 	mux.HandleFunc("/walletsolidity/getblockbynum", api.getSolidBlockByNum)
+	mux.HandleFunc("/walletsolidity/gettransactioncountbyblocknum", api.getSolidTransactionCountByBlockNum)
 	mux.HandleFunc("/walletsolidity/gettransactioninfobyblocknum", api.getSolidTxInfoByBlockNum)
 
 	// Other block-returning endpoints are bound-aware too: block ids carry their
@@ -70,12 +72,15 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getavailableunfreezecount", api.getSolidAvailableUnfreezeCount)
 	mux.HandleFunc("/walletsolidity/estimateenergy", api.estimateSolidEnergy)
 	mux.HandleFunc("/walletsolidity/triggerconstantcontract", api.triggerSolidConstantContract)
+	root.Handle("/walletsolidity/", withTronJSONOptions(mux))
 }
 
 // RegisterPbftRoutes registers /walletpbft/ prefixed endpoints.
-func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
+func (api *API) RegisterPbftRoutes(root *http.ServeMux) {
+	mux := http.NewServeMux()
 	mux.HandleFunc("/walletpbft/getnowblock", api.getPbftNowBlock)
 	mux.HandleFunc("/walletpbft/getblockbynum", api.getPbftBlockByNum)
+	mux.HandleFunc("/walletpbft/gettransactioncountbyblocknum", api.getPbftTransactionCountByBlockNum)
 	mux.HandleFunc("/walletpbft/gettransactioninfobyblocknum", api.getPbftTxInfoByBlockNum)
 
 	mux.HandleFunc("/walletpbft/getblockbyid", api.getPbftBlockByID)
@@ -127,9 +132,18 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getavailableunfreezecount", api.getPbftAvailableUnfreezeCount)
 	mux.HandleFunc("/walletpbft/estimateenergy", api.estimatePbftEnergy)
 	mux.HandleFunc("/walletpbft/triggerconstantcontract", api.triggerPbftConstantContract)
+	root.Handle("/walletpbft/", withTronJSONOptions(mux))
 }
 
 type blockBoundFunc func() (uint64, error)
+
+func (api *API) getSolidTransactionCountByBlockNum(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionCountByBlockNum(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftTransactionCountByBlockNum(w http.ResponseWriter, r *http.Request) {
+	api.handleGetTransactionCountByBlockNum(w, r, api.pbftBoundNum)
+}
 
 // solidBoundNum returns the solid block number as the upper bound.
 func (api *API) solidBoundNum() (uint64, error) {

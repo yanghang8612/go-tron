@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -69,6 +70,8 @@ func (a *VMActuator) Validate(ctx *Context) error {
 		if owner != origin {
 			return errors.New("ownerAddress is not equals originAddress")
 		}
+		// The generated Go decoder yields a UTF-8 string. Its byte length
+		// matches Java's protobuf getNameBytes() check since 4.8.2.2.
 		if len(csc.NewContract.Name) > contractNameMaxLen {
 			return errors.New("contractName's length cannot be greater than 32")
 		}
@@ -281,6 +284,12 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
+	cfg.StakeV2TimeGuard = ctx.PassVersion4822()
+	if !ctx.TrustTransactionRet && ctx.Tracer == nil {
+		cfg.Deadline = time.Now().Add(time.Duration(ctx.DynProps.MaxCpuTimeOfOneTx()) * time.Millisecond)
+	}
+	cfg.ValidateDeploymentHashes = cfg.StakeV2TimeGuard
+	cfg.StorageAliasCheck = ctx.PassVersion(forks.Version4822(ctx.isNile()) + 1)
 	cfg.Tracer = ctx.Tracer
 	tokenID := int64(0)
 	tokenValue := int64(0)
@@ -329,7 +338,6 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 
 	result.ContractRet = 1 // SUCCESS
 
-	ctx.State.SetContract(contractAddr, sc)
 	// java-tron RepositoryImpl.commitContractCache creates the dedicated ABI
 	// row alongside ContractStore on first commit. Keep the ABI in its own
 	// state domain as well as in the compatibility contract metadata payload.
@@ -390,6 +398,11 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
+	cfg.StakeV2TimeGuard = ctx.PassVersion4822()
+	if !ctx.TrustTransactionRet && ctx.Tracer == nil {
+		cfg.Deadline = time.Now().Add(time.Duration(ctx.DynProps.MaxCpuTimeOfOneTx()) * time.Millisecond)
+	}
+	cfg.StorageAliasCheck = ctx.PassVersion(forks.Version4822(ctx.isNile()) + 1)
 	cfg.Tracer = ctx.Tracer
 	tokenID := int64(0)
 	tokenValue := int64(0)

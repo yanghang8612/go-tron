@@ -7,6 +7,7 @@
 package metricsapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/metrics"
 	metricsprometheus "github.com/ethereum/go-ethereum/metrics/prometheus"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 )
 
@@ -33,9 +36,18 @@ func NewServer(addr string) *Server {
 	return newServer(addr, metrics.DefaultRegistry)
 }
 
-func newServer(addr string, registry metrics.Registry) *Server {
+// NewServerWithChainMetrics adds the node's isolated TRON metric families to
+// the existing geth-compatible /metrics endpoint.
+func NewServerWithChainMetrics(addr string, chain *ChainMetrics) *Server {
+	return newServer(addr, metrics.DefaultRegistry, chain.registry)
+}
+
+func newServer(addr string, registry metrics.Registry, chainRegistry ...*prometheus.Registry) *Server {
 	mux := http.NewServeMux()
 	handler := metricsprometheus.Handler(registry)
+	if len(chainRegistry) != 0 {
+		handler = appendChainMetrics(handler, chainRegistry[0])
+	}
 	mux.Handle("/metrics", handler)
 	// Keep an Erigon-compatible alias for existing dashboards and scrape jobs.
 	mux.Handle("/debug/metrics/prometheus", handler)
@@ -48,6 +60,35 @@ func newServer(addr string, registry metrics.Registry) *Server {
 		},
 		addr: addr,
 	}
+}
+
+type combinedMetricsWriter struct {
+	http.ResponseWriter
+}
+
+func (w combinedMetricsWriter) Write(data []byte) (int, error) {
+	// The geth handler's length describes only its own contribution.
+	w.Header().Del("Content-Length")
+	return w.ResponseWriter.Write(data)
+}
+
+func appendChainMetrics(base http.Handler, registry *prometheus.Registry) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		families, err := registry.Gather()
+		if err != nil {
+			http.Error(w, "collect TRON metrics", http.StatusInternalServerError)
+			return
+		}
+		var chain bytes.Buffer
+		for _, family := range families {
+			if _, err := expfmt.MetricFamilyToText(&chain, family); err != nil {
+				http.Error(w, "encode TRON metrics", http.StatusInternalServerError)
+				return
+			}
+		}
+		base.ServeHTTP(combinedMetricsWriter{w}, r)
+		_, _ = w.Write(chain.Bytes())
+	})
 }
 
 // ListenAddr returns the actual bound address after Start.

@@ -65,11 +65,9 @@ func TestTxPool_NoContractReject(t *testing.T) {
 	}
 }
 
-// TestTxPool_RejectsExchangeTransaction locks down master PR #6507's
-// unconditional mempool reject for ExchangeTransactionContract — independent
-// of fork state, since java-tron's pushTransaction has no version gate.
-func TestTxPool_RejectsExchangeTransaction(t *testing.T) {
-	pool := New()
+func TestTxPool_ExchangeTransactionFollowsHardenedPolicy(t *testing.T) {
+	hardened := false
+	pool := NewWithExchangePolicy(func() bool { return hardened })
 	var addr tcommon.Address
 	addr[0] = 0x41
 	addr[20] = 0x01
@@ -94,6 +92,15 @@ func TestTxPool_RejectsExchangeTransaction(t *testing.T) {
 	})
 	if err := pool.Add(tx); err != ErrExchangeRejected {
 		t.Fatalf("expected ErrExchangeRejected, got %v", err)
+	}
+	hardened = true
+	if err := pool.Add(tx); err != nil {
+		t.Fatalf("admit exchange with TIP-836 active: %v", err)
+	}
+	pool.Remove(tx.Hash())
+	hardened = false
+	if err := pool.Add(tx); err != ErrExchangeRejected {
+		t.Fatalf("reject exchange after TIP-836 reversal: %v", err)
 	}
 }
 

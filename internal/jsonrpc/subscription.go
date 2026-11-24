@@ -52,7 +52,7 @@ func (sm *SubscriptionManager) eventDemand() (block, logs bool) {
 // notify is called by FilterManager.fanOut (after releasing fm.mu) for each new block.
 // It copies the relevant sub set under sm.mu, then sends to per-connection channels
 // without holding any lock.
-func (sm *SubscriptionManager) notify(block *types.Block, logs []*RPCLog) {
+func (sm *SubscriptionManager) notify(block *types.Block, logs []*RPCLog, removed bool) {
 	type work struct {
 		sub    *wsSub
 		frames [][]byte
@@ -63,6 +63,9 @@ func (sm *SubscriptionManager) notify(block *types.Block, logs []*RPCLog) {
 	for _, sub := range sm.subs {
 		switch sub.kind {
 		case "newHeads":
+			if removed {
+				continue
+			}
 			frame := marshalPush(sub.id, blockToRPC(block, false))
 			pending = append(pending, work{sub: sub, frames: [][]byte{frame}})
 		case "logs":

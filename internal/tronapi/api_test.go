@@ -27,6 +27,9 @@ import (
 // Pre-set fields control what each new method returns.
 // All pre-existing methods return zero/nil values.
 type stubBackend struct {
+	blocks             map[uint64]*types.Block
+	pendingSize        int
+	burnTrxAt          int64
 	delegatedResources []*tronapi.DelegatedResourceInfo
 	legacyDelegIndex   *corepb.DelegatedResourceAccountIndex
 	delegationIndex    *tronapi.DelegationIndexInfo
@@ -95,7 +98,7 @@ func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
 	if s.blockErr != nil {
 		return nil, s.blockErr
 	}
-	return nil, nil
+	return s.blocks[n], nil
 }
 func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) {
 	if s.accountErr != nil {
@@ -111,7 +114,7 @@ func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types
 }
 func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
 func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
-func (s *stubBackend) PendingTransactionCount() int                     { return 0 }
+func (s *stubBackend) PendingTransactionCount() int                     { return s.pendingSize }
 func (s *stubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
 	if s.contractErr != nil {
 		return nil, s.contractErr
@@ -408,7 +411,7 @@ func (s *stubBackend) GetBurnTrx() (int64, error) {
 	return s.burnTrx, nil
 }
 func (s *stubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
-	return 0, nil
+	return s.burnTrxAt, nil
 }
 func (s *stubBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
@@ -1117,7 +1120,7 @@ func TestGetBurnTrxAndPrices(t *testing.T) {
 	defer srv.Close()
 
 	burn := postJSON(t, srv.URL+"/wallet/getburntrx", `{}`)
-	if burn["num"].(float64) != 123456 {
+	if burn["burnTrxAmount"] != float64(123456) {
 		t.Fatalf("getburntrx = %v, want 123456", burn)
 	}
 
@@ -1819,8 +1822,9 @@ func TestGetPaginatedNowWitnessList(t *testing.T) {
 		t.Fatalf("GET negative offset getpaginatednowwitnesslist: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("negative offset status = %d, want 400", resp.StatusCode)
+	var empty map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&empty); err != nil || resp.StatusCode != http.StatusOK || len(empty) != 0 {
+		t.Fatalf("negative offset = %v, %v, HTTP %d; want empty object", empty, err, resp.StatusCode)
 	}
 }
 
@@ -2250,4 +2254,73 @@ func TestBroadcastTransactionValidateSuccess(t *testing.T) {
 	if result["code"] != "SUCCESS" {
 		t.Fatalf("expected code=SUCCESS, got %v", result["code"])
 	}
+}
+
+func TestGETInt64AsStringIsRequestScoped(t *testing.T) {
+	const precisionEdge = int64(9007199254740993)
+	address := common.BytesToAddress(common.FromHex("410000000000000000000000000000000000000001"))
+	visibleAddress := crypto.AddressToBase58(address)
+	srv := newTestServer(t, &stubBackend{
+		burnTrx:     precisionEdge,
+		burnTrxAt:   precisionEdge,
+		pendingSize: 7,
+		reward:      &tronapi.RewardInfo{Reward: precisionEdge},
+		blocks: map[uint64]*types.Block{0: types.NewBlockFromPB(&corepb.Block{
+			Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Timestamp: 1}}},
+		})},
+	})
+	defer srv.Close()
+	cases := []struct {
+		method, path, field, expected string
+	}{
+		{"GET", "/wallet/getburntrx?int64_as_string=TRUE", "burnTrxAmount", `"9007199254740993"`},
+		{"GET", "/wallet/getburntrx", "burnTrxAmount", "9007199254740993"},
+		{"POST", "/wallet/getburntrx?int64_as_string=true", "burnTrxAmount", "9007199254740993"},
+		{"GET", "/walletsolidity/getburntrx?int64_as_string=true", "burnTrxAmount", `"9007199254740993"`},
+		{"GET", "/walletsolidity/getburntrx", "burnTrxAmount", "9007199254740993"},
+		{"POST", "/walletsolidity/getburntrx?int64_as_string=true", "burnTrxAmount", "9007199254740993"},
+		{"GET", "/walletpbft/getburntrx?int64_as_string=true", "burnTrxAmount", `"9007199254740993"`},
+		{"GET", "/walletpbft/getburntrx", "burnTrxAmount", "9007199254740993"},
+		{"POST", "/walletpbft/getburntrx?int64_as_string=true", "burnTrxAmount", "9007199254740993"},
+		{"GET", "/wallet/getReward?address=" + visibleAddress + "&int64_as_string=true", "reward", `"9007199254740993"`},
+		{"GET", "/walletsolidity/getReward?address=" + address.Hex() + "&int64_as_string=true", "reward", `"9007199254740993"`},
+		{"GET", "/walletpbft/getReward?address=" + visibleAddress + "&int64_as_string=true", "reward", `"9007199254740993"`},
+		{"GET", "/wallet/getReward?int64_as_string=true", "reward", `"0"`},
+		{"GET", "/wallet/getpendingsize?int64_as_string=true", "pendingSize", `"7"`},
+		{"POST", "/wallet/getpendingsize?int64_as_string=true", "pendingSize", "7"},
+		{"GET", "/wallet/gettransactioncountbyblocknum?num=0&int64_as_string=true", "count", `"1"`},
+		{"GET", "/walletsolidity/gettransactioncountbyblocknum?num=0&int64_as_string=true", "count", `"1"`},
+		{"GET", "/walletpbft/gettransactioncountbyblocknum?num=0&int64_as_string=true", "count", `"1"`},
+		{"GET", "/walletpbft/gettransactioncountbyblocknum?num=42&int64_as_string=true", "count", `"0"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, srv.URL+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var result map[string]json.RawMessage
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusOK || len(result) != 1 || string(result[tc.field]) != tc.expected {
+				t.Fatalf("status %d, result %v; want %s as %s", resp.StatusCode, result, tc.field, tc.expected)
+			}
+		})
+	}
+}
+
+func (b *stubBackend) GetPaginatedNowWitnessList(offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnesses()
+	return tronapi.WitnessPage(witnesses, offset, limit), err
+}
+
+func (b *stubBackend) GetPaginatedNowWitnessListAt(blockNum uint64, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnessesAt(blockNum)
+	return tronapi.WitnessPage(witnesses, offset, limit), err
 }

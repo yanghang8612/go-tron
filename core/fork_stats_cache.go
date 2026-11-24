@@ -3,6 +3,7 @@ package core
 import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 type cachedForkStatsStore struct {
@@ -65,7 +66,7 @@ func (bc *BlockChain) forkControllerForState(statedb *state.StateDB) *forks.Fork
 	bc.stateForkStatsStore.statedb = statedb
 	bc.stateForkStatsStore.cache = bc.forkStatsCache
 	if bc.stateForkController == nil {
-		bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore)
+		bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore, bc.effectiveGenesisHash() == params.NileGenesisHash)
 	}
 	return bc.stateForkController
 }

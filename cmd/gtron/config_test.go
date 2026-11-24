@@ -25,6 +25,7 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		httpPortFlag,
 		jsonrpcPortFlag,
 		grpcPortFlag,
+		grpcMaxConcurrentStreamsFlag,
 		pprofPortFlag,
 		pprofAddrFlag,
 		metricsEnabledFlag,
@@ -39,6 +40,7 @@ func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
 		syncAsyncCommitFlag,
 		execParallelTransfersFlag,
 		execParallelVMFlag,
+		vmConstantCallTimeoutFlag,
 		vmSaveInternalTxFlag,
 		vmSaveFeaturedInternalTxFlag,
 		vmSaveCancelAllUnfreezeV2DetailsFlag,
@@ -87,6 +89,20 @@ func TestMakeFreezerConfigDirectV2KillSwitch(t *testing.T) {
 	cfg = makeFreezerConfig(makeFreezerConfigFlagSet(t, []string{"--freezer.direct-v2.disable"}))
 	if cfg.DirectV2 {
 		t.Fatalf("direct V2 kill switch was ignored: %+v", cfg)
+	}
+}
+
+func TestMakeConfigGRPCAndVMTimeout(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
+	if cfg.GRPCMaxConcurrentStreams != 100 || cfg.ConstantCallTimeoutMs != 0 {
+		t.Fatalf("default gRPC streams %d, VM timeout %d", cfg.GRPCMaxConcurrentStreams, cfg.ConstantCallTimeoutMs)
+	}
+
+	cfg = makeConfig(makeNodeConfigFlagSet(t, []string{
+		"--grpc.max-concurrent-streams", "25", "--vm.constant-call-timeout-ms", "250",
+	}))
+	if cfg.GRPCMaxConcurrentStreams != 25 || cfg.ConstantCallTimeoutMs != 250 {
+		t.Fatalf("configured gRPC streams %d, VM timeout %d", cfg.GRPCMaxConcurrentStreams, cfg.ConstantCallTimeoutMs)
 	}
 }
 

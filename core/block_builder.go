@@ -14,6 +14,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -120,6 +121,10 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	accountStateMark := statedb.JournalMark()
 
 	for _, tx := range pendingTxs {
+		if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
+			!dynProps.AllowHardenExchangeCalculation() {
+			continue
+		}
 		hasPQSignature := dynProps.AllowPQSignatures() && len(tx.Proto().GetPqAuthSig()) != 0
 		if hasPQSignature && pqTxCount >= 1000 {
 			continue
@@ -127,7 +132,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		// Producer pulls from txpool whose Add gate already validates the
 		// envelope; re-validating here would re-recover signatures for every
 		// pending tx on every slot. Trust the pool, run only actuator.Validate.
-		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, bc.vmKV(buildBuf), bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
+		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, timestamp, blockNum,
+			bc.vmKV(buildBuf), bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), bc.effectiveGenesisHash(),
+			tcommon.Address{}, true, false, false, nil, nil)
 		if err != nil {
 			h := tx.Hash()
 			log.Debug("Skipping tx in build", "tx", fmt.Sprintf("%x", h[:8]), "err", err)
@@ -176,7 +183,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		// nil cache: the producer builds a single block, not a replay of many
 		// boundaries, so the terminal-skip cache has nothing to amortise. Result
 		// is identical to the cached path (the cache only elides redundant reads).
-		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb), nil, bc.effectiveGenesisHash()); err != nil {
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb, bc.effectiveGenesisHash() == params.NileGenesisHash), nil, bc.effectiveGenesisHash()); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{

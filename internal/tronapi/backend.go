@@ -104,6 +104,7 @@ type ChainParameter struct {
 }
 
 type WitnessInfo struct {
+	PubKey         string `json:"pubKey,omitempty"`
 	Address        string `json:"address"`
 	VoteCount      int64  `json:"voteCount"`
 	URL            string `json:"url"`
@@ -237,6 +238,8 @@ type Backend interface {
 	GetChainParametersAt(blockNum uint64) ([]ChainParameter, error)
 	ListWitnesses() ([]*WitnessInfo, error)
 	ListWitnessesAt(blockNum uint64) ([]*WitnessInfo, error)
+	GetPaginatedNowWitnessList(offset, limit int64) ([]*WitnessInfo, error)
+	GetPaginatedNowWitnessListAt(blockNum uint64, offset, limit int64) ([]*WitnessInfo, error)
 	NextMaintenanceTime() (int64, error)
 	NextMaintenanceTimeAt(blockNum uint64) (int64, error)
 

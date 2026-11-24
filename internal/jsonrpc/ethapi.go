@@ -2,25 +2,48 @@ package jsonrpc
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
-// callArgs is the {from,to,data,value} object accepted by eth_call and
-// eth_estimateGas. All fields are 0x-hex strings, parsed exactly as the legacy
-// handlers did; the framework unmarshals the request's object param into it.
+// callArgs is the transaction object accepted by eth_call and eth_estimateGas.
 type callArgs struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Data  string `json:"data"`
-	Value string `json:"value"`
+	From  string  `json:"from"`
+	To    string  `json:"to"`
+	Data  string  `json:"data"`
+	Input *string `json:"input"`
+	Value string  `json:"value"`
+}
+
+// callData validates both aliases and gives an explicitly supplied input precedence.
+func (tx callArgs) callData() ([]byte, error) {
+	var input []byte
+	if tx.Input != nil && *tx.Input != "" {
+		hexInput, prefixed := strings.CutPrefix(*tx.Input, "0x")
+		var err error
+		input, err = hex.DecodeString(hexInput)
+		if !prefixed || err != nil {
+			return nil, &invalidParamsError{message: `invalid hex string for "input"`}
+		}
+	}
+	hexData := strings.TrimPrefix(tx.Data, "0x")
+	if len(hexData)%2 != 0 {
+		hexData = "0" + hexData
+	}
+	data, err := hex.DecodeString(hexData)
+	if err != nil {
+		return nil, &invalidParamsError{message: `invalid hex string for "data"`}
+	}
+	if tx.Input != nil {
+		return input, nil
+	}
+	return data, nil
 }
 
 // parseCallValue mirrors the legacy tx-value parsing: empty/"0x0"/"0x" => 0,
@@ -237,15 +260,19 @@ func (e *EthAPI) Call(ctx context.Context, tx callArgs, block *string) (string, 
 	if err != nil {
 		return "", err
 	}
+	data, err := tx.callData()
+	if err != nil {
+		return "", err
+	}
 	blockNum, isLatest, err := e.resolveBlock(block)
 	if err != nil {
 		return "", err
 	}
 	var result []byte
 	if isLatest {
-		result, err = e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+		result, err = e.backend.Call(from, &to, data, parseCallValue(tx.Value))
 	} else {
-		result, err = e.backend.CallAtContext(ctx, from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+		result, err = e.backend.CallAtContext(ctx, from, &to, data, parseCallValue(tx.Value), blockNum)
 	}
 	if err != nil {
 		return "", err
@@ -273,15 +300,19 @@ func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 		}
 		to = &a
 	}
+	data, err := tx.callData()
+	if err != nil {
+		return "", err
+	}
 	blockNum, isLatest, err := e.resolveBlock(block)
 	if err != nil {
 		return "", err
 	}
 	var energy uint64
 	if isLatest {
-		energy, err = e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+		energy, err = e.backend.EstimateGas(from, to, data, parseCallValue(tx.Value))
 	} else {
-		energy, err = e.backend.EstimateGasAt(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value), blockNum)
+		energy, err = e.backend.EstimateGasAt(from, to, data, parseCallValue(tx.Value), blockNum)
 	}
 	if err != nil {
 		return "", err
@@ -293,7 +324,7 @@ func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 // (default false) selects full tx objects vs a hash list. Reuses the shared
 // blockToRPC converter. An unknown block resolves to null (Ethereum spec).
 func (e *EthAPI) GetBlockByNumber(blockTag string, fullTx *bool) (interface{}, error) {
-	num, err := parseBlockParam(blockTag)
+	num, err := parseBlockLookupParam(blockTag, e.backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -333,7 +364,7 @@ func (e *EthAPI) GetBlockByHash(hashHex string, fullTx *bool) (interface{}, erro
 // GetBlockTransactionCountByNumber serves
 // eth_getBlockTransactionCountByNumber. Unknown block => null.
 func (e *EthAPI) GetBlockTransactionCountByNumber(blockTag string) (interface{}, error) {
-	num, err := parseBlockParam(blockTag)
+	num, err := parseBlockLookupParam(blockTag, e.backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -480,7 +511,7 @@ func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
 // eth_getTransactionByBlockNumberAndIndex. Unknown block or out-of-range index
 // => null.
 func (e *EthAPI) GetTransactionByBlockNumberAndIndex(blockTag, indexHex string) (interface{}, error) {
-	num, err := parseBlockParam(blockTag)
+	num, err := parseBlockLookupParam(blockTag, e.backend.SolidifiedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -553,22 +584,22 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 	if err := validateTransactionInfoID(hash, info, fmt.Sprintf("transaction receipt %s", rpcHashHex(hash))); err != nil {
 		return nil, err
 	}
-	logIndexBase, err := e.receiptLogIndexBase(block, index, info)
+	var progress receiptProgress
+	if index > 0 {
+		infos, err := e.backend.GetTransactionInfoByBlockNum(block.Number())
+		if err != nil {
+			return nil, err
+		}
+		progress, err = receiptProgressFromInfos(block, index, infos)
+		if err != nil {
+			return nil, err
+		}
+	}
+	price, err := e.backend.GasPriceAt(block.Timestamp())
 	if err != nil {
 		return nil, err
 	}
-	return receiptToRPCWithLogTimestamp(hash, tx, info, block, index, logIndexBase), nil
-}
-
-func (e *EthAPI) receiptLogIndexBase(block *types.Block, txIndex int, info *corepb.TransactionInfo) (uint64, error) {
-	if txIndex <= 0 || len(info.GetLog()) == 0 {
-		return 0, nil
-	}
-	infos, err := e.backend.GetTransactionInfoByBlockNum(block.Number())
-	if err != nil {
-		return 0, err
-	}
-	return receiptLogIndexBaseFromInfos(block, txIndex, infos)
+	return receiptToRPC(hash, block.Transactions()[index], info, block, index, progress, price), nil
 }
 
 // GetBlockReceipts serves eth_getBlockReceipts for an Ethereum-compatible block
@@ -581,82 +612,15 @@ func (e *EthAPI) GetBlockReceipts(blockParam string) (interface{}, error) {
 	return blockReceiptsToRPC(e.backend, block)
 }
 
-// toLogFilter converts the polymorphic eth filter object into a LogFilter,
-// resolving block tags against head. Shared by eth_getLogs and eth_newFilter.
-func (e *EthAPI) toLogFilter(filterObj logFilterArgs) (LogFilter, error) {
-	filter := LogFilter{}
-
-	if filterObj.BlockHash != "" {
-		var h common.Hash
-		copy(h[:], common.FromHex(filterObj.BlockHash))
-		filter.BlockHash = &h
-	} else {
-		if filterObj.FromBlock != "" {
-			n, err := parseBlockParam(filterObj.FromBlock)
-			if err != nil {
-				return filter, fmt.Errorf("invalid fromBlock: %w", err)
-			}
-			if n == ^uint64(0) {
-				n = e.backend.BlockNumber()
-			}
-			filter.FromBlock = &n
-		}
-		if filterObj.ToBlock != "" {
-			n, err := parseBlockParam(filterObj.ToBlock)
-			if err != nil {
-				return filter, fmt.Errorf("invalid toBlock: %w", err)
-			}
-			if n == ^uint64(0) {
-				n = e.backend.BlockNumber()
-			}
-			filter.ToBlock = &n
-		}
-	}
-
-	// address: string or []string
-	if len(filterObj.Address) > 0 && string(filterObj.Address) != "null" {
-		addresses, err := parseFilterAddresses(filterObj.Address)
-		if err != nil {
-			return filter, err
-		}
-		filter.Addresses = addresses
-	}
-
-	// topics: [topic0, topic1, ...] where each is null | string | []string
-	if len(filterObj.Topics) > 0 && string(filterObj.Topics) != "null" {
-		var rawTopics []json.RawMessage
-		if err := json.Unmarshal(filterObj.Topics, &rawTopics); err == nil {
-			filter.Topics = make([][]common.Hash, len(rawTopics))
-			for i, rt := range rawTopics {
-				if string(rt) == "null" {
-					filter.Topics[i] = nil
-					continue
-				}
-				var single string
-				var multi []string
-				if json.Unmarshal(rt, &single) == nil {
-					var h common.Hash
-					copy(h[:], common.FromHex(single))
-					filter.Topics[i] = []common.Hash{h}
-				} else if json.Unmarshal(rt, &multi) == nil {
-					for _, s := range multi {
-						var h common.Hash
-						copy(h[:], common.FromHex(s))
-						filter.Topics[i] = append(filter.Topics[i], h)
-					}
-				}
-			}
-		}
-	}
-
-	return filter, nil
-}
-
 // GetLogs serves eth_getLogs. A nil result is normalized to an empty array,
 // matching the legacy handler.
 func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
-	filter, err := e.toLogFilter(filterObj)
+	head := e.backend.BlockNumber()
+	filter, err := rpcLogFilter(filterObj, head, e.backend.SolidifiedBlockNum)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateLogBlockRange(filter, head); err != nil {
 		return nil, err
 	}
 	logs, err := e.backend.GetLogs(filter)
@@ -671,7 +635,7 @@ func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
 
 // NewFilter serves eth_newFilter: install a log filter and return its id.
 func (e *EthAPI) NewFilter(filterObj logFilterArgs) (string, error) {
-	lf, err := e.toLogFilter(filterObj)
+	lf, err := rpcLogFilter(filterObj, e.backend.BlockNumber(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -701,9 +665,5 @@ func (e *EthAPI) GetFilterChanges(id string) (interface{}, error) {
 
 // GetFilterLogs serves eth_getFilterLogs: all logs matching a log filter id.
 func (e *EthAPI) GetFilterLogs(id string) (interface{}, error) {
-	logs, ok := e.filters.GetFilterLogs(id)
-	if !ok {
-		return nil, fmt.Errorf("filter not found")
-	}
-	return logs, nil
+	return e.filters.GetFilterLogs(id)
 }

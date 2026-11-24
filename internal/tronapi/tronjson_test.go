@@ -67,3 +67,18 @@ func TestMarshalTronJSON_AssetIssuedIDDecoded(t *testing.T) {
 		t.Fatalf("address: want hex, got %v", out["address"])
 	}
 }
+
+func TestMarshalTronJSON_Int64AsStringPreservesPrecisionInMaps(t *testing.T) {
+	var account = &corepb.Account{
+		Balance: 9007199254740993,
+		AssetV2: map[string]int64{"1": 9007199254740993},
+	}
+	data, err := tronJSON(true).marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"assetV2":[{"key":"1","value":"9007199254740993"}],"balance":"9007199254740993"}`
+	if string(data) != want {
+		t.Fatalf("marshal: got %s; want %s", data, want)
+	}
+}

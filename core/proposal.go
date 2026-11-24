@@ -33,7 +33,7 @@ func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.D
 	// 0->1 activation into an unguarded market-disable operation that always
 	// writes 0. Keeping this conditional on both network and fork preserves
 	// replay of Nile's 2020 proposal #5023 while matching proposal #20188.
-	nileMarketDisable := isNile && forks.PassVersionFromStoreWithRate(statedb, 33, maintenanceTime, dynProps.MaintenanceTimeInterval(), 80)
+	nileMarketDisable := isNile && forks.PassVersionFromStore(statedb, 33, maintenanceTime, dynProps.MaintenanceTimeInterval(), true)
 	ids := statedb.ReadProposalIndex()
 	// java ProposalController.processProposals iterates DESCENDING from
 	// latestProposalNum. ReadProposalIndex returns ascending (AppendProposalIndex

@@ -16,6 +16,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func TestPersistentHistoryReaderHonorsCanceledContext(t *testing.T) {
@@ -2694,5 +2695,38 @@ func TestGetOrCreateAccount_RecreateGenerationRevert(t *testing.T) {
 	}
 	if got, ok, err := s.GetAccountKV(addr, domain, []byte("k")); err != nil || !ok || string(got) != "v2" {
 		t.Fatalf("recreate-after-revert GetAccountKV(k) = %q ok=%v err=%v, want \"v2\"", got, ok, err)
+	}
+}
+
+func TestPersistentHistoryReaderOptimizedStorageUsesMetadataAndMasksLegacy(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr, slot := testAddr(0x84), tcommon.Hash{0xD1}
+	meta := &contractpb.SmartContract{TrxHash: bytes.Repeat([]byte{0x83}, 32), Version: 1}
+	legacy := tcommon.HexToHash("1111")
+	optimized := tcommon.HexToHash("2222")
+
+	f.applyBlock(tcommon.Hash{1}, func(s *StateDB) {
+		s.SetContract(addr, meta)
+		s.SetState(addr, slot, legacy)
+	})
+	f.applyBlock(tcommon.Hash{2}, func(s *StateDB) {
+		if err := s.SetAccountKV(addr, kvdomains.ContractStorage, OptimizedStorageRowKey(addr, slot, meta), optimized[:]); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f.applyBlock(tcommon.Hash{3}, func(s *StateDB) {
+		if err := s.SetAccountKV(addr, kvdomains.ContractStorage, OptimizedStorageRowKey(addr, slot, meta), make([]byte, 32)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	r := f.reader()
+	for i, want := range []tcommon.Hash{legacy, optimized, {}} {
+		block := uint64(i + 1)
+		if got, err := r.StorageAt(addr, slot, block); err != nil || got != want {
+			t.Fatalf("StorageAt(%d) = %x, %v; want %x", block, got, err, want)
+		}
+	}
+	if got, err := readFlatStorageLatest(f.disk, addr, slot); err != nil || got != (tcommon.Hash{}) {
+		t.Fatalf("flat latest storage = %x, %v; want zero", got, err)
 	}
 }

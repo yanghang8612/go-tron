@@ -1728,3 +1728,13 @@ func TestGetEnergyPrices(t *testing.T) {
 		t.Fatal("expected non-nil response")
 	}
 }
+
+func (b *testBackend) GetPaginatedNowWitnessList(offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnesses()
+	return tronapi.WitnessPage(witnesses, offset, limit), err
+}
+
+func (b *testBackend) GetPaginatedNowWitnessListAt(blockNum uint64, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnessesAt(blockNum)
+	return tronapi.WitnessPage(witnesses, offset, limit), err
+}

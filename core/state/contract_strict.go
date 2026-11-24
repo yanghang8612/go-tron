@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/metrics"
@@ -32,49 +33,19 @@ func (s *StateDB) GetStateStrict(addr tcommon.Address, key tcommon.Hash) (tcommo
 	if obj == nil || obj.deleted {
 		return tcommon.Hash{}, nil
 	}
-	if slot, ok := obj.storage[key]; ok {
-		return slot.value, nil
-	}
-	if obj.created {
-		return tcommon.Hash{}, nil
-	}
-
-	var runtime ContractRuntimeMetadata
-	if obj.contractMeta != nil || obj.contractMetaDirty {
-		var ok bool
-		runtime, ok = contractRuntimeMetadataFromProto(addr, obj.contractMeta)
-		if !ok {
-			runtime.storageKeyPrefix, runtime.storageKeyHashSlot = javaStorageKeyLayoutFields(addr, nil, 0)
-		}
-	} else {
-		data, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractMetadata, contractMetaKVKey)
-		if err != nil {
-			return tcommon.Hash{}, err
-		}
-		if ok && len(data) > 0 {
-			runtime, err = decodeContractRuntimeMetadata(addr, data)
-			if err != nil {
-				return tcommon.Hash{}, fmt.Errorf("decode contract metadata for storage key %s generation %d: %w", addr.Hex(), obj.accountKVGeneration, err)
+	context := fmt.Sprintf("live storage value generation %d", obj.accountKVGeneration)
+	read := func(domain kvdomains.KVDomain, row []byte) ([]byte, bool, error) {
+		if domain == kvdomains.ContractStorage && len(row) == tcommon.HashLength {
+			if slot, ok := obj.storage[key]; ok {
+				return bytes.Clone(slot.value[:]), true, nil
 			}
-		} else {
-			runtime.storageKeyPrefix, runtime.storageKeyHashSlot = javaStorageKeyLayoutFields(addr, nil, 0)
 		}
+		return s.getAccountKVForDecoding(addr, domain, row)
 	}
-	rowKey := storageRowKeyWithLayout(key, runtime.storageKeyPrefix, runtime.storageKeyHashSlot)
-	raw, ok, err := s.getAccountKVForDecoding(addr, kvdomains.ContractStorage, rowKey[:])
-	if err != nil {
-		return tcommon.Hash{}, err
+	if obj.contractMeta != nil || obj.contractMetaDirty {
+		return readStorageRowsWithMetadata(addr, key, context, obj.contractMeta, read)
 	}
-	if !ok || len(raw) == 0 {
-		obj.cacheStorageSlot(key, storageSlot{})
-		return tcommon.Hash{}, nil
-	}
-	h, err := decodeStorageValueHash("live storage value", raw)
-	if err != nil {
-		return tcommon.Hash{}, err
-	}
-	obj.cacheStorageSlot(key, storageSlot{value: h, exists: h != (tcommon.Hash{})})
-	return h, nil
+	return readStorageRows(addr, key, context, read)
 }
 
 // GetCodeStrict returns verified live bytecode. A database-owned positive cache

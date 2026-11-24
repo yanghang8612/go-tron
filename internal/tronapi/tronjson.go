@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -20,13 +21,20 @@ import (
 
 // marshalTronJSON converts a protobuf message to TRON-compatible JSON.
 func marshalTronJSON(msg proto.Message) ([]byte, error) {
+	return tronJSON(false).marshal(msg)
+}
+
+// tronJSON controls whether protobuf 64-bit integers are encoded as strings.
+type tronJSON bool
+
+func (opts tronJSON) marshal(msg proto.Message) ([]byte, error) {
 	if msg == nil {
 		return []byte("{}"), nil
 	}
-	return json.Marshal(marshalMessage(msg.ProtoReflect()))
+	return json.Marshal(opts.marshalMessage(msg.ProtoReflect()))
 }
 
-func marshalMessage(msg protoreflect.Message) map[string]any {
+func (opts tronJSON) marshalMessage(msg protoreflect.Message) map[string]any {
 	result := make(map[string]any)
 	fields := msg.Descriptor().Fields()
 	for i := 0; i < fields.Len(); i++ {
@@ -34,25 +42,25 @@ func marshalMessage(msg protoreflect.Message) map[string]any {
 		if !msg.Has(fd) {
 			continue
 		}
-		result[string(fd.Name())] = marshalValue(fd, msg.Get(fd))
+		result[string(fd.Name())] = opts.marshalValue(fd, msg.Get(fd))
 	}
 	return result
 }
 
-func marshalValue(fd protoreflect.FieldDescriptor, val protoreflect.Value) any {
+func (opts tronJSON) marshalValue(fd protoreflect.FieldDescriptor, val protoreflect.Value) any {
 	if fd.IsList() {
-		return marshalList(fd, val.List())
+		return opts.marshalList(fd, val.List())
 	}
 	if fd.IsMap() {
-		return marshalMap(fd, val.Map())
+		return opts.marshalMap(fd, val.Map())
 	}
-	return marshalSingular(fd, val)
+	return opts.marshalSingular(fd, val)
 }
 
-func marshalList(fd protoreflect.FieldDescriptor, list protoreflect.List) any {
+func (opts tronJSON) marshalList(fd protoreflect.FieldDescriptor, list protoreflect.List) any {
 	out := make([]any, list.Len())
 	for i := 0; i < list.Len(); i++ {
-		out[i] = marshalSingular(fd, list.Get(i))
+		out[i] = opts.marshalSingular(fd, list.Get(i))
 	}
 	return out
 }
@@ -61,7 +69,7 @@ func marshalList(fd protoreflect.FieldDescriptor, list protoreflect.List) any {
 // JsonFormat predates the proto map type and serializes map fields as their
 // underlying repeated MapEntry messages, so e.g. assetV2 is an array, not an
 // object. Entries are sorted by key for deterministic output.
-func marshalMap(fd protoreflect.FieldDescriptor, m protoreflect.Map) any {
+func (opts tronJSON) marshalMap(fd protoreflect.FieldDescriptor, m protoreflect.Map) any {
 	keyFD := fd.MapKey()
 	valFD := fd.MapValue()
 	type entry struct {
@@ -73,8 +81,8 @@ func marshalMap(fd protoreflect.FieldDescriptor, m protoreflect.Map) any {
 		entries = append(entries, entry{
 			sortKey: fmt.Sprint(k.Value().Interface()),
 			obj: map[string]any{
-				"key":   marshalSingular(keyFD, k.Value()),
-				"value": marshalSingular(valFD, v),
+				"key":   opts.marshalSingular(keyFD, k.Value()),
+				"value": opts.marshalSingular(valFD, v),
 			},
 		})
 		return true
@@ -87,7 +95,7 @@ func marshalMap(fd protoreflect.FieldDescriptor, m protoreflect.Map) any {
 	return out
 }
 
-func marshalSingular(fd protoreflect.FieldDescriptor, val protoreflect.Value) any {
+func (opts tronJSON) marshalSingular(fd protoreflect.FieldDescriptor, val protoreflect.Value) any {
 	switch fd.Kind() {
 	case protoreflect.BytesKind:
 		b := val.Bytes()
@@ -103,9 +111,9 @@ func marshalSingular(fd protoreflect.FieldDescriptor, val protoreflect.Value) an
 
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		if fd.Message().FullName() == "google.protobuf.Any" {
-			return marshalAny(val.Message())
+			return opts.marshalAny(val.Message())
 		}
-		return marshalMessage(val.Message())
+		return opts.marshalMessage(val.Message())
 
 	case protoreflect.EnumKind:
 		ed := fd.Enum().Values().ByNumber(val.Enum())
@@ -118,12 +126,18 @@ func marshalSingular(fd protoreflect.FieldDescriptor, val protoreflect.Value) an
 		return int32(val.Int())
 
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		if opts {
+			return strconv.FormatInt(val.Int(), 10)
+		}
 		return val.Int()
 
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
 		return uint32(val.Uint())
 
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		if opts {
+			return strconv.FormatUint(val.Uint(), 10)
+		}
 		return val.Uint()
 
 	case protoreflect.FloatKind:
@@ -144,7 +158,7 @@ func marshalSingular(fd protoreflect.FieldDescriptor, val protoreflect.Value) an
 }
 
 // marshalAny handles google.protobuf.Any: shows @type + unpacked inner fields.
-func marshalAny(msg protoreflect.Message) map[string]any {
+func (opts tronJSON) marshalAny(msg protoreflect.Message) map[string]any {
 	typeURLFD := msg.Descriptor().Fields().ByName("type_url")
 	valueFD := msg.Descriptor().Fields().ByName("value")
 
@@ -159,7 +173,7 @@ func marshalAny(msg protoreflect.Message) map[string]any {
 	if len(valueBytes) > 0 {
 		inner, err := unpackAny(typeURL, valueBytes)
 		if err == nil {
-			for k, v := range marshalMessage(inner.ProtoReflect()) {
+			for k, v := range opts.marshalMessage(inner.ProtoReflect()) {
 				result[k] = v
 			}
 			return result
@@ -200,13 +214,17 @@ func unpackAny(typeURL string, value []byte) (proto.Message, error) {
 
 // MarshalBlock converts a Block proto to JSON, adding blockID and txID fields.
 func MarshalBlock(msg proto.Message) ([]byte, error) {
+	return json.Marshal(tronJSON(false).block(msg))
+}
+
+func (opts tronJSON) block(msg proto.Message) map[string]any {
 	if msg == nil {
-		return []byte("{}"), nil
+		return map[string]any{}
 	}
-	result := marshalMessage(msg.ProtoReflect())
+	result := opts.marshalMessage(msg.ProtoReflect())
 	addBlockID(result, msg)
 	addTxIDsToBlock(result, msg)
-	return json.Marshal(result)
+	return result
 }
 
 // addBlockID computes and adds the blockID field.

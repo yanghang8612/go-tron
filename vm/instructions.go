@@ -448,7 +448,7 @@ func opExtCodeHash(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 	if !interpreter.tvm.StateDB.Exist(address) {
 		addr.Clear()
 	} else {
-		hash := interpreter.tvm.StateDB.GetCodeHash(address)
+		hash := interpreter.tvm.extCodeHash(address)
 		addr.SetBytes(hash.Bytes())
 	}
 	return nil, nil
@@ -743,7 +743,10 @@ func opSload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 	var k tcommon.Hash
 	b := key.Bytes32()
 	copy(k[:], b[:])
-	val := interpreter.tvm.StateDB.GetState(contract.Address, k)
+	val, _, err := interpreter.tvm.readStorage(contract.Address, k)
+	if err != nil {
+		return nil, err
+	}
 	key.SetBytes(val.Bytes())
 	return nil, nil
 }
@@ -756,7 +759,10 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	copy(k[:], kb[:])
 	copy(v[:], vb[:])
 
-	_, exists := interpreter.tvm.StateDB.GetStateWithExist(contract.Address, k)
+	_, exists, err := interpreter.tvm.readStorage(contract.Address, k)
+	if err != nil {
+		return nil, err
+	}
 	var cost uint64
 	if !exists && v != (tcommon.Hash{}) {
 		cost = EnergySstoreSet
@@ -767,8 +773,7 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		return nil, ErrOutOfEnergy
 	}
 
-	interpreter.tvm.StateDB.SetState(contract.Address, k, v)
-	return nil, nil
+	return nil, interpreter.tvm.writeStorage(contract.Address, k, v)
 }
 
 func opJump(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
@@ -950,6 +955,11 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrExecutionReverted
 	}
 
+	if interpreter.tvmConfig.StakeV2TimeGuard && interpreter.tvmConfig.SelfdestructRestrict &&
+		interpreter.tvm.StateDB.HasTVMSelfDestructMark(address) {
+		return nil, errSelfDestructedBeneficiaryTimeout
+	}
+
 	addSuicideInternal := func(value int64) *corepb.InternalTransaction {
 		interpreter.tvm.Nonce++
 		var tokenInfo map[string]int64
@@ -989,6 +999,9 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		balance = interpreter.tvm.StateDB.GetBalance(contract.Address)
 		suicideIT = addSuicideInternal(balance)
 		if address == contract.Address {
+			if interpreter.tvmConfig.StakeV2TimeGuard {
+				interpreter.tvm.StateDB.MarkTVMSelfDestruct(contract.Address)
+			}
 			return nil, nil
 		}
 		if interpreter.tvmConfig.Vote {
@@ -1100,6 +1113,9 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		if expireUnfrozenBalance > 0 && suicideIT != nil && len(suicideIT.CallValueInfo) > 0 {
 			suicideIT.CallValueInfo[0].CallValue += expireUnfrozenBalance
 		}
+	}
+	if interpreter.tvmConfig.StakeV2TimeGuard {
+		interpreter.tvm.StateDB.MarkTVMSelfDestruct(contract.Address)
 	}
 	if oldSuicide {
 		interpreter.tvm.StateDB.SelfDestruct(contract.Address)

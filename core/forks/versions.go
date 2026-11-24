@@ -9,9 +9,9 @@ type VersionParam struct {
 	HardForkRate int   // percentage of active witnesses whose last block must carry Value (0 = strict all-upgrade semantics)
 }
 
-// KnownVersions enumerates every ForkBlockVersionEnum entry from
-// java-tron's Parameter.ForkBlockVersionEnum (common/.../Parameter.java).
-// Order matches upstream for reviewability.
+// KnownVersions lists the wire versions from java-tron's mainnet and Nile
+// ForkBlockVersionEnum (common/.../Parameter.java), ordered by wire value.
+// Mainnet ends at version 39. Nile uses distinct rates for versions 33, 34, and 37.
 var KnownVersions = []VersionParam{
 	{5, 0, 0},               // ENERGY_LIMIT
 	{6, 0, 0},               // VERSION_3_2_2
@@ -39,7 +39,18 @@ var KnownVersions = []VersionParam{
 	{34, 1596780000000, 80}, // VERSION_4_8_1
 	{35, 1596780000000, 70}, // VERSION_4_8_1_1
 	{36, 1596780000000, 80}, // VERSION_4_8_2
-	{37, 1596780000000, 80}, // VERSION_4_8_2_PQ1 (Nile only; tracked for replay even before gtron advertises it)
+	{37, 1596780000000, 70}, // VERSION_4_8_2_2 (Nile: VERSION_4_8_2_PQ1 at 80%)
+	{38, 1596780000000, 70}, // VERSION_4_8_2_3 (Nile: VERSION_4_8_2_2_PQ1)
+	{39, 1596780000000, 70}, // VERSION_4_8_2_4 (Nile: VERSION_4_8_2_3_PQ1)
+	{40, 1596780000000, 70}, // VERSION_4_8_2_4_PQ1 (Nile only)
+}
+
+// Version4822 returns the wire version of the 4.8.2.2 release fork.
+func Version4822(nile bool) int32 {
+	if nile {
+		return 38
+	}
+	return 37
 }
 
 // Version4_0 is the boundary java-tron uses to switch between passOld
@@ -57,10 +68,29 @@ const VoteDowngrade byte = 0x00
 
 // lookupVersion returns the parameters for a known version or (zero, false).
 func lookupVersion(v int32) (VersionParam, bool) {
-	for _, vp := range KnownVersions {
+	return lookupNetworkVersion(v, false)
+}
+
+func lookupNetworkVersion(v int32, nile bool) (VersionParam, bool) {
+	for _, vp := range networkVersions(nile) {
 		if vp.Value == v {
+			if nile {
+				switch v {
+				case 33, 37:
+					vp.HardForkRate = 80
+				case 34:
+					vp.HardForkRate = 70
+				}
+			}
 			return vp, true
 		}
 	}
 	return VersionParam{}, false
+}
+
+func networkVersions(nile bool) []VersionParam {
+	if nile {
+		return KnownVersions
+	}
+	return KnownVersions[:len(KnownVersions)-1]
 }

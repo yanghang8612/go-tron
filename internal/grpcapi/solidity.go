@@ -308,13 +308,12 @@ func (s *SolidityServer) GetPaginatedNowWitnessList(_ context.Context, in *apipb
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	witnesses, err := s.backend.ListWitnessesAt(s.solidNum())
+	if in.Offset < 0 || in.Limit < 0 {
+		return nil, status.Error(codes.InvalidArgument, "offset and limit must be non-negative")
+	}
+	page, err := s.backend.GetPaginatedNowWitnessListAt(s.solidNum(), in.Offset, in.Limit)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
-	}
-	page, err := paginateWitnessInfos(witnesses, in.Offset, in.Limit)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	return witnessListFromInfos(page), nil
 }

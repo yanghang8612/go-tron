@@ -3,10 +3,12 @@ package jsonrpc
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 const (
@@ -37,6 +39,7 @@ type FilterManager struct {
 	backend Backend
 	subMgr  *SubscriptionManager // optional; notified after poll filters on each block
 	blockCh chan *types.Block
+	eventCh chan []FilterBlockEvent
 	quit    chan struct{}
 	wg      sync.WaitGroup
 }
@@ -53,7 +56,15 @@ func NewFilterManager(backend Backend) *FilterManager {
 
 // Start subscribes to new blocks and begins the GC loop.
 func (fm *FilterManager) Start() {
-	fm.backend.SubscribeBlocks(fm.blockCh)
+	if backend, ok := fm.backend.(FilterEventBackend); ok {
+		fm.eventCh = make(chan []FilterBlockEvent, 64)
+		backend.SubscribeFilterEvents(fm.eventCh, func() bool {
+			_, logs := fm.eventDemand()
+			return logs
+		})
+	} else {
+		fm.backend.SubscribeBlocks(fm.blockCh)
+	}
 	fm.wg.Add(1)
 	go fm.run()
 }
@@ -62,7 +73,11 @@ func (fm *FilterManager) Start() {
 func (fm *FilterManager) Stop() {
 	close(fm.quit)
 	fm.wg.Wait()
-	fm.backend.UnsubscribeBlocks(fm.blockCh)
+	if backend, ok := fm.backend.(FilterEventBackend); ok {
+		backend.UnsubscribeFilterEvents(fm.eventCh)
+	} else {
+		fm.backend.UnsubscribeBlocks(fm.blockCh)
+	}
 }
 
 func (fm *FilterManager) run() {
@@ -77,6 +92,10 @@ func (fm *FilterManager) run() {
 			if ok {
 				fm.fanOut(block)
 			}
+		case batch := <-fm.eventCh:
+			for _, event := range batch {
+				fm.publish(event)
+			}
 		case <-gc.C:
 			fm.gc()
 		}
@@ -89,50 +108,60 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 		return
 	}
 
-	blockHash := block.Hash()
-	hashHex := "0x" + hex.EncodeToString(blockHash[:])
-
 	// Receipts are persisted protobuf objects and expensive to read/decode. Only
 	// touch them when at least one poll or WebSocket log consumer exists; block
 	// filters and newHeads subscriptions need the header alone.
 	var logs []*RPCLog
 	if logDemand {
-		logIndex := uint64(0)
 		for i, tx := range block.Transactions() {
 			info, err := fm.backend.GetTransactionInfo(tx.Hash())
-			if err != nil || info == nil {
-				continue
-			}
-			for _, l := range info.Log {
-				topics := make([]string, len(l.Topics))
-				for ti, t := range l.Topics {
-					topics[ti] = hexBytes(t)
-				}
-				txHash := tx.Hash()
-				logs = append(logs, &RPCLog{
-					Address:          hex20(l.Address),
-					Topics:           topics,
-					Data:             hexBytes(l.Data),
-					BlockNumber:      hexUint64(block.Number()),
-					BlockTimestamp:   hexUint64(uint64(block.Timestamp() / 1000)),
-					TransactionHash:  "0x" + hex.EncodeToString(txHash[:]),
-					TransactionIndex: hexUint64(uint64(i)),
-					BlockHash:        hashHex,
-					LogIndex:         hexUint64(logIndex),
-					Removed:          false,
-				})
-				logIndex++
+			if err == nil {
+				logs = AppendFilterBlockLogs(logs, block, i, info, false)
 			}
 		}
 	}
 
+	fm.publish(FilterBlockEvent{Block: block, Logs: logs})
+}
+
+// AppendFilterBlockLogs formats one transaction's logs in the live filter stream.
+func AppendFilterBlockLogs(logs []*RPCLog, block *types.Block, index int, info *corepb.TransactionInfo, removed bool) []*RPCLog {
+	for _, entry := range info.GetLog() {
+		topics := make([]string, len(entry.GetTopics()))
+		for i, topic := range entry.GetTopics() {
+			topics[i] = hexBytes(topic)
+		}
+		logs = append(logs, &RPCLog{
+			Address:          hex20(entry.GetAddress()),
+			Topics:           topics,
+			Data:             hexBytes(entry.GetData()),
+			BlockNumber:      hexUint64(block.Number()),
+			BlockTimestamp:   hexUint64(uint64(block.Timestamp() / 1000)),
+			TransactionHash:  hexHash(block.Transactions()[index].Hash()),
+			TransactionIndex: hexUint64(uint64(index)),
+			BlockHash:        hexHash(block.Hash()),
+			LogIndex:         hexUint64(uint64(len(logs))),
+			Removed:          removed,
+		})
+	}
+	return logs
+}
+
+func (fm *FilterManager) publish(event FilterBlockEvent) {
+	var hashHex string
+	if !event.Removed {
+		blockHash := event.Block.Hash()
+		hashHex = "0x" + hex.EncodeToString(blockHash[:])
+	}
 	fm.mu.Lock()
 	for _, f := range fm.filters {
 		switch f.kind {
 		case filterKindBlock:
-			f.pendingHashes = append(f.pendingHashes, hashHex)
+			if !event.Removed {
+				f.pendingHashes = append(f.pendingHashes, hashHex)
+			}
 		case filterKindLog:
-			for _, log := range logs {
+			for _, log := range event.Logs {
 				if matchesLogFilter(log, f.logFilter) {
 					f.pendingLogs = append(f.pendingLogs, log)
 				}
@@ -142,7 +171,7 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 	fm.mu.Unlock()
 
 	if fm.subMgr != nil {
-		fm.subMgr.notify(block, logs)
+		fm.subMgr.notify(event.Block, event.Logs, event.Removed)
 	}
 }
 
@@ -263,22 +292,28 @@ func (fm *FilterManager) GetFilterChanges(id string) (interface{}, bool) {
 }
 
 // GetFilterLogs returns all current logs matching a log filter (ignores accumulated).
-func (fm *FilterManager) GetFilterLogs(id string) ([]*RPCLog, bool) {
+func (fm *FilterManager) GetFilterLogs(id string) ([]*RPCLog, error) {
 	fm.mu.Lock()
 	f, ok := fm.filters[id]
 	if !ok || f.kind != filterKindLog {
 		fm.mu.Unlock()
-		return nil, false
+		return nil, fmt.Errorf("filter not found")
 	}
 	lf := *f.logFilter
 	f.lastPoll = time.Now()
 	fm.mu.Unlock()
 
-	logs, err := fm.backend.GetLogs(lf)
-	if err != nil || logs == nil {
-		return []*RPCLog{}, true
+	if err := validateLogBlockRange(lf, fm.backend.BlockNumber()); err != nil {
+		return nil, err
 	}
-	return logs, true
+	logs, err := fm.backend.GetLogs(lf)
+	if err != nil {
+		return nil, err
+	}
+	if logs == nil {
+		return []*RPCLog{}, nil
+	}
+	return logs, nil
 }
 
 // matchesLogFilter checks whether a single RPCLog matches a LogFilter.

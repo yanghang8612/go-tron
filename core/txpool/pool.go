@@ -16,25 +16,29 @@ var (
 	ErrAlreadyKnown = errors.New("transaction already in pool")
 	ErrNoContract   = errors.New("transaction has no contract")
 	// ErrExchangeRejected mirrors java-tron Manager.pushTransaction's
-	// unconditional reject for ExchangeTransactionContract introduced in
-	// PR #6507 (commit 45e3bf88ca, master VERSION_4_8_0_1). Wire-format
-	// error message matches java-tron so log-grep consumers see the same
-	// string from either implementation.
+	// reject for ExchangeTransactionContract while TIP-836 is disabled.
 	ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 )
 
 // TxPool holds pending transactions waiting to be included in a block.
 type TxPool struct {
-	mu      sync.RWMutex
-	pending map[tcommon.Hash]*types.Transaction
-	maxSize int
+	mu            sync.RWMutex
+	pending       map[tcommon.Hash]*types.Transaction
+	maxSize       int
+	allowExchange func() bool
 }
 
 // New creates a new transaction pool.
 func New() *TxPool {
+	return NewWithExchangePolicy(nil)
+}
+
+// NewWithExchangePolicy uses the node's current exchange policy at admission.
+func NewWithExchangePolicy(allowExchange func() bool) *TxPool {
 	return &TxPool{
-		pending: make(map[tcommon.Hash]*types.Transaction),
-		maxSize: defaultMaxPoolSize,
+		pending:       make(map[tcommon.Hash]*types.Transaction),
+		maxSize:       defaultMaxPoolSize,
+		allowExchange: allowExchange,
 	}
 }
 
@@ -43,7 +47,8 @@ func (pool *TxPool) Add(tx *types.Transaction) error {
 	if tx.Contract() == nil {
 		return ErrNoContract
 	}
-	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract {
+	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
+		(pool.allowExchange == nil || !pool.allowExchange()) {
 		return ErrExchangeRejected
 	}
 	if tx.Proto() != nil {

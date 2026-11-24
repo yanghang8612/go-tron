@@ -15,45 +15,51 @@ import (
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm/tracers"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // stubBackend is a test double implementing jsonrpc.Backend.
 type stubBackend struct {
-	chainID           int64
-	blockNumber       uint64
-	block             *types.Block
-	blockErr          error
-	balance           int64
-	code              []byte
-	storage           common.Hash
-	tx                *corepb.Transaction
-	txErr             error
-	txBlock           *types.Block
-	txIndex           int
-	txInfo            *corepb.TransactionInfo
-	txInfos           []*corepb.TransactionInfo
-	txInfoErr         error
-	callResult        []byte
-	gotCallFrom       *common.Address
-	gotCallTo         *common.Address
-	callAtResult      []byte
-	callAtBlock       uint64
-	callAtCalls       int
-	liveCallCalls     int
-	estimateGas       uint64
-	estimateGasAt     uint64
-	estimateAtBlock   uint64
-	estimateAtCalls   int
-	liveEstimateCalls int
-	logs              []*jsonrpc.RPCLog
-	gasPrice          int64
-	peerCount         int
-	freezerStatus     *jsonrpc.FreezerStatus
-	freezerErr        error
-	stageStatus       *jsonrpc.StageStatus
-	stageErr          error
-	nodeInfo          *tronapi.NodeInfo
+	solidifiedBlockNum uint64
+	getBlockByNumber   func(uint64) (*types.Block, error)
+	getLogs            func(jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error)
+	chainID            int64
+	blockNumber        uint64
+	block              *types.Block
+	blockErr           error
+	balance            int64
+	code               []byte
+	storage            common.Hash
+	tx                 *corepb.Transaction
+	txErr              error
+	txBlock            *types.Block
+	txIndex            int
+	txInfo             *corepb.TransactionInfo
+	txInfos            []*corepb.TransactionInfo
+	txInfoErr          error
+	callResult         []byte
+	gotCallFrom        *common.Address
+	gotCallTo          *common.Address
+	callAtResult       []byte
+	callAtBlock        uint64
+	callAtCalls        int
+	liveCallCalls      int
+	estimateGas        uint64
+	estimateGasAt      uint64
+	estimateAtBlock    uint64
+	estimateAtCalls    int
+	liveEstimateCalls  int
+	logs               []*jsonrpc.RPCLog
+	gasPrice           int64
+	peerCount          int
+	freezerStatus      *jsonrpc.FreezerStatus
+	freezerErr         error
+	stageStatus        *jsonrpc.StageStatus
+	stageErr           error
+	nodeInfo           *tronapi.NodeInfo
 
 	// Archive-query stubs: when atErr is non-nil the *At methods return it
 	// (used to exercise the history-disabled gate at the handler layer).
@@ -84,7 +90,9 @@ type stubBackend struct {
 	traceBlockResult []jsonrpc.BlockTraceResult
 }
 
-func (s *stubBackend) ChainID() int64      { return s.chainID }
+func (s *stubBackend) ChainID() int64             { return s.chainID }
+func (s *stubBackend) SolidifiedBlockNum() uint64 { return s.solidifiedBlockNum }
+
 func (s *stubBackend) BlockNumber() uint64 { return s.blockNumber }
 func (s *stubBackend) SyncInfo() *tronapi.SyncInfo {
 	if s.nodeInfo == nil {
@@ -142,6 +150,9 @@ func (s *stubBackend) GetStorageAtBlockContext(_ context.Context, addr common.Ad
 	return s.GetStorageAtBlock(addr, slot, blockNum)
 }
 func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error) {
+	if s.getBlockByNumber != nil {
+		return s.getBlockByNumber(num)
+	}
 	if s.blockErr != nil {
 		return nil, s.blockErr
 	}
@@ -236,7 +247,16 @@ func (s *stubBackend) TraceBlock(block *types.Block, cfg *tracers.TraceConfig) (
 	return results, nil
 }
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
+	if s.getLogs != nil {
+		return s.getLogs(filter)
+	}
 	return s.logs, nil
+}
+func (s *stubBackend) GasPriceAt(timestamp int64) (int64, error) {
+	if s.gasPrice != 0 {
+		return s.gasPrice, nil
+	}
+	return 100, nil
 }
 func (s *stubBackend) GasPrice() int64 { return s.gasPrice }
 func (s *stubBackend) PeerCount() int  { return s.peerCount }
@@ -950,6 +970,8 @@ func TestEthGetBlockReceipts_RejectsMismatchedTxInfoBlockNumber(t *testing.T) {
 
 func TestEthGetBlockReceipts_UsesBlockGlobalLogIndexes(t *testing.T) {
 	block, infos := buildReceiptLogIndexBlock()
+	infos[0].Receipt = &corepb.ResourceReceipt{EnergyUsageTotal: 16}
+	infos[1].Receipt = &corepb.ResourceReceipt{EnergyUsageTotal: 32}
 	srv := newTestServer(t, &stubBackend{blockNumber: block.Number(), block: block, txInfos: infos})
 	defer srv.Close()
 
@@ -976,6 +998,14 @@ func TestEthGetBlockReceipts_UsesBlockGlobalLogIndexes(t *testing.T) {
 	}
 	if got := receiptLogIndexes(t, apiReceipts[1]); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
 		t.Fatalf("EthAPI second receipt log indexes = %v, want [0x1 0x2]", got)
+	}
+
+	second := apiReceipts[1].(map[string]interface{})
+	if got := second["cumulativeGasUsed"]; got != "0x30" {
+		t.Fatalf("second cumulative gas = %v, want 0x30", got)
+	}
+	if got := second["logs"].([]map[string]interface{})[0]["blockTimestamp"]; got != "0x1e" {
+		t.Fatalf("second log timestamp = %v, want 0x1e", got)
 	}
 }
 
@@ -1284,8 +1314,11 @@ func TestEthGetTransactionReceipt_RejectsMismatchedLookupMetadata(t *testing.T) 
 	}
 }
 
-func TestEthGetTransactionReceipt_UsesBlockGlobalLogIndex(t *testing.T) {
+func TestEthGetTransactionReceipt_CumulativeGasIncludesEarlierTransactions(t *testing.T) {
 	block, infos := buildReceiptLogIndexBlock()
+	infos[0].Receipt = &corepb.ResourceReceipt{EnergyUsageTotal: 16}
+	infos[1].Receipt = &corepb.ResourceReceipt{EnergyUsageTotal: 32}
+	infos[1].Log = nil
 	tx := block.Transactions()[1]
 	txHash := "0x" + tx.Hash().Hex()
 	backend := &stubBackend{
@@ -1304,8 +1337,8 @@ func TestEthGetTransactionReceipt_UsesBlockGlobalLogIndex(t *testing.T) {
 	if !ok {
 		t.Fatalf("eth_getTransactionReceipt result = %T %v, want receipt", resp["result"], resp["result"])
 	}
-	if got := receiptLogIndexes(t, receipt); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
-		t.Fatalf("eth_getTransactionReceipt log indexes = %v, want [0x1 0x2]", got)
+	if receipt["cumulativeGasUsed"] != "0x30" || receipt["effectiveGasPrice"] != "0x64" {
+		t.Fatalf("receipt economic fields = %v; want total 0x30 and price 0x64", receipt)
 	}
 
 	api := jsonrpc.NewEthAPI(backend, nil)
@@ -1317,8 +1350,8 @@ func TestEthGetTransactionReceipt_UsesBlockGlobalLogIndex(t *testing.T) {
 	if !ok {
 		t.Fatalf("EthAPI.GetTransactionReceipt = %T %v, want receipt", got, got)
 	}
-	if got := receiptLogIndexes(t, apiReceipt); !stringSlicesEqual(got, []string{"0x1", "0x2"}) {
-		t.Fatalf("EthAPI.GetTransactionReceipt log indexes = %v, want [0x1 0x2]", got)
+	if apiReceipt["cumulativeGasUsed"] != "0x30" || apiReceipt["effectiveGasPrice"] != "0x64" {
+		t.Fatalf("receipt economic fields = %v; want total 0x30 and price 0x64", apiReceipt)
 	}
 }
 
@@ -1717,5 +1750,92 @@ func TestBatchRequest(t *testing.T) {
 		if _, hasErr := r["error"]; hasErr {
 			t.Fatalf("batch item has error: %v", r["error"])
 		}
+	}
+}
+
+func TestFinalizedBlockSelectors(t *testing.T) {
+	block, infos := buildReceiptLogIndexBlock()
+	stub := &stubBackend{
+		blockNumber:        101,
+		solidifiedBlockNum: 100,
+		txInfos:            infos,
+		getBlockByNumber: func(number uint64) (*types.Block, error) {
+			if number == 100 {
+				return block, nil
+			}
+			return nil, nil
+		},
+		getLogs: func(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
+			if filter.FromBlock != nil && *filter.FromBlock == 100 && filter.ToBlock != nil && *filter.ToBlock == 100 {
+				return []*jsonrpc.RPCLog{{BlockNumber: "0x64"}}, nil
+			}
+			return nil, nil
+		},
+	}
+	api := jsonrpc.NewEthAPI(stub, nil)
+	got, err := api.GetBlockByNumber("FINALIZED", nil)
+	if err != nil || got == nil || got.(map[string]interface{})["number"] != "0x64" {
+		t.Fatalf("finalized block = %v, %v", got, err)
+	}
+	if count, err := api.GetBlockTransactionCountByNumber("finalized"); err != nil || count != "0x2" {
+		t.Fatalf("finalized tx count = %v, %v", count, err)
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_getLogs", []interface{}{map[string]string{
+		"fromBlock": "FINALIZED",
+		"toBlock":   "finalized",
+	}})
+	if logs, ok := resp["result"].([]interface{}); !ok || len(logs) != 1 {
+		t.Fatalf("finalized logs = %v; want one log", resp)
+	}
+}
+
+func TestReceiptContractAddresses(t *testing.T) {
+	const ownerHex = "0x0000000000000000000000000000000000000011"
+	const targetHex = "0x0000000000000000000000000000000000000022"
+	owner := common.FromHex("41" + ownerHex[2:])
+	target := common.FromHex("41" + targetHex[2:])
+	for _, tc := range []struct {
+		kind         corepb.Transaction_Contract_ContractType
+		message      proto.Message
+		to, deployed any
+	}{
+		{corepb.Transaction_Contract_TriggerSmartContract, &contractpb.TriggerSmartContract{OwnerAddress: owner, ContractAddress: target}, targetHex, nil},
+		{corepb.Transaction_Contract_CreateSmartContract, &contractpb.CreateSmartContract{OwnerAddress: owner}, nil, targetHex},
+		{corepb.Transaction_Contract_TransferContract, &contractpb.TransferContract{OwnerAddress: owner, ToAddress: target}, targetHex, nil},
+		{corepb.Transaction_Contract_ProposalCreateContract, &contractpb.ProposalCreateContract{OwnerAddress: owner}, nil, nil},
+		{corepb.Transaction_Contract_ProposalApproveContract, &contractpb.ProposalApproveContract{OwnerAddress: owner}, nil, nil},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			parameter, err := anypb.New(tc.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx := &corepb.Transaction{RawData: &corepb.TransactionRaw{
+				Contract: []*corepb.Transaction_Contract{{Type: tc.kind, Parameter: parameter}},
+			}}
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 3000}},
+				Transactions: []*corepb.Transaction{tx},
+			})
+			hash := block.Transactions()[0].Hash()
+			info := &corepb.TransactionInfo{Id: hash.Bytes(), BlockNumber: 1, ContractAddress: target}
+			backend := &stubBackend{blockNumber: 1, block: block, txBlock: block, tx: tx, txInfo: info, txInfos: []*corepb.TransactionInfo{info}}
+			server := newTestServer(t, backend)
+			defer server.Close()
+			single := rpcCall(t, server, "eth_getTransactionReceipt", []any{"0x" + hash.Hex()})
+			batch := rpcCall(t, server, "eth_getBlockReceipts", []any{"0x1"})
+			batchReceipts, ok := batch["result"].([]any)
+			if !ok || len(batchReceipts) != 1 {
+				t.Fatalf("batch receipt: %v", batch)
+			}
+			for _, item := range []any{single["result"], batchReceipts[0]} {
+				receipt, ok := item.(map[string]any)
+				if !ok || receipt["from"] != ownerHex || receipt["to"] != tc.to || receipt["contractAddress"] != tc.deployed {
+					t.Fatalf("receipt addresses = %+v, want from %v to %v contract %v", item, ownerHex, tc.to, tc.deployed)
+				}
+			}
+		})
 	}
 }

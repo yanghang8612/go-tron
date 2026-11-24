@@ -1500,15 +1500,20 @@ func (ss *SyncService) sendSyncBlockChain(peer *p2p.Peer) {
 
 // HandleSyncBlockChain processes SYNC_BLOCK_CHAIN from a peer.
 // Responds with CHAIN_INVENTORY containing missing block IDs.
-func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
+func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) error {
 	var inv corepb.BlockInventory
 	if err := proto.Unmarshal(payload, &inv); err != nil {
-		return
+		return err
+	}
+	if len(inv.Ids) == 0 || len(inv.Ids) > syncdl.MaxSyncChainIDs {
+		return fmt.Errorf("sync chain summary has %d IDs, expected 1 to %d", len(inv.Ids), syncdl.MaxSyncChainIDs)
 	}
 
-	// Convert to BlockIDs
-	var peerSummary []types.BlockID
+	peerSummary := make([]types.BlockID, 0, len(inv.Ids))
 	for _, bid := range inv.Ids {
+		if len(bid.GetHash()) != tcommon.HashLength {
+			return fmt.Errorf("sync chain block ID length %d, expected %d", len(bid.GetHash()), tcommon.HashLength)
+		}
 		peerSummary = append(peerSummary, types.BlockID{
 			Hash: tcommon.BytesToHash(bid.Hash),
 			Num:  uint64(bid.Number),
@@ -1545,6 +1550,7 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 	}
 	data, _ := proto.Marshal(resp)
 	peer.Send(p2p.MsgChainInventory, data)
+	return nil
 }
 
 // HandleChainInventory processes CHAIN_INVENTORY from the sync peer.

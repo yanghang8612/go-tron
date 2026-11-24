@@ -96,6 +96,8 @@ var javaGetterToGoKeyMap = map[string]string{
 	"getAllowUpdateAccountName":             "allow_update_account_name",
 	"getAllowHardenResourceCalculation":     "allow_harden_resource_calculation",
 	"getAllowHardenExchangeCalculation":     "allow_harden_exchange_calculation",
+	"getAllowOptimizeTvmStorage":            "allow_optimize_tvm_storage",
+	"getAllowOptimizeTvmStorageKey":         "allow_optimize_tvm_storage_key",
 	"getAllowFnDsa512":                      "allow_fn_dsa_512",
 	"getAllowMlDsa44":                       "allow_ml_dsa_44",
 	"getConsensusLogicOptimization":         "consensus_logic_optimization",
@@ -212,6 +214,8 @@ var javaChainParameterOrder = []string{
 	"getAllowHardenExchangeCalculation",
 	"getAllowFnDsa512",
 	"getAllowMlDsa44",
+	"getAllowOptimizeTvmStorage",
+	"getAllowOptimizeTvmStorageKey",
 }
 
 // ChainParameterKeys returns the java-tron Wallet.getChainParameters key

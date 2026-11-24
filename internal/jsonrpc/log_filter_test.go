@@ -114,3 +114,25 @@ func TestParseLogFilterJSONRejectsInvalidAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestRPCLogFilterDefaultsAndRangeLimit(t *testing.T) {
+	const head = uint64(10_000)
+	filter, err := rpcLogFilter(logFilterArgs{}, head, nil)
+	if err != nil || filter.FromBlock == nil || *filter.FromBlock != head || filter.ToBlock != nil {
+		t.Fatalf("default filter = %+v, %v; want head and open end", filter, err)
+	}
+	filter, err = rpcLogFilter(logFilterArgs{ToBlock: "0x20"}, head, nil)
+	if err != nil || filter.FromBlock == nil || *filter.FromBlock != 32 || filter.ToBlock == nil || *filter.ToBlock != 32 {
+		t.Fatalf("only toBlock filter = %+v, %v; want block 32", filter, err)
+	}
+	filter, err = rpcLogFilter(logFilterArgs{FromBlock: "5000", ToBlock: "Latest"}, head, nil)
+	if err != nil || filter.ToBlock != nil {
+		t.Fatalf("open filter = %+v, %v; want dynamic upper bound", filter, err)
+	}
+	if err := validateLogBlockRange(filter, head); err != nil {
+		t.Fatalf("valid range at creation: %v", err)
+	}
+	if err := validateLogBlockRange(filter, head+1); err == nil {
+		t.Fatal("stored filter beyond range limit must fail when queried")
+	}
+}

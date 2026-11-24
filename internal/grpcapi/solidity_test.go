@@ -2143,3 +2143,13 @@ func solidityBlockIDWithNumber(num uint64) common.Hash {
 	binary.BigEndian.PutUint64(hash[:8], num)
 	return hash
 }
+
+func (b *solidTestBackend) GetPaginatedNowWitnessList(offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnesses()
+	return tronapi.WitnessPage(witnesses, offset, limit), err
+}
+
+func (b *solidTestBackend) GetPaginatedNowWitnessListAt(blockNum uint64, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	witnesses, err := b.ListWitnessesAt(blockNum)
+	return tronapi.WitnessPage(witnesses, offset, limit), err
+}

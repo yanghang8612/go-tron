@@ -5,6 +5,17 @@ import (
 	"fmt"
 )
 
+type cpuTimeoutError string
+
+func (e cpuTimeoutError) Error() string { return string(e) }
+func (e cpuTimeoutError) Unwrap() error { return ErrAlreadyTimeOut }
+
+const (
+	errFreezeV2AfterSelfDestructTimeout = cpuTimeoutError("CPU timeout for FreezeBalanceV2 after SELFDESTRUCT")
+	errSelfDestructedBeneficiaryTimeout = cpuTimeoutError("CPU timeout for SELFDESTRUCT with selfdestructed beneficiary")
+	errInvalidDelegatedV2BalanceTimeout = cpuTimeoutError("CPU timeout for invalid delegated V2 balance")
+)
+
 var (
 	ErrOutOfEnergy           = errors.New("out of energy")
 	ErrStackOverflow         = errors.New("stack overflow")
@@ -310,3 +321,8 @@ func opNameForError(op OpCode) string {
 	}
 	return name
 }
+
+const (
+	deploymentHashTimeout = cpuTimeoutError("CPU timeout for contract hash fields")
+	storageAliasTimeout   = cpuTimeoutError("CPU timeout for storage check")
+)

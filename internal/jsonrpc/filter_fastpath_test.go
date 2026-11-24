@@ -135,3 +135,30 @@ func BenchmarkFilterFanOut(b *testing.B) {
 		}
 	})
 }
+
+func TestFilterReorgRemovedLogsOnlyNotifyLogConsumers(t *testing.T) {
+	backend := new(countingFilterBackend)
+	fm := NewFilterManager(backend)
+	fm.subMgr = newSubscriptionManager()
+	wsLogs, wsHeads := make(chan []byte, 2), make(chan []byte, 2)
+	fm.subMgr.subs["logs"] = &wsSub{id: "logs", kind: "logs", logFilter: &LogFilter{}, outCh: wsLogs}
+	fm.subMgr.subs["heads"] = &wsSub{id: "heads", kind: "newHeads", outCh: wsHeads}
+	logID, err := fm.NewLogFilter(LogFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockID, err := fm.NewBlockFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := filterFastPathBlock(1)
+	fm.publish(FilterBlockEvent{Block: block, Removed: true, Logs: []*RPCLog{{Removed: true}}})
+	fm.publish(FilterBlockEvent{Block: block, Logs: []*RPCLog{{}}})
+	if len(wsHeads) != 1 || len(wsLogs) != 2 || backend.infoCalls.Load() != 0 {
+		t.Fatalf("headers=%d logs=%d receipt reads=%d", len(wsHeads), len(wsLogs), backend.infoCalls.Load())
+	}
+	logs := fm.filters[logID].pendingLogs
+	if len(logs) != 2 || !logs[0].Removed || logs[1].Removed || len(fm.filters[blockID].pendingHashes) != 1 {
+		t.Fatalf("poll logs=%+v headers=%+v", logs, fm.filters[blockID].pendingHashes)
+	}
+}

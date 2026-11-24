@@ -25,6 +25,7 @@ import (
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
+	"github.com/tronprotocol/go-tron/internal/tronapi"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -678,8 +679,8 @@ func TestTronBackend_LiveWitnessReadsSurfaceCorruptPendingVotes(t *testing.T) {
 		}
 	})
 
-	if _, err := backend.ListWitnesses(); err == nil || !strings.Contains(err.Error(), "decode votes") {
-		t.Fatalf("ListWitnesses corrupt pending votes error = %v, want decode votes error", err)
+	if _, err := backend.GetPaginatedNowWitnessList(0, 1); err == nil || !strings.Contains(err.Error(), "decode votes") {
+		t.Fatalf("GetPaginatedNowWitnessList corrupt pending votes error = %v, want decode votes error", err)
 	}
 
 	commitHeadStateForBackendTest(t, bc, func(statedb *state.StateDB) {
@@ -688,8 +689,8 @@ func TestTronBackend_LiveWitnessReadsSurfaceCorruptPendingVotes(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if _, err := backend.ListWitnesses(); err == nil || !strings.Contains(err.Error(), "votes index") {
-		t.Fatalf("ListWitnesses corrupt pending votes index error = %v, want votes index decode error", err)
+	if _, err := backend.GetPaginatedNowWitnessList(0, 1); err == nil || !strings.Contains(err.Error(), "votes index") {
+		t.Fatalf("GetPaginatedNowWitnessList corrupt pending votes index error = %v, want votes index decode error", err)
 	}
 }
 
@@ -1056,7 +1057,7 @@ func TestTronBackend_GetStorageAt(t *testing.T) {
 	_ = val // just verify no panic
 }
 
-func TestTronBackend_ListWitnessesIncludesPendingVotes(t *testing.T) {
+func TestTronBackend_PaginatedWitnessesIncludePendingVotes(t *testing.T) {
 	voter := testCoreAddr(1)
 	witness := testCoreAddr(2)
 	// Witness lives in genesis so it's in the rooted witness index at the head
@@ -1075,12 +1076,28 @@ func TestTronBackend_ListWitnessesIncludesPendingVotes(t *testing.T) {
 		},
 	})
 
-	got, err := (&TronBackend{chain: bc}).ListWitnesses()
+	backend := &TronBackend{chain: bc}
+	legacy, err := backend.ListWitnesses()
+	if err != nil || len(legacy) != 1 || legacy[0].VoteCount != 0 {
+		t.Fatalf("legacy votes = %+v, %v; want one witness with zero votes", legacy, err)
+	}
+	got, err := backend.GetPaginatedNowWitnessList(0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].VoteCount != 123 {
 		t.Fatalf("pending VotesStore delta not reflected: %+v", got)
+	}
+
+	commitHeadStateForBackendTest(t, bc, func(sdb *state.StateDB) {
+		dp := state.NewDynamicProperties()
+		dp.SetStateFlag(1)
+		if err := dp.FlushRooted(sdb); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := backend.GetPaginatedNowWitnessList(0, 1); err != tronapi.ErrWitnessMaintenance {
+		t.Fatalf("head maintenance error = %v", err)
 	}
 }
 
@@ -1177,7 +1194,7 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 		Accounts: []params.GenesisAccount{
 			{Address: owner, Balance: 100_000_000},
 		},
-		DynamicProperties: map[string]int64{},
+		DynamicProperties: map[string]int64{"energy_fee": 420},
 	}
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)
@@ -1343,7 +1360,7 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 	genesis := &params.Genesis{
 		Config:            params.MainnetChainConfig,
 		Timestamp:         0,
-		DynamicProperties: map[string]int64{},
+		DynamicProperties: map[string]int64{"energy_fee": 420},
 	}
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)
@@ -1379,6 +1396,9 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 	}
 	if err := rawdb.WriteTransactionIndex(diskdb, txHash[:], block.Number()); err != nil {
 		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := rawdb.WriteBlockStateRoot(diskdb, block.Hash(), bc.HeadStateRoot()); err != nil {
+		t.Fatal(err)
 	}
 	bc.currentBlock.Store(block)
 
@@ -1521,7 +1541,7 @@ func TestJSONRPCGetTransactionReceiptUsesColdTxPositionAfterHotPrune(t *testing.
 	genesis := &params.Genesis{
 		Config:            params.MainnetChainConfig,
 		Timestamp:         0,
-		DynamicProperties: map[string]int64{},
+		DynamicProperties: map[string]int64{"energy_fee": 420},
 	}
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)
@@ -1568,6 +1588,9 @@ func TestJSONRPCGetTransactionReceiptUsesColdTxPositionAfterHotPrune(t *testing.
 	}
 	if err := rawdb.WriteTransactionIndex(diskdb, txHash2[:], block.Number()); err != nil {
 		t.Fatalf("WriteTransactionIndex tx2: %v", err)
+	}
+	if err := rawdb.WriteBlockStateRoot(diskdb, block.Hash(), bc.HeadStateRoot()); err != nil {
+		t.Fatal(err)
 	}
 	bc.currentBlock.Store(block)
 
@@ -2218,6 +2241,13 @@ func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 func TestJSONRPCReceiptHydratesExternalizedLogsFromEventLogV4(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
+	commitHeadStateForBackendTest(t, bc, func(sdb *state.StateDB) {
+		dp := state.NewDynamicProperties()
+		dp.SetEnergyPriceHistory("0:100,30000:200")
+		if err := dp.FlushRooted(sdb); err != nil {
+			t.Fatal(err)
+		}
+	})
 	logAddress := bytes20(0x37)
 	topic := tcommon.Hash{0x38}
 	block, info := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
@@ -2234,6 +2264,9 @@ func TestJSONRPCReceiptHydratesExternalizedLogsFromEventLogV4(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteTransactionIndex(bc.db, block.Transactions()[0].Hash().Bytes(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteBlockStateRoot(bc.db, block.Hash(), bc.HeadStateRoot()); err != nil {
 		t.Fatal(err)
 	}
 	bc.currentBlock.Store(block)
@@ -2275,7 +2308,7 @@ func TestJSONRPCReceiptHydratesExternalizedLogsFromEventLogV4(t *testing.T) {
 		t.Fatalf("receipt result = %T %v", resp["result"], resp["result"])
 	}
 	logs, ok := receipt["logs"].([]any)
-	if !ok || len(logs) != 1 || receipt["status"] != "0x0" || receipt["gasUsed"] != "0x4d" {
+	if !ok || len(logs) != 1 || receipt["status"] != "0x0" || receipt["gasUsed"] != "0x4d" || receipt["effectiveGasPrice"] != "0xc8" {
 		t.Fatalf("external receipt = %+v", receipt)
 	}
 	logObject, ok := logs[0].(map[string]any)
@@ -3658,5 +3691,41 @@ func TestTronBackend_GetDelegatedResourceV2ReturnsSeparateBuckets(t *testing.T) 
 	}
 	if got[1].FrozenBalanceForEnergy != 200 || got[1].ExpireTimeForEnergy != 300 {
 		t.Fatalf("second record should be locked bucket, got %+v", got[1])
+	}
+}
+
+func TestEnergyPriceFromHistoryUsesJavaActivationBoundary(t *testing.T) {
+	const history = "0:100,1500:200,3000:300"
+	for timestamp, want := range map[int64]int64{1: 100, 1500: 100, 1501: 200, 3000: 200, 3001: 300} {
+		if got, err := energyPriceFromHistory(timestamp, history); err != nil || got != want {
+			t.Fatalf("price at %d = %d, %v; want %d", timestamp, got, err, want)
+		}
+	}
+	for _, invalid := range []string{"", "1500:200", "0:100,malformed"} {
+		if _, err := energyPriceFromHistory(1000, invalid); err == nil {
+			t.Fatalf("history %q unexpectedly resolves a price", invalid)
+		}
+	}
+}
+
+func TestTronBackend_GasPriceAtDefaultsAndWalletFallback(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	backend := &TronBackend{chain: bc}
+	if got, err := backend.GasPriceAt(30_000); err != nil || got != 100 {
+		t.Fatalf("default energy history price = %d, %v; want 100", got, err)
+	}
+	commitHeadStateForBackendTest(t, bc, func(sdb *state.StateDB) {
+		dp := state.NewDynamicProperties()
+		dp.SetEnergyPriceHistory("1000:200")
+		dp.Set("energy_fee", 420)
+		if err := dp.FlushRooted(sdb); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for timestamp, want := range map[int64]int64{1000: 420, 1001: 200} {
+		if got, err := backend.GasPriceAt(timestamp); err != nil || got != want {
+			t.Fatalf("energy price at %d = %d, %v; want %d", timestamp, got, err, want)
+		}
 	}
 }

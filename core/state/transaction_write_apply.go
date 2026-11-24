@@ -140,7 +140,7 @@ func validateTransactionWritePhysicalAliases(writes TransactionWriteSet) error {
 		storage  bool
 	}
 	var byAddress map[tcommon.Address]addressFamilies
-	for key := range writes {
+	for key, value := range writes {
 		if err := validateTransactionWriteKeyShape(key); err != nil {
 			return err
 		}
@@ -164,7 +164,18 @@ func validateTransactionWritePhysicalAliases(writes TransactionWriteSet) error {
 			case kvdomains.ContractMetadata:
 				return fmt.Errorf("apply transaction writes: contract metadata account-KV is owned by the typed cache")
 			case kvdomains.ContractStorage:
-				return fmt.Errorf("apply transaction writes: contract storage account-KV is owned by the typed cache")
+				switch len(key.LogicalKey) {
+				case OptimizedStorageRowKeyLength:
+					if !value.Exists || len(value.Value) != tcommon.HashLength {
+						return fmt.Errorf("apply transaction writes: invalid optimized contract storage row")
+					}
+				case tcommon.HashLength:
+					if value.Exists {
+						return fmt.Errorf("apply transaction writes: contract storage account-KV is owned by the typed cache")
+					}
+				default:
+					return fmt.Errorf("apply transaction writes: invalid contract storage row key")
+				}
 			case kvdomains.WitnessCapsule:
 				return fmt.Errorf("apply transaction writes: witness capsule account-KV is owned by the typed cache")
 			case kvdomains.SystemDynamicProperty:

@@ -40,6 +40,14 @@ The machinery behind each column:
 | `AllowTvmBlob` | `allow_tvm_blob` | 89 | — | 0x02000a precompile mapping is Nile-only; mainnet keeps an ordinary address |
 | `AllowTvmCancun` | `allow_tvm_cancun` | 83 | — | |
 
+The TVM reads these two switches directly from dynamic properties. The wire
+versions below gate proposal creation. An approved proposal takes effect at maintenance.
+
+| Dynamic property | Parameter ID | Mainnet wire version | Nile wire version | Effect |
+|---|---|---|---|---|
+| `allow_optimize_tvm_storage` | 99 | 38 | 39 | Enables the optimized storage key and legacy-row migration. |
+| `allow_optimize_tvm_storage_key` | 102 | 39 | 40 | Independently enables the optimized key, protects read-only access to old rows, and changes empty-code metadata handling. |
+
 ## Aliases — one proposal flips multiple flags
 
 | Alias AllowFlag | Canonical DP key | Reason |

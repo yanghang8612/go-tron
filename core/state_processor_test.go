@@ -4661,7 +4661,7 @@ func makeExchangeTransactionTx(owner byte) *types.Transaction {
 		OwnerAddress: testProcessorAddr(owner).Bytes(),
 		ExchangeId:   1,
 		TokenId:      []byte("_"),
-		Quant:        1,
+		Quant:        100_000,
 		Expected:     1,
 	}
 	param, _ := anypb.New(tc)
@@ -4697,6 +4697,26 @@ func TestApplyTransaction_ExchangeRejectedAfterFork(t *testing.T) {
 	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1_700_000_000_000, 1, db, nil, false, false)
 	if !errors.Is(err, ErrExchangeRejected) {
 		t.Fatalf("expected ErrExchangeRejected, got %v", err)
+	}
+
+	dynProps.SetAllowHardenExchangeCalculation(true)
+	dynProps.SetAllowSameTokenName(true)
+	owner := testProcessorAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 3_000_000_000)
+	if err := statedb.WriteExchangeV2(&corepb.Exchange{
+		ExchangeId: 1, CreatorAddress: owner.Bytes(),
+		FirstTokenId: []byte("_"), FirstTokenBalance: 1_000_000_000,
+		SecondTokenId: []byte("1000001"), SecondTokenBalance: 500_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1_700_000_000_000, 1, db, nil, true, false)
+	if err != nil {
+		t.Fatalf("apply valid swap after TIP-836: %v", err)
+	}
+	if result.ExchangeReceivedAmount <= 0 || statedb.GetTRC10Balance(owner, 1_000_001) != result.ExchangeReceivedAmount {
+		t.Fatalf("swap output %d does not match the credited balance", result.ExchangeReceivedAmount)
 	}
 }
 

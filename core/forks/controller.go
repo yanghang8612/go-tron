@@ -26,6 +26,7 @@ import (
 // (actuators, rpc) may race with producer updates.
 type ForkController struct {
 	store ForkStatsStore
+	nile  bool
 	mu    sync.RWMutex
 }
 
@@ -60,19 +61,19 @@ func (s rawDBForkStatsStore) WriteForkStats(version int32, stats []byte) {
 }
 
 // NewForkController binds a controller to a KV store.
-func NewForkController(db keyValueReadWriter) *ForkController {
-	return NewForkControllerFromStore(rawDBForkStatsStore{db: db})
+func NewForkController(db keyValueReadWriter, nile ...bool) *ForkController {
+	return NewForkControllerFromStore(rawDBForkStatsStore{db: db}, nile...)
 }
 
 // NewForkControllerFromStore binds a controller to a typed fork-stats store.
-func NewForkControllerFromStore(store ForkStatsStore) *ForkController {
-	return &ForkController{store: store}
+func NewForkControllerFromStore(store ForkStatsStore, nile ...bool) *ForkController {
+	return &ForkController{store: store, nile: len(nile) > 0 && nile[0]}
 }
 
 // NewForkControllerFromState binds a controller to StateDB's rooted
 // SystemForkVote domain.
-func NewForkControllerFromState(statedb *state.StateDB) *ForkController {
-	return NewForkControllerFromStore(statedb)
+func NewForkControllerFromState(statedb *state.StateDB, nile ...bool) *ForkController {
+	return NewForkControllerFromStore(statedb, nile...)
 }
 
 var knownVersionValues = func() []int32 {
@@ -103,9 +104,9 @@ func (fc *ForkController) Update(blockVersion int32, slot, witnessCount int) {
 
 	var batchStats map[int32][]byte
 	if br, ok := fc.store.(ForkStatsBatchReader); ok {
-		batchStats = br.ReadForkStatsBatch(knownVersionValues)
+		batchStats = br.ReadForkStatsBatch(knownVersionValues[:len(fc.versions())])
 	}
-	for _, vp := range KnownVersions {
+	for _, vp := range fc.versions() {
 		var stats []byte
 		if batchStats != nil {
 			stats = batchStats[vp.Value]
@@ -155,7 +156,7 @@ func (fc *ForkController) UpdateJava(blockVersion int32, slot, witnessCount int,
 	defer fc.mu.Unlock()
 
 	// downgrade(version, slot): do not materialize a missing future bitmap.
-	for _, vp := range KnownVersions {
+	for _, vp := range fc.versions() {
 		if vp.Value <= blockVersion || fc.passLocked(vp.Value, latestBlockTime, maintenanceIntervalMs) {
 			continue
 		}
@@ -177,7 +178,7 @@ func (fc *ForkController) UpdateJava(blockVersion int32, slot, witnessCount int,
 	// Java evaluates pass(version) before recording this block's vote. The
 	// block after quorum is therefore the one that advances VERSION_NUMBER.
 	if fc.passLocked(blockVersion, latestBlockTime, maintenanceIntervalMs) {
-		for _, vp := range KnownVersions {
+		for _, vp := range fc.versions() {
 			if vp.Value >= blockVersion || fc.passLocked(vp.Value, latestBlockTime, maintenanceIntervalMs) {
 				continue
 			}
@@ -218,7 +219,7 @@ func (fc *ForkController) UpdateJava(blockVersion int32, slot, witnessCount int,
 // 21_600_000). It's passed in rather than read off DP to keep this package
 // import-free of core/state and safe to call from anywhere.
 func (fc *ForkController) Pass(version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
-	vp, ok := lookupVersion(version)
+	vp, ok := lookupNetworkVersion(version, fc.nile)
 	if !ok {
 		return false
 	}
@@ -272,7 +273,7 @@ func (fc *ForkController) Stats(version int32) []byte {
 func (fc *ForkController) Reset(latestBlockTime, maintenanceIntervalMs int64, witnessCount int) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
-	for _, vp := range KnownVersions {
+	for _, vp := range fc.versions() {
 		if fc.store.ReadForkStats(vp.Value) == nil {
 			continue
 		}
@@ -286,7 +287,7 @@ func (fc *ForkController) Reset(latestBlockTime, maintenanceIntervalMs int64, wi
 // passLocked is the mutex-free core of Pass for use from already-locked
 // contexts (Reset).
 func (fc *ForkController) passLocked(version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
-	vp, ok := lookupVersion(version)
+	vp, ok := lookupNetworkVersion(version, fc.nile)
 	if !ok {
 		return false
 	}
@@ -327,4 +328,8 @@ func passFromStats(stats []byte, vp VersionParam, latestBlockTime, maintenanceIn
 	}
 	required := int(math.Ceil(float64(vp.HardForkRate) * float64(len(stats)) / 100.0))
 	return upvotes >= required
+}
+
+func (fc *ForkController) versions() []VersionParam {
+	return networkVersions(fc.nile)
 }

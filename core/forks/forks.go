@@ -180,6 +180,9 @@ var proposalParamKey = map[int64]string{
 	96: "allow_tvm_osaka",
 	97: "allow_harden_resource_calculation",
 	98: "allow_harden_exchange_calculation",
+	99: "allow_optimize_tvm_storage",
+
+	102:  "allow_optimize_tvm_storage_key",
 	1000: "allow_fn_dsa_512",
 	1001: "allow_ml_dsa_44",
 }

@@ -88,6 +88,8 @@ var javaWalletChainParameterKeys = []string{
 	"getAllowHardenExchangeCalculation",
 	"getAllowFnDsa512",
 	"getAllowMlDsa44",
+	"getAllowOptimizeTvmStorage",
+	"getAllowOptimizeTvmStorageKey",
 }
 
 func TestChainParameterKeysPinJavaWalletList(t *testing.T) {

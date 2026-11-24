@@ -39,6 +39,8 @@ type peerState struct {
 	solidNum       uint64
 	lowestBlockNum uint64
 
+	inventoryLimits peerInventoryLimits
+
 	rateLimitDrops            atomic.Uint64
 	lastRateLimitSummaryNanos atomic.Int64
 }
@@ -511,7 +513,9 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 	switch code {
 	case p2p.MsgSyncBlockChain:
 		if h.syncService != nil {
-			h.syncService.HandleSyncBlockChain(peer, payload)
+			if err := h.syncService.HandleSyncBlockChain(peer, payload); err != nil {
+				h.rejectBadProtocol(peer, code, err)
+			}
 		}
 	case p2p.MsgChainInventory:
 		if h.syncService != nil {
@@ -526,7 +530,7 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 	case p2p.MsgTrxs:
 		h.handleTrxs(peer, payload)
 	case p2p.MsgInventory:
-		h.handleInventory(peer, payload)
+		h.handleInventory(peer, ps, payload)
 	case p2p.MsgPbftMsg:
 		h.pbftHandler.HandlePbftMsg(peer, payload)
 	case p2p.MsgPbftCommitMsg:
@@ -557,23 +561,29 @@ func (h *TronHandler) reportPeerRateLimited(ps *peerState, code byte, now time.T
 		"sampleCode", fmt.Sprintf("0x%02x", code))
 }
 
+func (h *TronHandler) rejectBadProtocol(peer *p2p.Peer, code byte, err error) {
+	log.Debug("Invalid peer message", "peer", peer.ID(), "msg", p2p.MsgName(code), "err", err)
+	h.disconnectPeer(peer, corepb.ReasonCode_BAD_PROTOCOL)
+}
+
 func (h *TronHandler) handleFetchInvData(peer *p2p.Peer, payload []byte) {
-	var inv corepb.Inventory
-	if err := proto.Unmarshal(payload, &inv); err != nil {
+	inv, err := decodeInventory(payload)
+	if err == nil {
+		err = validateInventoryIDs(inv.Ids)
+	}
+	if err != nil {
+		h.rejectBadProtocol(peer, p2p.MsgFetchInvData, err)
 		return
 	}
 	switch inv.Type {
 	case corepb.Inventory_BLOCK:
 		for _, id := range inv.Ids {
-			// Block IDs have block number in first 8 bytes (big-endian).
-			// Try by number first (more reliable), fallback to hash.
-			var block *types.Block
-			if len(id) >= 8 {
-				num := binary.BigEndian.Uint64(id[:8])
-				block = h.chain.GetBlockByNumber(num)
-			}
-			if block == nil {
-				block = h.chain.GetBlockByHash(tcommon.BytesToHash(id))
+			// Block IDs encode the height in the first 8 bytes. Check the
+			// full ID before returning the canonical block at that height.
+			hash := tcommon.Hash(id)
+			block := h.chain.GetBlockByNumber(binary.BigEndian.Uint64(id[:8]))
+			if block == nil || block.Hash() != hash {
+				block = h.chain.GetBlockByHash(hash)
 			}
 			if block != nil {
 				data, err := proto.Marshal(block.Proto())
@@ -681,8 +691,19 @@ func (h *TronHandler) handleTrxs(peer *p2p.Peer, payload []byte) {
 	if err := proto.Unmarshal(payload, &batch); err != nil {
 		return
 	}
+	transactions := make([]*types.Transaction, 0, len(batch.Transactions))
+	seen := make(map[tcommon.Hash]struct{}, len(batch.Transactions))
 	for _, pbTx := range batch.Transactions {
 		tx := types.NewTransactionFromPB(pbTx)
+		id := tx.Hash()
+		if _, duplicate := seen[id]; duplicate {
+			h.rejectBadProtocol(peer, p2p.MsgTrxs, fmt.Errorf("duplicate transaction %s", id))
+			return
+		}
+		seen[id] = struct{}{}
+		transactions = append(transactions, tx)
+	}
+	for _, tx := range transactions {
 		if err := h.chain.ValidateTransaction(tx); err != nil {
 			continue
 		}
@@ -695,9 +716,21 @@ func (h *TronHandler) handleTrxs(peer *p2p.Peer, payload []byte) {
 	}
 }
 
-func (h *TronHandler) handleInventory(peer *p2p.Peer, payload []byte) {
-	var inv corepb.Inventory
-	if err := proto.Unmarshal(payload, &inv); err != nil {
+func (h *TronHandler) handleInventory(peer *p2p.Peer, ps *peerState, payload []byte) {
+	inv, err := decodeInventory(payload)
+	if err != nil {
+		h.rejectBadProtocol(peer, p2p.MsgInventory, err)
+		return
+	}
+	if ps != nil {
+		now := time.Now()
+		if !ps.inventoryLimits.allow(inv.Type, len(inv.Ids), now.Unix()) {
+			h.reportPeerRateLimited(ps, p2p.MsgInventory, now)
+			return
+		}
+	}
+	if err := validateInventoryIDs(inv.Ids); err != nil {
+		h.rejectBadProtocol(peer, p2p.MsgInventory, err)
 		return
 	}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	troncrypto "github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -1351,6 +1352,11 @@ func tvmAdjustAllowance(tvm *TVM, addr tcommon.Address, amount int64) {
 	tvm.StateDB.AddAllowance(addr, amount)
 }
 
+func hasInvalidDelegatedV2(account *types.Account) bool {
+	return account != nil && (account.DelegatedFrozenV2BalanceForBandwidth() < 0 ||
+		account.DelegatedFrozenV2BalanceForEnergy() < 0)
+}
+
 // ── 0xDA FREEZEBALANCEV2 ──────────────────────────────────────────────────────
 // Stack: amount, resourceType → success
 
@@ -1376,6 +1382,10 @@ func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory
 		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
+	}
+	if in.tvmConfig.StakeV2TimeGuard && in.tvm.StateDB.HasTVMSelfDestructMark(caller) &&
+		in.tvm.StateDB.GetBalance(caller) >= amount {
+		return nil, errFreezeV2AfterSelfDestructTimeout
 	}
 	oldWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
 	if err := in.tvm.StateDB.SubBalance(caller, amount); err != nil {
@@ -1422,7 +1432,13 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	internalTx := in.tvm.addInternalTransaction(caller, caller, int64(amountWord.Uint64()), nil,
 		"unfreezeBalanceV2For"+featuredInternalResourceName(&resourceWord), 0, 0)
 
-	if !amountOK || amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), now) >= 32 {
+	if !amountOK || amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) {
+		rejectInternalTransaction(internalTx)
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	account := in.tvm.StateDB.GetAccount(caller)
+	if tvmUnfreezingV2Count(account, now) >= 32 {
 		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
@@ -1432,6 +1448,9 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
+	}
+	if in.tvmConfig.StakeV2TimeGuard && hasInvalidDelegatedV2(account) {
+		return nil, errInvalidDelegatedV2BalanceTimeout
 	}
 	tvmWithdrawReward(in.tvm, caller)
 	withdrawnExpired := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, now)
@@ -1494,10 +1513,14 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 	in.tvm.Nonce++
 	internalTx := in.tvm.addInternalTransaction(contract.Address, contract.Address, 0, nil,
 		"cancelAllUnfreezeV2", 0, 0)
-	if !in.tvm.StateDB.AccountExists(contract.Address) {
+	account := in.tvm.StateDB.GetAccount(contract.Address)
+	if account == nil {
 		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
+	}
+	if in.tvmConfig.StakeV2TimeGuard && hasInvalidDelegatedV2(account) {
+		return nil, errInvalidDelegatedV2BalanceTimeout
 	}
 	// CancelAllUnfreezeV2 refreezes unexpired entries and returns the per-resource
 	// total_*_weight deltas + the expired total (which java/actuator add to the
@@ -1564,6 +1587,9 @@ func opWithdrawExpireUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ 
 		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil
+	}
+	if in.tvmConfig.StakeV2TimeGuard && hasInvalidDelegatedV2(account) {
+		return nil, errInvalidDelegatedV2BalanceTimeout
 	}
 	// WithdrawExpireUnfreezeProcessor.execute returns immediately when the
 	// expired sum is zero. In particular, malformed zero-valued expired rows are

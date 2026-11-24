@@ -62,6 +62,7 @@ type TVM struct {
 	// Failed charges are excluded, matching java-tron ProgramResult.
 	EnergyPenaltyTotal uint64
 
+	storage             *state.TVMStorage
 	cfg                 TVMConfig
 	interpreter         *Interpreter
 	newContracts        map[tcommon.Address]bool
@@ -978,7 +979,13 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		return nil, tcommon.Address{}, 0, err
 	}
 
-	if len(ret) != 0 && tvm.cfg.London && ret[0] == 0xEF {
+	depositCost := uint64(len(ret)) * EnergyCodeDeposit
+	invalidDeploymentHashes := !internal && tvm.cfg.Constantinople && tvm.cfg.ValidateDeploymentHashes &&
+		(len(contractMeta.GetCodeHash()) > 0 || len(contractMeta.GetTrxHash()) > 0)
+	// Java records invalid code first, then still checks the hash fields when
+	// the constructor can pay the code-deposit energy.
+	if len(ret) != 0 && tvm.cfg.London && ret[0] == 0xEF &&
+		(!invalidDeploymentHashes || contract.Energy < depositCost) {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
@@ -986,7 +993,6 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		return ret, tcommon.Address{}, 0, ErrInvalidCode
 	}
 
-	depositCost := uint64(len(ret)) * EnergyCodeDeposit
 	if !contract.UseEnergy(depositCost) {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.restoreNewContractMark(contractAddr, wasNew)
@@ -996,8 +1002,22 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	}
 	tvm.addRawEnergyUsage(depositCost)
 
+	if invalidDeploymentHashes {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
+		tvm.restoreNewContractMark(contractAddr, wasNew)
+		tvm.RevertLogs(logSnap)
+		tvm.StateDB.RevertToSnapshot(snap)
+		return ret, tcommon.Address{}, 0, deploymentHashTimeout
+	}
+
 	if internal || tvm.cfg.Constantinople {
 		tvm.StateDB.SetCode(contractAddr, ret)
+		if tvm.cfg.Constantinople {
+			meta := tvm.StateDB.GetContract(contractAddr)
+			if meta != nil {
+				tvm.cacheContractCodeHash(contractAddr, meta, tvm.StateDB.GetCodeHash(contractAddr))
+			}
+		}
 	}
 	return ret, contractAddr, contract.Energy, nil
 }

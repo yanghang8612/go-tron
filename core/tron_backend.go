@@ -13,10 +13,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -45,26 +47,41 @@ type TxBroadcaster interface {
 
 // TronBackend implements tronapi.Backend.
 type TronBackend struct {
-	chain            *BlockChain
-	pool             *txpool.TxPool
-	txBroadcast      TxBroadcaster              // nil until wired from main
-	peersFunc        func() []*tronapi.PeerInfo // nil until wired from main
-	syncInfoFunc     func() tronapi.SyncInfo
-	stateColdHistory state.StateDomainChangeColdHistory
+	chain               *BlockChain
+	pool                *txpool.TxPool
+	txBroadcast         TxBroadcaster              // nil until wired from main
+	peersFunc           func() []*tronapi.PeerInfo // nil until wired from main
+	syncInfoFunc        func() tronapi.SyncInfo
+	stateColdHistory    state.StateDomainChangeColdHistory
+	constantCallTimeout time.Duration
 
-	subsMu    sync.Mutex
-	blockSubs []chan<- *types.Block
+	subsMu      sync.Mutex
+	blockSubs   []chan<- *types.Block
+	filterSubs  []filterEventSubscriber
+	filterReorg bool
 }
 
 func NewTronBackend(chain *BlockChain, pool *txpool.TxPool) *TronBackend {
 	b := &TronBackend{chain: chain, pool: pool}
 	chain.AddBlockHook(b.notifyBlockSubs)
+	chain.prepareFilterReorg = b.prepareFilterReorg
 	return b
 }
 
 func (b *TronBackend) notifyBlockSubs(block *types.Block) {
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()
+	if b.filterReorg {
+		return
+	}
+	b.notifyBlockSubscribersLocked(block)
+	if len(b.filterSubs) != 0 {
+		event := b.captureFilterBlock(block, false, b.filterLogDemandLocked())
+		b.notifyFilterSubscribersLocked([]jsonrpc.FilterBlockEvent{event})
+	}
+}
+
+func (b *TronBackend) notifyBlockSubscribersLocked(block *types.Block) {
 	for _, ch := range b.blockSubs {
 		select {
 		case ch <- block:
@@ -88,6 +105,12 @@ func (b *TronBackend) UnsubscribeBlocks(ch chan<- *types.Block) {
 		}
 	}
 	b.subsMu.Unlock()
+}
+
+// SetConstantCallTimeout configures the local TVM constant-call budget.
+// Zero uses the rooted max_cpu_time_of_one_tx dynamic property.
+func (b *TronBackend) SetConstantCallTimeout(timeout time.Duration) {
+	b.constantCallTimeout = timeout
 }
 
 // SetTxBroadcaster wires in the P2P broadcaster so BroadcastTransaction
@@ -349,8 +372,9 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 		energyLimit = 30_000_000 // default max energy for constant calls
 	}
 
+	stakeGuardVersion := forks.Version4822(b.chain.effectiveGenesisHash() == params.NileGenesisHash)
 	if history != nil {
-		if err := history.PrefetchExecutionAt(historyBlock, owner, contractAddr, []int32{27, 35}); err != nil {
+		if err := history.PrefetchExecutionAt(historyBlock, owner, contractAddr, []int32{27, 35, stakeGuardVersion, stakeGuardVersion + 1}); err != nil {
 			return nil, err
 		}
 	}
@@ -364,11 +388,21 @@ func (b *TronBackend) triggerConstantContractAtRoot(owner, contractAddr tcommon.
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	cfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	cfg.StakeV2TimeGuard = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	cfg.StorageAliasCheck = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion+1,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	timeout := b.constantCallTimeout
+	if timeout == 0 {
+		timeout = time.Duration(dp.MaxCpuTimeOfOneTx()) * time.Millisecond
+	}
+	cfg.Deadline = time.Now().Add(timeout)
 	// Opt-in opcode trace for sync-stall diagnosis (GTRON_TVM_TRACE=<file>):
 	// install a FileLogger tracer when the env var is set; nil/zero overhead
 	// otherwise. Superseded by debug_traceCall for richer JSON traces.
 	fileTracer := tracers.FileLoggerFromEnv()
 	if fileTracer != nil {
+		cfg.Deadline = time.Time{}
 		cfg.Tracer = fileTracer
 	}
 	evm := vm.NewTVM(statedbCopy, dp, owner, block.Number(), block.Timestamp(), tcommon.Address{}, 1, cfg)
@@ -466,6 +500,11 @@ func (b *TronBackend) TraceCallContext(ctx context.Context, from, to *tcommon.Ad
 	tvmCfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	tvmCfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	stakeGuardVersion := forks.Version4822(b.chain.effectiveGenesisHash() == params.NileGenesisHash)
+	tvmCfg.StakeV2TimeGuard = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	tvmCfg.StorageAliasCheck = forks.PassVersionFromStore(statedbCopy, stakeGuardVersion+1,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	tvmCfg.Tracer = tracer
 
@@ -1099,7 +1138,7 @@ func (b *TronBackend) GetChainParameters() ([]tronapi.ChainParameter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return chainParametersFromDynamicProperties(dynProps), nil
+	return chainParametersFromDynamicProperties(dynProps, b.chain.effectiveGenesisHash() == params.NileGenesisHash), nil
 }
 
 func (b *TronBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
@@ -1113,10 +1152,10 @@ func (b *TronBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainPara
 	if err != nil {
 		return nil, fmt.Errorf("reconstruct chain parameters at block %d: %w", blockNum, err)
 	}
-	return chainParametersFromDynamicProperties(dynProps), nil
+	return chainParametersFromDynamicProperties(dynProps, b.chain.effectiveGenesisHash() == params.NileGenesisHash), nil
 }
 
-func chainParametersFromDynamicProperties(dynProps *state.DynamicProperties) []tronapi.ChainParameter {
+func chainParametersFromDynamicProperties(dynProps *state.DynamicProperties, nile bool) []tronapi.ChainParameter {
 	if dynProps == nil {
 		return nil
 	}
@@ -1124,15 +1163,36 @@ func chainParametersFromDynamicProperties(dynProps *state.DynamicProperties) []t
 	keys := state.ChainParameterKeys()
 	params := make([]tronapi.ChainParameter, 0, len(keys))
 	for _, javaKey := range keys {
-		params = append(params, tronapi.ChainParameter{
-			Key:   javaKey,
-			Value: all[state.JavaGetterToGoKey(javaKey)],
-		})
+		if !nile && (javaKey == "getAllowFnDsa512" || javaKey == "getAllowMlDsa44") {
+			continue
+		}
+		value := all[state.JavaGetterToGoKey(javaKey)]
+		if javaKey == "getAdaptiveResourceLimitTargetRatio" {
+			// Wallet.getChainParameters exposes the proposal ratio; the stored
+			// value includes one day's 1,440-minute normalization factor.
+			value /= 24 * 60
+		}
+		params = append(params, tronapi.ChainParameter{Key: javaKey, Value: value})
 	}
 	return params
 }
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
+	return b.listWitnesses(false)
+}
+
+func (b *TronBackend) GetPaginatedNowWitnessList(offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	if offset < 0 || limit <= 0 {
+		return nil, nil
+	}
+	witnesses, err := b.listWitnesses(true)
+	if err != nil {
+		return nil, err
+	}
+	return tronapi.WitnessPage(witnesses, offset, limit), nil
+}
+
+func (b *TronBackend) listWitnesses(realtime bool) ([]*tronapi.WitnessInfo, error) {
 	statedb, err := b.headSystemStateStrict()
 	if err != nil {
 		return nil, err
@@ -1141,9 +1201,21 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read witness index at head: %w", err)
 	}
-	pendingDeltas, _, err := pendingVoteDeltasStrict(statedb)
-	if err != nil {
-		return nil, fmt.Errorf("read pending vote deltas at head: %w", err)
+	var pendingDeltas map[tcommon.Address]int64
+	var sortOptimization bool
+	if realtime {
+		dp, err := b.dynamicPropertiesFromStateStrict(statedb)
+		if err != nil {
+			return nil, err
+		}
+		if dp.StateFlag() == 1 {
+			return nil, tronapi.ErrWitnessMaintenance
+		}
+		sortOptimization = dp.ConsensusLogicOptimization()
+		pendingDeltas, _, err = pendingVoteDeltasStrict(statedb)
+		if err != nil {
+			return nil, fmt.Errorf("read pending vote deltas at head: %w", err)
+		}
 	}
 	activeMap := activeWitnessMap(b.chain.ActiveWitnesses())
 
@@ -1155,6 +1227,7 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 		}
 		result = append(result, &tronapi.WitnessInfo{
 			Address:        hex.EncodeToString(addr[:]),
+			PubKey:         hex.EncodeToString(w.Proto().GetPubKey()),
 			VoteCount:      w.VoteCount() + pendingDeltas[addr],
 			URL:            w.URL(),
 			IsJobs:         activeMap[addr],
@@ -1164,10 +1237,28 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 			LatestSlotNum:  w.LatestSlotNum(),
 		})
 	}
+	if realtime {
+		result = sortWitnessInfos(result, sortOptimization)
+	}
 	return result, nil
 }
 
 func (b *TronBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, error) {
+	return b.listWitnessesAt(blockNum, false)
+}
+
+func (b *TronBackend) GetPaginatedNowWitnessListAt(blockNum uint64, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
+	if offset < 0 || limit <= 0 {
+		return nil, nil
+	}
+	witnesses, err := b.listWitnessesAt(blockNum, true)
+	if err != nil {
+		return nil, err
+	}
+	return tronapi.WitnessPage(witnesses, offset, limit), nil
+}
+
+func (b *TronBackend) listWitnessesAt(blockNum uint64, realtime bool) ([]*tronapi.WitnessInfo, error) {
 	session, err := b.archiveStateAt(blockNum)
 	if err != nil {
 		return nil, err
@@ -1178,9 +1269,18 @@ func (b *TronBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, 
 	if err != nil {
 		return nil, fmt.Errorf("read witness index at block %d: %w", blockNum, err)
 	}
-	pendingDeltas, _, err := session.reader.PendingVoteDeltasAt(blockNum)
-	if err != nil {
-		return nil, fmt.Errorf("read pending vote deltas at block %d: %w", blockNum, err)
+	var pendingDeltas map[tcommon.Address]int64
+	var sortOptimization bool
+	if realtime {
+		dp, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, []string{"consensus_logic_optimization"})
+		if err != nil {
+			return nil, err
+		}
+		sortOptimization = dp.ConsensusLogicOptimization()
+		pendingDeltas, _, err = session.reader.PendingVoteDeltasAt(blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read pending vote deltas at block %d: %w", blockNum, err)
+		}
 	}
 	activeSet, err := session.reader.ActiveWitnessesAt(blockNum)
 	if err != nil {
@@ -1199,6 +1299,7 @@ func (b *TronBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, 
 		}
 		result = append(result, &tronapi.WitnessInfo{
 			Address:        hex.EncodeToString(addr[:]),
+			PubKey:         hex.EncodeToString(w.Proto().GetPubKey()),
 			VoteCount:      w.VoteCount() + pendingDeltas[addr],
 			URL:            w.URL(),
 			IsJobs:         activeMap[addr],
@@ -1208,7 +1309,24 @@ func (b *TronBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessInfo, 
 			LatestSlotNum:  w.LatestSlotNum(),
 		})
 	}
+	if realtime {
+		result = sortWitnessInfos(result, sortOptimization)
+	}
 	return result, nil
+}
+
+func sortWitnessInfos(witnesses []*tronapi.WitnessInfo, sortOptimization bool) []*tronapi.WitnessInfo {
+	votes := make([]dpos.WitnessVote, 0, len(witnesses))
+	byAddress := make(map[tcommon.Address]*tronapi.WitnessInfo, len(witnesses))
+	for _, witness := range witnesses {
+		addr := tcommon.BytesToAddress(tcommon.FromHex(witness.Address))
+		votes = append(votes, dpos.WitnessVote{Address: addr, Votes: witness.VoteCount})
+		byAddress[addr] = witness
+	}
+	for i, vote := range dpos.SortWitnessesByVotesWithOptimization(votes, sortOptimization) {
+		witnesses[i] = byAddress[vote.Address]
+	}
+	return witnesses
 }
 
 func activeWitnessMap(activeSet []tcommon.Address) map[tcommon.Address]bool {
@@ -3381,6 +3499,58 @@ func (b *TronBackend) GasPrice() int64 {
 	return b.chain.DynProps().EnergyFee()
 }
 
+// GasPriceAt returns the historical SUN price at the receipt's block
+// timestamp. A proposal price applies strictly after its expiration time,
+// matching java-tron's price-history lookup.
+func (b *TronBackend) GasPriceAt(timestamp int64) (int64, error) {
+	statedb, err := b.headSystemStateStrict()
+	if err != nil {
+		return 0, err
+	}
+	history, ok, err := statedb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte("energy_price_history"))
+	if err != nil {
+		return 0, err
+	}
+	defaults := state.NewDynamicProperties()
+	if !ok {
+		// java-tron initializes absent energy price history to 0:100.
+		// Go's rooted dynamic properties represent unchanged defaults sparsely.
+		history = []byte(defaults.EnergyPriceHistory())
+	}
+	if fee, err := energyPriceFromHistory(timestamp, string(history)); err == nil {
+		return fee, nil
+	}
+	// Wallet.getEnergyFee(timestamp) uses the current protocol setting when
+	// the history has no qualifying price or parsing fails.
+	fee, exists, err := statedb.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte("energy_fee"))
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return defaults.EnergyFee(), nil
+	}
+	if len(fee) != 8 {
+		return 0, fmt.Errorf("energy_fee has length %d, want 8", len(fee))
+	}
+	return int64(binary.BigEndian.Uint64(fee)), nil
+}
+
+func energyPriceFromHistory(timestamp int64, history string) (int64, error) {
+	entries := strings.Split(history, ",")
+	for i := len(entries) - 1; i >= 0; i-- {
+		effective, price, ok := strings.Cut(entries[i], ":")
+		start, timeErr := strconv.ParseInt(effective, 10, 64)
+		fee, priceErr := strconv.ParseInt(price, 10, 64)
+		if !ok || timeErr != nil || priceErr != nil || fee < 0 {
+			return 0, fmt.Errorf("invalid energy price history entry %q", entries[i])
+		}
+		if timestamp > start {
+			return fee, nil
+		}
+	}
+	return 0, fmt.Errorf("no historical energy price at timestamp %d", timestamp)
+}
+
 func (b *TronBackend) PeerCount() int {
 	if b.peersFunc == nil {
 		return 0
@@ -3477,7 +3647,7 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) (tco
 	if err != nil {
 		return tcommon.Hash{}, fmt.Errorf("open head state: %w", err)
 	}
-	return statedb.GetState(addr, slot), nil
+	return statedb.GetStateStrict(addr, slot)
 }
 
 func (b *TronBackend) balanceTraceBlock(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*types.Block, error) {
@@ -4038,8 +4208,6 @@ func (b *TronBackend) CallAtContext(ctx context.Context, from, to *tcommon.Addre
 }
 
 func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
-	const maxBlockRange = 2000
-
 	var fromBlock, toBlock uint64
 
 	if filter.BlockHash != nil {
@@ -4072,8 +4240,8 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		if toBlock < fromBlock {
 			return []*jsonrpc.RPCLog{}, nil
 		}
-		if toBlock-fromBlock+1 > maxBlockRange {
-			return nil, fmt.Errorf("block range too large (max %d)", maxBlockRange)
+		if toBlock-fromBlock > jsonrpc.MaxLogBlockRange {
+			return nil, fmt.Errorf("block range too large (max %d)", jsonrpc.MaxLogBlockRange)
 		}
 	}
 

@@ -473,3 +473,39 @@ func TestProposalCreateExecute(t *testing.T) {
 		t.Fatalf("latest_proposal_num=%d, want 2", ctx.DynProps.LatestProposalNum())
 	}
 }
+
+func TestOptimizeStorageProposalsRequireReleaseQuorum(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		genesis tcommon.Hash
+		id      int64
+		version int32
+		key     string
+	}{
+		{"mainnet/storage", tcommon.Hash{}, 99, 38, "allow_optimize_tvm_storage"},
+		{"mainnet/key", tcommon.Hash{}, 102, 39, "allow_optimize_tvm_storage_key"},
+		{"nile/storage", params.NileGenesisHash, 99, 39, "allow_optimize_tvm_storage"},
+		{"nile/key", params.NileGenesisHash, 102, 40, "allow_optimize_tvm_storage_key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, act := newProposalCreateValidationContext(t, map[int64]int64{tc.id: 1})
+			ctx.GenesisHash = tc.genesis
+			ctx.PrevBlockTime = 1_780_000_000_000
+			markProposalForkVersionPassed(t, ctx, tc.version-1)
+			if err := act.Validate(ctx); err == nil {
+				t.Fatal("previous software fork enabled proposal")
+			}
+			markProposalForkVersionPassed(t, ctx, tc.version)
+			if err := act.Validate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateProposalParameter(ctx, tc.id, 0); err == nil {
+				t.Fatal("zero accepted")
+			}
+			ctx.DynProps.Set(tc.key, 1)
+			if err := act.Validate(ctx); err == nil {
+				t.Fatal("repeated activation accepted")
+			}
+		})
+	}
+}

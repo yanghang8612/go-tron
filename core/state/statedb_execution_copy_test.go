@@ -87,9 +87,10 @@ func TestStateDBCopyTopLevelFieldPolicy(t *testing.T) {
 		"accountCommitPlans": "reset-workspace", "kvEntryArena": "reset-owned-copy-values",
 		"journal": "fresh", "snapshots": "reset", "balanceTrace": "fresh",
 		"balanceTraceSnapshots": "reset", "accountJournalPos": "reset",
-		"transientStorage": "deep-copy", "domainChangeNoJournal": "reset-temporal-capture",
-		"dynProps":          "share-requires-explicit-copy-before-execution",
-		"transactionAccess": "reset-recorder", "originRoot": "copy",
+		"transientStorage": "deep-copy", "selfDestructMarks": "deep-copy",
+		"domainChangeNoJournal": "reset-temporal-capture",
+		"dynProps":              "share-requires-explicit-copy-before-execution",
+		"transactionAccess":     "reset-recorder", "originRoot": "copy",
 		"deferFold": "reset-commit-control", "capturedFold": "reset-commit-control",
 		"accountKVIndexStore": "share-reader-writer", "accountKVLatestReader": "share-immutable-reader",
 		"accountKVLatestIterator": "share-immutable-reader", "flatLatestReader": "share-immutable-reader",
@@ -108,6 +109,47 @@ func TestStateDBCopyTopLevelFieldPolicy(t *testing.T) {
 		if policies[field] == "" {
 			t.Fatalf("StateDB field %q has no copy policy", field)
 		}
+	}
+}
+
+func TestStateDBCopiesPreservePrivateTVMSelfDestructMarks(t *testing.T) {
+	source := newTestStateDB(t)
+	first, second := testAddr(0x41), testAddr(0x42)
+	source.MarkTVMSelfDestruct(first)
+	for _, copyState := range []struct {
+		name string
+		copy func() (*StateDB, error)
+	}{
+		{"Copy", source.Copy},
+		{"CopyBlockExecutionBase", source.CopyBlockExecutionBase},
+	} {
+		t.Run(copyState.name, func(t *testing.T) {
+			copied, err := copyState.copy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !copied.HasTVMSelfDestructMark(first) {
+				t.Fatal("copy lost the existing transaction marker")
+			}
+			frame := copied.Snapshot()
+			copied.MarkTVMSelfDestruct(first)
+			copied.MarkTVMSelfDestruct(second)
+			if source.HasTVMSelfDestructMark(second) {
+				t.Fatal("copy marker leaked into source")
+			}
+			copied.RevertToSnapshot(frame)
+			if !copied.HasTVMSelfDestructMark(first) || copied.HasTVMSelfDestructMark(second) {
+				t.Fatal("revert must retain the earlier mark and discard the new mark")
+			}
+			copied.FinalizeTransaction()
+			if copied.HasTVMSelfDestructMark(first) || !source.HasTVMSelfDestructMark(first) {
+				t.Fatal("finalization must clear only the copy's transaction markers")
+			}
+		})
+	}
+	source.FinalizeTransaction()
+	if source.HasTVMSelfDestructMark(first) {
+		t.Fatal("marker crossed into the next transaction")
 	}
 }
 

@@ -41,7 +41,7 @@ func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boun
 	}
 	var list []map[string]any
 	for _, e := range exchanges {
-		list = append(list, marshalMessage(e.ProtoReflect()))
+		list = append(list, responseTronJSON(w).marshalMessage(e.ProtoReflect()))
 	}
 	if list == nil {
 		list = []map[string]any{}
@@ -150,7 +150,7 @@ func (api *API) handleGetPaginatedExchangeList(w http.ResponseWriter, r *http.Re
 	}
 	var list []map[string]any
 	for _, e := range exchanges {
-		list = append(list, marshalMessage(e.ProtoReflect()))
+		list = append(list, responseTronJSON(w).marshalMessage(e.ProtoReflect()))
 	}
 	if list == nil {
 		list = []map[string]any{}

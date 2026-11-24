@@ -57,7 +57,7 @@ func TestArchiveStateAtCallersCloseSession(t *testing.T) {
 		"GetStorageAtBlockContext":             1,
 		"ListExchangesAt":                      1,
 		"ListProposalsAt":                      1,
-		"ListWitnessesAt":                      1,
+		"listWitnessesAt":                      1,
 		"NextMaintenanceTimeAt":                1,
 		"TraceBlock":                           1,
 		"TraceTransaction":                     1,
@@ -168,7 +168,8 @@ func TestPublicBlockBoundArchiveAPIsUseArchiveBoundary(t *testing.T) {
 		"ListExchangesPaginatedAt":             {"ListExchangesAt"},
 		"ListProposalsAt":                      {"archiveStateAt"},
 		"ListProposalsPaginatedAt":             {"ListProposalsAt"},
-		"ListWitnessesAt":                      {"archiveStateAt"},
+		"ListWitnessesAt":                      {"listWitnessesAt"},
+		"GetPaginatedNowWitnessListAt":         {"listWitnessesAt"},
 		"NextMaintenanceTimeAt":                {"archiveStateAt"},
 		"TriggerConstantContractAt":            {"TriggerConstantContractAtContext"},
 		"TriggerConstantContractAtContext":     {"archiveStateAt"},
@@ -487,6 +488,7 @@ func archiveBoundaryCallNames(body *ast.BlockStmt) []string {
 		"accountAtOrNil":                   {},
 		"archiveStateAt":                   {},
 		"listAssetsAt":                     {},
+		"listWitnessesAt":                  {},
 	}
 	seen := make(map[string]struct{})
 	ast.Inspect(body, func(n ast.Node) bool {

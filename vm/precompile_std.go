@@ -5,6 +5,9 @@ import (
 	"errors"
 	"math/big"
 	"math/bits"
+	"time"
+
+	"github.com/consensys/gnark-crypto/ecc/bn254"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
@@ -448,12 +451,12 @@ type bn128Pairing struct {
 	istanbul bool
 }
 
-func (c *bn128Pairing) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
-	ret, used, _, err := c.RunWithStatus(nil, tcommon.Address{}, input, energy)
+func (c *bn128Pairing) Run(tvm *TVM, addr tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(tvm, addr, input, energy)
 	return ret, used, err
 }
 
-func (c *bn128Pairing) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
+func (c *bn128Pairing) RunWithStatus(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	var cost uint64
 	pairs := uint64(0)
 	if len(input) > 0 {
@@ -467,7 +470,14 @@ func (c *bn128Pairing) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, en
 	if energy < cost {
 		return nil, energy, false, ErrOutOfEnergy
 	}
-	ret, err := runBN128Pairing(input)
+	var deadline time.Time
+	if tvm != nil {
+		deadline = tvm.cfg.Deadline
+	}
+	ret, err := runBN128Pairing(input, deadline)
+	if errors.Is(err, ErrAlreadyTimeOut) {
+		return nil, energy, false, err
+	}
 	if err != nil {
 		return []byte{}, cost, false, nil
 	}
@@ -480,27 +490,64 @@ var (
 	bn128False32            = make([]byte, 32)
 )
 
-func runBN128Pairing(input []byte) ([]byte, error) {
+const errBN128PairingTimeout = cpuTimeoutError("CPU timeout for 'precompiled contract pair' operation executing")
+
+func runBN128Pairing(input []byte, deadline time.Time) ([]byte, error) {
 	if len(input)%bn128PairSize != 0 {
 		return nil, errBN128BadPairingInput
 	}
-	var (
-		g1s []*bn256.G1
-		g2s []*bn256.G2
-	)
-	for i := 0; i < len(input); i += bn128PairSize {
-		g1, err := newBN128G1(input[i : i+64])
-		if err != nil {
+	pairs := len(input) / bn128PairSize
+	g1s := make([]bn254.G1Affine, pairs)
+	g2s := make([]bn254.G2Affine, pairs)
+	for i := range g1s {
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return nil, errBN128PairingTimeout
+		}
+		offset := i * bn128PairSize
+		g1 := input[offset : offset+64]
+		g2 := input[offset+64 : offset+bn128PairSize]
+		// BN254's decoder also understands compressed points. The TVM only
+		// accepts canonical, uncompressed coordinates (including infinity).
+		if g1[0]&0xc0 != 0 || g2[0]&0xc0 != 0 {
+			return nil, errBN128BadPairingInput
+		}
+		if _, err := g1s[i].SetBytes(g1); err != nil {
 			return nil, err
 		}
-		g2, err := newBN128G2(input[i+64 : i+192])
-		if err != nil {
+		if _, err := g2s[i].SetBytes(g2); err != nil {
 			return nil, err
 		}
-		g1s = append(g1s, g1)
-		g2s = append(g2s, g2)
 	}
-	if bn256.PairingCheck(g1s, g2s) {
+	if deadline.IsZero() {
+		if pairs == 0 {
+			return bn128True32, nil
+		}
+		ok, err := bn254.PairingCheck(g1s, g2s)
+		if ok {
+			return bn128True32, err
+		}
+		return bn128False32, err
+	}
+
+	// Accumulate individual Miller loops so an expired deadline can stop the
+	// precompile between pairs. The shared final exponentiation is unchanged.
+	var product bn254.GT
+	product.SetOne()
+	for i := range g1s {
+		factor, err := bn254.MillerLoop(g1s[i:i+1], g2s[i:i+1])
+		if err != nil {
+			return nil, err
+		}
+		product.Mul(&product, &factor)
+		if time.Now().After(deadline) {
+			return nil, errBN128PairingTimeout
+		}
+	}
+	result := bn254.FinalExponentiation(&product)
+	if time.Now().After(deadline) {
+		return nil, errBN128PairingTimeout
+	}
+	if result.IsOne() {
 		return bn128True32, nil
 	}
 	return bn128False32, nil
@@ -508,14 +555,6 @@ func runBN128Pairing(input []byte) ([]byte, error) {
 
 func newBN128G1(blob []byte) (*bn256.G1, error) {
 	p := new(bn256.G1)
-	if _, err := p.Unmarshal(blob); err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
-func newBN128G2(blob []byte) (*bn256.G2, error) {
-	p := new(bn256.G2)
 	if _, err := p.Unmarshal(blob); err != nil {
 		return nil, err
 	}

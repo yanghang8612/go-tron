@@ -377,6 +377,15 @@ type kvGenerationHistoryChange struct {
 func (kvGenerationHistoryChange) revert(map[tcommon.Address]*stateObject, map[tcommon.Address]*types.Witness) {
 }
 
+type tvmSelfDestructMarkChange struct {
+	marks   map[tcommon.Address]struct{}
+	address tcommon.Address
+}
+
+func (e tvmSelfDestructMarkChange) revert(_ map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	delete(e.marks, e.address)
+}
+
 // transientStorageChange records a single EIP-1153 transient storage write for
 // revert. It captures the StateDB.transientStorage map by reference (maps are
 // reference types) rather than the *StateDB, because the journal revert

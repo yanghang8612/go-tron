@@ -21,6 +21,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const DefaultMaxConcurrentStreams = 100
+
 var log = gtronlog.NewModule("grpcapi")
 
 // Server implements the gRPC Wallet service as a thin adapter over tronapi.Backend.
@@ -28,14 +30,24 @@ var log = gtronlog.NewModule("grpcapi")
 // Server implements node.Lifecycle: Start() binds the configured addr; Stop() is idempotent.
 type Server struct {
 	apipb.UnimplementedWalletServer
-	backend tronapi.Backend
-	addr    string
-	grpc    *grpc.Server
+	backend              tronapi.Backend
+	addr                 string
+	grpc                 *grpc.Server
+	maxConcurrentStreams uint32
 }
 
 // NewServer creates a Server that will listen on addr when Start is called.
 func NewServer(backend tronapi.Backend, addr string) *Server {
-	return &Server{backend: backend, addr: addr}
+	return NewServerWithMaxConcurrentStreams(backend, addr, 0)
+}
+
+// NewServerWithMaxConcurrentStreams bounds simultaneous HTTP/2 streams for
+// each incoming connection. Zero selects the java-tron default.
+func NewServerWithMaxConcurrentStreams(backend tronapi.Backend, addr string, limit uint32) *Server {
+	if limit == 0 {
+		limit = DefaultMaxConcurrentStreams
+	}
+	return &Server{backend: backend, addr: addr, maxConcurrentStreams: limit}
 }
 
 // Start binds the listener and begins serving.
@@ -44,7 +56,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("grpc listen %s: %w", s.addr, err)
 	}
-	s.grpc = grpc.NewServer()
+	s.grpc = grpc.NewServer(grpc.MaxConcurrentStreams(s.maxConcurrentStreams))
 	apipb.RegisterWalletServer(s.grpc, s)
 	apipb.RegisterWalletSolidityServer(s.grpc, NewSolidityServer(s.backend))
 	go func() {
@@ -506,13 +518,12 @@ func (s *Server) GetPaginatedNowWitnessList(_ context.Context, in *apipb.Paginat
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	witnesses, err := s.backend.ListWitnesses()
+	if in.Offset < 0 || in.Limit < 0 {
+		return nil, status.Error(codes.InvalidArgument, "offset and limit must be non-negative")
+	}
+	page, err := s.backend.GetPaginatedNowWitnessList(in.Offset, in.Limit)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
-	}
-	page, err := paginateWitnessInfos(witnesses, in.Offset, in.Limit)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	return witnessListFromInfos(page), nil
 }
@@ -520,36 +531,11 @@ func (s *Server) GetPaginatedNowWitnessList(_ context.Context, in *apipb.Paginat
 func witnessListFromInfos(witnesses []*tronapi.WitnessInfo) *apipb.WitnessList {
 	result := make([]*corepb.Witness, 0, len(witnesses))
 	for _, w := range witnesses {
-		if w == nil {
-			continue
+		if w != nil {
+			result = append(result, w.Proto())
 		}
-		result = append(result, &corepb.Witness{
-			Address:   common.FromHex(w.Address),
-			VoteCount: w.VoteCount,
-			Url:       w.URL,
-			IsJobs:    w.IsJobs,
-		})
 	}
 	return &apipb.WitnessList{Witnesses: result}
-}
-
-func paginateWitnessInfos(witnesses []*tronapi.WitnessInfo, offset, limit int64) ([]*tronapi.WitnessInfo, error) {
-	if offset < 0 {
-		return nil, fmt.Errorf("offset must be non-negative")
-	}
-	if limit < 0 {
-		return nil, fmt.Errorf("limit must be non-negative")
-	}
-	if limit == 0 || offset >= int64(len(witnesses)) {
-		return nil, nil
-	}
-	remaining := int64(len(witnesses)) - offset
-	if limit > remaining {
-		limit = remaining
-	}
-	start := int(offset)
-	end := int(offset + limit)
-	return witnesses[start:end], nil
 }
 
 // GetNextMaintenanceTime returns the timestamp of the next maintenance window.
@@ -1091,6 +1077,11 @@ func (s *Server) GetTransactionInfoByBlockNum(_ context.Context, in *apipb.Numbe
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &apipb.TransactionInfoList{TransactionInfo: infos}, nil
+}
+
+// GetPendingSize returns the number of transactions currently in the pool.
+func (s *Server) GetPendingSize(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
+	return &apipb.NumberMessage{Num: int64(s.backend.PendingTransactionCount())}, nil
 }
 
 // GetTransactionListFromPending returns all transactions currently in the mempool.

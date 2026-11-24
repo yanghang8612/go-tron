@@ -79,6 +79,7 @@ type commitJob struct {
 	txInfoBatchPool   *transactionInfoBatchPool
 	balanceTrace      *blockBalanceTraceData
 	wasMaintenance    bool
+	maintOldWitnesses []tcommon.Address
 	maintNewWitnesses []tcommon.Address
 
 	// Async telemetry is joined without making either half wait: foreground
@@ -184,6 +185,7 @@ func (bc *BlockChain) commitAsync(
 	stats *applyStats,
 	commitOpts state.CommitOptions,
 	wasMaintenanceBlock bool,
+	maintOldWitnesses []tcommon.Address,
 	maintNewWitnesses []tcommon.Address,
 	rewardAcctAddrs []tcommon.Address,
 	txInfos []*corepb.TransactionInfo,
@@ -244,6 +246,7 @@ func (bc *BlockChain) commitAsync(
 		txInfos:           txInfos,
 		balanceTrace:      balanceTrace,
 		wasMaintenance:    wasMaintenanceBlock,
+		maintOldWitnesses: maintOldWitnesses,
 		maintNewWitnesses: maintNewWitnesses,
 		telemetry:         stats,
 	}
@@ -525,6 +528,9 @@ func (bc *BlockChain) finishCommitJob(job *commitJob, root tcommon.Hash, foldErr
 	// correct epoch (decision-(b)).
 	phaseStarted = time.Now()
 	if job.wasMaintenance && job.block.Number() != 1 {
+		if bc.witnessSetObserver != nil && job.maintOldWitnesses != nil {
+			bc.witnessSetObserver(job.maintOldWitnesses, job.maintNewWitnesses)
+		}
 		bc.maintHookMu.Lock()
 		mhooks := bc.maintHooks
 		bc.maintHookMu.Unlock()

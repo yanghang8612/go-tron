@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"time"
+
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -57,6 +59,20 @@ type TVMConfig struct {
 	// is caller-wired from the rooted fork-vote store, not by NewTVMConfig.
 	CpuTimeGuard bool
 
+	// StakeV2TimeGuard enables the 4.8.2.2 native Stake V2 and SELFDESTRUCT
+	// checks. The caller loads it from the rooted SR fork votes.
+	StakeV2TimeGuard bool
+	// These gates are sourced from the software fork votes.
+	StorageAliasCheck        bool // 4.8.2.3, protects the legacy row key format
+	ValidateDeploymentHashes bool // 4.8.2.2, protects top-level code deposit
+
+	OptimizeStorage           bool // proposal 99 or 102
+	ProtectLegacyStorageReads bool // proposal 102, defers legacy migration to writes
+
+	// Deadline is shared by all frames of one node-local execution. The zero
+	// time disables wall-clock checks for signed replay and debug tracing.
+	Deadline time.Time
+
 	// Tracer, when non-nil, receives the EIP-3155 hook stream during execution
 	// (per-opcode CaptureState plus frame CaptureStart/Enter/Exit/End). It is
 	// left nil by NewTVMConfig — only the debug_trace* backends and the
@@ -105,5 +121,8 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		MultiSign:                       isActive(forks.AllowMultiSign),
 		OptimizedReturnValueOfChainId:   dp != nil && dp.AllowOptimizedReturnValueOfChainId(),
 		NewResourceModelPower:           isActive(forks.AllowNewResourceModel) && unfreezeDelay,
+
+		OptimizeStorage:           dp != nil && (dp.AllowOptimizeTvmStorage() || dp.AllowOptimizeTvmStorageKey()),
+		ProtectLegacyStorageReads: dp != nil && dp.AllowOptimizeTvmStorageKey(),
 	}
 }

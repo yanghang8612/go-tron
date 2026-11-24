@@ -28,8 +28,8 @@ func (s rawDBForkStatsReader) ReadForkStats(version int32) []byte {
 }
 
 // PassVersionFromStore is the typed-store variant of PassVersion.
-func PassVersionFromStore(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
-	vp, ok := lookupVersion(version)
+func PassVersionFromStore(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64, nile ...bool) bool {
+	vp, ok := lookupNetworkVersion(version, len(nile) > 0 && nile[0])
 	if !ok {
 		return false
 	}

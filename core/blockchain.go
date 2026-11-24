@@ -402,11 +402,14 @@ type BlockChain struct {
 	// every batch boundary. Its channel remains bounded by commitDepth.
 	txInfoBatches *transactionInfoBatchPool
 
-	blockHookMu sync.Mutex
-	blockHooks  []func(*types.Block) // called after each successful InsertBlock
+	blockHookMu        sync.Mutex
+	blockHooks         []func(*types.Block) // called after each successful InsertBlock
+	prepareFilterReorg func([]*types.Block) func([]*types.Block)
 
 	maintHookMu sync.Mutex
 	maintHooks  []func(*types.Block, []tcommon.Address) // fired after a maintenance block
+
+	witnessSetObserver func(previous, current []tcommon.Address)
 
 	applyStatsHookMu sync.Mutex
 	applyStatsHooks  []func(*types.Block, ApplyStats) // fired after each successful applyBlock with per-block execution telemetry
@@ -528,6 +531,12 @@ func (bc *BlockChain) AddMaintenanceHook(fn func(*types.Block, []tcommon.Address
 	bc.maintHookMu.Unlock()
 }
 
+// SetWitnessSetObserver wires a node-local observer for committed witness
+// membership changes. Configure it before the chain starts accepting blocks.
+func (bc *BlockChain) SetWitnessSetObserver(observe func(previous, current []tcommon.Address)) {
+	bc.witnessSetObserver = observe
+}
+
 // flushBarrier counts in-flight async flushes and supports concurrent
 // post (Add) + wait (Wait), which sync.WaitGroup explicitly forbids
 // ("Add called concurrently with Wait" panics). postFlush runs on the
@@ -615,7 +624,6 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		chaindb:           chaindb,
 		stateDB:           stateDB,
 		config:            config,
-		fc:                forks.NewForkController(buffer),
 		buffer:            buffer,
 		flushQueue:        make(chan uint64, flushQueueCap),
 		flushPending:      newFlushBarrier(),
@@ -647,7 +655,6 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		)
 	}
 	bc.stateForkStatsStore.cache = bc.forkStatsCache
-	bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore)
 	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
 	if err != nil {
 		return nil, fmt.Errorf("load cycle reward pending accumulator: %w", err)
@@ -663,6 +670,9 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		return nil, errors.New("genesis block not found in database")
 	}
 	bc.genesisBlock = genesisBlock
+	nile := bc.effectiveGenesisHash() == params.NileGenesisHash
+	bc.fc = forks.NewForkController(buffer, nile)
+	bc.stateForkController = forks.NewForkControllerFromStore(&bc.stateForkStatsStore, nile)
 
 	for _, gw := range rawdb.ReadGenesisWitnesses(db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
@@ -968,7 +978,7 @@ func (bc *BlockChain) stateCommitOptions(_ *types.Block, _ bool) state.CommitOpt
 // ForkController returns the chain's fork controller.
 func (bc *BlockChain) ForkController() *forks.ForkController {
 	if statedb := bc.sysKVAt(bc.HeadStateRoot()); statedb != nil {
-		return forks.NewForkControllerFromState(statedb)
+		return forks.NewForkControllerFromState(statedb, bc.effectiveGenesisHash() == params.NileGenesisHash)
 	}
 	return bc.fc
 }
@@ -1891,7 +1901,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 
 	// Run maintenance if at boundary (before commit so allowances are included).
 	wasMaintenanceBlock := false
-	var maintNewWitnesses []tcommon.Address
+	var maintOldWitnesses, maintNewWitnesses []tcommon.Address
 	atBoundary := dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime()
 	if atBoundary {
 		// java-tron parity (MaintenanceManager.applyBlock lines 62-75): when
@@ -1967,6 +1977,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 				// distribution, before the active set is swapped — bc.ActiveWitnesses()
 				// still holds the outgoing set here.
 				flipWitnessIsJobs(statedb, bc.ActiveWitnesses(), newActive)
+				if bc.witnessSetObserver != nil {
+					maintOldWitnesses = maintNewWitnesses
+				}
 				if err := bc.SetActiveWitnesses(statedb, newActive); err != nil {
 					return err
 				}
@@ -2116,7 +2129,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		// once after both halves complete; the foreground defer must not expose
 		// a partial per-block sample.
 		applyStatsDeferred = true
-		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos, balanceTraceData)
+		return bc.commitAsync(block, blockData, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintOldWitnesses, maintNewWitnesses, rewardAcctAddrs, txInfos, balanceTraceData)
 	}
 
 	commitResult, err := plan.CommitState(block, commitOpts)
@@ -2199,6 +2212,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// #1 advances the grid but doesn't run doMaintenance, so java skips
 	// srPrePrepare too (line 70 guard `if (blockNum != 1)`).
 	if wasMaintenanceBlock && block.Number() != 1 && !bc.suppressReplayHooks {
+		if bc.witnessSetObserver != nil && maintOldWitnesses != nil {
+			bc.witnessSetObserver(maintOldWitnesses, maintNewWitnesses)
+		}
 		bc.maintHookMu.Lock()
 		mhooks := bc.maintHooks
 		bc.maintHookMu.Unlock()
@@ -2751,6 +2767,11 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	if err = bc.materializeForkLCA(lcaTarget); err != nil {
 		return fmt.Errorf("materialize fork LCA: %w", err)
 	}
+	var filterReplacement []*types.Block
+	if bc.prepareFilterReorg != nil && !bc.suppressReplayHooks {
+		finish := bc.prepareFilterReorg(orphanBlocks)
+		defer func() { finish(filterReplacement) }()
+	}
 	if err := bc.deleteOrphanedBlockMetadata(orphaned); err != nil {
 		return fmt.Errorf("delete orphaned block metadata: %w", err)
 	}
@@ -2885,7 +2906,11 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 			return fmt.Errorf("async commit failed during fork re-apply: %w", *errPtr)
 		}
 	}
-	return forkExecutor.Close()
+	if err := forkExecutor.Close(); err != nil {
+		return err
+	}
+	filterReplacement = reversed
+	return nil
 }
 
 type orphanedBlockMetadata struct {

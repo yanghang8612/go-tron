@@ -16,6 +16,26 @@ func javaStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.
 	return storageRowKeyWithLayout(key, prefix, hashSlot)
 }
 
+// LegacyStorageRowKey returns the historical 32-byte java-tron row key.
+func LegacyStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.SmartContract) tcommon.Hash {
+	return javaStorageRowKey(addr, key, meta)
+}
+
+const OptimizedStorageRowKeyLength = storageKeyPrefixBytes + tcommon.HashLength
+
+// OptimizedStorageRowKey returns the java-tron 48-byte storage migration key.
+func OptimizedStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.SmartContract) []byte {
+	addrHash := javaStorageAddressHash(addr, meta.GetTrxHash())
+	var seed [2 * tcommon.HashLength]byte
+	copy(seed[:], addrHash[:])
+	copy(seed[tcommon.HashLength:], key[:])
+	slotHash := tcommon.Keccak256(seed[:])
+	var row [OptimizedStorageRowKeyLength]byte
+	copy(row[:storageKeyPrefixBytes], addrHash[:storageKeyPrefixBytes])
+	copy(row[storageKeyPrefixBytes:], slotHash[:])
+	return row[:]
+}
+
 func javaStorageKeyLayout(addr tcommon.Address, meta *contractpb.SmartContract) ([storageKeyPrefixBytes]byte, bool) {
 	if meta == nil {
 		return javaStorageKeyLayoutFields(addr, nil, 0)
@@ -24,10 +44,18 @@ func javaStorageKeyLayout(addr tcommon.Address, meta *contractpb.SmartContract) 
 }
 
 func javaStorageKeyLayoutFields(addr tcommon.Address, trxHash []byte, version int32) ([storageKeyPrefixBytes]byte, bool) {
+	addrHash := javaStorageAddressHash(addr, trxHash)
+	var prefix [storageKeyPrefixBytes]byte
+	copy(prefix[:], addrHash[:storageKeyPrefixBytes])
+	return prefix, version == 1
+}
+
+func javaStorageAddressHash(addr tcommon.Address, trxHash []byte) tcommon.Hash {
 	var seed [tcommon.AddressLength + tcommon.HashLength]byte
 	copy(seed[:], addr[:])
 	seedLen := len(addr)
-	hasTrxHash := !isZeroBytes(trxHash)
+	// Java treats any nonempty trx_hash as an address salt.
+	hasTrxHash := len(trxHash) != 0
 	var addrSeed []byte
 	if hasTrxHash && len(trxHash) > tcommon.HashLength {
 		// Protocol hashes are 32 bytes, but preserve the historical behavior for
@@ -41,10 +69,7 @@ func javaStorageKeyLayoutFields(addr tcommon.Address, trxHash []byte, version in
 		}
 		addrSeed = seed[:seedLen]
 	}
-	addrHash := tcommon.Keccak256(addrSeed)
-	var prefix [storageKeyPrefixBytes]byte
-	copy(prefix[:], addrHash[:storageKeyPrefixBytes])
-	return prefix, version == 1
+	return tcommon.Keccak256(addrSeed)
 }
 
 func storageRowKeyWithLayout(key tcommon.Hash, prefix [storageKeyPrefixBytes]byte, hashSlot bool) tcommon.Hash {
@@ -96,16 +121,4 @@ func decodeStorageValueHash(context string, raw []byte) (tcommon.Hash, error) {
 	var h tcommon.Hash
 	copy(h[tcommon.HashLength-len(raw):], raw)
 	return h, nil
-}
-
-func isZeroBytes(b []byte) bool {
-	if len(b) == 0 {
-		return true
-	}
-	for _, v := range b {
-		if v != 0 {
-			return false
-		}
-	}
-	return true
 }

@@ -51,7 +51,7 @@ func (api *API) handleGetProposalById(w http.ResponseWriter, r *http.Request, bo
 		w.Write([]byte("{}"))
 		return
 	}
-	data, _ := json.Marshal(p)
+	data, _ := responseTronJSON(w).marshalInt64Fields(p)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -102,7 +102,7 @@ func (api *API) handleGetPaginatedProposalList(w http.ResponseWriter, r *http.Re
 	if proposals == nil {
 		proposals = []*ProposalInfo{}
 	}
-	data, _ := json.Marshal(map[string]interface{}{"proposal": proposals})
+	data, _ := responseTronJSON(w).marshalInt64Fields(map[string]interface{}{"proposal": proposals})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }

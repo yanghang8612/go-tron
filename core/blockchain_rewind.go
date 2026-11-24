@@ -1073,7 +1073,7 @@ func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Ha
 	if err := bc.reloadCycleRewardsFromBuffer(); err != nil {
 		return fmt.Errorf("reload cycle reward pending accumulator: %w", err)
 	}
-	bc.fc = forks.NewForkController(bc.buffer)
+	bc.fc = forks.NewForkController(bc.buffer, bc.effectiveGenesisHash() == params.NileGenesisHash)
 	bc.invalidateStandbyPayCache()
 	bc.clearSystemAccountCache()
 	bc.clearRewardAccountCache()

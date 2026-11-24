@@ -770,29 +770,12 @@ func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, s
 	if err != nil {
 		return tcommon.Hash{}, false, err
 	}
-	var meta *contractpb.SmartContract
-	if data, ok, err := r.readStateKVAsOf(addr, envelope.AccountKVGeneration, kvdomains.ContractMetadata, contractMetaKVKey, blockNum, r.headNum); err != nil {
-		return tcommon.Hash{}, false, err
-	} else if ok && len(data) > 0 {
-		var sc contractpb.SmartContract
-		if err := statecodec.Unmarshal(data, &sc); err != nil {
-			return tcommon.Hash{}, false, fmt.Errorf("decode contract metadata for storage key %s at block %d: %w", addr.Hex(), blockNum, err)
-		}
-		meta = &sc
+	generation := envelope.AccountKVGeneration
+	read := func(domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+		return r.readStateKVAsOf(addr, generation, domain, key, blockNum, r.headNum)
 	}
-	rowKey := javaStorageRowKey(addr, slot, meta)
-	raw, ok, err := r.readStateKVAsOf(addr, envelope.AccountKVGeneration, kvdomains.ContractStorage, rowKey.Bytes(), blockNum, r.headNum)
-	if err != nil {
-		return tcommon.Hash{}, false, err
-	}
-	if !ok || len(raw) == 0 {
-		return tcommon.Hash{}, true, nil
-	}
-	h, err := decodeStorageValueHash(fmt.Sprintf("storage value at block %d", blockNum), raw)
-	if err != nil {
-		return tcommon.Hash{}, false, err
-	}
-	return h, true, nil
+	value, err := readStorageRows(addr, slot, fmt.Sprintf("storage value at block %d", blockNum), read)
+	return value, err == nil, err
 }
 
 func (r *PersistentHistoryReader) readStateAccountLatestAsOf(owner tcommon.Address, targetBlock, headBlock uint64) ([]byte, bool, error) {
@@ -1886,15 +1869,44 @@ func readFlatStorageLatestWithReader(latest hotStateLatestReader, addr tcommon.A
 	if err != nil || !ok {
 		return tcommon.Hash{}, err
 	}
-	rowKey, err := storageRowKeyFromFlatLatest(latest, addr, envelope.AccountKVGeneration, slot)
+	read := func(domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+		return latest.KVLatest(addr, envelope.AccountKVGeneration, domain, key)
+	}
+	return readStorageRows(addr, slot, "live storage value", read)
+}
+
+// readStorageRows probes the optimized key in the selected state view. Only
+// writes under a storage-optimization proposal create 48-byte rows. The
+// historical view removes later rows before the lookup, so pre-activation
+// queries naturally use the legacy key. A present zero row stops fallback.
+func readStorageRows(addr tcommon.Address, slot tcommon.Hash, context string, read func(kvdomains.KVDomain, []byte) ([]byte, bool, error)) (tcommon.Hash, error) {
+	var meta *contractpb.SmartContract
+	data, ok, err := read(kvdomains.ContractMetadata, contractMetaKVKey)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
-	raw, ok, err := latest.KVLatest(addr, envelope.AccountKVGeneration, kvdomains.ContractStorage, rowKey.Bytes())
-	if err != nil || !ok || len(raw) == 0 {
+	if ok && len(data) > 0 {
+		meta = new(contractpb.SmartContract)
+		if err := statecodec.Unmarshal(data, meta); err != nil {
+			return tcommon.Hash{}, fmt.Errorf("decode contract metadata for storage key %s (%s): %w", addr.Hex(), context, err)
+		}
+	}
+	return readStorageRowsWithMetadata(addr, slot, context, meta, read)
+}
+
+func readStorageRowsWithMetadata(addr tcommon.Address, slot tcommon.Hash, context string, meta *contractpb.SmartContract, read func(kvdomains.KVDomain, []byte) ([]byte, bool, error)) (tcommon.Hash, error) {
+	raw, ok, err := read(kvdomains.ContractStorage, OptimizedStorageRowKey(addr, slot, meta))
+	if err != nil {
 		return tcommon.Hash{}, err
 	}
-	return decodeStorageValueHash("live storage value", raw)
+	if !ok {
+		legacy := javaStorageRowKey(addr, slot, meta)
+		raw, _, err = read(kvdomains.ContractStorage, legacy[:])
+		if err != nil {
+			return tcommon.Hash{}, err
+		}
+	}
+	return decodeStorageValueHash(context, raw)
 }
 
 func readFlatAccountLatestEnvelope(db ethdb.KeyValueReader, addr tcommon.Address) (*StateAccountV2, bool, error) {

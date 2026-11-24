@@ -997,11 +997,11 @@ func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
 	}
 	if list1[0].Address != hex.EncodeToString(w1.Bytes()) ||
 		list1[0].URL != "witness-one" ||
-		list1[0].VoteCount != 15 ||
+		list1[0].VoteCount != 10 ||
 		!list1[0].IsJobs ||
 		list1[0].TotalProduced != 1 ||
 		list1[0].LatestBlockNum != 1 {
-		t.Fatalf("block1 witness = %+v, want witness1 with pending +5", list1[0])
+		t.Fatalf("block1 witness = %+v, want settled witness1", list1[0])
 	}
 
 	list2, err := b.ListWitnessesAt(block2.Number())
@@ -1013,17 +1013,26 @@ func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
 	}
 	if list2[0].Address != hex.EncodeToString(w1.Bytes()) ||
 		list2[0].URL != "witness-one-updated" ||
-		list2[0].VoteCount != 15 ||
+		list2[0].VoteCount != 20 ||
 		list2[0].IsJobs {
-		t.Fatalf("block2 witness1 = %+v, want updated inactive witness1 with pending -5", list2[0])
+		t.Fatalf("block2 witness1 = %+v, want updated settled inactive witness1", list2[0])
 	}
 	if list2[1].Address != hex.EncodeToString(w2.Bytes()) ||
 		list2[1].URL != "witness-two" ||
-		list2[1].VoteCount != 37 ||
+		list2[1].VoteCount != 30 ||
 		!list2[1].IsJobs ||
 		list2[1].TotalMissed != 3 ||
 		list2[1].LatestSlotNum != 4 {
-		t.Fatalf("block2 witness2 = %+v, want active witness2 with pending +7", list2[1])
+		t.Fatalf("block2 witness2 = %+v, want settled active witness2", list2[1])
+	}
+
+	page, err := b.GetPaginatedNowWitnessListAt(block1.Number(), 0, 1)
+	if err != nil || len(page) != 1 || page[0].VoteCount != 15 {
+		t.Fatalf("block1 witness page = %+v, %v; want witness1 with 15 votes", page, err)
+	}
+	page, err = b.GetPaginatedNowWitnessListAt(block2.Number(), 0, 2)
+	if err != nil || len(page) != 2 || page[0].VoteCount != 37 || page[1].VoteCount != 15 {
+		t.Fatalf("block2 witness page = %+v, %v; want witnesses ranked 37 then 15", page, err)
 	}
 }
 
