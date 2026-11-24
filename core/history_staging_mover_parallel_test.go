@@ -165,6 +165,10 @@ func TestHistoryStagingMoverRunsBesideForwardIndexETL(t *testing.T) {
 		<-done
 		t.Fatal(err)
 	}
+	// This deadlock watchdog includes the mover's synchronous Pebble I/O
+	// while the forward ETL remains parked at its snapshot barrier.
+	const moverWatchdog = 30 * time.Second
+	moveStarted := time.Now()
 	moved := make(chan error, 1)
 	go func() { moved <- mover.RunOnce(ctx) }()
 	select {
@@ -174,11 +178,12 @@ func TestHistoryStagingMoverRunsBesideForwardIndexETL(t *testing.T) {
 			<-done
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(moverWatchdog):
+		elapsed := time.Since(moveStarted)
 		unblock()
-		<-done
-		<-moved
-		t.Fatal("mover waited for unrelated forward ETL")
+		etlErr := <-done
+		moverErr := <-moved
+		t.Fatalf("mover did not finish beside paused forward ETL after %s (ETL cleanup: %v, mover cleanup: %v)", elapsed.Round(time.Millisecond), etlErr, moverErr)
 	}
 	route, present, err := f.manager.ReadRoute(1)
 	if err != nil || !present || route.Owner != rawdb.HistoryStagingOwnerTarget || !route.SourceCleared {
