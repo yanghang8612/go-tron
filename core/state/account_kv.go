@@ -1703,6 +1703,9 @@ func (s *StateDB) readStateKVGeneration(owner tcommon.Address) (uint64, bool, er
 	if generation, exists, ok := s.readTransactionVersionedKVGeneration(owner); ok {
 		return generation, exists, nil
 	}
+	if s != nil && s.storageReadScope != nil {
+		return s.readCanonicalStateKVGeneration(owner)
+	}
 	if s != nil && s.flatLatestReader != nil {
 		return s.flatLatestReader.KVGeneration(owner)
 	}

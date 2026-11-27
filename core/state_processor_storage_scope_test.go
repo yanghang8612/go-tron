@@ -334,3 +334,117 @@ func TestProcessBlockCanonicalStorageScopeEmptyRingWrapAndRollback(t *testing.T)
 		}
 	}
 }
+
+func TestProcessBlockCanonicalStorageScopeWithSampledShadowCreateAccounts(t *testing.T) {
+	var wantRoot tcommon.Hash
+	var wantInfos []*corepb.TransactionInfo
+	for _, enabled := range []bool{false, true} {
+		mode := "live"
+		if enabled {
+			mode = "scope"
+		}
+		t.Run(mode, func(t *testing.T) {
+			disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer disk.Close()
+			history, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer history.Close()
+			db := rawdb.NewDirectHistoryStore(disk, history)
+			database := state.NewDatabase(rawdb.WrapKeyValueStore(db))
+			seed, err := state.New(tcommon.Hash{}, database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, contract := testProcessorAddr(1), testProcessorAddr(0xee)
+			seed.DynamicProperties().SetAllowCreationOfContracts(true)
+			seed.DynamicProperties().SetAllowAdaptiveEnergy(true)
+			seed.DynamicProperties().SetAllowBlackHoleOptimization(true)
+			seed.DynamicProperties().SetLatestBlockHeaderTimestamp(30_000)
+			seed.CreateAccount(owner, corepb.AccountType_Normal)
+			seed.AddBalance(owner, 1_000_000_000)
+			seed.CreateAccount(params.BlackholeAddress, corepb.AccountType_Normal)
+			seed.CreateAccount(contract, corepb.AccountType_Contract)
+			seed.SetContract(contract, &contractpb.SmartContract{OriginAddress: owner.Bytes(), ContractAddress: contract.Bytes()})
+			var code []byte
+			for i := byte(0); i < 8; i++ {
+				code = append(code, 0x60, i, 0x54, 0x60, i*32, 0x52) // SLOAD -> memory
+				if i%2 == 0 {
+					seed.SetState(contract, tcommon.Hash{31: i}, tcommon.Hash{31: i + 1})
+				}
+			}
+			code = append(code, 0x61, 0x01, 0x00, 0x60, 0x00, 0xf3)
+			seed.SetCode(contract, code)
+			root, err := seed.Commit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := disk.Compact(nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			dp := seed.DynamicProperties().Copy()
+
+			s, err := state.New(root, database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetDynamicProperties(dp)
+			buffer := blockbuffer.New(db)
+			s.SetAccountKVIndexStore(buffer)
+			commits := s.NewCommitScope()
+			defer commits.Discard()
+
+			txPBs := make([]*corepb.Transaction, 0, 22)
+			trigger := makeTestTriggerTx(1, contract, nil)
+			trigger.Proto().RawData.FeeLimit = 10_000_000
+			trigger.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+			txPBs = append(txPBs, trigger.Proto())
+			for i := byte(0); i < 20; i++ {
+				tx := makeTestTransferTx(1, 100+i, 100_000)
+				tx.Proto().Ret = []*corepb.Transaction_Result{{ContractRet: corepb.Transaction_Result_SUCCESS}}
+				txPBs = append(txPBs, tx.Proto())
+			}
+			blockNum := uint64(discardShadowSampleInterval)
+			buffer.BeginBlock(tcommon.Hash{1}, blockNum)
+			block := types.NewBlockFromPB(&corepb.Block{
+				BlockHeader: &corepb.BlockHeader{
+					RawData: &corepb.BlockHeaderRaw{Number: int64(blockNum), Timestamp: 33_000},
+				},
+				Transactions: txPBs,
+			})
+			infos, _, err := processBlockWithOptions(
+				s, dp, block, buffer, nil, 0, params.DefaultBlockNumForEnergyLimit,
+				false, tcommon.Hash{}, nil, nil, nil, forks.NewVersionPassCache(),
+				new(transactionInfoBatch), true, -1, nil,
+				processBlockOptions{canonicalStorageReadScope: enabled},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotRoot, _, err := s.CommitWithStatsOptionsInScope(commits, state.CommitOptions{BlockNumber: blockNum})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !enabled {
+				wantRoot = gotRoot
+				wantInfos = infos
+			} else {
+				if gotRoot != wantRoot {
+					t.Fatalf("root mismatch: got %x want %x", gotRoot, wantRoot)
+				}
+				if len(infos) != len(wantInfos) {
+					t.Fatalf("info len mismatch: got %d want %d", len(infos), len(wantInfos))
+				}
+				for i := range infos {
+					if !proto.Equal(infos[i], wantInfos[i]) {
+						t.Fatalf("info[%d] mismatch", i)
+					}
+				}
+			}
+		})
+	}
+}

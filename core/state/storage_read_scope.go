@@ -24,7 +24,7 @@ func (s *StateDB) BeginCanonicalStorageReadScope(number uint64) (func() error, e
 		return nil, errors.New("state: canonical storage scope already open")
 	}
 	reader, ok := s.accountKVLatestReader.(*commitScopeLatestReader)
-	if !ok || reader == nil || reader.state != s || reader.writer == nil || reader.atomicScope != nil {
+	if !ok || reader == nil || reader.state != s || reader.writer == nil || reader.atomicScope != nil || s.flatLatestReader != reader {
 		return noop, nil
 	}
 	buffer, ok := s.accountKVIndex().(*blockbuffer.Buffer)
@@ -69,4 +69,15 @@ func (s *StateDB) readCanonicalAccountKVLatest(owner tcommon.Address, generation
 		return pending.value, true, nil
 	}
 	return rawdb.ReadStateKVLatestNoCopy(s.storageReadScope, owner, generation, domain, key)
+}
+
+func (s *StateDB) readCanonicalStateKVGeneration(owner tcommon.Address) (uint64, bool, error) {
+	reader, ok := s.flatLatestReader.(*commitScopeLatestReader)
+	if !ok || reader != s.storageReadScopeReader || reader.state != s || reader.writer == nil || reader.writer.index != s.accountKVIndex() {
+		return 0, false, fmt.Errorf("state: canonical storage reader changed within block")
+	}
+	if gen, exists, handled := reader.writer.lookupPendingKVGeneration(owner); handled {
+		return gen, exists, nil
+	}
+	return rawdb.ReadStateKVGeneration(s.storageReadScope, owner)
 }

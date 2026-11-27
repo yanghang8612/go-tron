@@ -3,8 +3,10 @@ package state
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -157,5 +159,124 @@ func TestCanonicalStorageScopeRejectsReaderReplacement(t *testing.T) {
 	s.accountKVLatestReader = &commitScopeLatestReader{state: s, writer: commits.latestWriter}
 	if _, _, err := s.readAccountKVLatestForDecoding(testAddr(1), 0, kvdomains.ContractStorage, bytes.Repeat([]byte{1}, 32)); err == nil {
 		t.Fatal("replacement reader accepted old scope")
+	}
+	s.flatLatestReader = &commitScopeLatestReader{state: s, writer: commits.latestWriter}
+	if _, _, err := s.readStateKVGeneration(testAddr(1)); err == nil {
+		t.Fatal("replacement flat reader accepted old scope")
+	}
+}
+
+func TestCanonicalStorageScopeCopyDoesNotShareKVGenerationScope(t *testing.T) {
+	disk, err := rawdb.NewPebbleDB(t.TempDir(), 16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer disk.Close()
+	database := NewDatabase(rawdb.WrapKeyValueStore(disk))
+	seed, err := New(tcommon.Hash{}, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := testAddr(0xb1)
+	seed.CreateAccount(existing, corepb.AccountType_Contract)
+	for i := byte(0); i < 8; i++ {
+		seed.SetState(existing, tcommon.Hash{31: i}, tcommon.Hash{31: i + 1})
+	}
+	root, err := seed.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := disk.Compact(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(root, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := blockbuffer.New(disk)
+	s.SetAccountKVIndexStore(buffer)
+	commits := s.NewCommitScope()
+	defer commits.Discard()
+	buffer.BeginBlock(tcommon.Hash{1}, 1)
+
+	closeScope, err := s.BeginCanonicalStorageReadScope(1)
+	if err != nil || s.storageReadScope == nil {
+		t.Fatalf("open scope: %v", err)
+	}
+	defer func() {
+		if err := closeScope(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	execCopy, err := s.CopyBlockExecutionBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deepCopy, err := s.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	durable := metrics.GetOrRegisterCounter("blockbuffer/storage_read/durable_calls", nil)
+	before := durable.Snapshot().Count()
+	if _, _, err := execCopy.readStateKVGeneration(testAddr(0xc1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := deepCopy.readStateKVGeneration(testAddr(0xc2)); err != nil {
+		t.Fatal(err)
+	}
+	if got := durable.Snapshot().Count() - before; got != 0 {
+		t.Fatalf("copy readStateKVGeneration used canonical storageReadScope %d times, want 0", got)
+	}
+
+	before = durable.Snapshot().Count()
+	if _, _, err := s.readStateKVGeneration(testAddr(0xc3)); err != nil {
+		t.Fatal(err)
+	}
+	if got := durable.Snapshot().Count() - before; got == 0 {
+		t.Fatal("canonical StateDB did not route readStateKVGeneration through storageReadScope")
+	}
+
+	const workers = 4
+	workerCopies := make([]*StateDB, workers)
+	for i := range workerCopies {
+		workerCopies[i], err = execCopy.CopyBlockExecutionBase()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(workerID int, cp *StateDB) {
+			defer wg.Done()
+			for i := 0; i < 150; i++ {
+				target := testAddr(byte(0xe0 + workerID*16 + i%16))
+				if _, _, err := cp.readStateKVGeneration(target); err != nil {
+					errCh <- err
+					return
+				}
+				cp.CreateAccount(target, corepb.AccountType_Normal)
+			}
+		}(w, workerCopies[w])
+	}
+
+	for i := 0; i < 150; i++ {
+		if _, _, err := s.readStateKVGeneration(testAddr(byte(0xd0 + i%16))); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.readAccountKVLatestForDecoding(existing, 0, kvdomains.ContractStorage, tcommon.Hash{31: byte(i % 8)}.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
 	}
 }
