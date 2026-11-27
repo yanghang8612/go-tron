@@ -1,11 +1,22 @@
 package snapshots
 
 import (
+	"encoding/json"
 	"strconv"
 	"unicode/utf8"
 )
 
 const jsonHex = "0123456789abcdef"
+
+// jsonInvalidUTF8 matches the active Go toolchain's encoding/json invalid-UTF-8
+// replacement (Go 1.25 emits `\ufffd`; Go 1.27 emits literal UTF-8 U+FFFD).
+var jsonInvalidUTF8 = func() string {
+	b, err := json.Marshal("\xff")
+	if err != nil || len(b) < 2 {
+		return `\ufffd`
+	}
+	return string(b[1 : len(b)-1])
+}()
 
 // safeJSONByte mirrors encoding/json's HTML-escaped ASCII safeSet so
 // marshalManifestJSON matches json.Marshal byte-for-byte without reflection.
@@ -233,7 +244,7 @@ func appendJSONString(buf []byte, s string) []byte {
 		c, size := utf8.DecodeRuneInString(s[i:])
 		if c == utf8.RuneError && size == 1 {
 			buf = append(buf, s[start:i]...)
-			buf = append(buf, "\ufffd"...)
+			buf = append(buf, jsonInvalidUTF8...)
 			i += size
 			start = i
 			continue
