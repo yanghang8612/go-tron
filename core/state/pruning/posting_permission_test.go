@@ -69,3 +69,68 @@ func TestPostingPrunePermissionRequiresSuccessfulDurableColdPrune(t *testing.T) 
 		})
 	}
 }
+
+func TestPostingPrunePermissionRestoresAfterRestartVerifiedNoopPass(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 1, 3)
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 1, 3, "history/state-domain-change-1-3.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(1, 3, refs)); err != nil {
+		t.Fatal(err)
+	}
+	proof := common.Hash{10}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 10, proof); err != nil {
+		t.Fatal(err)
+	}
+	cfg := PrunerConfig{Policy: SnapPolicy(3, 2), SnapshotDir: dir, MetricsNamespace: "test/" + t.Name()}
+	chain := &fakePruneChain{db: db, solidified: 10, canonicalHashes: map[uint64]common.Hash{10: proof}}
+	p := NewPruner(chain, cfg)
+	if _, err := p.PrunePassContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate restart: fresh pruner has empty boundary until a verified pass runs.
+	restarted := &SnapshotLifecycle{pruner: NewPruner(chain, cfg)}
+	if restarted.PostingPruneBoundary() != (PostingPruneBoundary{}) {
+		t.Fatal("restart granted permission before first verified pass")
+	}
+	stats, err := restarted.pruner.PrunePassContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.DeletedDomainChangeBlocks != 0 || stats.VerifiedHotPrunedThrough != 1 {
+		t.Fatalf("unexpected restart stats: %+v", stats)
+	}
+	want := PostingPruneBoundary{PrunedThrough: 1, ProofHead: 10, ProofHash: proof}
+	if got := restarted.PostingPruneBoundary(); got != want {
+		t.Fatalf("restored boundary=%+v want=%+v", got, want)
+	}
+
+	// Lower StageSnapshotHotPrune must deny permission on zero-delete pass.
+	if err := newRawDBStageProgressStore(db).Write(rawdb.StageSnapshotHotPrune, 2); err != nil {
+		t.Fatal(err)
+	}
+	unverifiedStage := &SnapshotLifecycle{pruner: NewPruner(chain, cfg)}
+	if _, err := unverifiedStage.pruner.PrunePassContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := unverifiedStage.PostingPruneBoundary(); got != (PostingPruneBoundary{}) {
+		t.Fatalf("lower stage progress granted permission: %+v", got)
+	}
+
+	// Bad Finish hash must also deny permission.
+	if err := newRawDBStageProgressStore(db).Write(rawdb.StageSnapshotHotPrune, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 10, common.Hash{99}); err != nil {
+		t.Fatal(err)
+	}
+	badFinish := &SnapshotLifecycle{pruner: NewPruner(chain, cfg)}
+	_, _ = badFinish.pruner.PrunePassContext(context.Background())
+	if got := badFinish.PostingPruneBoundary(); got != (PostingPruneBoundary{}) {
+		t.Fatalf("bad finish hash granted permission: %+v", got)
+	}
+}

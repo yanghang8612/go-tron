@@ -149,3 +149,47 @@ func TestHistoryLoadEventFailureRequiresCompletedPublication(t *testing.T) {
 		t.Fatalf("published event discarded density or failed to recover gradually: %+v", r.historyLoad)
 	}
 }
+
+func TestRecordEventWorkExcludesFixedPublishOverhead(t *testing.T) {
+	r := historyLoadRegressionRunner(t)
+	res := PassResult{
+		HistoryEventAttempted:   true,
+		DerivedSidecarCatchup:   true,
+		EventLogBuilt:           true,
+		historyWasSyncing:       true,
+		historyEventBatchBlocks: 100,
+		EventLogDuration:        50 * time.Millisecond,
+		DerivedSidecarDuration:  3 * time.Second,
+		BeforeMergeDuration:     2 * time.Second,
+		Segments:                []SegmentRef{{Size: 1 << 20}},
+	}
+	r.recordEventWork(&res)
+	if r.historyLoad.event.work != 50*time.Millisecond {
+		t.Fatalf("event work = %s, want 50ms", r.historyLoad.event.work)
+	}
+	if got := r.adaptiveEventBatchLimit(65536); got != 125 {
+		t.Fatalf("adaptiveEventBatchLimit(65536) = %d, want 125", got)
+	}
+
+	// Simulate repeated catch-up passes where manifest publish + BeforeMerge takes
+	// ~3s fixed while actual event-log build takes 500ms; batch limit must stay healthy.
+	blocks := uint64(1250)
+	for i := 0; i < 12; i++ {
+		pass := PassResult{
+			HistoryEventAttempted:   true,
+			DerivedSidecarCatchup:   true,
+			EventLogBuilt:           true,
+			historyWasSyncing:       true,
+			historyEventBatchBlocks: blocks,
+			EventLogDuration:        500 * time.Millisecond,
+			DerivedSidecarDuration:  3 * time.Second,
+			BeforeMergeDuration:     1500 * time.Millisecond,
+			Segments:                []SegmentRef{{Size: 8 << 20}},
+		}
+		r.recordEventWork(&pass)
+		blocks = r.adaptiveEventBatchLimit(65536)
+	}
+	if blocks < 1000 {
+		t.Fatalf("adaptive event batch collapsed to %d under fixed publish overhead, want >= 1000", blocks)
+	}
+}

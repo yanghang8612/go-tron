@@ -639,6 +639,20 @@ func (r *Runner) recordHistoryWork(result *PassResult) {
 	r.historyLoad.metric("density_measurement", measurement)
 }
 
+func eventDensityWork(result *PassResult) time.Duration {
+	if result == nil {
+		return 0
+	}
+	// Event-log catch-up builds only the event-log sidecar. Exclude fixed
+	// manifest publish/reconcile and before-merge overhead when the build
+	// itself was timed; otherwise multi-second manifest rewrites collapse
+	// adaptive batch sizing to 1 block.
+	if result.EventLogDuration > 0 {
+		return result.EventLogDuration
+	}
+	return historyWorkDurationSum(result.DerivedSidecarDuration, result.BeforeMergeDuration)
+}
+
 func (r *Runner) recordEventWork(result *PassResult) {
 	if !result.HistoryEventAttempted {
 		return
@@ -649,7 +663,7 @@ func (r *Runner) recordEventWork(result *PassResult) {
 	}
 	r.historyLoad.eventFailureBlocks = 0
 	r.historyLoad.event = historyWorkSample{blocks: result.historyEventBatchBlocks,
-		bytes: segmentRefsSize(result.Segments), work: result.DerivedSidecarDuration + result.BeforeMergeDuration}
+		bytes: segmentRefsSize(result.Segments), work: eventDensityWork(result)}
 }
 
 func saturatingHistoryBudgetSum(a, b uint64) uint64 {

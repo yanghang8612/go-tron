@@ -844,6 +844,11 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 				ProofHead:     pruneHead, ProofHash: pruneHeadHash,
 			})
 		}
+	} else if postingProofAvailable && stats.VerifiedHotPrunedThrough > 0 && stats.VerifiedHotPrunedThroughTx > 0 {
+		p.postingPruneBoundary.Store(&PostingPruneBoundary{
+			PrunedThrough: stats.VerifiedHotPrunedThrough,
+			ProofHead:     pruneHead, ProofHash: pruneHeadHash,
+		})
 	}
 	if stats.DeletedTxRanges != 0 || stats.DeletedDomainChangeBlocks != 0 || stats.DeletedCommitmentCheckpoints != 0 || stats.DeletedStateCodeRows != 0 {
 		elapsed := time.Since(start)

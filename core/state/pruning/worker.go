@@ -83,6 +83,8 @@ type Stats struct {
 	DomainChangeStartBlock       uint64
 	DomainChangePrunedThrough    uint64
 	DomainChangePrunedThroughTx  uint64
+	VerifiedHotPrunedThrough     uint64
+	VerifiedHotPrunedThroughTx   uint64
 	// HistoryMetadataDuration covers manifest planning/progress work only.
 	// Lazy content verification, hot row reads/deletes and every batch flush
 	// remain outside it. Only separately timed independent shared GC is also
@@ -363,6 +365,27 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 			stats.HistoryChunkGCDuration = time.Since(gcStarted)
 			if err := ctx.Err(); err != nil {
 				return Stats{}, err
+			}
+		}
+		if hotStats.DeletedHistoryBlocks == 0 && w.Policy.Mode == ModeSnap && w.SnapshotDir != "" && coverage.manifest != nil && coverage.manifest.Progress != nil {
+			prunedBlock := coverage.manifest.Progress.HotPruneBlockNum
+			prunedTx := coverage.manifest.Progress.HotPruneTxNum
+			if prunedBlock > 0 && prunedTx > 0 && !w.Policy.RetainHotHistory(prunedBlock, headNum) &&
+				coverage.manifest.VisibleTxStart > 0 && coverage.manifest.VisibleTxStart <= prunedTx {
+				stage, stagePresent, stageErr := newRawDBStageProgressStore(w.DB).Read(rawdb.StageSnapshotHotPrune)
+				if stageErr != nil {
+					return Stats{}, fmt.Errorf("pruning: read snapshot/hot-prune stage progress: %w", stageErr)
+				}
+				if stagePresent && stage.BlockNum >= prunedTx && coverage.coversMetadata(coverage.manifest.VisibleTxStart, prunedTx) {
+					covered, covErr := coverage.covers(prunedTx, prunedTx)
+					if covErr != nil {
+						return Stats{}, covErr
+					}
+					if covered {
+						stats.VerifiedHotPrunedThrough = prunedBlock
+						stats.VerifiedHotPrunedThroughTx = prunedTx
+					}
+				}
 			}
 		}
 		if coverageDone != nil {
