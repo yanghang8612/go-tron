@@ -250,3 +250,35 @@ func TestManifestFailedPublicationDoesNotSeed(t *testing.T) {
 		t.Fatal("failed publication seeded the cache")
 	}
 }
+
+func TestManifestEventSourceHashOwnershipAndCharge(t *testing.T) {
+	m := cachedManifestFixture(2)
+	anchor := strings.Repeat("a", 64)
+	backing := strings.Repeat("x", 1<<20) + anchor
+	ref := SegmentRef{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 1, ToTxNum: 2, Path: "log/source-hash.seg", Size: 4096, SourceBlockHash: backing[1<<20:]}
+	m.Segments = append(m.Segments, ref)
+	ref.FromTxNum, ref.ToTxNum, ref.Path = 3, 4, "log/retired-source-hash.seg"
+	m.Retired = append(m.Retired, ref)
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache manifestDecodeCache
+	cache.retainPublished(raw, m, manifestCacheDefaultBytes)
+	active, retired := len(m.Segments)-1, len(m.Retired)-1
+	if cache.manifest == nil || cache.manifest.Segments[active].SourceBlockHash != anchor || cache.manifest.Retired[retired].SourceBlockHash != anchor {
+		t.Fatal("source hash lost in publication cache")
+	}
+	if unsafe.StringData(cache.manifest.Segments[active].SourceBlockHash) == unsafe.StringData(m.Segments[active].SourceBlockHash) || unsafe.StringData(cache.manifest.Retired[retired].SourceBlockHash) == unsafe.StringData(m.Retired[retired].SourceBlockHash) {
+		t.Fatal("source hash retained uncharged caller backing")
+	}
+	without := cloneDecodedManifest(m)
+	without.Segments[active].SourceBlockHash, without.Retired[retired].SourceBlockHash = "", ""
+	if manifestCacheCharge(raw, cloneDecodedManifest(m))-manifestCacheCharge(raw, without) != 4*uint64(len(anchor)) {
+		t.Fatal("active/retired source hashes omitted from resident charge")
+	}
+	m.Segments[active].SourceBlockHash = string([]byte{255})
+	if manifestStringsValidUTF8(m) {
+		t.Fatal("invalid source hash UTF-8 accepted for publication seed")
+	}
+}

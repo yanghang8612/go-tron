@@ -97,6 +97,21 @@ func VerifyRemoteProductionManifest(dir string, expected ChainIdentity) (*Manife
 	if err != nil {
 		return nil, nil, err
 	}
+	// Accept legacy state-coupled V4 manifests whose unanchored event-log
+	// segments sit below restored state, while strictly rejecting malformed
+	// anchors everywhere and missing anchors on event-only/uncoupled catalogs.
+	legacyStateCoupled := manifest.LatestStateTxNum > 0 && manifest.VisibleTxEnd > 0
+	for _, ref := range manifest.Segments {
+		if ref.Kind != SegmentEventLog || ref.normalizedDataset() != SegmentDatasetEventLog {
+			continue
+		}
+		if ref.SourceBlockHash == "" && legacyStateCoupled {
+			continue
+		}
+		if _, err := parseEventSourceBlockHash(ref.SourceBlockHash); err != nil {
+			return nil, nil, fmt.Errorf("snapshots: event source anchor %q [%d,%d]: %w", ref.Path, ref.FromTxNum, ref.ToTxNum, err)
+		}
+	}
 	report, err := VerifyLoadedManifestFiles(dir, manifest, VerifyManifestOptions{
 		ExpectedChain:     &expected,
 		RequireRegistered: true,

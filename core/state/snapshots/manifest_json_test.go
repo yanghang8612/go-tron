@@ -70,6 +70,16 @@ func TestMarshalManifestJSONMatchesEncodingJSON(t *testing.T) {
 						LookupRoot:       "cafebabe",
 					},
 					{
+						Dataset:         SegmentDatasetEventLog,
+						Kind:            SegmentEventLog,
+						FromTxNum:       1000,
+						ToTxNum:         1999,
+						Path:            "log/event-log-1000-1999.seg",
+						Size:            2048,
+						Checksum:        "feedface",
+						SourceBlockHash: "00000000000007cf0123456789abcdef0123456789abcdef0123456789abcdef",
+					},
+					{
 						Kind:      SegmentEventLogIndex,
 						FromTxNum: 1000,
 						ToTxNum:   1999,

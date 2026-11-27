@@ -47,6 +47,8 @@ type Manager struct {
 	pinned                 bool
 	cache                  map[string]*LatestSegment
 	chainVerificationCache *ChainFreezerVerificationCache
+	eventCanonicalVerifier func(uint64, common.Hash) (bool, error)
+	eventCanonicalScope    func() (eventCanonicalScopePolicy, error)
 }
 
 func AccountSnapshotKey(owner common.Address) []byte {

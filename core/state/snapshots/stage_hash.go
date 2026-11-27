@@ -8,8 +8,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
+func readSnapshotCanonicalBlockHashStrict(db ethdb.KeyValueReader, blockNum uint64) (common.Hash, bool, error) {
+	return rawdb.ReadBlockHashByNumberStrict(db, blockNum)
+}
+
 func snapshotStageBoundaryHash(db ethdb.KeyValueReader, stage rawdb.StageID, blockNum uint64) (common.Hash, bool, error) {
-	hash, ok, err := rawdb.ReadBlockHashByNumberStrict(db, blockNum)
+	hash, ok, err := readSnapshotCanonicalBlockHashStrict(db, blockNum)
 	if err != nil {
 		return common.Hash{}, false, fmt.Errorf("snapshots: read %s stage block %d canonical hash: %w", stage, blockNum, err)
 	}

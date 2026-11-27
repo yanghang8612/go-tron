@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
@@ -18,6 +19,10 @@ var (
 	// ErrStateChangePostingPruneBoundaryChanged invalidates the current traversal
 	// and its hot-prune permission. A fresh permission is required before retrying.
 	ErrStateChangePostingPruneBoundaryChanged = errors.New("state-change posting prune boundary changed")
+	// ErrStateChangeDirectoryPruneUnsupported reports that the active database
+	// does not support pinned blockbuffer + durable prefix snapshots required
+	// for safe online orphan directory deletion.
+	ErrStateChangeDirectoryPruneUnsupported = errors.New("state-change directory prune unsupported")
 )
 
 // StateChangePostingPruneTimings records elapsed phases even when a call fails.
@@ -71,7 +76,51 @@ func (bc *BlockChain) PruneStateChangePostingChunkWithAdmission(ctx context.Cont
 	return bc.pruneStateChangePostingChunk(ctx, prunedThrough, proofHead, proofHash, anchor, cursor, limits, admit)
 }
 
-func (bc *BlockChain) pruneStateChangePostingChunk(ctx context.Context, prunedThrough, proofHead uint64, proofHash, anchor common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits, admit StateChangePostingPruneAdmission) (result rawdb.StateChangePostingPruneChunkResult, nextAnchor common.Hash, timing StateChangePostingPruneTimings, retErr error) {
+// PruneStateChangeDirectoryChunkWithAdmission removes one bounded page of
+// orphan state-change key directory rows whose latest key has zero posting
+// frames in a pinned view spanning durable storage and every live blockbuffer
+// overlay. It enforces the exact same canonical proofs, lock ordering, and
+// resource admission as PruneStateChangePostingChunkWithAdmission.
+func (bc *BlockChain) PruneStateChangeDirectoryChunkWithAdmission(ctx context.Context, prunedThrough, proofHead uint64, proofHash, anchor common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits, admit StateChangePostingPruneAdmission) (rawdb.StateChangePostingPruneChunkResult, common.Hash, StateChangePostingPruneTimings, error) {
+	if admit == nil {
+		return rawdb.StateChangePostingPruneChunkResult{NextCursor: bytes.Clone(cursor)}, anchor, StateChangePostingPruneTimings{}, errors.New("state-change directory prune: missing resource admission")
+	}
+	return bc.pruneStateChangePostingChunkMode(ctx, prunedThrough, proofHead, proofHash, anchor, cursor, limits, admit, true)
+}
+
+func (bc *BlockChain) pruneStateChangePostingChunk(ctx context.Context, prunedThrough, proofHead uint64, proofHash, anchor common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits, admit StateChangePostingPruneAdmission) (rawdb.StateChangePostingPruneChunkResult, common.Hash, StateChangePostingPruneTimings, error) {
+	return bc.pruneStateChangePostingChunkMode(ctx, prunedThrough, proofHead, proofHash, anchor, cursor, limits, admit, false)
+}
+
+// warmPostingPruneProofCache performs unlocked best-effort reads of the up to
+// four canonical block bodies needed by the proof phase so Pebble block cache
+// and ancient/OS page cache faults happen without holding chainmu. Authoritative
+// verification still runs under chainmu.
+func (bc *BlockChain) warmPostingPruneProofCache(prunedThrough, proofHead uint64) {
+	var heights [4]uint64
+	used := 0
+	addHeight := func(h uint64) {
+		for i := 0; i < used; i++ {
+			if heights[i] == h {
+				return
+			}
+		}
+		heights[used] = h
+		used++
+	}
+	addHeight(proofHead)
+	addHeight(prunedThrough)
+	for _, stage := range [...]rawdb.StageID{rawdb.StageFinish, rawdb.StageStateHistoryIndex} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.db, stage); err == nil && ok {
+			addHeight(row.BlockNum)
+		}
+	}
+	for i := 0; i < used; i++ {
+		_, _, _ = bc.readCanonicalHashStrict(heights[i])
+	}
+}
+
+func (bc *BlockChain) pruneStateChangePostingChunkMode(ctx context.Context, prunedThrough, proofHead uint64, proofHash, anchor common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits, admit StateChangePostingPruneAdmission, directory bool) (result rawdb.StateChangePostingPruneChunkResult, nextAnchor common.Hash, timing StateChangePostingPruneTimings, retErr error) {
 	result = rawdb.StateChangePostingPruneChunkResult{NextCursor: bytes.Clone(cursor)}
 	if ctx == nil {
 		ctx = context.Background()
@@ -92,6 +141,10 @@ func (bc *BlockChain) pruneStateChangePostingChunk(ctx context.Context, prunedTh
 		return result, anchor, timing, ErrStateChangePostingPruneDeferred
 	}
 	defer bc.stateHistoryIndexMu.Unlock()
+	if bc.closed.Load() || bc.config == nil || !bc.config.HistoryEnabled {
+		return result, anchor, timing, ErrStateChangePostingPruneDeferred
+	}
+	bc.warmPostingPruneProofCache(prunedThrough, proofHead)
 	waitStarted := time.Now()
 	bc.chainmu.Lock()
 	acquiredAt := time.Now()
@@ -153,8 +206,7 @@ func (bc *BlockChain) pruneStateChangePostingChunk(ctx context.Context, prunedTh
 	}()
 
 	// At most four canonical heights are read: proof, Finish, index and H.
-	// Reuse coincident heights without allocating a map. The existing strict
-	// lookup decodes a canonical block, so its individual I/O is not time-bounded.
+	// Reuse coincident heights without allocating a map.
 	var heights [4]uint64
 	var hashes [4]common.Hash
 	used := 0
@@ -205,6 +257,27 @@ func (bc *BlockChain) pruneStateChangePostingChunk(ctx context.Context, prunedTh
 	}
 	timing.Proof = time.Since(proofStarted)
 	verifying = false
+	if directory {
+		if bc.buffer == nil {
+			return result, anchor, timing, ErrStateChangeDirectoryPruneUnsupported
+		}
+		view, snapErr := bc.buffer.TryNewReadSnapshot()
+		if errors.Is(snapErr, blockbuffer.ErrReadSnapshotUnsupported) {
+			return result, anchor, timing, ErrStateChangeDirectoryPruneUnsupported
+		}
+		if errors.Is(snapErr, blockbuffer.ErrReadSnapshotBusy) {
+			return result, anchor, timing, ErrStateChangePostingPruneDeferred
+		}
+		if snapErr != nil {
+			return result, anchor, timing, snapErr
+		}
+		defer view.Close()
+		result, err = rawdb.PruneStagingStateChangeDirectoryChunk(ctx, bc.db, view, cursor, limits)
+		if err != nil {
+			return result, anchor, timing, err
+		}
+		return result, canonicalAnchor, timing, nil
+	}
 	result, err = rawdb.PruneStaleStateChangePostingChunkContext(ctx, bc.db, prunedThrough, cursor, limits)
 	if err != nil {
 		return result, anchor, timing, err

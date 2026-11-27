@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -358,22 +359,59 @@ func (a *Aggregator) BuildEventLogsFromReaderWithBuildOptions(reader rawdb.Event
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
+	old, err := loadOptionalProductionManifest(a.dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEventLogRewriteTarget(old, fromBlock, toBlock); err != nil {
+		return nil, err
+	}
+	reader, release, err := pinEventLogRewriteReader(reader)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	refs, err := buildEventLogPairFromReader(reader, a.dir, fromBlock, toBlock, opts)
 	if err != nil {
 		return nil, err
 	}
-	visibleStart, visibleEnd := uint64(0), uint64(0)
-	if old, err := LoadProductionManifest(a.dir); err == nil {
-		visibleStart = old.VisibleTxStart
-		visibleEnd = old.VisibleTxEnd
-	} else if !os.IsNotExist(err) {
+	// Recheck the current target after construction as well. A crossing source
+	// or index cannot be retired just because another range was built meanwhile.
+	old, err = loadOptionalProductionManifest(a.dir)
+	if err != nil {
 		return nil, err
 	}
-	manifest, err := a.Integrate(visibleStart, visibleEnd, refs)
+	if err := validateEventLogRewriteTarget(old, fromBlock, toBlock); err != nil {
+		return nil, err
+	}
+	visibleStart, visibleEnd := uint64(0), uint64(0)
+	if old != nil {
+		visibleStart, visibleEnd = old.VisibleTxStart, old.VisibleTxEnd
+	}
+	manifest, err := a.integrateWithManifest(visibleStart, visibleEnd, refs, old)
 	if err != nil {
 		return nil, err
 	}
 	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
+}
+
+// Replacing a shorter main or lookup range would retire the entire wider ref
+// and silently discard its uncovered prefix/suffix. Reject before reading or
+// writing candidate payload; the dedicated migrator can instead preserve a
+// crossing index after proving its candidate keys are unchanged.
+func validateEventLogRewriteTarget(manifest *Manifest, from, to uint64) error {
+	if manifest == nil {
+		return nil
+	}
+	for _, ref := range manifest.Segments {
+		if (ref.Kind != SegmentEventLog && ref.Kind != SegmentEventLogIndex) || ref.normalizedDataset() != SegmentDatasetEventLog || ref.ToTxNum < from || ref.FromTxNum > to {
+			continue
+		}
+		if ref.FromTxNum < from || ref.ToTxNum > to {
+			return fmt.Errorf("snapshots: event-log rewrite [%d,%d] would retire wider active %s [%d,%d]", from, to, ref.Kind, ref.FromTxNum, ref.ToTxNum)
+		}
+	}
+	return nil
 }
 
 func normalizedEventLogBuildVersion(version uint32) (uint32, error) {
@@ -386,7 +424,31 @@ func normalizedEventLogBuildVersion(version uint32) (uint32, error) {
 	return version, nil
 }
 
-func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toBlock uint64, opts EventLogBuildOptions) ([]SegmentRef, error) {
+func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toBlock uint64, opts EventLogBuildOptions) (refs []SegmentRef, buildErr error) {
+	anchor, err := requireSnapshotStageBoundaryHash(chain, rawdb.StageSnapshotEventLogBuild, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if buildErr != nil {
+			return
+		}
+		current, err := requireSnapshotStageBoundaryHash(chain, rawdb.StageSnapshotEventLogBuild, toBlock)
+		if err != nil {
+			refs, buildErr = nil, err
+			return
+		}
+		if current != anchor {
+			refs = nil
+			buildErr = fmt.Errorf("snapshots: event source block %d changed during construction from %x to %x", toBlock, anchor, current)
+			return
+		}
+		for i := range refs {
+			if refs[i].Kind == SegmentEventLog {
+				refs[i].SourceBlockHash = anchor.Hex()
+			}
+		}
+	}()
 	version, err := normalizedEventLogBuildVersion(opts.Version)
 	if err != nil {
 		return nil, err
@@ -413,11 +475,34 @@ func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toB
 	return []SegmentRef{build.Ref, indexRef}, nil
 }
 
-func buildEventLogPairFromReader(reader rawdb.EventLogReader, dir string, fromBlock, toBlock uint64, opts EventLogBuildOptions) ([]SegmentRef, error) {
+func buildEventLogPairFromReader(reader rawdb.EventLogReader, dir string, fromBlock, toBlock uint64, opts EventLogBuildOptions) (refs []SegmentRef, buildErr error) {
 	version, err := normalizedEventLogBuildVersion(opts.Version)
 	if err != nil {
 		return nil, err
 	}
+	anchor, err := requireEventLogReaderAnchor(reader, fromBlock, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if buildErr != nil {
+			return
+		}
+		current, err := requireEventLogReaderAnchor(reader, fromBlock, toBlock)
+		if err != nil {
+			refs, buildErr = nil, err
+			return
+		}
+		if current != anchor {
+			refs, buildErr = nil, fmt.Errorf("snapshots: event-log rewrite terminal source changed at block %d", toBlock)
+			return
+		}
+		for i := range refs {
+			if refs[i].Kind == SegmentEventLog {
+				refs[i].SourceBlockHash = anchor.Hex()
+			}
+		}
+	}()
 	if version == EventLogSegmentV4Version {
 		ref, err := BuildEventLogV4SegmentFromReader(reader, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 		if err != nil {
@@ -703,7 +788,43 @@ func snapshotInstallProgressRows(db ethdb.KeyValueWriter, progress *Progress, ma
 		Stage:    rawdb.StageSnapshotInstall,
 		BlockNum: manifest.VisibleTxEnd,
 	})
-	eventRow, ok, err := eventLogBuildStageProgress(db, manifest)
+	// Event files can legitimately lead the state cut. Installing them must
+	// not publish an execution/event stage beyond the authenticated restored
+	// HEAD, nor require canonical rows that have not been replayed yet.
+	eventManifest := manifest
+	if reader, ok := db.(ethdb.KeyValueReader); ok {
+		head, present, err := rawdb.ReadStateCommitmentHead(reader)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			eventManifest = eventManifestAtBlock(manifest, head.BlockNum)
+		}
+	}
+	if reader, ok := db.(ethdb.KeyValueReader); ok {
+		legacyStateCoupled := manifest.LatestStateTxNum > 0 && manifest.VisibleTxEnd > 0
+		policy := eventCanonicalScopePolicy{
+			verify: func(n uint64, expected common.Hash) (bool, error) {
+				got, present, err := snapshotStageBoundaryHash(reader, rawdb.StageSnapshotEventLogBuild, n)
+				if err != nil || !present {
+					return false, err
+				}
+				if got != expected {
+					return false, fmt.Errorf("snapshots: restored event source block %d hash does not match canonical", n)
+				}
+				return true, nil
+			},
+		}
+		if legacyStateCoupled {
+			policy.legacyStateBoundary = func() (uint64, error) { return ^uint64(0), nil }
+		}
+		if verified, err := verifyEventSourceRefsWithPolicy(eventLogRefs(eventManifest), 1, ^uint64(0), policy); err != nil {
+			return nil, err
+		} else if !verified {
+			return nil, errors.New("snapshots: restored event source canonical boundary unavailable")
+		}
+	}
+	eventRow, ok, err := eventLogBuildStageProgress(db, eventManifest)
 	if err != nil {
 		return nil, err
 	}

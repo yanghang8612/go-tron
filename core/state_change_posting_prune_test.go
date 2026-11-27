@@ -17,6 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/maintenance"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -486,6 +487,130 @@ func TestStateChangePostingPruneGuardAdmissionAfterQueuedLock(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestStateChangeDirectoryPruneDirectHistoryPebbleSafety(t *testing.T) {
+	// MemoryDB lacks pinned blockbuffer snapshots -> must return ErrStateChangeDirectoryPruneUnsupported without mutation.
+	f := newPostingPruneGuardFixture(t)
+	gate := maintenance.NewHeavyWorkGate()
+	admit := StateChangePostingPruneAdmission(gate.TryAcquire)
+	_, _, _, err := f.bc.PruneStateChangeDirectoryChunkWithAdmission(context.Background(), 2, 4, f.blocks[4].Hash(), common.Hash{}, nil, postingPruneGuardLimits(), admit)
+	if !errors.Is(err, ErrStateChangeDirectoryPruneUnsupported) || !gate.CanTryAcquire() {
+		t.Fatalf("memorydb directory prune err=%v gate=%v", err, gate.CanTryAcquire())
+	}
+
+	// Real dual-Pebble DirectHistoryStore + blockbuffer.
+	bc, _, history := newDirectHistoryIntegrationChain(t, false, false)
+	blocks := directIntegrationBlocks(t, bc.CurrentBlock(), 4, 0, 100)
+	if err := bc.InsertBlocks(blocks); err != nil {
+		t.Fatal(err)
+	}
+	if err := bc.EnsureStateHistoryIndexStage(); err != nil {
+		t.Fatal(err)
+	}
+	proofBlock := blocks[len(blocks)-1]
+	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageFinish, proofBlock.Number(), proofBlock.Hash()); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.db, rawdb.StageStateHistoryIndex, proofBlock.Number(), proofBlock.Hash()); err != nil {
+		t.Fatal(err)
+	}
+	dp := bc.cachedDynProps()
+	dp.SetLatestSolidifiedBlockNum(int64(proofBlock.Number()))
+	bc.storeDynPropsCache(dp)
+
+	// 1. Seed one orphan directory row (no posting anywhere), one durable
+	//    directory row (with posting in history Pebble), and one overlay-only
+	//    directory row (directory row in history Pebble, posting ONLY in live
+	//    unflushed blockbuffer overlay).
+	orphanChange := &rawdb.StateDomainChange{
+		BlockNum: 1, FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner: common.Address{0x41, 0x99}, Domain: kvdomains.ContractStorage, Key: []byte("orphan-dir"),
+	}
+	durableChange := &rawdb.StateDomainChange{
+		BlockNum: 2, FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner: common.Address{0x41, 0x98}, Domain: kvdomains.ContractStorage, Key: []byte("durable-dir"),
+	}
+	overlayChange := &rawdb.StateDomainChange{
+		BlockNum: 3, FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner: common.Address{0x41, 0x97}, Domain: kvdomains.ContractStorage, Key: []byte("overlay-dir"),
+	}
+	for _, ch := range []*rawdb.StateDomainChange{orphanChange, durableChange, overlayChange} {
+		if err := rawdb.WriteStateDomainChangePostingIndex(bc.db, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var dirKeys [][]byte
+	if err := rawdb.ScanStateChangeKeyDirectory(context.Background(), history, func(row rawdb.StateChangeDirectoryCursor) error {
+		if bytes.Contains(row.Key, []byte("orphan-dir")) || bytes.Contains(row.Key, []byte("durable-dir")) || bytes.Contains(row.Key, []byte("overlay-dir")) {
+			dirKeys = append(dirKeys, bytes.Clone(row.Key))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(dirKeys) != 3 {
+		t.Fatalf("expected 3 seeded directory keys, got %d", len(dirKeys))
+	}
+	var orphanDirKey, durableDirKey, overlayDirKey []byte
+	for _, k := range dirKeys {
+		switch {
+		case bytes.Contains(k, []byte("orphan-dir")):
+			orphanDirKey = k
+		case bytes.Contains(k, []byte("durable-dir")):
+			durableDirKey = k
+		case bytes.Contains(k, []byte("overlay-dir")):
+			overlayDirKey = k
+		}
+	}
+	// Remove durable postings for orphanChange and overlayChange so their
+	// directory keys remain in history without durable postings.
+	if err := rawdb.ScanStateChangePostingFrames(context.Background(), history, func(row rawdb.StateChangePostingFrameCursor) error {
+		if row.FirstBlock == 1 || row.FirstBlock == 3 {
+			return history.Delete(row.Key)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bc.buffer.BeginBlock(common.Hash{0xaa}, proofBlock.Number()+1)
+	if err := rawdb.WriteStateDomainChangePostingIndex(bc.buffer, overlayChange); err != nil {
+		t.Fatal(err)
+	}
+	bc.buffer.CommitBlock()
+
+	var anchor common.Hash
+	var cursor []byte
+	var totalDeleted uint64
+	for step := 0; step < 32; step++ {
+		res, nextAnchor, timing, dirErr := bc.PruneStateChangeDirectoryChunkWithAdmission(
+			context.Background(), 2, proofBlock.Number(), proofBlock.Hash(), anchor, cursor, postingPruneGuardLimits(), admit,
+		)
+		if dirErr != nil {
+			t.Fatalf("step %d directory prune err=%v", step, dirErr)
+		}
+		if timing.ChainHeld <= 0 || timing.GateHeld <= 0 {
+			t.Fatalf("step %d missing timings: %+v", step, timing)
+		}
+		anchor = nextAnchor
+		cursor = res.NextCursor
+		totalDeleted += res.RowsDeleted
+		if res.Complete {
+			break
+		}
+	}
+	if totalDeleted != 1 {
+		t.Fatalf("directory deleted rows = %d, want 1", totalDeleted)
+	}
+	if exists, err := bc.db.Has(orphanDirKey); err != nil || exists {
+		t.Fatalf("orphan directory row still exists=%v err=%v", exists, err)
+	}
+	if exists, err := bc.db.Has(durableDirKey); err != nil || !exists {
+		t.Fatalf("durable protected directory row missing exists=%v err=%v", exists, err)
+	}
+	if exists, err := bc.db.Has(overlayDirKey); err != nil || !exists {
+		t.Fatalf("overlay protected directory row missing exists=%v err=%v", exists, err)
 	}
 }
 

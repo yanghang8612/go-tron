@@ -209,6 +209,10 @@ func appendSegmentRefJSON(buf []byte, seg *SegmentRef) []byte {
 		buf = append(buf, `,"checksum":`...)
 		buf = appendJSONString(buf, seg.Checksum)
 	}
+	if seg.SourceBlockHash != "" {
+		buf = append(buf, `,"sourceBlockHash":`...)
+		buf = appendJSONString(buf, seg.SourceBlockHash)
+	}
 	if seg.LookupRoot != "" {
 		buf = append(buf, `,"lookupRoot":`...)
 		buf = appendJSONString(buf, seg.LookupRoot)
@@ -410,6 +414,9 @@ func estimateSegmentRefJSONSize(seg *SegmentRef) int {
 		len(`,"size":`) + uintDecimalLen(seg.Size)
 	if seg.Checksum != "" {
 		size += len(`,"checksum":`) + 2 + len(seg.Checksum)
+	}
+	if seg.SourceBlockHash != "" {
+		size += len(`,"sourceBlockHash":`) + 2 + len(seg.SourceBlockHash)
 	}
 	if seg.LookupRoot != "" {
 		size += len(`,"lookupRoot":`) + 2 + len(seg.LookupRoot)

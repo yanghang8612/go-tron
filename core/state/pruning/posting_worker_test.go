@@ -673,3 +673,168 @@ func TestPostingPruneWorkerStartValidationAndStopBeforeStart(t *testing.T) {
 		})
 	}
 }
+
+func makeWorkerTestPostingCursor(ordinal byte, block uint64) []byte {
+	key := make([]byte, len("state-change-posting-v3-")+32+8)
+	copy(key, "state-change-posting-v3-")
+	key[len("state-change-posting-v3-")] = ordinal
+	key[len(key)-1] = byte(block)
+	return key
+}
+
+func TestPostingPruneWorkerWrapAroundCursorHintAndDirectoryPhase(t *testing.T) {
+	hint := makeWorkerTestPostingCursor(5, 1)
+	savedHints := make([][]byte, 0, 4)
+	var currentHint []byte = bytes.Clone(hint)
+
+	type phaseCall struct {
+		dir      bool
+		maxRows  uint64
+		cursor   []byte
+		stopIncl []byte
+	}
+	var calls []phaseCall
+
+	postingStep := 0
+	dirStep := 0
+	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return postingWorkerTestBoundary(100, 1) },
+		func(_ context.Context, _ PostingPruneBoundary, _ common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			calls = append(calls, phaseCall{dir: false, maxRows: limits.MaxScannedRows, cursor: bytes.Clone(cursor), stopIncl: bytes.Clone(limits.StopKeyInclusive)})
+			postingStep++
+			switch postingStep {
+			case 1:
+				// Chunk #1: 1-row anchor-binding probe from cursor=nil to authenticate w.anchor before jumping to hint.
+				return PostingPruneChunkOutcome{
+					Anchor: common.Hash{2},
+					Result: rawdb.StateChangePostingPruneChunkResult{
+						NextCursor:  makeWorkerTestPostingCursor(1, 1),
+						RowsScanned: 1, RowsDeleted: 1, BytesDeleted: 50,
+					},
+				}, nil
+			case 2:
+				// Jumped to hint cleanly with non-zero anchor; saves periodic hint.
+				return PostingPruneChunkOutcome{
+					Anchor: common.Hash{2},
+					Result: rawdb.StateChangePostingPruneChunkResult{
+						NextCursor:  makeWorkerTestPostingCursor(7, 1),
+						RowsScanned: 3, RowsDeleted: 2, BytesDeleted: 200,
+					},
+				}, nil
+			case 3:
+				// Reaches EOF of Phase 1 -> must wrap, NOT complete sweep yet.
+				return PostingPruneChunkOutcome{
+					Anchor: common.Hash{2},
+					Result: rawdb.StateChangePostingPruneChunkResult{
+						NextCursor:  makeWorkerTestPostingCursor(9, 1),
+						Complete:    true,
+						RowsScanned: 2, RowsDeleted: 1, BytesDeleted: 100,
+					},
+				}, nil
+			default:
+				// Phase 2 wrapped [nil, hint] completes -> should clear hint and enter directoryPhase.
+				return PostingPruneChunkOutcome{
+					Anchor: common.Hash{2},
+					Result: rawdb.StateChangePostingPruneChunkResult{
+						NextCursor:  bytes.Clone(hint),
+						Complete:    true,
+						RowsScanned: 4, RowsDeleted: 2, BytesDeleted: 200,
+					},
+				}, nil
+			}
+		})
+	cfg.DirectoryChunk = func(_ context.Context, _ PostingPruneBoundary, _ common.Hash, cursor []byte, limits rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+		calls = append(calls, phaseCall{dir: true, maxRows: limits.MaxScannedRows, cursor: bytes.Clone(cursor), stopIncl: bytes.Clone(limits.StopKeyInclusive)})
+		dirStep++
+		if dirStep == 1 {
+			return PostingPruneChunkOutcome{
+				Anchor: common.Hash{2},
+				Result: rawdb.StateChangePostingPruneChunkResult{
+					NextCursor:  []byte("dir-1"),
+					RowsScanned: 5, RowsDeleted: 2, BytesDeleted: 80,
+				},
+			}, nil
+		}
+		return PostingPruneChunkOutcome{
+			Anchor: common.Hash{2},
+			Result: rawdb.StateChangePostingPruneChunkResult{
+				NextCursor:  []byte("dir-2"),
+				Complete:    true,
+				RowsScanned: 3, RowsDeleted: 1, BytesDeleted: 40,
+			},
+		}, nil
+	}
+	cfg.LoadCursorHint = func() []byte { return currentHint }
+	cfg.SaveCursorHint = func(c []byte) {
+		savedHints = append(savedHints, bytes.Clone(c))
+		currentHint = bytes.Clone(c)
+	}
+	cfg.CursorHintSaveEvery = 1
+
+	w := NewPostingPruneWorker(cfg)
+	t.Cleanup(func() { _ = w.Stop() })
+
+	// 1: 1-row anchor probe from nil -> jumps to hint for chunk #2
+	runPostingWorkerTestChunk(t, w)
+	if w.pendingHintJump || w.anchor != (common.Hash{2}) || !bytes.Equal(w.cursor, hint) {
+		t.Fatalf("after anchor probe: pending=%v anchor=%x cursor=%x", w.pendingHintJump, w.anchor, w.cursor)
+	}
+	// 2: Phase 1 chunk from hint
+	runPostingWorkerTestChunk(t, w)
+	// 3: Phase 1 EOF -> wraps
+	runPostingWorkerTestChunk(t, w)
+	if w.completed != 0 || !w.wrapped || w.directoryPhase || len(w.cursor) != 0 {
+		t.Fatalf("after Phase 1 EOF: completed=%d wrapped=%v dir=%v cursor=%x", w.completed, w.wrapped, w.directoryPhase, w.cursor)
+	}
+	// 4: Phase 2 wrapped [nil, hint] -> clears hint and enters directoryPhase
+	runPostingWorkerTestChunk(t, w)
+	if w.completed != 0 || !w.directoryPhase || currentHint != nil || len(w.cursor) != 0 {
+		t.Fatalf("after Phase 2 EOF: completed=%d dir=%v hint=%x cursor=%x", w.completed, w.directoryPhase, currentHint, w.cursor)
+	}
+	// 5: Directory chunk 1
+	runPostingWorkerTestChunk(t, w)
+	if w.completed != 0 || !bytes.Equal(w.cursor, []byte("dir-1")) {
+		t.Fatalf("after dir chunk 1: completed=%d cursor=%q", w.completed, w.cursor)
+	}
+	// 6: Directory chunk 2 completes entire sweep
+	runPostingWorkerTestChunk(t, w)
+	if w.completed != 100 || w.counts["sweeps"] != 1 || w.counts["directory/sweeps"] != 1 || w.counts["directory/deleted_rows"] != 3 || w.counts["directory/deleted_bytes"] != 120 {
+		t.Fatalf("after dir complete: completed=%d counts=%+v", w.completed, w.counts)
+	}
+	if len(calls) != 6 || len(calls[0].cursor) != 0 || calls[0].maxRows != 1 ||
+		!bytes.Equal(calls[1].cursor, hint) || len(calls[1].stopIncl) != 0 ||
+		len(calls[3].cursor) != 0 || !bytes.Equal(calls[3].stopIncl, hint) ||
+		!calls[4].dir || len(calls[4].cursor) != 0 || len(calls[4].stopIncl) != 0 {
+		t.Fatalf("unexpected phase call sequence: %+v", calls)
+	}
+	if len(savedHints) < 2 || !bytes.Equal(savedHints[0], makeWorkerTestPostingCursor(7, 1)) || savedHints[len(savedHints)-1] != nil {
+		t.Fatalf("unexpected saved hints: %+v", savedHints)
+	}
+}
+
+func TestPostingPruneWorkerDirectoryUnsupportedCompletesSweepAndInvalidHintIgnored(t *testing.T) {
+	boundary := postingWorkerTestBoundary(50, 1)
+	var seenCursor []byte
+	cfg := postingWorkerTestConfig(t, func() PostingPruneBoundary { return boundary },
+		func(_ context.Context, _ PostingPruneBoundary, _ common.Hash, cursor []byte, _ rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+			seenCursor = bytes.Clone(cursor)
+			return PostingPruneChunkOutcome{
+				Anchor: common.Hash{1},
+				Result: rawdb.StateChangePostingPruneChunkResult{Complete: true, RowsScanned: 1},
+			}, nil
+		})
+	cfg.LoadCursorHint = func() []byte { return []byte("corrupt-cursor-hint") }
+	cfg.DirectoryChunk = func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error) {
+		return PostingPruneChunkOutcome{DirectoryUnsupported: true}, nil
+	}
+	w := NewPostingPruneWorker(cfg)
+	t.Cleanup(func() { _ = w.Stop() })
+
+	runPostingWorkerTestChunk(t, w) // posting completes
+	if len(seenCursor) != 0 || !w.directoryPhase || w.completed != 0 {
+		t.Fatalf("unexpected state before directory fallback: seenCursor=%x dir=%v completed=%d", seenCursor, w.directoryPhase, w.completed)
+	}
+	runPostingWorkerTestChunk(t, w) // directory unsupported -> completes sweep cleanly
+	if w.completed != 50 || w.counts["sweeps"] != 1 || w.counts["directory/unsupported"] != 1 || w.directoryPhase {
+		t.Fatalf("directory unsupported did not complete sweep: completed=%d counts=%+v dir=%v", w.completed, w.counts, w.directoryPhase)
+	}
+}

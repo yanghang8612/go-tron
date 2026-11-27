@@ -1,6 +1,7 @@
 package pruning
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -30,68 +31,83 @@ type PostingPruneTimings struct {
 }
 
 type PostingPruneChunkOutcome struct {
-	Result           rawdb.StateChangePostingPruneChunkResult
-	Anchor           common.Hash
-	Deferred         bool
-	BoundaryChanged  bool
-	PressureDeferred bool
-	GateDeferred     bool
-	DebtRelief       bool // actual admission after acquiring writer locks
-	Timings          PostingPruneTimings
+	Result               rawdb.StateChangePostingPruneChunkResult
+	Anchor               common.Hash
+	Deferred             bool
+	BoundaryChanged      bool
+	PressureDeferred     bool
+	GateDeferred         bool
+	DirectoryUnsupported bool
+	DebtRelief           bool // actual admission after acquiring writer locks
+	Timings              PostingPruneTimings
 }
 
 // PostingPruneChunkFunc must reacquire resource admission after owning its
 // writer locks. The worker's CanTryAcquire check is only a scheduling hint.
 type PostingPruneChunkFunc func(context.Context, PostingPruneBoundary, common.Hash, []byte, rawdb.StateChangePostingPruneLimits) (PostingPruneChunkOutcome, error)
 
+const defaultCursorHintSaveEvery uint64 = 32
+
 type PostingPruneWorkerConfig struct {
-	Boundary         func() PostingPruneBoundary
-	Chunk            PostingPruneChunkFunc
-	LoadProbe        func() maintenance.StoragePressure
-	HeavyWorkGate    *maintenance.HeavyWorkGate
-	Interval         time.Duration
-	Limits           rawdb.StateChangePostingPruneLimits
-	MinAdvanceBlocks uint64
-	MetricsNamespace string
+	Boundary            func() PostingPruneBoundary
+	Chunk               PostingPruneChunkFunc
+	DirectoryChunk      PostingPruneChunkFunc
+	LoadCursorHint      func() []byte
+	SaveCursorHint      func([]byte)
+	CursorHintSaveEvery uint64
+	LoadProbe           func() maintenance.StoragePressure
+	HeavyWorkGate       *maintenance.HeavyWorkGate
+	Interval            time.Duration
+	Limits              rawdb.StateChangePostingPruneLimits
+	MinAdvanceBlocks    uint64
+	MetricsNamespace    string
 }
 
 // PostingPruneWorker owns a single in-memory sweep. It never writes a manifest
-// or directory and must stop before the blockchain/database lifecycle.
+// or persistent cursor authority and must stop before the blockchain/database lifecycle.
 type PostingPruneWorker struct {
-	cfg          PostingPruneWorkerConfig
-	ctx          context.Context
-	cancel       context.CancelFunc
-	done         chan struct{}
-	mu           sync.Mutex
-	started      bool
-	stopped      bool
-	target       PostingPruneBoundary
-	rejected     PostingPruneBoundary
-	anchor       common.Hash
-	cursor       []byte
-	completed    uint64
-	gauges       map[string]*metrics.Gauge
-	counts       map[string]uint64
-	lastErrorLog time.Time
-	nextDelay    time.Duration
+	cfg             PostingPruneWorkerConfig
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	mu              sync.Mutex
+	started         bool
+	stopped         bool
+	target          PostingPruneBoundary
+	rejected        PostingPruneBoundary
+	anchor          common.Hash
+	cursor          []byte
+	startCursor     []byte
+	pendingHintJump bool
+	wrapped         bool
+	directoryPhase  bool
+	chunksSinceHint uint64
+	completed       uint64
+	gauges          map[string]*metrics.Gauge
+	counts          map[string]uint64
+	lastErrorLog    time.Time
+	nextDelay       time.Duration
 }
 
 func NewPostingPruneWorker(cfg PostingPruneWorkerConfig) *PostingPruneWorker {
 	if cfg.Interval <= 0 {
 		cfg.Interval = time.Second
 	}
-	if cfg.Limits == (rawdb.StateChangePostingPruneLimits{}) {
+	if cfg.Limits.IsZero() {
 		cfg.Limits = rawdb.StateChangePostingPruneLimits{MaxScannedRows: 4096, MaxScannedBytes: 1 << 20, MaxDeleteBytes: 256 << 10, MaxDuration: 10 * time.Millisecond}
 	}
 	if cfg.MinAdvanceBlocks == 0 {
 		cfg.MinAdvanceBlocks = DefaultStateChangeIndexPruneIntervalBlocks
+	}
+	if cfg.CursorHintSaveEvery == 0 {
+		cfg.CursorHintSaveEvery = defaultCursorHintSaveEvery
 	}
 	if cfg.MetricsNamespace == "" {
 		cfg.MetricsNamespace = "state/prune/posting/"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &PostingPruneWorker{cfg: cfg, ctx: ctx, cancel: cancel, done: make(chan struct{}), gauges: make(map[string]*metrics.Gauge), counts: make(map[string]uint64), nextDelay: cfg.Interval}
-	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes", "callbacks", "debt_relief/callbacks", "debt_relief/chunks", "debt_relief/deleted_bytes"} {
+	for _, name := range []string{"enabled", "chunks", "sweeps", "errors", "deferred/boundary", "deferred/pressure", "deferred/gate", "deferred/chain", "resets", "scanned/rows", "scanned/bytes", "deleted/rows", "deleted/bytes", "directory/chunks", "directory/sweeps", "directory/scanned_rows", "directory/scanned_bytes", "directory/deleted_rows", "directory/deleted_bytes", "directory/unsupported", "target/block", "completed/block", "last/duration_ns", "max/duration_ns", "last/scanned_rows", "last/deleted_bytes", "callbacks", "debt_relief/callbacks", "debt_relief/chunks", "debt_relief/deleted_bytes"} {
 		w.gauges[name] = metrics.GetOrRegisterGauge(normalizePrunerMetricNamespace(cfg.MetricsNamespace)+name, nil)
 		w.gauges[name].Update(0)
 	}
@@ -143,7 +159,12 @@ func (w *PostingPruneWorker) Stop() error {
 }
 
 func (w *PostingPruneWorker) loop() {
-	defer close(w.done)
+	defer func() {
+		if w.cfg.SaveCursorHint != nil && !w.directoryPhase && !w.pendingHintJump && len(w.cursor) > 0 {
+			w.cfg.SaveCursorHint(bytes.Clone(w.cursor))
+		}
+		close(w.done)
+	}()
 	for {
 		if err := w.runChunk(w.ctx); err != nil && w.ctx.Err() == nil && time.Since(w.lastErrorLog) >= time.Minute {
 			log.Warn("Posting prune chunk failed; retaining cursor", "err", err)
@@ -216,7 +237,20 @@ func (w *PostingPruneWorker) clearSweep() {
 	w.target = PostingPruneBoundary{}
 	w.anchor = common.Hash{}
 	w.cursor = nil
+	w.startCursor = nil
+	w.pendingHintJump = false
+	w.wrapped = false
+	w.directoryPhase = false
+	w.chunksSinceHint = 0
 	w.gauges["target/block"].Update(0)
+}
+
+func (w *PostingPruneWorker) finishSweep() {
+	w.completed = w.target.PrunedThrough
+	w.gauges["completed/block"].Update(prunerUintGauge(w.completed))
+	w.add("sweeps", 1)
+	log.Info("Bounded posting-only sweep completed", "prunedThrough", w.completed, "deletedLogicalBytes", w.counts["deleted/bytes"], "chunks", w.counts["chunks"], "directoryDeletedBytes", w.counts["directory/deleted_bytes"], "directoryChunks", w.counts["directory/chunks"])
+	w.clearSweep()
 }
 
 // runChunk is owned by loop; tests call it only without a running lifecycle.
@@ -252,6 +286,18 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 			return nil
 		}
 		w.target = boundary
+		w.wrapped = false
+		w.directoryPhase = false
+		w.startCursor = nil
+		w.pendingHintJump = false
+		w.cursor = nil
+		w.chunksSinceHint = 0
+		if w.cfg.LoadCursorHint != nil {
+			if hint := w.cfg.LoadCursorHint(); rawdb.IsValidStateChangePostingCursor(hint) {
+				w.startCursor = bytes.Clone(hint)
+				w.pendingHintJump = true
+			}
+		}
 		w.gauges["target/block"].Update(prunerUintGauge(boundary.PrunedThrough))
 	}
 	if !PostingPrunePressureReady(w.cfg.LoadProbe(), time.Now()) {
@@ -263,9 +309,20 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 		return nil
 	}
 	started := time.Now()
-	out, err := w.cfg.Chunk(ctx, w.target, w.anchor, w.cursor, w.cfg.Limits)
+	chunkFn := w.cfg.Chunk
+	chunkLimits := w.cfg.Limits
+	if w.directoryPhase {
+		chunkFn = w.cfg.DirectoryChunk
+		chunkLimits.StopKeyInclusive = nil
+	} else if w.pendingHintJump {
+		chunkLimits.MaxScannedRows = 1
+		chunkLimits.StopKeyInclusive = nil
+	} else if w.wrapped && len(w.startCursor) > 0 {
+		chunkLimits.StopKeyInclusive = w.startCursor
+	}
+	out, err := chunkFn(ctx, w.target, w.anchor, w.cursor, chunkLimits)
 	elapsed := time.Since(started)
-	productive := err == nil && !out.Deferred && !out.PressureDeferred && !out.GateDeferred && !out.BoundaryChanged && out.Result.RowsScanned > 0
+	productive := err == nil && !out.Deferred && !out.PressureDeferred && !out.GateDeferred && !out.BoundaryChanged && !out.DirectoryUnsupported && out.Result.RowsScanned > 0
 	w.nextDelay = postingPruneRecovery(w.cfg.Interval, out.Timings.ChainHeld, productive)
 	w.add("callbacks", 1)
 	if out.DebtRelief {
@@ -307,6 +364,64 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 		w.add("deferred/chain", 1)
 		return nil
 	}
+	if w.directoryPhase {
+		if out.DirectoryUnsupported {
+			w.add("directory/unsupported", 1)
+			w.finishSweep()
+			return nil
+		}
+		w.anchor = out.Anchor
+		w.cursor = append(w.cursor[:0], out.Result.NextCursor...)
+		w.add("directory/chunks", 1)
+		w.add("directory/scanned_rows", out.Result.RowsScanned)
+		w.add("directory/scanned_bytes", out.Result.BytesScanned)
+		w.add("directory/deleted_rows", out.Result.RowsDeleted)
+		w.add("directory/deleted_bytes", out.Result.BytesDeleted)
+		if out.DebtRelief {
+			w.add("debt_relief/chunks", 1)
+			w.add("debt_relief/deleted_bytes", out.Result.BytesDeleted)
+		}
+		w.gauges["last/deleted_bytes"].Update(prunerUintGauge(out.Result.BytesDeleted))
+		if out.Result.Complete {
+			w.add("directory/sweeps", 1)
+			w.finishSweep()
+		}
+		return nil
+	}
+	if w.pendingHintJump {
+		w.pendingHintJump = false
+		w.anchor = out.Anchor
+		w.add("chunks", 1)
+		w.add("deleted/rows", out.Result.RowsDeleted)
+		w.add("deleted/bytes", out.Result.BytesDeleted)
+		if out.DebtRelief {
+			w.add("debt_relief/chunks", 1)
+			w.add("debt_relief/deleted_bytes", out.Result.BytesDeleted)
+		}
+		w.gauges["last/deleted_bytes"].Update(prunerUintGauge(out.Result.BytesDeleted))
+		if out.Result.Complete {
+			w.startCursor = nil
+			w.wrapped = false
+			w.chunksSinceHint = 0
+			if w.cfg.SaveCursorHint != nil {
+				w.cfg.SaveCursorHint(nil)
+			}
+			if w.cfg.DirectoryChunk != nil {
+				w.directoryPhase = true
+				w.cursor = nil
+				return nil
+			}
+			w.finishSweep()
+			return nil
+		}
+		if w.anchor == (common.Hash{}) || (len(out.Result.NextCursor) > 0 && bytes.Compare(out.Result.NextCursor, w.startCursor) >= 0) {
+			w.startCursor = nil
+			w.cursor = append(w.cursor[:0], out.Result.NextCursor...)
+			return nil
+		}
+		w.cursor = bytes.Clone(w.startCursor)
+		return nil
+	}
 	w.anchor = out.Anchor
 	w.cursor = append(w.cursor[:0], out.Result.NextCursor...)
 	w.add("chunks", 1)
@@ -318,11 +433,30 @@ func (w *PostingPruneWorker) runChunk(ctx context.Context) error {
 	}
 	w.gauges["last/deleted_bytes"].Update(prunerUintGauge(out.Result.BytesDeleted))
 	if out.Result.Complete {
-		w.completed = w.target.PrunedThrough
-		w.gauges["completed/block"].Update(prunerUintGauge(w.completed))
-		w.add("sweeps", 1)
-		log.Info("Bounded posting-only sweep completed", "prunedThrough", w.completed, "deletedLogicalBytes", w.counts["deleted/bytes"], "chunks", w.counts["chunks"])
-		w.clearSweep()
+		if len(w.startCursor) > 0 && !w.wrapped {
+			w.wrapped = true
+			w.cursor = nil
+			w.chunksSinceHint = 0
+			return nil
+		}
+		w.startCursor = nil
+		w.wrapped = false
+		w.chunksSinceHint = 0
+		if w.cfg.SaveCursorHint != nil {
+			w.cfg.SaveCursorHint(nil)
+		}
+		if w.cfg.DirectoryChunk != nil {
+			w.directoryPhase = true
+			w.cursor = nil
+			return nil
+		}
+		w.finishSweep()
+		return nil
+	}
+	w.chunksSinceHint++
+	if w.cfg.SaveCursorHint != nil && w.chunksSinceHint >= w.cfg.CursorHintSaveEvery {
+		w.chunksSinceHint = 0
+		w.cfg.SaveCursorHint(bytes.Clone(w.cursor))
 	}
 	return nil
 }

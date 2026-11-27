@@ -16,6 +16,7 @@
 package rawdb
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -65,6 +66,11 @@ func ReadBlockRawStrict(db ethdb.KeyValueReader, number uint64) ([]byte, bool, e
 		}
 	}
 	key := blockKey(number)
+	if reader, ok := db.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	}); ok {
+		return reader.GetWithPresence(key)
+	}
 	exists, err := db.Has(key)
 	if err != nil {
 		return nil, false, err
@@ -178,19 +184,25 @@ func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
 // ReadBlockHashByNumberStrict returns the canonical block hash for number and
 // preserves block-row read/decode errors. It is intended for verifier paths
 // that must distinguish "canonical body missing" from "canonical body corrupt".
+// It extracts BlockHeader via BlockHashFromRaw (with BlockIDFromRaw fallback for
+// non-canonical protobuf field order) instead of unmarshaling transactions.
 func ReadBlockHashByNumberStrict(db ethdb.KeyValueReader, number uint64) (common.Hash, bool, error) {
 	data, ok, err := ReadBlockRawStrict(db, number)
 	if err != nil || !ok {
 		return common.Hash{}, ok, err
 	}
-	block, err := types.UnmarshalBlock(data)
+	hash, scanErr := types.BlockHashFromRaw(data)
+	if scanErr == nil && binary.BigEndian.Uint64(hash[:8]) == number {
+		return hash, true, nil
+	}
+	id, err := types.BlockIDFromRaw(data)
 	if err != nil {
 		return common.Hash{}, true, fmt.Errorf("rawdb: block %d decode during read block hash: %w", number, err)
 	}
-	if block.Number() != number {
-		return common.Hash{}, true, fmt.Errorf("rawdb: block hash lookup row %d contains block number %d", number, block.Number())
+	if id.Num != number {
+		return common.Hash{}, true, fmt.Errorf("rawdb: block hash lookup row %d contains block number %d", number, id.Num)
 	}
-	return block.Hash(), true, nil
+	return id.Hash, true, nil
 }
 
 // ReadBlockStateRootRaw returns the raw 32-byte state root stored under

@@ -1035,3 +1035,99 @@ func TestReadBlockStrictRejectsMismatchedHotBlockNumber(t *testing.T) {
 		t.Fatalf("ReadBlockStrict mismatched hot row = %#v/%v/%v, want block/true/mismatch error", got, ok, err)
 	}
 }
+
+type freezerPresenceSpyReader struct {
+	ethdb.KeyValueStore
+	presenceCalls int
+	hasCalls      int
+	getCalls      int
+}
+
+func (s *freezerPresenceSpyReader) GetWithPresence(key []byte) ([]byte, bool, error) {
+	s.presenceCalls++
+	exists, err := s.KeyValueStore.Has(key)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	data, err := s.KeyValueStore.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+func (s *freezerPresenceSpyReader) Has(key []byte) (bool, error) {
+	s.hasCalls++
+	return s.KeyValueStore.Has(key)
+}
+
+func (s *freezerPresenceSpyReader) Get(key []byte) ([]byte, error) {
+	s.getCalls++
+	return s.KeyValueStore.Get(key)
+}
+
+func TestReadBlockHashByNumberStrictHeaderOnlyAndPresence(t *testing.T) {
+	t.Parallel()
+
+	pb := newBlockProto(19, 1919)
+	pb.Transactions = make([]*corepb.Transaction, 8)
+	for i := range pb.Transactions {
+		pb.Transactions[i] = &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{Timestamp: int64(i + 1), RefBlockHash: []byte{1, 2, 3, 4}},
+		}
+	}
+	block := types.NewBlockFromPB(pb)
+	canonicalBytes, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+
+	spy := &freezerPresenceSpyReader{KeyValueStore: NewMemoryDatabase()}
+	cdb := NewChainDB(spy, nil)
+	if err := cdb.Put(blockKey(19), canonicalBytes); err != nil {
+		t.Fatalf("put canonical block: %v", err)
+	}
+	got, ok, err := ReadBlockHashByNumberStrict(cdb, 19)
+	if err != nil || !ok || got != block.Hash() {
+		t.Fatalf("ReadBlockHashByNumberStrict canonical = %x/%v/%v, want %x/true/nil", got, ok, err, block.Hash())
+	}
+	if spy.presenceCalls != 1 || spy.hasCalls != 0 || spy.getCalls != 0 {
+		t.Fatalf("unexpected lookup counts: presence=%d has=%d get=%d", spy.presenceCalls, spy.hasCalls, spy.getCalls)
+	}
+
+	// Missing row also uses single GetWithPresence without Has+Get.
+	missing, ok, err := ReadBlockHashByNumberStrict(cdb, 20)
+	if err != nil || ok || missing != (common.Hash{}) {
+		t.Fatalf("ReadBlockHashByNumberStrict missing = %x/%v/%v", missing, ok, err)
+	}
+	if spy.presenceCalls != 2 || spy.hasCalls != 0 || spy.getCalls != 0 {
+		t.Fatalf("unexpected missing lookup counts: presence=%d has=%d get=%d", spy.presenceCalls, spy.hasCalls, spy.getCalls)
+	}
+
+	// Reverse field order (BlockHeader field 2 followed by Transactions field 1)
+	// with duplicate BlockHeader field exercises BlockIDFromRaw fallback.
+	headerBytes, err := proto.Marshal(&corepb.Block{BlockHeader: pb.BlockHeader})
+	if err != nil {
+		t.Fatalf("marshal header only: %v", err)
+	}
+	txOnlyBytes, err := proto.Marshal(&corepb.Block{Transactions: pb.Transactions})
+	if err != nil {
+		t.Fatalf("marshal tx only: %v", err)
+	}
+	reordered := append(append([]byte(nil), headerBytes...), txOnlyBytes...)
+	reordered = append(reordered, headerBytes...)
+	if err := cdb.Put(blockKey(21), reordered); err != nil {
+		t.Fatalf("put reordered block: %v", err)
+	}
+	// Non-canonical raw bytes still represent block 19 -> must report mismatch.
+	if _, _, err := ReadBlockHashByNumberStrict(cdb, 21); err == nil || !strings.Contains(err.Error(), "block hash lookup row 21 contains block number 19") {
+		t.Fatalf("reordered mismatch err = %v", err)
+	}
+	if err := cdb.Put(blockKey(19), reordered); err != nil {
+		t.Fatalf("put reordered block at 19: %v", err)
+	}
+	got, ok, err = ReadBlockHashByNumberStrict(cdb, 19)
+	if err != nil || !ok || got != block.Hash() {
+		t.Fatalf("reordered BlockIDFromRaw = %x/%v/%v, want %x/true/nil", got, ok, err, block.Hash())
+	}
+}

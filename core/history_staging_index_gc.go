@@ -59,7 +59,7 @@ func NewHistoryStagingIndexGC(bc *BlockChain, cfg HistoryStagingIndexGCConfig) (
 	if cfg.Interval <= 0 {
 		cfg.Interval = 100 * time.Millisecond
 	}
-	if cfg.Limits == (rawdb.StateChangePostingPruneLimits{}) {
+	if cfg.Limits.IsZero() {
 		cfg.Limits = rawdb.StateChangePostingPruneLimits{MaxScannedRows: 4096, MaxScannedBytes: 1 << 20,
 			MaxDeleteBytes: 256 << 10, MaxDuration: 10 * time.Millisecond}
 	}

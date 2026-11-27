@@ -1042,6 +1042,7 @@ func gtron(ctx *cli.Context) error {
 	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
 	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
 	bc.ChainDB().SetSectionBloomReader(stateSnapshotManager)
+	stateSnapshotManager.SetEventLogCanonicalSource(newStateSnapshotChainSource(bc))
 	bc.ChainDB().SetEventLogReader(stateSnapshotManager)
 	backend.SetStateColdHistory(stateSnapshotManager)
 	if manifest := stateSnapshotManager.Manifest(); manifest != nil {
@@ -1393,6 +1394,7 @@ func gtron(ctx *cli.Context) error {
 				},
 				DeferDerivedSidecarsWhileSyncing: buildDerivedSnapshots,
 				BuildEventLogsWhileSyncing:       buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+				EventLogIndependentFrontier:      syncEventLogTargetBlock != nil,
 				SyncEventLogCatchupBlocks:        freezerCfg.V2SegmentBlocks,
 				SyncEventLogTargetBlock:          syncEventLogTargetBlock,
 			},
@@ -1437,13 +1439,25 @@ func gtron(ctx *cli.Context) error {
 			log.Info("Cold history backlog import admission enabled", "highBlocks", historyBacklog.high, "lowBlocks", historyBacklog.low, "historyWindow", prunePolicy.HistoryWindow)
 		}
 		if postingPrune {
+			postingLimits := runtimePostingPruneLimits()
+			cursorHintPath := filepath.Join(cfg.DataDir, "posting-prune.cursor")
 			stack.RegisterLifecycle(statepruning.NewPostingPruneWorker(statepruning.PostingPruneWorkerConfig{
-				Boundary:      domainLifecycle.PostingPruneBoundary,
-				Chunk:         runtimePostingPruneChunk(bc, heavyWorkGate, historyResources.postingPressure),
-				LoadProbe:     historyLoadProbe,
-				HeavyWorkGate: heavyWorkGate,
+				Boundary:       domainLifecycle.PostingPruneBoundary,
+				Chunk:          runtimePostingPruneChunk(bc, heavyWorkGate, historyResources.postingPressure),
+				DirectoryChunk: runtimeDirectoryPruneChunk(bc, heavyWorkGate, historyResources.postingPressure),
+				LoadCursorHint: func() []byte { return loadPostingPruneCursorHint(cursorHintPath) },
+				SaveCursorHint: func(cursor []byte) { savePostingPruneCursorHint(cursorHintPath, cursor) },
+				Limits:         postingLimits,
+				LoadProbe:      historyLoadProbe,
+				HeavyWorkGate:  heavyWorkGate,
 			}))
-			log.Info("Bounded posting-only pruning enabled", "interval", time.Second, "scanRows", 4096, "scanBytes", 1<<20, "deleteLogicalBytes", 256<<10, "scanDuration", 10*time.Millisecond)
+			log.Info("Bounded posting-only pruning enabled",
+				"interval", time.Second,
+				"scanRows", postingLimits.MaxScannedRows,
+				"scanBytes", postingLimits.MaxScannedBytes,
+				"deleteLogicalBytes", postingLimits.MaxDeleteBytes,
+				"scanDuration", postingLimits.MaxDuration,
+				"directoryChunkPrune", true)
 		}
 		syncService.AddSyncCompleteHook(domainLifecycle.RequestPass)
 		chainLookupPruneLifecycleWired = chainLookupPrune != nil
@@ -1482,6 +1496,7 @@ func gtron(ctx *cli.Context) error {
 			"syncBuildRequiresImporterCapacity", true,
 			"deferDerivedSidecarsWhileSyncing", buildDerivedSnapshots,
 			"buildEventLogsWhileSyncing", buildDerivedSnapshots && freezerCfg.ExternalizeV2ReceiptLogs,
+			"eventLogIndependentFrontier", syncEventLogTargetBlock != nil,
 			"syncEventLogCatchupBlocks", freezerCfg.V2SegmentBlocks,
 			"syncEventLogFreezerHandoff", syncEventLogTargetBlock != nil,
 			"maxPruneSyncLag", domainStatePrunerMaxSyncLag(chainConfig, prunePolicy),

@@ -455,3 +455,65 @@ func (b *postingChunkTestBatch) Close() {
 	b.db.closes++
 	b.Batch.Close()
 }
+
+func TestPruneStateChangePostingChunkStopKeyInclusiveAndWrapAround(t *testing.T) {
+	store := ethrawdb.NewMemoryDatabase()
+	t.Cleanup(func() { _ = store.Close() })
+	db := &postingChunkTestDB{KeyValueStore: store}
+	k1, _ := putPostingChunkFrame(t, store, 1, 1, 2)
+	k2, _ := putPostingChunkFrame(t, store, 2, 1, 3)
+	k3, _ := putPostingChunkFrame(t, store, 3, 2, 4)
+	k4, _ := putPostingChunkFrame(t, store, 4, 2, 5)
+	k5, _ := putPostingChunkFrame(t, store, 5, 10, 12)
+
+	if IsValidStateChangePostingCursor(k2) != true || IsValidStateChangePostingCursor([]byte("bad")) != false {
+		t.Fatal("IsValidStateChangePostingCursor mismatch")
+	}
+
+	// Invalid StopKeyInclusive rejected cleanly without opening an iterator.
+	if got, err := PruneStaleStateChangePostingChunkContext(context.Background(), db, 6, nil, StateChangePostingPruneLimits{
+		MaxScannedRows: 10, MaxScannedBytes: 1 << 20, MaxDeleteBytes: 1 << 20, MaxDuration: time.Minute, StopKeyInclusive: []byte{1, 2, 3},
+	}); err == nil || db.iterators != 0 || len(got.NextCursor) != 0 {
+		t.Fatalf("invalid stop key = %+v, %v, iterators=%d", got, err, db.iterators)
+	}
+
+	// resume >= stop returns Complete immediately without scanning past stop.
+	limits := postingChunkTestLimits()
+	limits.StopKeyInclusive = k2
+	immediate, err := PruneStaleStateChangePostingChunkContext(context.Background(), db, 6, k2, limits)
+	if err != nil || !immediate.Complete || immediate.RowsScanned != 0 || !bytes.Equal(immediate.NextCursor, k2) {
+		t.Fatalf("resume==stop = %+v, %v", immediate, err)
+	}
+
+	// Phase 1: start from hint k2 -> tail [k3, k4, k5] -> k3, k4 deleted; k5 kept.
+	p1, err := PruneStaleStateChangePostingChunkContext(context.Background(), db, 6, k2, postingChunkTestLimits())
+	if err != nil || !p1.Complete || p1.RowsScanned != 3 || p1.RowsDeleted != 2 {
+		t.Fatalf("phase 1 = %+v, %v", p1, err)
+	}
+	assertPostingChunkExists(t, store, k1, true)
+	assertPostingChunkExists(t, store, k2, true)
+	assertPostingChunkExists(t, store, k3, false)
+	assertPostingChunkExists(t, store, k4, false)
+	assertPostingChunkExists(t, store, k5, true)
+
+	// Phase 2: wrap from nil through k2 inclusive in 1-row chunks; stops cleanly at k2 without re-scanning k5.
+	wrapLimits := postingChunkTestLimits()
+	wrapLimits.MaxScannedRows = 1
+	wrapLimits.StopKeyInclusive = k2
+	w1, err := PruneStaleStateChangePostingChunkContext(context.Background(), db, 6, nil, wrapLimits)
+	if err != nil || w1.Complete || !w1.StoppedByBudget || w1.RowsDeleted != 1 || !bytes.Equal(w1.NextCursor, k1) {
+		t.Fatalf("wrap chunk 1 = %+v, %v", w1, err)
+	}
+	w2, err := PruneStaleStateChangePostingChunkContext(context.Background(), db, 6, w1.NextCursor, wrapLimits)
+	if err != nil || w2.Complete || !w2.StoppedByBudget || w2.RowsDeleted != 1 || !bytes.Equal(w2.NextCursor, k2) {
+		t.Fatalf("wrap chunk 2 = %+v, %v", w2, err)
+	}
+	// resume == k2 completes immediately without reading k5.
+	w3, err := PruneStaleStateChangePostingChunkContext(context.Background(), db, 6, w2.NextCursor, wrapLimits)
+	if err != nil || !w3.Complete || w3.RowsScanned != 0 {
+		t.Fatalf("wrap chunk 3 = %+v, %v", w3, err)
+	}
+	assertPostingChunkExists(t, store, k1, false)
+	assertPostingChunkExists(t, store, k2, false)
+	assertPostingChunkExists(t, store, k5, true)
+}

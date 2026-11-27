@@ -20,10 +20,22 @@ import (
 // is allowed even if MaxDuration has elapsed; context cancellation is not.
 // Duration is cooperative: it cannot interrupt iterator IO or batch.Write.
 type StateChangePostingPruneLimits struct {
-	MaxScannedRows  uint64
-	MaxScannedBytes uint64
-	MaxDeleteBytes  uint64
-	MaxDuration     time.Duration
+	MaxScannedRows   uint64
+	MaxScannedBytes  uint64
+	MaxDeleteBytes   uint64
+	MaxDuration      time.Duration
+	StopKeyInclusive []byte
+}
+
+// IsZero reports whether all limit fields are zero.
+func (l StateChangePostingPruneLimits) IsZero() bool {
+	return l.MaxScannedRows == 0 && l.MaxScannedBytes == 0 && l.MaxDeleteBytes == 0 && l.MaxDuration == 0 && len(l.StopKeyInclusive) == 0
+}
+
+// IsValidStateChangePostingCursor reports whether cursor has the exact fixed
+// physical key layout of a state-change posting frame row.
+func IsValidStateChangePostingCursor(cursor []byte) bool {
+	return len(cursor) == len(stateChangePostingPrefix)+sha256.Size+8 && bytes.HasPrefix(cursor, stateChangePostingPrefix)
 }
 
 // StateChangePostingPruneChunkResult describes one committed chunk. NextCursor
@@ -84,6 +96,9 @@ func PruneStaleStateChangePostingChunkContext(ctx context.Context, db ethdb.KeyV
 	if len(resumeKeyExclusive) != 0 && (len(resumeKeyExclusive) != keyBytes || !bytes.HasPrefix(resumeKeyExclusive, stateChangePostingPrefix)) {
 		return result, errors.New("rawdb: invalid posting prune exclusive cursor")
 	}
+	if len(limits.StopKeyInclusive) != 0 && (len(limits.StopKeyInclusive) != keyBytes || !bytes.HasPrefix(limits.StopKeyInclusive, stateChangePostingPrefix)) {
+		return result, errors.New("rawdb: invalid posting prune inclusive stop key")
+	}
 	started := time.Now()
 	scanning := true
 	defer func() {
@@ -96,61 +111,69 @@ func PruneStaleStateChangePostingChunkContext(ctx context.Context, db ethdb.KeyV
 	var complete, stoppedByBudget bool
 	batch := db.NewBatch()
 	defer batch.Close()
-	err = func() error {
-		var start []byte
-		if len(resumeKeyExclusive) > 0 {
-			start = resumeKeyExclusive[len(stateChangePostingPrefix):]
-		}
-		it := db.NewIterator(stateChangePostingPrefix, start)
-		defer it.Release()
-		for {
-			if err := ctx.Err(); err != nil {
-				return err
+	if len(resumeKeyExclusive) != 0 && len(limits.StopKeyInclusive) != 0 && bytes.Compare(resumeKeyExclusive, limits.StopKeyInclusive) >= 0 {
+		complete = true
+	} else {
+		err = func() error {
+			var start []byte
+			if len(resumeKeyExclusive) > 0 {
+				start = resumeKeyExclusive[len(stateChangePostingPrefix):]
 			}
-			if result.RowsScanned > 0 && (result.RowsScanned >= limits.MaxScannedRows || result.BytesScanned >= limits.MaxScannedBytes || deletedBytes >= limits.MaxDeleteBytes || time.Since(started) >= limits.MaxDuration) {
-				stoppedByBudget = true
-				break
-			}
-			if !it.Next() {
-				complete = true
-				break
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			key := it.Key()
-			// NewIterator seeks inclusively. A surviving mixed/live cursor row
-			// must not be counted again, while a deleted cursor resumes at the
-			// next greater row without assuming the old row still exists.
-			if bytes.Equal(key, resumeKeyExclusive) {
-				continue
-			}
-			value := it.Value()
-			rowBytes := uint64(len(key)) + uint64(len(value))
-			result.RowsScanned++
-			result.BytesScanned += rowBytes
-			if len(key) != keyBytes || !bytes.HasPrefix(key, stateChangePostingPrefix) || bytes.Compare(key, resumeKeyExclusive) <= 0 {
-				return fmt.Errorf("rawdb: malformed or unordered posting prune key length %d", len(key))
-			}
-			if len(value) > maxStateChangePostingEncodedBytes {
-				return fmt.Errorf("rawdb: oversized state change posting value %d", len(value))
-			}
-			first := binary.BigEndian.Uint64(key[len(key)-8:])
-			blocks, err := decodeStateChangePosting(first, value)
-			if err != nil {
-				return err
-			}
-			if blocks[len(blocks)-1] <= prunedThrough {
-				if err := batch.Delete(key); err != nil {
+			it := db.NewIterator(stateChangePostingPrefix, start)
+			defer it.Release()
+			for {
+				if err := ctx.Err(); err != nil {
 					return err
 				}
-				deletedRows++
-				deletedBytes += rowBytes
+				if result.RowsScanned > 0 && (result.RowsScanned >= limits.MaxScannedRows || result.BytesScanned >= limits.MaxScannedBytes || deletedBytes >= limits.MaxDeleteBytes || time.Since(started) >= limits.MaxDuration) {
+					stoppedByBudget = true
+					break
+				}
+				if !it.Next() {
+					complete = true
+					break
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				key := it.Key()
+				// NewIterator seeks inclusively. A surviving mixed/live cursor row
+				// must not be counted again, while a deleted cursor resumes at the
+				// next greater row without assuming the old row still exists.
+				if bytes.Equal(key, resumeKeyExclusive) {
+					continue
+				}
+				if len(key) != keyBytes || !bytes.HasPrefix(key, stateChangePostingPrefix) || bytes.Compare(key, resumeKeyExclusive) <= 0 {
+					return fmt.Errorf("rawdb: malformed or unordered posting prune key length %d", len(key))
+				}
+				if len(limits.StopKeyInclusive) != 0 && bytes.Compare(key, limits.StopKeyInclusive) > 0 {
+					complete = true
+					break
+				}
+				value := it.Value()
+				rowBytes := uint64(len(key)) + uint64(len(value))
+				result.RowsScanned++
+				result.BytesScanned += rowBytes
+				if len(value) > maxStateChangePostingEncodedBytes {
+					return fmt.Errorf("rawdb: oversized state change posting value %d", len(value))
+				}
+				first := binary.BigEndian.Uint64(key[len(key)-8:])
+				last, _, err := stateChangePostingLastBlock(first, value)
+				if err != nil {
+					return err
+				}
+				if last <= prunedThrough {
+					if err := batch.Delete(key); err != nil {
+						return err
+					}
+					deletedRows++
+					deletedBytes += rowBytes
+				}
+				nextCursor = append(nextCursor[:0], key...)
 			}
-			nextCursor = append(nextCursor[:0], key...)
-		}
-		return it.Error()
-	}()
+			return it.Error()
+		}()
+	}
 	if err != nil {
 		return result, err
 	}

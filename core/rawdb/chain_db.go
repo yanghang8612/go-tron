@@ -91,6 +91,28 @@ func (db *ChainDBReadView) Has(key []byte) (bool, error) {
 	return db.reader.Has(key)
 }
 
+// GetWithPresence forwards single-lookup presence checks on ChainDB's hot KV
+// store, avoiding a Has+Get double lookup on Pebble-backed databases.
+func (db *ChainDB) GetWithPresence(key []byte) ([]byte, bool, error) {
+	if db == nil || db.KeyValueStore == nil {
+		return nil, false, errors.New("rawdb: nil chain database")
+	}
+	if reader, ok := db.KeyValueStore.(interface {
+		GetWithPresence([]byte) ([]byte, bool, error)
+	}); ok {
+		return reader.GetWithPresence(key)
+	}
+	exists, err := db.KeyValueStore.Has(key)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	data, err := db.KeyValueStore.Get(key)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
 func (db *ChainDBReadView) NewIterator(prefix, start []byte) ethdb.Iterator {
 	return db.iteratee.NewIterator(prefix, start)
 }

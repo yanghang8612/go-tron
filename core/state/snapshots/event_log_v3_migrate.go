@@ -76,7 +76,12 @@ func MigrateEventLogsV4(dir string, opts EventLogV4MigrationOptions) (*EventLogV
 	if err != nil {
 		return nil, err
 	}
-	v4Ref, err := BuildEventLogV4SegmentFromReader(pinned, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	reader, release, err := pinEventLogRewriteReader(pinned)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	v4Ref, err := buildAnchoredEventLogV4FromReader(reader, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 	if err != nil {
 		return nil, err
 	}
