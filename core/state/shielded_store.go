@@ -333,6 +333,48 @@ func (s *StateDB) WriteMerkleTreeRootByBlock(blockNum int64, root []byte) error 
 	return s.writeSystemShielded(key, root)
 }
 
+func (s *StateDB) ShieldedCurrentMatchesBest() bool {
+	return s != nil &&
+		s.shieldedBest.currentMatches &&
+		s.transactionVersionedReader == nil &&
+		s.transactionAccess == nil &&
+		s.Error() == nil
+}
+
+func (s *StateDB) MarkShieldedCurrentMatchesBest() {
+	if s == nil || s.transactionVersionedReader != nil || s.transactionAccess != nil || s.Error() != nil {
+		return
+	}
+	s.shieldedBest.currentMatches = true
+}
+
+func (s *StateDB) ShieldedAdvanceUnchangedBest(blockNum int64) (bool, error) {
+	if s == nil || blockNum <= 0 ||
+		s.transactionVersionedReader != nil ||
+		s.transactionAccess != nil ||
+		s.Error() != nil ||
+		!s.shieldedBest.valid ||
+		!s.shieldedBest.currentMatches ||
+		s.shieldedBest.blockNum != blockNum-1 {
+		return false, nil
+	}
+	s.shieldedBest.blockNum = blockNum
+	return true, nil
+}
+
+func (s *StateDB) RecordShieldedBest(blockNum int64, root []byte) {
+	if s == nil || blockNum <= 0 || len(root) != 32 ||
+		s.transactionVersionedReader != nil ||
+		s.transactionAccess != nil ||
+		s.Error() != nil {
+		return
+	}
+	s.shieldedBest.valid = true
+	s.shieldedBest.blockNum = blockNum
+	s.shieldedBest.currentMatches = true
+	copy(s.shieldedBest.root[:], root)
+}
+
 func decodeShieldedMerkleTreeStrict(context string, data []byte, ok bool) (*shieldpb.IncrementalMerkleTree, bool, error) {
 	if !ok {
 		return nil, false, nil

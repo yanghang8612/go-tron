@@ -11,6 +11,15 @@ import (
 
 var accountResourceKey = []byte{0x00}
 
+func clearAccountResourceRawCache(obj *stateObject) {
+	if obj == nil {
+		return
+	}
+	obj.accountResourceRaw = nil
+	obj.accountResourceRawExists = false
+	obj.accountResourceRawLoaded = false
+}
+
 func clearAccountResourceProto(pb *corepb.Account) {
 	if pb != nil {
 		pb.AccountResource = nil
@@ -46,6 +55,13 @@ func (s *StateDB) materializeAccountResource(obj *stateObject) (err error) {
 		}
 		pb.AccountResource = resource
 	}
+	if !obj.accountResourceRawLoaded && s.transactionVersionedReader == nil {
+		if _, dirty := lookupKVEntry(obj.kvDirty, kvdomains.AccountResourceAux, accountResourceKey); !dirty {
+			obj.accountResourceRaw = bytes.Clone(value)
+			obj.accountResourceRawExists = exists
+			obj.accountResourceRawLoaded = true
+		}
+	}
 	obj.accountResourceLoaded = true
 	return nil
 }
@@ -56,7 +72,7 @@ func (s *StateDB) writeAccountResource(obj *stateObject) error {
 	}
 	resource := obj.account.Proto().AccountResource
 	if resource == nil {
-		if err := s.DeleteAccountKV(obj.address, kvdomains.AccountResourceAux, accountResourceKey); err != nil {
+		if err := s.deleteAccountKVForObjectWithPrev(obj, kvdomains.AccountResourceAux, accountResourceKey, obj.accountResourceRaw, obj.accountResourceRawExists, obj.accountResourceRawLoaded); err != nil {
 			return err
 		}
 		obj.accountResourceLoaded = true
@@ -66,7 +82,7 @@ func (s *StateDB) writeAccountResource(obj *stateObject) error {
 	if err != nil {
 		return err
 	}
-	if err := s.SetAccountKV(obj.address, kvdomains.AccountResourceAux, accountResourceKey, value); err != nil {
+	if err := s.setAccountKVForObjectWithPrev(obj, kvdomains.AccountResourceAux, accountResourceKey, value, true, obj.accountResourceRaw, obj.accountResourceRawExists, obj.accountResourceRawLoaded); err != nil {
 		return err
 	}
 	obj.accountResourceLoaded = true
@@ -112,15 +128,9 @@ func (s *StateDB) accountFrozenBandwidthForLimit(obj *stateObject, includeV2 boo
 	acct := obj.account
 	// The owner resource snapshot and the consensus bandwidth charge both read
 	// this value for the same transaction. Valid java-tron state has at most one
-	// V1 bandwidth row, so point-read and cache it instead of opening a prefix
-	// iterator over the block overlay. The fast materializer keeps a generic
-	// fallback for non-standard multi-row state.
-	var err error
-	if includeV2 {
-		err = s.materializeAccountFrozenBandwidthFast(obj)
-	} else {
-		err = s.materializeAccountFrozenBandwidthCanonical(obj)
-	}
+	// V1 bandwidth row (MAX_FROZEN_NUMBER == 1), so point-read index 0 and cache
+	// it instead of probing index 1 or opening a prefix iterator.
+	err := s.materializeAccountFrozenBandwidthCanonical(obj)
 	if err != nil {
 		return 0, err
 	}

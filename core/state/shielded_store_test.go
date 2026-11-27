@@ -242,3 +242,63 @@ func TestShieldedStoreStrictReadersSurfaceCorruptRows(t *testing.T) {
 		t.Fatalf("ReadMerkleTreeRootByBlockStrict valid = %x/%v/%v, want root/true/nil", got, ok, err)
 	}
 }
+
+func TestShieldedBestCacheLifecycleAndInvalidation(t *testing.T) {
+	sdb := newTestStateDB(t)
+	root := bytes.Repeat([]byte{0x55}, 32)
+
+	if sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("fresh StateDB reported ShieldedCurrentMatchesBest")
+	}
+	sdb.RecordShieldedBest(10, root)
+	if !sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("RecordShieldedBest did not set ShieldedCurrentMatchesBest")
+	}
+	handled, err := sdb.ShieldedAdvanceUnchangedBest(11)
+	if err != nil || !handled {
+		t.Fatalf("ShieldedAdvanceUnchangedBest(11) = (%v,%v), want (true,nil)", handled, err)
+	}
+	if handled, err := sdb.ShieldedAdvanceUnchangedBest(13); err != nil || handled {
+		t.Fatalf("ShieldedAdvanceUnchangedBest(13) gap = (%v,%v), want (false,nil)", handled, err)
+	}
+
+	// Copy resets execution-confined shielded cache.
+	cp, err := sdb.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.ShieldedCurrentMatchesBest() {
+		t.Fatal("Copy leaked shieldedBest cache")
+	}
+
+	// TransactionAccessRecorder disables fast path while attached.
+	var rec TransactionAccessRecorder
+	rec.Reset(4)
+	sdb.SetTransactionAccessRecorder(&rec)
+	if sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("fast path active while TransactionAccessRecorder attached")
+	}
+	if handled, err := sdb.ShieldedAdvanceUnchangedBest(12); err != nil || handled {
+		t.Fatalf("advance active while recorder attached: %v %v", handled, err)
+	}
+	sdb.SetTransactionAccessRecorder(nil)
+	if !sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("fast path did not resume after clearing recorder")
+	}
+
+	// Writing SystemShielded invalidates cache cleanly.
+	if err := sdb.WriteCurrentMerkleTree(&contractpb.IncrementalMerkleTree{}); err != nil {
+		t.Fatal(err)
+	}
+	if sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("WriteCurrentMerkleTree did not invalidate shieldedBest")
+	}
+
+	// RevertToSnapshot invalidates cache cleanly.
+	sdb.RecordShieldedBest(12, root)
+	snap := sdb.Snapshot()
+	sdb.RevertToSnapshot(snap)
+	if sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("RevertToSnapshot did not invalidate shieldedBest")
+	}
+}

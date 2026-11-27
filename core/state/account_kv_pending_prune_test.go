@@ -832,3 +832,93 @@ func TestCommitScopeThreadsBlockNumberToLatestWriter(t *testing.T) {
 		t.Fatal("scope latest writer deepAsync = false, want true (CommitOptions.DeepAsync must thread through)")
 	}
 }
+
+type pruneCountedLatestStore struct {
+	accountKVPhysicalLatestStore
+	reads int
+}
+
+func (s *pruneCountedLatestStore) ReadKVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	s.reads++
+	return s.accountKVPhysicalLatestStore.ReadKVLatest(owner, generation, domain, key)
+}
+
+func (s *pruneCountedLatestStore) ReadKVLatestNoCopy(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	s.reads++
+	if nc, ok := s.accountKVPhysicalLatestStore.(accountKVLatestNoCopyPhysicalStore); ok {
+		return nc.ReadKVLatestNoCopy(owner, generation, domain, key)
+	}
+	return s.accountKVPhysicalLatestStore.ReadKVLatest(owner, generation, domain, key)
+}
+
+func (s *pruneCountedLatestStore) ReadAccountLatest(owner tcommon.Address) ([]byte, bool, error) {
+	s.reads++
+	return s.accountKVPhysicalLatestStore.ReadAccountLatest(owner)
+}
+
+func (s *pruneCountedLatestStore) ReadKVGeneration(owner tcommon.Address) (uint64, bool, error) {
+	s.reads++
+	return s.accountKVPhysicalLatestStore.ReadKVGeneration(owner)
+}
+
+func TestAccountKVLatestBatchDeepAsyncPruneSkipsDurableReadsWhenOpLayerProven(t *testing.T) {
+	domain := kvdomains.SystemDelegation
+	key := []byte("k")
+	o1, o2, o3 := pruneTestOwner(1), pruneTestOwner(2), pruneTestOwner(3)
+
+	writer, buf := newPruneTestWriter(t, 8)
+	counted := &pruneCountedLatestStore{accountKVPhysicalLatestStore: writer.latestStore}
+	writer.latestStore = counted
+	writer.deepAsync = true
+
+	// Block 1: aligned opLayer=1, commitBlock=1.
+	buf.BeginBlock(pruneBlockHash(1), 1)
+	writer.commitBlock = 1
+	if err := writer.DomainPut(o1, domain, key, pruneTestVal(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.writeAccountLatest(o1, pruneTestVal(11)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.writeKVGeneration(o1, 1); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+
+	// Block 2: mixed — o2 is aligned (opLayer=2, commitBlock=2), while o3 keeps
+	// stale commitBlock=1 with opLayer=2 (simulating misalignment).
+	buf.BeginBlock(pruneBlockHash(2), 2)
+	writer.commitBlock = 2
+	if err := writer.DomainPut(o2, domain, key, pruneTestVal(2)); err != nil {
+		t.Fatal(err)
+	}
+	writer.commitBlock = 1
+	if err := writer.DomainPut(o3, domain, key, pruneTestVal(3)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Flushing up to block 1 applies layer 1 while leaving layer 2 in-flight
+	// (MinRemainingLayerNumber() == 2). Block 1's entries have opLayer=1 <= 1
+	// and < 2, so they must be pruned with ZERO latestStore reads; misaligned o3
+	// has opLayer=2 so it falls back to kvPendingDurable and is retained.
+	readsBefore := counted.reads
+	if err := writer.flushUpTo(1); err != nil {
+		t.Fatalf("flushUpTo(1): %v", err)
+	}
+	readsDuring := counted.reads - readsBefore
+	if readsDuring != 1 {
+		t.Fatalf("deepAsync flushUpTo(1) reads = %d, want 1 (only misaligned o3, 0 for o1 kv/acct/gen)", readsDuring)
+	}
+	if _, ok := writer.pending[accountKVLatestPendingKey(o1, 0, domain, key)]; ok {
+		t.Fatal("aligned o1 kv entry was not pruned")
+	}
+	if _, ok := writer.accountPending[o1.AccountID()]; ok {
+		t.Fatal("aligned o1 account entry was not pruned")
+	}
+	if _, ok := writer.generationPending[o1.AccountID()]; ok {
+		t.Fatal("aligned o1 generation entry was not pruned")
+	}
+	if val, ok, err := writer.readLatest(o3, 0, domain, key); err != nil || !ok || string(val) != string(pruneTestVal(3)) {
+		t.Fatalf("misaligned o3 entry = (%q, %v, %v), want %q", val, ok, err, pruneTestVal(3))
+	}
+}

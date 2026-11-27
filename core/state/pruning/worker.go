@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -729,11 +732,13 @@ type snapshotStateDomainCoverageSegment struct {
 // but deliberately postpones SHA-256 and semantic verification until a hot row
 // is actually eligible for deletion.
 type snapshotStateDomainCoverageGate struct {
-	ctx      context.Context
-	dir      string
-	manifest *snapshots.Manifest
-	cache    *snapshotCoverageVerificationCache
-	segments []snapshotStateDomainCoverageSegment
+	ctx         context.Context
+	dir         string
+	manifest    *snapshots.Manifest
+	companions  *snapshots.HistoryCompanionView
+	cache       *snapshotCoverageVerificationCache
+	segments    []snapshotStateDomainCoverageSegment
+	prefixMaxTo []uint64
 }
 
 func (w Worker) snapshotStateDomainChangeCoverage() (snapshotTxCoverage, error) {
@@ -779,20 +784,74 @@ func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*
 	// view local; the gate retains the original mutable-loader contract and
 	// lazy verification still resolves companions and Stats files afresh.
 	companions := snapshots.NewHistoryCompanionView(manifest)
-	activeCacheKeys := make(map[snapshotHistoryVerificationKey]struct{})
+	gate.companions = companions
+	refs := make([]snapshots.SegmentRef, 0, len(manifest.Segments))
 	for _, ref := range manifest.Segments {
 		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
 			continue
 		}
+		refs = append(refs, ref)
+	}
+	activeCacheKeys := make(map[snapshotHistoryVerificationKey]struct{}, len(refs))
+	gate.segments = make([]snapshotStateDomainCoverageSegment, 0, len(refs))
+	const parallelStatThreshold = 64
+	if len(refs) < parallelStatThreshold {
+		for _, ref := range refs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			cacheKey, err := snapshotHistoryVerificationKeyForView(w.SnapshotDir, manifest, ref, companions)
+			if err != nil {
+				return nil, fmt.Errorf("hot prune coverage: identify state-domain history %q: %w", ref.Path, err)
+			}
+			activeCacheKeys[cacheKey] = struct{}{}
+			gate.segments = append(gate.segments, snapshotStateDomainCoverageSegment{ref: ref, key: cacheKey})
+		}
+	} else {
+		keys := make([]snapshotHistoryVerificationKey, len(refs))
+		errs := make([]error, len(refs))
+		workers := runtime.GOMAXPROCS(0)
+		if workers > 8 {
+			workers = 8
+		}
+		if workers < 1 {
+			workers = 1
+		}
+		if workers > len(refs) {
+			workers = len(refs)
+		}
+		var nextIdx atomic.Int64
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				for {
+					if ctx.Err() != nil {
+						return
+					}
+					idx := int(nextIdx.Add(1) - 1)
+					if idx >= len(refs) {
+						return
+					}
+					keys[idx], errs[idx] = snapshotHistoryVerificationKeyForView(w.SnapshotDir, manifest, refs[idx], companions)
+				}
+			}()
+		}
+		wg.Wait()
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cacheKey, err := snapshotHistoryVerificationKeyForView(w.SnapshotDir, manifest, ref, companions)
-		if err != nil {
-			return nil, fmt.Errorf("hot prune coverage: identify state-domain history %q: %w", ref.Path, err)
+		for i, err := range errs {
+			if err != nil {
+				return nil, fmt.Errorf("hot prune coverage: identify state-domain history %q: %w", refs[i].Path, err)
+			}
 		}
-		activeCacheKeys[cacheKey] = struct{}{}
-		gate.segments = append(gate.segments, snapshotStateDomainCoverageSegment{ref: ref, key: cacheKey})
+		for i, ref := range refs {
+			cacheKey := keys[i]
+			activeCacheKeys[cacheKey] = struct{}{}
+			gate.segments = append(gate.segments, snapshotStateDomainCoverageSegment{ref: ref, key: cacheKey})
+		}
 	}
 	if w.coverageVerificationCache != nil {
 		w.coverageVerificationCache.setActiveManifest(activeCacheKeys)
@@ -806,7 +865,26 @@ func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*
 		}
 		return gate.segments[i].ref.ToTxNum < gate.segments[j].ref.ToTxNum
 	})
+	if len(gate.segments) > 0 {
+		gate.prefixMaxTo = make([]uint64, len(gate.segments))
+		var maxTo uint64
+		for i := range gate.segments {
+			if to := gate.segments[i].ref.ToTxNum; to > maxTo {
+				maxTo = to
+			}
+			gate.prefixMaxTo[i] = maxTo
+		}
+	}
 	return gate, nil
+}
+
+func (g *snapshotStateDomainCoverageGate) firstSegmentFor(from uint64) int {
+	if len(g.prefixMaxTo) == len(g.segments) {
+		return sort.Search(len(g.prefixMaxTo), func(i int) bool {
+			return g.prefixMaxTo[i] >= from
+		})
+	}
+	return 0
 }
 
 func (g *snapshotStateDomainCoverageGate) verify(index int) error {
@@ -817,7 +895,7 @@ func (g *snapshotStateDomainCoverageGate) verify(index int) error {
 	if segment.verified {
 		return nil
 	}
-	key, _, err := g.cache.verifyHistory(g.ctx, g.dir, g.manifest, segment.ref, false, "hot prune coverage")
+	key, _, err := g.cache.verifyHistoryWithView(g.ctx, g.dir, g.manifest, segment.ref, g.companions, false, "hot prune coverage")
 	if err != nil {
 		return err
 	}
@@ -841,7 +919,7 @@ func (g *snapshotStateDomainCoverageGate) covers(from, to uint64) (bool, error) 
 		return false, nil
 	}
 	next := from
-	for i := range g.segments {
+	for i := g.firstSegmentFor(from); i < len(g.segments); i++ {
 		ref := g.segments[i].ref
 		if ref.ToTxNum < next {
 			continue
@@ -859,7 +937,7 @@ func (g *snapshotStateDomainCoverageGate) covers(from, to uint64) (bool, error) 
 
 func (g *snapshotStateDomainCoverageGate) coversMetadata(from, to uint64) bool {
 	next := from
-	for i := range g.segments {
+	for i := g.firstSegmentFor(from); i < len(g.segments); i++ {
 		ref := g.segments[i].ref
 		if ref.ToTxNum < next {
 			continue

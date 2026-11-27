@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -124,4 +125,77 @@ func TestReadDelegatedResourceV2PreservesStoredJSON(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEncodeCanonicalDelegatedResourceMatchesJSONMarshal(t *testing.T) {
+	var minBytes, mixedBytes, maxBytes tcommon.Address
+	for i := range mixedBytes {
+		minBytes[i] = 0
+		maxBytes[i] = 255
+		mixedBytes[i] = byte((i*37 + 9) & 0xff)
+	}
+	mixedBytes[0] = 1
+	mixedBytes[1] = 9
+	mixedBytes[2] = 10
+	mixedBytes[3] = 99
+	mixedBytes[4] = 100
+	cases := []*rawdb.DelegatedResource{
+		nil,
+		{},
+		{
+			From:                      minBytes,
+			To:                        maxBytes,
+			FrozenBalanceForBandwidth: math.MinInt64,
+			FrozenBalanceForEnergy:    -1,
+			ExpireTimeForBandwidth:    0,
+			ExpireTimeForEnergy:       math.MaxInt64,
+		},
+		{
+			From:                      mixedBytes,
+			To:                        testAddr(0x42),
+			FrozenBalanceForBandwidth: 1_234_567_890_123,
+			FrozenBalanceForEnergy:    987_654_321,
+			ExpireTimeForBandwidth:    1732700000000,
+			ExpireTimeForEnergy:       1732799999999,
+		},
+	}
+	for i, tc := range cases {
+		want, err := json.Marshal(tc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := encodeCanonicalDelegatedResource(tc)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("case %d: got %s, want %s", i, got, want)
+		}
+	}
+}
+
+func BenchmarkEncodeCanonicalDelegatedResource(b *testing.B) {
+	dr := &rawdb.DelegatedResource{
+		From:                      testAddr(0x11),
+		To:                        testAddr(0x22),
+		FrozenBalanceForBandwidth: 50_000_000_000,
+		FrozenBalanceForEnergy:    12_345_678_900,
+		ExpireTimeForBandwidth:    1732700000000,
+		ExpireTimeForEnergy:       1732799999999,
+	}
+	b.Run("json.Marshal", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			out, err := json.Marshal(dr)
+			if err != nil || len(out) == 0 {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("canonical", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			out := encodeCanonicalDelegatedResource(dr)
+			if len(out) == 0 {
+				b.Fatal("empty")
+			}
+		}
+	})
 }

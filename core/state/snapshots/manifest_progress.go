@@ -1,7 +1,6 @@
 package snapshots
 
 import (
-	"encoding/json"
 	"os"
 )
 
@@ -59,7 +58,7 @@ func updateManifestPruneProgressWithSync(dir string, blockNum, txNum, indexBlock
 	m := *prior
 	m.Progress = &next
 	// The old lookup is valid for exactly these unchanged catalogs.
-	data, err := json.Marshal(&m)
+	data, err := marshalManifestJSON(&m)
 	if err != nil {
 		return err
 	}

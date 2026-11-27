@@ -2,7 +2,6 @@ package state
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -26,6 +25,25 @@ func (s *StateDB) readSystemDelegation(key []byte) ([]byte, bool) {
 
 func (s *StateDB) readSystemDelegationWithError(key []byte) ([]byte, bool, error) {
 	return s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
+}
+
+// readSystemDelegationForDecoding borrows durable bytes from active read scopes
+// when available. Callers must decode/copy immediately before returning or
+// performing another KV read.
+func (s *StateDB) readSystemDelegationForDecoding(key []byte) ([]byte, bool) {
+	raw, ok, err := s.readSystemDelegationForDecodingWithError(key)
+	if err != nil {
+		s.recordStateError(fmt.Sprintf("read system delegation key=%x", key), err)
+		return nil, false
+	}
+	if !ok {
+		return nil, false
+	}
+	return raw, true
+}
+
+func (s *StateDB) readSystemDelegationForDecodingWithError(key []byte) ([]byte, bool, error) {
+	return s.getAccountKVForDecoding(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key)
 }
 
 func (s *StateDB) writeSystemDelegation(key, value []byte) error {
@@ -113,7 +131,7 @@ func (s *StateDB) ReadDelegatedResourceV2Strict(from, to tcommon.Address, locked
 }
 
 func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResource {
-	data, ok := s.readSystemDelegation(key)
+	data, ok := s.readSystemDelegationForDecoding(key)
 	if !ok {
 		return nil
 	}
@@ -130,7 +148,7 @@ func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResourc
 }
 
 func (s *StateDB) readDelegatedResourceByKeyStrict(key []byte, context string) (*rawdb.DelegatedResource, bool, error) {
-	data, ok, err := s.readSystemDelegationWithError(key)
+	data, ok, err := s.readSystemDelegationForDecodingWithError(key)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -150,11 +168,7 @@ func (s *StateDB) WriteDelegatedResourceV2(from, to tcommon.Address, locked bool
 }
 
 func (s *StateDB) writeDelegatedResourceByKey(key []byte, dr *rawdb.DelegatedResource) error {
-	data, err := json.Marshal(dr)
-	if err != nil {
-		return err
-	}
-	return s.writeSystemDelegation(key, data)
+	return s.writeSystemDelegation(key, encodeCanonicalDelegatedResource(dr))
 }
 
 func (s *StateDB) DeleteDelegatedResourceLegacy(from, to tcommon.Address) error {
@@ -207,7 +221,7 @@ func (s *StateDB) WriteDelegationIndex(from tcommon.Address, receivers []tcommon
 }
 
 func (s *StateDB) ReadDelegationIndex(from tcommon.Address) []tcommon.Address {
-	data, ok := s.readSystemDelegation(rawdb.DelegationIndexStateKey(from))
+	data, ok := s.readSystemDelegationForDecoding(rawdb.DelegationIndexStateKey(from))
 	if !ok {
 		return nil
 	}
@@ -227,7 +241,7 @@ func (s *StateDB) ReadDelegationIndex(from tcommon.Address) []tcommon.Address {
 }
 
 func (s *StateDB) ReadDelegationIndexStrict(from tcommon.Address) ([]tcommon.Address, error) {
-	data, ok, err := s.readSystemDelegationWithError(rawdb.DelegationIndexStateKey(from))
+	data, ok, err := s.readSystemDelegationForDecodingWithError(rawdb.DelegationIndexStateKey(from))
 	if err != nil || !ok || len(data) == 0 {
 		return nil, err
 	}
@@ -252,7 +266,7 @@ func (s *StateDB) ReadDrAccountIndexLegacy(account []byte) *corepb.DelegatedReso
 }
 
 func (s *StateDB) ReadDrAccountIndexLegacyStrict(account []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
-	return ReadPagedDelegationIndex(account, s.readSystemDelegationWithError)
+	return ReadPagedDelegationIndex(account, s.readSystemDelegationForDecodingWithError)
 }
 
 func (s *StateDB) WriteDrAccountIndexLegacyDelegate(from, to []byte) error {
@@ -408,7 +422,7 @@ func (s *StateDB) WriteDrAccountIndexUnDelegate(v2 bool, from, to []byte) error 
 }
 
 func (s *StateDB) ReadDrAccountIndexEntry(dir rawdb.DrAccIdxDirection, anchor, counterparty []byte) *corepb.DelegatedResourceAccountIndex {
-	data, ok := s.readSystemDelegation(rawdb.DrAccountIndexStateKey(dir, anchor, counterparty))
+	data, ok := s.readSystemDelegationForDecoding(rawdb.DrAccountIndexStateKey(dir, anchor, counterparty))
 	if !ok {
 		return nil
 	}
@@ -429,7 +443,7 @@ func (s *StateDB) ReadDrAccountIndexEntryStrict(dir rawdb.DrAccIdxDirection, anc
 }
 
 func (s *StateDB) readDrAccountIndexByKeyStrict(key []byte, context string) (*corepb.DelegatedResourceAccountIndex, bool, error) {
-	data, ok, err := s.readSystemDelegationWithError(key)
+	data, ok, err := s.readSystemDelegationForDecodingWithError(key)
 	if err != nil || !ok {
 		return nil, ok, err
 	}

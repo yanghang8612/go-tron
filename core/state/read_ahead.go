@@ -13,6 +13,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,7 +23,7 @@ const (
 	defaultStateReadAheadQueueBytes  = 16 << 20
 	maxTransferAssetPrefetchRows     = 256
 	maxStateReadAheadWorkers         = 4
-	maxStateReadAheadPlanRows        = 4096
+	maxStateReadAheadPlanRows        = 8192
 )
 
 var (
@@ -368,16 +369,25 @@ func (p *StateReadAhead) worker() {
 }
 
 type stateReadAheadTarget struct {
-	address     tcommon.Address
-	contract    bool
-	owner       bool
-	permissions []int32
+	address            tcommon.Address
+	contract           bool
+	owner              bool
+	delegationReceiver bool
+	needsBandwidthV1   bool
+	needsBandwidthV2   bool
+	needsEnergyV2      bool
+	permissions        []int32
 }
 
 type stateReadAheadTransferAsset struct {
 	owner     tcommon.Address
 	to        tcommon.Address
 	assetName []byte
+}
+
+type stateReadAheadDelegation struct {
+	owner    tcommon.Address
+	receiver tcommon.Address
 }
 
 type stateReadAheadKVTarget struct {
@@ -388,7 +398,7 @@ type stateReadAheadKVTarget struct {
 }
 
 func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
-	targets, assetTransfers := stateReadAheadTargets(job.block)
+	targets, assetTransfers, delegations := stateReadAheadTargets(job.block)
 	assetAccounts := make(map[tcommon.Address]struct{}, len(assetTransfers)*2+1)
 	if len(assetTransfers) > 0 {
 		assetAccounts[tcommon.SystemAccountAddress] = struct{}{}
@@ -397,6 +407,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			assetAccounts[transfer.to] = struct{}{}
 		}
 	}
+	delegationSystem := len(delegations) > 0
 	// Stage one resolves account generations. Stage two groups all predictable
 	// subrows into a deduplicated physical read plan. Hints may observe an old
 	// generation, but canonical access still reopens the current envelope.
@@ -417,7 +428,8 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		p.recordRow(ok, err)
 		target := byID[id]
 		_, assetAccount := assetAccounts[target.address]
-		if err != nil || !ok || (!target.contract && !target.owner && len(target.permissions) == 0 && !assetAccount) {
+		isDelegationSystem := delegationSystem && target.address == tcommon.SystemAccountAddress
+		if err != nil || !ok || (!target.contract && !target.owner && !target.delegationReceiver && len(target.permissions) == 0 && !assetAccount && !isDelegationSystem) {
 			return nil
 		}
 		envelope, err := splitStateAccountV3(encoded)
@@ -442,9 +454,17 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			}
 			rows.AddKV(target.address, generation, kvdomains.AccountPermissionAux, key)
 		}
-		if target.owner {
-			rows.AddKV(target.address, generation, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
+		if target.owner || target.delegationReceiver {
 			rows.AddKV(target.address, generation, kvdomains.AccountResourceAux, accountResourceKey)
+			if target.needsBandwidthV1 {
+				rows.AddKV(target.address, generation, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0))
+			}
+			if target.needsBandwidthV2 {
+				rows.AddKV(target.address, generation, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH))
+			}
+			if target.needsEnergyV2 {
+				rows.AddKV(target.address, generation, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_ENERGY))
+			}
 		}
 		if target.contract {
 			rows.AddKV(target.address, generation, kvdomains.ContractMetadata, contractMetaKVKey)
@@ -457,6 +477,22 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 	}
 	if err != nil {
 		p.recordError()
+	}
+	if sysGen, ok := generations[tcommon.SystemAccountAddress]; ok && len(delegations) > 0 {
+		seenDelegations := make(map[[tcommon.AddressLength * 2]byte]struct{}, len(delegations))
+		for _, d := range delegations {
+			var pair [tcommon.AddressLength * 2]byte
+			copy(pair[:tcommon.AddressLength], d.owner[:])
+			copy(pair[tcommon.AddressLength:], d.receiver[:])
+			if _, seen := seenDelegations[pair]; seen {
+				continue
+			}
+			seenDelegations[pair] = struct{}{}
+			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(d.owner, d.receiver, false))
+			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(d.owner, d.receiver, true))
+			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2From, d.owner[:], d.receiver[:]))
+			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2To, d.receiver[:], d.owner[:]))
+		}
 	}
 	// Prioritize the balance rows used by Validate across the whole block before
 	// bandwidth, operation time, and metadata rows. Numeric names may mean a
@@ -589,54 +625,89 @@ func (p *StateReadAhead) recordError() {
 	stateReadAheadErrorsCounter.Inc(1)
 }
 
-func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset) {
+func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset, []stateReadAheadDelegation) {
 	if block == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	transactions := block.Transactions()
 	index := make(map[tcommon.Address]int)
 	targets := make([]stateReadAheadTarget, 0, len(transactions)*2+1)
 	assetTransfers := make([]stateReadAheadTransferAsset, 0)
-	add := func(raw []byte, contract bool) {
+	delegations := make([]stateReadAheadDelegation, 0)
+	add := func(raw []byte, contract bool) int {
 		if len(raw) != tcommon.AddressLength {
-			return
+			return -1
 		}
 		address := tcommon.BytesToAddress(raw)
 		if !address.ValidPrefix() {
-			return
+			return -1
 		}
 		if i, ok := index[address]; ok {
 			targets[i].contract = targets[i].contract || contract
-			return
+			return i
 		}
-		index[address] = len(targets)
+		idx := len(targets)
+		index[address] = idx
 		targets = append(targets, stateReadAheadTarget{address: address, contract: contract})
+		return idx
 	}
 
 	witness := block.WitnessAddress()
-	add(witness[:], false)
-	if i, ok := index[witness]; ok {
+	if i := add(witness[:], false); i >= 0 {
 		targets[i].permissions = append(targets[i].permissions, 1)
+	}
+	recordDelegation := func(ownerRaw, receiverRaw []byte, resource corepb.ResourceCode) {
+		if len(ownerRaw) != tcommon.AddressLength || len(receiverRaw) != tcommon.AddressLength {
+			return
+		}
+		owner := tcommon.BytesToAddress(ownerRaw)
+		receiver := tcommon.BytesToAddress(receiverRaw)
+		if !owner.ValidPrefix() || !receiver.ValidPrefix() {
+			return
+		}
+		if oi := add(owner[:], false); oi >= 0 {
+			switch resource {
+			case corepb.ResourceCode_ENERGY:
+				targets[oi].needsEnergyV2 = true
+			default:
+				targets[oi].needsBandwidthV2 = true
+			}
+		}
+		if ri := add(receiver[:], false); ri >= 0 {
+			targets[ri].delegationReceiver = true
+			switch resource {
+			case corepb.ResourceCode_ENERGY:
+				targets[ri].needsEnergyV2 = true
+			default:
+				targets[ri].needsBandwidthV1 = true
+				targets[ri].needsBandwidthV2 = true
+			}
+		}
+		delegations = append(delegations, stateReadAheadDelegation{owner: owner, receiver: receiver})
+		add(tcommon.SystemAccountAddress[:], false)
 	}
 	for _, tx := range transactions {
 		message, err := tx.DecodedContract()
 		if err != nil || message == nil {
 			continue
 		}
+		ownerIdx := -1
 		if owner, _, err := tx.ContractOwnerAddress(); err == nil {
-			add(owner, false)
-			if i, ok := index[tcommon.BytesToAddress(owner)]; ok {
-				targets[i].owner = true
+			ownerIdx = add(owner, false)
+			if ownerIdx >= 0 {
+				targets[ownerIdx].owner = true
+				targets[ownerIdx].needsBandwidthV1 = true
+				targets[ownerIdx].needsBandwidthV2 = true
 				permission := tx.Contract().GetPermissionId()
 				seen := false
-				for _, id := range targets[i].permissions {
+				for _, id := range targets[ownerIdx].permissions {
 					if id == permission {
 						seen = true
 						break
 					}
 				}
 				if !seen {
-					targets[i].permissions = append(targets[i].permissions, permission)
+					targets[ownerIdx].permissions = append(targets[ownerIdx].permissions, permission)
 				}
 			}
 		}
@@ -658,14 +729,25 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 		if value, ok := message.(interface{ GetTransparentToAddress() []byte }); ok {
 			add(value.GetTransparentToAddress(), false)
 		}
-		if transfer, ok := message.(*contractpb.TransferAssetContract); ok && len(transfer.OwnerAddress) == tcommon.AddressLength && len(transfer.ToAddress) == tcommon.AddressLength {
-			owner := tcommon.BytesToAddress(transfer.OwnerAddress)
-			to := tcommon.BytesToAddress(transfer.ToAddress)
-			if owner.ValidPrefix() && to.ValidPrefix() {
-				assetTransfers = append(assetTransfers, stateReadAheadTransferAsset{owner: owner, to: to, assetName: transfer.AssetName})
-				add(tcommon.SystemAccountAddress[:], false)
+		switch c := message.(type) {
+		case *contractpb.TriggerSmartContract:
+			if ownerIdx >= 0 {
+				targets[ownerIdx].needsEnergyV2 = true
+			}
+		case *contractpb.DelegateResourceContract:
+			recordDelegation(c.GetOwnerAddress(), c.GetReceiverAddress(), c.GetResource())
+		case *contractpb.UnDelegateResourceContract:
+			recordDelegation(c.GetOwnerAddress(), c.GetReceiverAddress(), c.GetResource())
+		case *contractpb.TransferAssetContract:
+			if len(c.OwnerAddress) == tcommon.AddressLength && len(c.ToAddress) == tcommon.AddressLength {
+				owner := tcommon.BytesToAddress(c.OwnerAddress)
+				to := tcommon.BytesToAddress(c.ToAddress)
+				if owner.ValidPrefix() && to.ValidPrefix() {
+					assetTransfers = append(assetTransfers, stateReadAheadTransferAsset{owner: owner, to: to, assetName: c.AssetName})
+					add(tcommon.SystemAccountAddress[:], false)
+				}
 			}
 		}
 	}
-	return targets, assetTransfers
+	return targets, assetTransfers, delegations
 }

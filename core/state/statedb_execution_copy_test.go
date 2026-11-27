@@ -27,7 +27,9 @@ func TestStateObjectCopyFieldPolicy(t *testing.T) {
 		"accountPermissionPointLoaded": "copy", "witnessPermissionSigner": "copy",
 		"witnessPermissionSignerLoaded": "copy", "accountVotesLoaded": "copy",
 		"accountStakeV2Loaded": "copy", "accountFrozenSupplyLoaded": "copy",
-		"accountResourceLoaded": "copy", "accountFrozenBandwidthLoaded": "copy",
+		"accountResourceLoaded": "copy", "accountResourceRaw": "deep-copy",
+		"accountResourceRawExists": "copy", "accountResourceRawLoaded": "copy",
+		"accountFrozenBandwidthLoaded": "copy",
 		"accountFrozenBandwidthMode": "copy", "accountFrozenBandwidthPoints": "clone-immutable-values",
 		"accountTronPowerLoaded": "copy", "trc10PointDomain": "copy",
 		"trc10PointKey": "copy-immutable", "trc10PointValue": "copy",
@@ -99,6 +101,7 @@ func TestStateDBCopyTopLevelFieldPolicy(t *testing.T) {
 		"cycleRewardSink":        "reset-external-mutable-sink",
 		"storageReadScope":       "reset-execution-scope",
 		"storageReadScopeReader": "reset-execution-scope-reader",
+		"shieldedBest":           "reset-cache",
 	}
 	typ := reflect.TypeOf(StateDB{})
 	if len(policies) != typ.NumField() {

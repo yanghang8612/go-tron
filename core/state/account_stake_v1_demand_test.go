@@ -348,22 +348,34 @@ func TestDemandResourceProjectionDependenciesAndErrors(t *testing.T) {
 			// Cold materialization additionally records a conservative full envelope
 			// read through the prefix iterator. All consumed exact cells and the range
 			// marker remain required on every warm transaction.
-			for _, key := range []TransactionAccessKey{
+			expectedKeys := []TransactionAccessKey{
 				{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldExistence},
 				{Kind: TransactionAccessAccountField, Address: addr, AccountField: TransactionAccountFieldFrozenResource},
 				{Kind: TransactionAccessAccountKVGeneration, Address: addr},
 				{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: kvdomains.AccountFrozenV2Aux, LogicalKey: string(accountFrozenV2Key(resource))},
 				{Kind: TransactionAccessAccountKV, Address: addr, KVDomain: kvdomains.AccountResourceAux, LogicalKey: string(accountResourceKey)},
-			} {
+			}
+			if resource == corepb.ResourceCode_BANDWIDTH {
+				expectedKeys = append(expectedKeys, TransactionAccessKey{
+					Kind:       TransactionAccessAccountKV,
+					Address:    addr,
+					KVDomain:   kvdomains.AccountFrozenBandwidthAux,
+					LogicalKey: string(accountFrozenBandwidthKey(0)),
+				})
+			}
+			for _, key := range expectedKeys {
 				if cold[key] != TransactionAccessRead || hot[key] != TransactionAccessRead {
 					t.Fatalf("missing consumed dependency %+v cold=%v hot=%v", key, cold, hot)
 				}
 			}
-			if coldUnsupported != (resource == corepb.ResourceCode_BANDWIDTH) || hotUnsupported != coldUnsupported {
-				t.Fatal("complete prefix provenance not replayed")
+			if coldUnsupported || hotUnsupported {
+				t.Fatalf("unexpected unsupported flag cold=%v hot=%v", coldUnsupported, hotUnsupported)
 			}
 			for key := range hot {
-				if key.Kind == TransactionAccessAccountKV && key.KVDomain != kvdomains.AccountFrozenV2Aux && key.KVDomain != kvdomains.AccountResourceAux {
+				if key.Kind == TransactionAccessAccountKV &&
+					key.KVDomain != kvdomains.AccountFrozenV2Aux &&
+					key.KVDomain != kvdomains.AccountResourceAux &&
+					!(resource == corepb.ResourceCode_BANDWIDTH && key.KVDomain == kvdomains.AccountFrozenBandwidthAux) {
 					t.Fatalf("unrelated point domain %+v", key)
 				}
 			}

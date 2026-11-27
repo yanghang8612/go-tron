@@ -1038,10 +1038,42 @@ type bufferBatchOp struct {
 }
 
 type bufferBatch struct {
-	parent *Buffer
-	ops    []bufferBatchOp
-	size   int
-	closed bool
+	parent               *Buffer
+	ops                  []bufferBatchOp
+	size                 int
+	closed               bool
+	lastOpLayer          uint64
+	hasLastOpLayer       bool
+	minRemainingLayer    uint64
+	hasMinRemainingLayer bool
+}
+
+func (b *bufferBatch) recordOpLayer(target *layer) {
+	if target == nil {
+		b.lastOpLayer = 0
+		b.hasLastOpLayer = false
+		return
+	}
+	b.lastOpLayer = target.number
+	b.hasLastOpLayer = true
+}
+
+// LastOpLayerNumber reports the layer number captured by the most recent
+// Put/Delete appended to this batch.
+func (b *bufferBatch) LastOpLayerNumber() (uint64, bool) {
+	if b == nil || !b.hasLastOpLayer {
+		return 0, false
+	}
+	return b.lastOpLayer, true
+}
+
+// MinRemainingLayerNumber reports the minimum target layer number among ops
+// remaining in the batch after the most recent partial WriteUpTo/WriteCommitted.
+func (b *bufferBatch) MinRemainingLayerNumber() (uint64, bool) {
+	if b == nil || !b.hasMinRemainingLayer {
+		return 0, false
+	}
+	return b.minRemainingLayer, true
 }
 
 // BlockHashReader is the optional cold-chain lookup carried by buffers used as
@@ -1352,7 +1384,9 @@ func (b *bufferBatch) Put(key, value []byte) error {
 	// then allocating the same key again during []byte→string conversion.
 	k := string(key)
 	v := append([]byte(nil), value...)
-	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: target})
 	b.size += len(k) + len(v)
 	return nil
 }
@@ -1366,7 +1400,9 @@ func (b *bufferBatch) PutStateKVLatest(prefix []byte, accountID common.AccountID
 	}
 	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
 	v := append([]byte(nil), value...)
-	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: target})
 	b.size += len(k) + len(v)
 	return nil
 }
@@ -1378,7 +1414,9 @@ func (b *bufferBatch) PutStateKVLatestOwnedValue(prefix []byte, accountID common
 		return errors.New("blockbuffer: batch closed")
 	}
 	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
-	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: target})
 	b.size += len(k) + len(value)
 	return nil
 }
@@ -1392,7 +1430,9 @@ func (b *bufferBatch) PutOwnedValue(key, value []byte) error {
 		return errors.New("blockbuffer: batch closed")
 	}
 	k := string(key)
-	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: value, target: target})
 	b.size += len(k) + len(value)
 	return nil
 }
@@ -1404,7 +1444,9 @@ func (b *bufferBatch) PutStringOwnedValue(key string, value []byte) error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
 	}
-	b.ops = append(b.ops, bufferBatchOp{key: key, value: value, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{key: key, value: value, target: target})
 	b.size += len(key) + len(value)
 	return nil
 }
@@ -1423,6 +1465,7 @@ func (b *bufferBatch) PutOwnedKeyValue(key, value []byte) error {
 		k = unsafe.String(unsafe.SliceData(key), len(key))
 	}
 	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
 	op := bufferBatchOp{key: k, value: value, target: target}
 	if target != nil {
 		s := target.shardForString(k)
@@ -1441,7 +1484,9 @@ func (b *bufferBatch) Delete(key []byte) error {
 		return errors.New("blockbuffer: batch closed")
 	}
 	k := string(key)
-	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: target})
 	b.size += len(k)
 	return nil
 }
@@ -1452,7 +1497,9 @@ func (b *bufferBatch) DeleteStateKVLatest(prefix []byte, accountID common.Accoun
 		return errors.New("blockbuffer: batch closed")
 	}
 	k := joinStateKVLatestKey(prefix, accountID, generation, domain, logicalKey)
-	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
+	target := b.parent.activeLayer()
+	b.recordOpLayer(target)
+	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: target})
 	b.size += len(k)
 	return nil
 }
@@ -1640,6 +1687,21 @@ func (b *bufferBatch) writeFilteredAttempt(matchCommitted func(*layer) bool, dro
 
 	kept := b.ops[:0]
 	keptSize := 0
+	var (
+		minRem              uint64
+		hasMinRem           bool
+		hasUnboundRemaining bool
+	)
+	recordKept := func(target *layer) {
+		if target == nil {
+			hasUnboundRemaining = true
+			return
+		}
+		if !hasMinRem || target.number < minRem {
+			minRem = target.number
+			hasMinRem = true
+		}
+	}
 	for i := range b.ops {
 		op := &b.ops[i]
 		target := op.target
@@ -1653,6 +1715,7 @@ func (b *bufferBatch) writeFilteredAttempt(matchCommitted func(*layer) bool, dro
 			}
 			kept = append(kept, *op)
 			keptSize += bufferBatchOpSize(*op)
+			recordKept(nil)
 			continue
 		}
 		state := b.parent.layerStateLocked(target)
@@ -1666,6 +1729,7 @@ func (b *bufferBatch) writeFilteredAttempt(matchCommitted func(*layer) bool, dro
 		if state != layerCommitted || !matchCommitted(target) {
 			kept = append(kept, *op)
 			keptSize += bufferBatchOpSize(*op)
+			recordKept(target)
 			continue
 		}
 		applyBatchOpToLayer(target, op)
@@ -1673,6 +1737,13 @@ func (b *bufferBatch) writeFilteredAttempt(matchCommitted func(*layer) bool, dro
 	clear(b.ops[len(kept):])
 	b.ops = kept
 	b.size = keptSize
+	if !hasUnboundRemaining && hasMinRem {
+		b.minRemainingLayer = minRem
+		b.hasMinRemainingLayer = true
+	} else {
+		b.minRemainingLayer = 0
+		b.hasMinRemainingLayer = false
+	}
 	return nil, len(b.ops), nil
 }
 
@@ -1685,6 +1756,10 @@ func (b *bufferBatch) Reset() {
 	clear(b.ops)
 	b.ops = b.ops[:0]
 	b.size = 0
+	b.lastOpLayer = 0
+	b.hasLastOpLayer = false
+	b.minRemainingLayer = 0
+	b.hasMinRemainingLayer = false
 }
 
 func (b *bufferBatch) Replay(w ethdb.KeyValueWriter) error {
@@ -1713,6 +1788,10 @@ func (b *bufferBatch) Close() {
 	b.closed = true
 	b.parent = nil
 	b.ops = nil
+	b.lastOpLayer = 0
+	b.hasLastOpLayer = false
+	b.minRemainingLayer = 0
+	b.hasMinRemainingLayer = false
 	b.size = 0
 }
 

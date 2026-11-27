@@ -315,6 +315,16 @@ type StateDB struct {
 	// commit readers must never recover it through their original StateDB.
 	storageReadScope       *blockbuffer.StorageReadScope
 	storageReadScopeReader *commitScopeLatestReader
+
+	// Execution-confined fast-path cache for SystemShielded transparent blocks.
+	shieldedBest shieldedBestCache
+}
+
+type shieldedBestCache struct {
+	valid          bool
+	blockNum       int64
+	root           [32]byte
+	currentMatches bool
 }
 
 // SetTransactionAccessRecorder installs a transaction-scoped observe-only
@@ -1196,10 +1206,11 @@ func (s *StateDB) AccountResourceReference(addr tcommon.Address) *types.Account 
 }
 
 // AccountDelegationResourceReference is the read-only resource projection used
-// by delegation's balance/usage calculations. BANDWIDTH deliberately loads the
-// complete V1 domain: unlike the canonical resource-charge fast path, this
-// replaces a full GetAccount and must retain arbitrary sparse physical rows.
-// V2 balances remain point-addressable via GetFrozenV2Amount.
+// by delegation's balance/usage calculations. BANDWIDTH uses the canonical
+// index-0 point lookup (matching accountFrozenBandwidthForLimit): valid
+// java-tron state enforces MAX_FROZEN_NUMBER == 1, avoiding full KV prefix scans
+// on every DelegateResource/UnDelegateResource transaction. V2 balances remain
+// point-addressable via GetFrozenV2Amount.
 func (s *StateDB) AccountDelegationResourceReference(addr tcommon.Address, resource corepb.ResourceCode) *types.Account {
 	s.recordAccountFieldRead(addr, TransactionAccountFieldExistence)
 	obj := s.getStateObjectForField(addr, TransactionAccountFieldFrozenResource)
@@ -1207,7 +1218,7 @@ func (s *StateDB) AccountDelegationResourceReference(addr tcommon.Address, resou
 		return nil
 	}
 	if resource == corepb.ResourceCode_BANDWIDTH {
-		if err := s.materializeAccountFrozenBandwidth(obj); err != nil {
+		if err := s.materializeAccountFrozenBandwidthCanonical(obj); err != nil {
 			return nil
 		}
 	}
@@ -2083,6 +2094,7 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	// accountChange/codeChange/contractMetaChange may delete or replace an
 	// object in stateObjects. Never retain a pointer across journal replay.
 	s.lastStateObject = nil
+	s.shieldedBest = shieldedBestCache{}
 	s.snapshots = s.snapshots[:id]
 	if id < len(s.balanceTraceSnapshots) {
 		snap := s.balanceTraceSnapshots[id]
@@ -3850,6 +3862,9 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		accountStakeV2Loaded:          obj.accountStakeV2Loaded,
 		accountFrozenSupplyLoaded:     obj.accountFrozenSupplyLoaded,
 		accountResourceLoaded:         obj.accountResourceLoaded,
+		accountResourceRaw:            bytes.Clone(obj.accountResourceRaw),
+		accountResourceRawExists:      obj.accountResourceRawExists,
+		accountResourceRawLoaded:      obj.accountResourceRawLoaded,
 		accountFrozenBandwidthLoaded:  obj.accountFrozenBandwidthLoaded,
 		accountFrozenBandwidthMode:    obj.accountFrozenBandwidthMode,
 		accountFrozenBandwidthPoints:  cloneAccountFrozenBandwidthPoints(obj.accountFrozenBandwidthPoints),

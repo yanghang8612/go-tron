@@ -592,3 +592,97 @@ func BenchmarkCanonicalKVScopeLifecycle(b *testing.B) {
 		b.Fatalf("balance %d", got)
 	}
 }
+
+func TestCanonicalKVScopeWritePreimageAndDelegationBorrowRoute(t *testing.T) {
+	s, buf, commits, store := newCanonicalKVFixture(t, 0)
+	addr := testAddr(0xa7)
+	from := testAddr(0xb2)
+	to := testAddr(0xb3)
+	key1 := []byte("write-preimage")
+	key2 := []byte("delete-preimage")
+	storagePendingKey := []byte("pending-storage")
+
+	// Commit SystemAccountAddress cleanly as block 1 so it has a real durable
+	// StateAccountV3 envelope before block 2 opens StorageReadScope.
+	buf.BeginBlock(tcommon.Hash{1}, 1)
+	s.CreateAccount(tcommon.SystemAccountAddress, corepb.AccountType_Normal)
+	if _, _, err := s.CommitWithStatsOptionsInScope(commits, CommitOptions{BlockNumber: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := commits.FlushLatest(); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+	if err := buf.Flush(store.sink); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rawdb.WriteStateKVLatest(store, addr, 0, kvdomains.SystemReward, key1, []byte("old-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(store, addr, 0, kvdomains.SystemReward, key2, []byte("old-2")); err != nil {
+		t.Fatal(err)
+	}
+	dr := &rawdb.DelegatedResource{From: from, To: to, FrozenBalanceForBandwidth: 12345}
+	drJSON := encodeCanonicalDelegatedResource(dr)
+	drKey := rawdb.DelegatedResourceV2StateKey(from, to, false)
+	if err := rawdb.WriteStateKVLatest(store, tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, drKey, drJSON); err != nil {
+		t.Fatal(err)
+	}
+
+	// Materialize both committed generation-0 objects before measuring KV point reads.
+	if s.getStateObject(addr) == nil || s.getStateObject(tcommon.SystemAccountAddress) == nil {
+		t.Fatal("missing committed state object")
+	}
+
+	buf.BeginBlock(tcommon.Hash{2}, 2)
+	closeScope, err := s.BeginCanonicalStorageReadScope(2)
+	if err != nil || s.storageReadScope == nil {
+		t.Fatalf("open scope: %v", err)
+	}
+	defer func() {
+		if err := closeScope(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	var storagePendingResolved int64
+	commits.latestWriter.storagePendingResolved = &storagePendingResolved
+	commits.latestWriter.pending = map[accountKVLatestPendingMapKey]accountKVLatestPending{
+		accountKVLatestPendingLookupKey(addr, 0, kvdomains.ContractStorage, storagePendingKey): {value: []byte("slot-v")},
+	}
+
+	liveBefore := store.live
+	pointsBefore := store.points
+
+	if err := s.SetAccountKV(addr, kvdomains.SystemReward, key1, []byte("new-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAccountKV(addr, kvdomains.SystemReward, key2); err != nil {
+		t.Fatal(err)
+	}
+	gotDR := s.ReadDelegatedResourceV2(from, to, false)
+	if gotDR == nil || *gotDR != *dr {
+		t.Fatalf("delegated resource = %+v, want %+v", gotDR, dr)
+	}
+	if store.live != liveBefore || store.points-pointsBefore != 3 || store.cursors != 1 {
+		t.Fatalf("borrow route check failed: liveDelta=%d pointsDelta=%d cursors=%d", store.live-liveBefore, store.points-pointsBefore, store.cursors)
+	}
+
+	// Write/delete pre-image reads on ContractStorage must NOT count toward storagePendingResolved.
+	if err := s.SetAccountKV(addr, kvdomains.ContractStorage, storagePendingKey, []byte("slot-v2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAccountKV(addr, kvdomains.ContractStorage, storagePendingKey); err != nil {
+		t.Fatal(err)
+	}
+	if storagePendingResolved != 0 {
+		t.Fatalf("write pre-image incremented storagePendingResolved=%d, want 0", storagePendingResolved)
+	}
+	if _, _, err := s.readAccountKVLatestForDecoding(addr, 0, kvdomains.ContractStorage, storagePendingKey); err != nil {
+		t.Fatal(err)
+	}
+	if storagePendingResolved != 1 {
+		t.Fatalf("decode pending read storagePendingResolved=%d, want 1", storagePendingResolved)
+	}
+}

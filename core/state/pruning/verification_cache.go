@@ -1,6 +1,7 @@
 package pruning
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -389,6 +390,10 @@ func (c *snapshotCoverageVerificationCache) finishChecksum(bytes uint64, err err
 // callers set reauthenticateMemory so even a same-process trusted build is
 // checksum-bound immediately before retired fallback files are removed.
 func (c *snapshotCoverageVerificationCache) verifyHistory(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef, reauthenticateMemory bool, operation string) (snapshotHistoryVerificationKey, snapshotHistoryVerificationRoute, error) {
+	return c.verifyHistoryWithView(ctx, dir, manifest, ref, nil, reauthenticateMemory, operation)
+}
+
+func (c *snapshotCoverageVerificationCache) verifyHistoryWithView(ctx context.Context, dir string, manifest *snapshots.Manifest, ref snapshots.SegmentRef, companions *snapshots.HistoryCompanionView, reauthenticateMemory bool, operation string) (snapshotHistoryVerificationKey, snapshotHistoryVerificationRoute, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -398,7 +403,15 @@ func (c *snapshotCoverageVerificationCache) verifyHistory(ctx context.Context, d
 	if operation == "" {
 		operation = "snapshot verification"
 	}
-	key, err := snapshotHistoryVerificationKeyFor(dir, manifest, ref)
+	var (
+		key snapshotHistoryVerificationKey
+		err error
+	)
+	if companions != nil {
+		key, err = snapshotHistoryVerificationKeyForView(dir, manifest, ref, companions)
+	} else {
+		key, err = snapshotHistoryVerificationKeyFor(dir, manifest, ref)
+	}
 	if err != nil {
 		return snapshotHistoryVerificationKey{}, 0, fmt.Errorf("%s: identify state-domain history %q: %w", operation, ref.Path, err)
 	}
@@ -580,13 +593,6 @@ func (c *snapshotCoverageVerificationCache) persistLocked() error {
 		}
 		return entries[i].Accessor.Path < entries[j].Accessor.Path
 	})
-	data, err := json.MarshalIndent(snapshotCoverageVerificationDisk{
-		Version: snapshotCoverageVerificationCacheVersion,
-		Entries: entries,
-	}, "", "  ")
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return err
 	}
@@ -596,7 +602,17 @@ func (c *snapshotCoverageVerificationCache) persistLocked() error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
+	bw := bufio.NewWriterSize(tmp, 64<<10)
+	enc := json.NewEncoder(bw)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(snapshotCoverageVerificationDisk{
+		Version: snapshotCoverageVerificationCacheVersion,
+		Entries: entries,
+	}); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := bw.Flush(); err != nil {
 		_ = tmp.Close()
 		return err
 	}

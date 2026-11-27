@@ -209,7 +209,9 @@ type accountKVLatestPending struct {
 	// latest put's block on re-put of the same key (matching the map's
 	// overwrite-by-key semantics). Entries are pruned once a flush makes their
 	// number durable in latestStore.
-	number uint64
+	number     uint64
+	opLayer    uint64
+	hasOpLayer bool
 }
 
 // accountKVLatestPendingMapKey indexes the read-your-writes overlay by its
@@ -244,15 +246,19 @@ func (k accountKVLatestPendingMapKey) prefixKey() accountKVPendingPrefixKey {
 }
 
 type accountLatestPending struct {
-	value   []byte
-	deleted bool
-	number  uint64
+	value      []byte
+	deleted    bool
+	number     uint64
+	opLayer    uint64
+	hasOpLayer bool
 }
 
 type kvGenerationPending struct {
 	generation uint64
 	deleted    bool
 	number     uint64
+	opLayer    uint64
+	hasOpLayer bool
 }
 
 type accountKVIndexStore interface {
@@ -269,6 +275,11 @@ type accountKVLayerBatch interface {
 	// committed. A flush only makes an op durable once its layer is committed,
 	// so this bounds which overlay entries are safe to prune.
 	NewestCommittedNumber() (uint64, bool)
+}
+
+type accountKVLayerTracker interface {
+	LastOpLayerNumber() (uint64, bool)
+	MinRemainingLayerNumber() (uint64, bool)
 }
 
 type accountKVLatestGenerationReader interface {
@@ -691,7 +702,7 @@ func (w *accountKVLatestBatch) flushUpTo(cutoff uint64) error {
 		if ncn < pruneCutoff {
 			pruneCutoff = ncn
 		}
-		w.prunePending(pruneCutoff)
+		w.prunePendingWithBatchState(pruneCutoff, true)
 	}
 	return nil
 }
@@ -718,7 +729,7 @@ func (w *accountKVLatestBatch) flushCommitted(dropStale bool) error {
 		return nil
 	}
 	if hasCommitted {
-		w.prunePending(ncn)
+		w.prunePendingWithBatchState(ncn, !dropStale)
 	}
 	return nil
 }
@@ -734,15 +745,31 @@ func (w *accountKVLatestBatch) flushCommitted(dropStale bool) error {
 // value. This bounds the overlay to the in-flight window under deep async commit
 // instead of accumulating the whole staged range.
 func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
+	w.prunePendingWithBatchState(cutoff, false)
+}
+
+func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenNoStaleDrop bool) {
 	if w == nil {
 		return
+	}
+	var (
+		minRem    uint64
+		hasMinRem bool
+	)
+	if w.deepAsync && provenNoStaleDrop {
+		if tracker, ok := w.batch.(accountKVLayerTracker); ok {
+			minRem, hasMinRem = tracker.MinRemainingLayerNumber()
+		}
+	}
+	provablyDurable := func(opLayer uint64, hasOpLayer bool) bool {
+		return hasMinRem && hasOpLayer && opLayer <= cutoff && opLayer < minRem
 	}
 	prunedKV := false
 	for k, e := range w.pending {
 		if e.number > cutoff {
 			continue
 		}
-		if !w.deepAsync || w.kvPendingDurable(k, e) {
+		if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.kvPendingDurable(k, e) {
 			delete(w.pending, k)
 			if k.domain == kvdomains.AccountFrozenBandwidthAux {
 				w.pendingFrozenBandwidth--
@@ -758,7 +785,7 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		if e.number > cutoff {
 			continue
 		}
-		if !w.deepAsync || w.accountPendingDurable(k, e) {
+		if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.accountPendingDurable(k, e) {
 			delete(w.accountPending, k)
 		}
 	}
@@ -766,7 +793,7 @@ func (w *accountKVLatestBatch) prunePending(cutoff uint64) {
 		if e.number > cutoff {
 			continue
 		}
-		if !w.deepAsync || w.generationPendingDurable(k, e) {
+		if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.generationPendingDurable(k, e) {
 			delete(w.generationPending, k)
 		}
 	}
@@ -1227,14 +1254,28 @@ func (w *accountKVLatestBatch) rememberPutOwned(owner tcommon.Address, generatio
 	w.rememberPutWithKey(accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey), value)
 }
 
+func (w *accountKVLatestBatch) lastBatchOpLayer() (uint64, bool) {
+	if w == nil || w.batch == nil {
+		return 0, false
+	}
+	tracker, ok := w.batch.(accountKVLayerTracker)
+	if !ok {
+		return 0, false
+	}
+	return tracker.LastOpLayerNumber()
+}
+
 func (w *accountKVLatestBatch) rememberPutWithKey(mapKey accountKVLatestPendingMapKey, value []byte) {
 	if w.pending == nil {
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
 	w.indexPendingKey(mapKey)
 	w.pending[mapKey] = accountKVLatestPending{
-		value:  value,
-		number: w.commitBlock,
+		value:      value,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
 	}
 }
 
@@ -1249,9 +1290,12 @@ func (w *accountKVLatestBatch) rememberAccountLatestPutOwned(owner tcommon.Addre
 	if w.accountPending == nil {
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
 	w.accountPending[owner.AccountID()] = accountLatestPending{
-		value:  value,
-		number: w.commitBlock,
+		value:      value,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
 	}
 }
 
@@ -1262,7 +1306,13 @@ func (w *accountKVLatestBatch) rememberAccountLatestDelete(owner tcommon.Address
 	if w.accountPending == nil {
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
-	w.accountPending[owner.AccountID()] = accountLatestPending{deleted: true, number: w.commitBlock}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
+	w.accountPending[owner.AccountID()] = accountLatestPending{
+		deleted:    true,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
+	}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, generation uint64) {
@@ -1272,7 +1322,13 @@ func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, ge
 	if w.generationPending == nil {
 		w.generationPending = make(map[tcommon.AccountID]kvGenerationPending)
 	}
-	w.generationPending[owner.AccountID()] = kvGenerationPending{generation: generation, number: w.commitBlock}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
+	w.generationPending[owner.AccountID()] = kvGenerationPending{
+		generation: generation,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
+	}
 }
 
 func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address) {
@@ -1282,7 +1338,13 @@ func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address)
 	if w.generationPending == nil {
 		w.generationPending = make(map[tcommon.AccountID]kvGenerationPending)
 	}
-	w.generationPending[owner.AccountID()] = kvGenerationPending{deleted: true, number: w.commitBlock}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
+	w.generationPending[owner.AccountID()] = kvGenerationPending{
+		deleted:    true,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
+	}
 }
 
 func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) {
@@ -1292,11 +1354,14 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 	if w.pending == nil {
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
 	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
 	w.indexPendingKey(mapKey)
 	w.pending[mapKey] = accountKVLatestPending{
-		deleted: true,
-		number:  w.commitBlock,
+		deleted:    true,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
 	}
 }
 
@@ -1307,11 +1372,14 @@ func (w *accountKVLatestBatch) rememberDeleteOwned(owner tcommon.Address, genera
 	if w.pending == nil {
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
+	opLayer, hasOpLayer := w.lastBatchOpLayer()
 	mapKey := accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey)
 	w.indexPendingKey(mapKey)
 	w.pending[mapKey] = accountKVLatestPending{
-		deleted: true,
-		number:  w.commitBlock,
+		deleted:    true,
+		number:     w.commitBlock,
+		opLayer:    opLayer,
+		hasOpLayer: hasOpLayer,
 	}
 }
 
@@ -1537,6 +1605,7 @@ func (s *StateDB) setAccountKVLatestView(reader statedomains.LatestReader, itera
 		return
 	}
 	s.clearLegacyDelegationCache()
+	s.shieldedBest = shieldedBestCache{}
 	s.accountKVLatestReader = reader
 	s.accountKVLatestIterator = iterator
 }
@@ -1561,17 +1630,24 @@ func (s *StateDB) readAccountKVLatest(owner tcommon.Address, generation uint64, 
 
 func (s *StateDB) readAccountKVLatestForDecoding(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	s.recordAccountKVRead(owner, domain, key)
+	return s.readAccountKVLatestBorrowed(owner, generation, domain, key, true)
+}
+
+func (s *StateDB) readAccountKVLatestBorrowed(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, countStoragePending bool) ([]byte, bool, error) {
 	if value, exists, ok := s.readTransactionVersionedAccountKV(owner, domain, key); ok {
 		return value, exists, nil
 	}
 	if s != nil && s.storageReadScope != nil {
-		return s.readCanonicalAccountKVLatest(owner, generation, domain, key)
+		return s.readCanonicalAccountKVLatest(owner, generation, domain, key, countStoragePending)
 	}
 	if s != nil && s.accountKVLatestReader != nil {
 		if reader, ok := s.accountKVLatestReader.(accountKVLatestDecodingBorrower); ok {
 			return reader.kvLatestForDecoding(owner, generation, domain, key)
 		}
-		return s.readAccountKVLatest(owner, generation, domain, key)
+		if reader, ok := s.accountKVLatestReader.(accountKVLatestGenerationReader); ok {
+			return reader.KVLatest(owner, generation, domain, key)
+		}
+		return s.accountKVLatestReader.GetLatest(owner, domain, key)
 	}
 	store := s.accountKVPhysicalLatestStore()
 	if reader, ok := store.(accountKVLatestNoCopyPhysicalStore); ok {
@@ -1962,7 +2038,8 @@ func (s *StateDB) setAccountKVPrepared(owner tcommon.Address, domain kvdomains.K
 			recordFreshAccountKVPreimageReadAvoided()
 			prevLoaded = true
 		} else {
-			current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
+			s.recordAccountKVRead(owner, domain, key)
+			current, exists, err := s.readAccountKVLatestBorrowed(owner, obj.accountKVGeneration, domain, key, false)
 			if err != nil {
 				return err
 			}
@@ -1994,6 +2071,39 @@ func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.K
 	return s.setAccountKVResolved(obj, domain, key, value, nil, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
 }
 
+func (s *StateDB) setAccountKVForObjectWithPrev(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, journal bool, prevValue []byte, prevExists, prevLoaded bool) (err error) {
+	defer func() {
+		if err != nil && s.Error() == nil {
+			err = s.recordStateError(fmt.Sprintf("write rooted account kv %s domain=%d key=%x", obj.address.Hex(), domain, key), err)
+		}
+	}()
+	if err := s.Error(); err != nil {
+		return err
+	}
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	prevDirty, dirty := lookupKVEntry(obj.kvDirty, domain, key)
+	if !dirty {
+		if prevLoaded {
+			s.recordAccountKVRead(obj.address, domain, key)
+		} else if hasFreshAccountKVGeneration(obj) {
+			recordFreshAccountKVPreimageReadAvoided()
+			prevLoaded = true
+		} else {
+			s.recordAccountKVRead(obj.address, domain, key)
+			current, exists, err := s.readAccountKVLatestBorrowed(obj.address, obj.accountKVGeneration, domain, key, false)
+			if err != nil {
+				return err
+			}
+			prevValue = current
+			prevExists = exists
+			prevLoaded = true
+		}
+	}
+	return s.setAccountKVResolved(obj, domain, key, value, nil, journal, prevValue, prevExists, prevLoaded, prevDirty, dirty)
+}
+
 // setAccountKVResolved receives the allocation-free dirty lookup performed by
 // its caller. Delay owning the composite map key until after no-op detection so
 // repeated writes of an identical dirty value allocate nothing.
@@ -2022,6 +2132,9 @@ func (s *StateDB) setAccountKVResolved(obj *stateObject, domain kvdomains.KVDoma
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
 		s.setKVEntryPrev(&entry, prevValue, prevExists)
+	}
+	if domain == kvdomains.SystemShielded {
+		s.shieldedBest = shieldedBestCache{}
 	}
 	obj.setKVDirty(mk, entry)
 	invalidateAccountKVMaterialization(obj, domain)
@@ -2114,7 +2227,7 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 			return false, nil
 		}
 	} else {
-		current, exists, err := s.readAccountKVLatest(obj.address, obj.accountKVGeneration, domain, key)
+		current, exists, err := s.readAccountKVLatestBorrowed(obj.address, obj.accountKVGeneration, domain, key, false)
 		if err != nil {
 			return false, err
 		}
@@ -2123,12 +2236,30 @@ func (s *StateDB) stageAccountKVCommitWithPrev(obj *stateObject, domain kvdomain
 			return false, nil
 		}
 	}
+	if domain == kvdomains.SystemShielded {
+		s.shieldedBest = shieldedBestCache{}
+	}
 	obj.setKVDirty(mk, entry)
 	return true, nil
 }
 
 // DeleteAccountKV stages a tombstone for owner's (domain,key).
 func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) (err error) {
+	if err := s.Error(); err != nil {
+		return err
+	}
+	if !kvdomains.IsRegistered(domain) {
+		return s.recordStateError("delete rooted account kv", fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain)))
+	}
+	obj := s.getStateObject(owner)
+	if obj == nil {
+		return nil
+	}
+	return s.deleteAccountKVForObjectWithPrev(obj, domain, key, nil, false, false)
+}
+
+func (s *StateDB) deleteAccountKVForObjectWithPrev(obj *stateObject, domain kvdomains.KVDomain, key, prevValue []byte, prevExists, prevLoaded bool) (err error) {
+	owner := obj.address
 	defer func() {
 		if err != nil && s.Error() == nil {
 			err = s.recordStateError(fmt.Sprintf("delete rooted account kv %s domain=%d key=%x", owner.Hex(), domain, key), err)
@@ -2140,35 +2271,33 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	if !kvdomains.IsRegistered(domain) {
 		return s.recordStateError("delete rooted account kv", fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain)))
 	}
-	obj := s.getStateObject(owner)
-	if obj == nil {
-		return nil
-	}
 	mk := s.kvCompositeKeyString(domain, key)
 	prevDirty, dirty := obj.kvDirty[mk]
-	var (
-		prevValue  []byte
-		prevExists bool
-		prevLoaded bool
-	)
 	if !dirty {
-		// No durable row can exist in a fresh account generation. A
-		// delete of an untouched key is therefore already a no-op; same-block
-		// writes still take the dirty branch above and retain normal journaling.
-		if hasFreshAccountKVGeneration(obj) {
+		if prevLoaded {
+			s.recordAccountKVRead(owner, domain, key)
+			if !prevExists {
+				return nil
+			}
+		} else if hasFreshAccountKVGeneration(obj) {
+			// No durable row can exist in a fresh account generation. A
+			// delete of an untouched key is therefore already a no-op; same-block
+			// writes still take the dirty branch above and retain normal journaling.
 			recordFreshAccountKVPreimageReadAvoided()
 			return nil
+		} else {
+			s.recordAccountKVRead(owner, domain, key)
+			current, exists, err := s.readAccountKVLatestBorrowed(owner, obj.accountKVGeneration, domain, key, false)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return nil
+			}
+			prevValue = current
+			prevExists = true
+			prevLoaded = true
 		}
-		current, exists, err := s.readAccountKVLatest(owner, obj.accountKVGeneration, domain, key)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return nil
-		}
-		prevValue = current
-		prevExists = true
-		prevLoaded = true
 	}
 	s.recordAccountKVWrite(owner, domain, key)
 	s.journal.append(acquireKVChange(owner, mk, dirty, prevDirty))
@@ -2177,6 +2306,9 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		entry.inheritPrev(prevDirty)
 	} else if prevLoaded {
 		s.setKVEntryPrev(&entry, prevValue, prevExists)
+	}
+	if domain == kvdomains.SystemShielded {
+		s.shieldedBest = shieldedBestCache{}
 	}
 	obj.setKVDirty(mk, entry)
 	invalidateAccountKVMaterialization(obj, domain)
@@ -2291,7 +2423,11 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	clearAccountPermissionCaches(obj)
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
+	clearAccountResourceRawCache(obj)
 	clearAccountFrozenBandwidthCache(obj)
+	if owner == tcommon.SystemAccountAddress {
+		s.shieldedBest = shieldedBestCache{}
+	}
 	obj.accountKVGenerationDirty = true
 	obj.markDirty()
 	return nil

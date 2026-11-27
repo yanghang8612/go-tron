@@ -153,6 +153,9 @@ type stateObject struct {
 	accountStakeV2Loaded          bool
 	accountFrozenSupplyLoaded     bool
 	accountResourceLoaded         bool
+	accountResourceRaw            []byte
+	accountResourceRawExists      bool
+	accountResourceRawLoaded      bool
 	accountFrozenBandwidthLoaded  bool
 	accountFrozenBandwidthMode    uint8
 	accountFrozenBandwidthPoints  *accountFrozenBandwidthPointCache
@@ -475,6 +478,7 @@ func (s *stateObject) setKVDirty(mapKey string, entry kvEntry) {
 // borrows map keys or entries (commit plans do so through finalization).
 func (s *stateObject) releaseKVDirty() {
 	clearTRC10PointCache(s)
+	clearAccountResourceRawCache(s)
 	dirty := s.kvDirty
 	highWater := s.kvDirtyHighWater
 	s.kvDirty = nil

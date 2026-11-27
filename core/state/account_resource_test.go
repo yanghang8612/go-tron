@@ -271,6 +271,149 @@ func TestGetAccountFrozenResourceTotalsLoadsOnlyResourceDomains(t *testing.T) {
 	}
 }
 
+func TestCanonicalBandwidthPointReadsAvoidPrefixScanAndIndex1Probe(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0xa6)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.FreezeV1Bandwidth(addr, 77, 100)
+	sdb.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 23)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. AccountDelegationResourceReference(BANDWIDTH) must open 0 iterators and
+	// point-read only accountFrozenBandwidthKey(0), not scan or probe index 1.
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
+	var rec TransactionAccessRecorder
+	rec.Reset(8)
+	reopened.SetTransactionAccessRecorder(&rec)
+
+	ref := reopened.AccountDelegationResourceReference(addr, corepb.ResourceCode_BANDWIDTH)
+	reopened.SetTransactionAccessRecorder(nil)
+	if ref == nil || ref.TotalFrozenBandwidth() != 77 || reopened.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH) != 23 {
+		t.Fatalf("delegation reference = %+v (v2=%d), want V1=77 V2=23", ref, reopened.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH))
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("delegation reference opened %d iterators, want 0", store.iteratorCalls)
+	}
+	if rec.Unsupported() {
+		t.Fatal("delegation reference marked access recorder unsupported")
+	}
+
+	// 2. GetAccountFrozenBandwidth must also probe only index 0 (no index-1 key).
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store = &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(store)
+	rec.Reset(8)
+	reopened.SetTransactionAccessRecorder(&rec)
+
+	frozen, err := reopened.GetAccountFrozenBandwidth(addr)
+	reopened.SetTransactionAccessRecorder(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen != 100 {
+		t.Fatalf("frozen bandwidth = %d, want 100", frozen)
+	}
+	if store.iteratorCalls != 0 {
+		t.Fatalf("GetAccountFrozenBandwidth opened %d iterators, want 0", store.iteratorCalls)
+	}
+	index1Key := TransactionAccessKey{
+		Kind:       TransactionAccessAccountKV,
+		Address:    addr,
+		KVDomain:   kvdomains.AccountFrozenBandwidthAux,
+		LogicalKey: string(accountFrozenBandwidthKey(1)),
+	}
+	for _, r := range rec.CaptureReadSet().Reads {
+		if r.Key == index1Key {
+			t.Fatalf("GetAccountFrozenBandwidth unexpectedly probed index 1: %+v", r.Key)
+		}
+	}
+}
+
+type countingAccountResourceLatestReader struct {
+	store          *frozenBandwidthPointReadStore
+	accountKVReads int
+}
+
+func (r *countingAccountResourceLatestReader) KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if domain == kvdomains.AccountResourceAux {
+		r.accountKVReads++
+	}
+	return rawdb.ReadStateKVLatest(r.store, owner, generation, domain, key)
+}
+
+func (r *countingAccountResourceLatestReader) GetLatest(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if domain == kvdomains.AccountResourceAux {
+		r.accountKVReads++
+	}
+	return rawdb.ReadStateKVLatest(r.store, owner, 0, domain, key)
+}
+
+func TestMutateAccountResourceAvoidsSecondDurableRead(t *testing.T) {
+	sdb := newTestStateDB(t)
+	existing := testAddr(0xa7)
+	empty := testAddr(0xa8)
+	sdb.CreateAccount(existing, corepb.AccountType_Normal)
+	sdb.CreateAccount(empty, corepb.AccountType_Normal)
+	sdb.SetEnergyUsage(existing, 10)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &countingAccountResourceLatestReader{
+		store: &frozenBandwidthPointReadStore{Database: sdb.db.DiskDB()},
+	}
+	reopened.setAccountKVLatestView(reader, nil)
+
+	// 1. Existing resource row: materialize reads once, writeAccountResource reuses cached pre-image.
+	reopened.SetEnergyUsage(existing, 25)
+	if reader.accountKVReads != 1 {
+		t.Fatalf("existing resource mutate reads = %d, want 1", reader.accountKVReads)
+	}
+
+	// 2. Absent resource row: materialize misses once, writeAccountResource reuses cached miss.
+	reopened.SetEnergyUsage(empty, 5)
+	if reader.accountKVReads != 2 {
+		t.Fatalf("absent resource mutate reads = %d, want 2 (1 each)", reader.accountKVReads)
+	}
+
+	// 3. Snapshot + revert + re-write on another existing account preserves correct pre-image.
+	reopened2, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := reopened2.Snapshot()
+	reopened2.SetEnergyUsage(existing, 99)
+	reopened2.RevertToSnapshot(snap)
+	reopened2.SetEnergyUsage(existing, 42)
+	root2, err := reopened2.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err := New(root2, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := check.GetEnergyUsage(existing); got != 42 {
+		t.Fatalf("energy usage after revert+rewrite = %d, want 42", got)
+	}
+}
+
 func TestGetAccountFrozenEnergyLoadsOnlyEnergyRows(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xa5)

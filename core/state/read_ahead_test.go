@@ -82,8 +82,8 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	defer prefetcher.Close()
 
 	readsAfterWarmup := base.gets.Load()
-	if readsAfterWarmup != 10 {
-		t.Fatalf("durable warmup reads = %d, want 4 accounts + metadata + code + 4 permission/resource rows", readsAfterWarmup)
+	if readsAfterWarmup != 12 {
+		t.Fatalf("durable warmup reads = %d, want 4 accounts + metadata + code + 6 permission/resource rows", readsAfterWarmup)
 	}
 	for _, addr := range []tcommon.Address{owner, to, contract, witness} {
 		if _, ok, err := rawdb.ReadStateAccountLatestNoCopy(buffer, addr); err != nil || !ok {
@@ -101,7 +101,7 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	}
 
 	stats := prefetcher.Stats()
-	if stats.EnqueuedBlocks != 1 || stats.ProcessedBlocks != 1 || stats.Rows != 10 || stats.Present != 6 || stats.Missing != 4 || stats.QueuedBytes != 0 || stats.Errors != 0 {
+	if stats.EnqueuedBlocks != 1 || stats.ProcessedBlocks != 1 || stats.Rows != 12 || stats.Present != 6 || stats.Missing != 6 || stats.QueuedBytes != 0 || stats.Errors != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
@@ -159,8 +159,8 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 	defer prefetcher.Close()
 
 	readsAfterWarmup := base.gets.Load()
-	if readsAfterWarmup != 14 {
-		t.Fatalf("durable warmup reads = %d, want 4 accounts + 6 asset rows + 4 permission/resource rows", readsAfterWarmup)
+	if readsAfterWarmup != 15 {
+		t.Fatalf("durable warmup reads = %d, want 4 accounts + 6 asset rows + 5 permission/resource rows", readsAfterWarmup)
 	}
 	for _, row := range rows {
 		if _, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, row.address, generation, row.domain, row.key); err != nil || !ok {
@@ -171,7 +171,7 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 		t.Fatalf("canonical TransferAsset reads reached durable base after warmup: before=%d after=%d", readsAfterWarmup, got)
 	}
 	stats := prefetcher.Stats()
-	if stats.Rows != 14 || stats.Present != 10 || stats.Missing != 4 || stats.Errors != 0 {
+	if stats.Rows != 15 || stats.Present != 10 || stats.Missing != 5 || stats.Errors != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
@@ -311,7 +311,7 @@ func TestStateReadAheadTransferAssetRepeatedHintsDoNotConsumeCap(t *testing.T) {
 }
 
 func TestStateReadAheadTransferAssetRespectsFullSubrowPlan(t *testing.T) {
-	const owners = 1400 // Each owner contributes permission and resource subrows.
+	const owners = 2800 // Each owner contributes permission and resource subrows, exceeding maxStateReadAheadPlanRows (8192).
 	disk := rawdb.NewMemoryDatabase()
 	to, witness := readAheadAddress(0xe0), readAheadAddress(0xe1)
 	to[len(to)-3], witness[len(witness)-3] = 1, 1
@@ -476,4 +476,104 @@ func readAheadTransferAssetBlock(t *testing.T, owner, to, witness tcommon.Addres
 			Type: corepb.Transaction_Contract_TransferAssetContract, Parameter: transfer,
 		}}}}},
 	})
+}
+
+func TestStateReadAheadWarmsDelegationAndVMSubrows(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	owner, recv, contract, witness := readAheadAddress(0x61), readAheadAddress(0x62), readAheadAddress(0x63), readAheadAddress(0x64)
+	for _, address := range []tcommon.Address{owner, recv, contract, witness, tcommon.SystemAccountAddress} {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: 9}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, address, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeKV := func(addr tcommon.Address, domain kvdomains.KVDomain, key, val []byte) {
+		if err := rawdb.WriteStateKVLatest(disk, addr, 9, domain, key, val); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expected := []struct {
+		addr   tcommon.Address
+		domain kvdomains.KVDomain
+		key    []byte
+		val    []byte
+	}{
+		// Owner V1/V2 bandwidth + V2 energy (TriggerSmartContract) + AccountResource
+		{owner, kvdomains.AccountResourceAux, accountResourceKey, []byte("owner-res")},
+		{owner, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0), []byte("owner-bw-v1")},
+		{owner, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH), []byte("owner-bw-v2")},
+		{owner, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_ENERGY), []byte("owner-en-v2")},
+		// Receiver V1 bandwidth + V2 bandwidth + V2 energy + AccountResource
+		{recv, kvdomains.AccountResourceAux, accountResourceKey, []byte("recv-res")},
+		{recv, kvdomains.AccountFrozenBandwidthAux, accountFrozenBandwidthKey(0), []byte("recv-bw-v1")},
+		{recv, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH), []byte("recv-bw-v2")},
+		{recv, kvdomains.AccountFrozenV2Aux, accountFrozenV2Key(corepb.ResourceCode_ENERGY), []byte("recv-en-v2")},
+		// SystemDelegation V2 rows and bilateral indices
+		{tcommon.SystemAccountAddress, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(owner, recv, false), []byte("dr-unlocked")},
+		{tcommon.SystemAccountAddress, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(owner, recv, true), []byte("dr-locked")},
+		{tcommon.SystemAccountAddress, kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2From, owner[:], recv[:]), []byte("idx-from")},
+		{tcommon.SystemAccountAddress, kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2To, recv[:], owner[:]), []byte("idx-to")},
+	}
+	for _, row := range expected {
+		writeKV(row.addr, row.domain, row.key, row.val)
+	}
+
+	delBW, err := anypb.New(&contractpb.DelegateResourceContract{
+		OwnerAddress:    owner.Bytes(),
+		ReceiverAddress: recv.Bytes(),
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         1_000_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	undelEN, err := anypb.New(&contractpb.UnDelegateResourceContract{
+		OwnerAddress:    owner.Bytes(),
+		ReceiverAddress: recv.Bytes(),
+		Resource:        corepb.ResourceCode_ENERGY,
+		Balance:         1_000_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trig, err := anypb.New(&contractpb.TriggerSmartContract{
+		OwnerAddress:    owner.Bytes(),
+		ContractAddress: contract.Bytes(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: []*corepb.Transaction{
+			{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_DelegateResourceContract, Parameter: delBW}}}},
+			{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_UnDelegateResourceContract, Parameter: undelEN}}}},
+			{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_TriggerSmartContract, Parameter: trig}}}},
+		},
+	})
+
+	base := &readAheadCountingReader{KeyValueReader: disk}
+	buffer := blockbuffer.New(base)
+	buffer.SetBaseReadCacheSize(1 << 20)
+	p := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 1})
+	defer p.Close()
+	if !p.EnqueueBlock(block, 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+
+	before := base.gets.Load()
+	for i, row := range expected {
+		got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, row.addr, 9, row.domain, row.key)
+		if err != nil || !ok || !bytes.Equal(got, row.val) {
+			t.Fatalf("row %d: got=%q ok=%v err=%v, want %q", i, got, ok, err, row.val)
+		}
+	}
+	if after := base.gets.Load(); after != before {
+		t.Fatalf("delegation/VM read-ahead missed cache: base gets %d -> %d", before, after)
+	}
 }

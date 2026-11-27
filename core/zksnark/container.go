@@ -31,6 +31,13 @@ type strictIncrMerkleTreeReader interface {
 	ReadIncrMerkleTreeStrict(root []byte) (*shieldpb.IncrementalMerkleTree, bool, error)
 }
 
+type shieldedBestFastPath interface {
+	ShieldedCurrentMatchesBest() bool
+	MarkShieldedCurrentMatchesBest()
+	ShieldedAdvanceUnchangedBest(blockNum int64) (bool, error)
+	RecordShieldedBest(blockNum int64, root []byte)
+}
+
 type rawDBStore struct {
 	db DB
 }
@@ -121,15 +128,31 @@ func (c *MerkleContainer) GetCurrent() *IncrementalMerkleTree {
 // ResetCurrent copies the best tree into the CURRENT_TREE sentinel. Called
 // from applyBlock before transaction execution.
 func (c *MerkleContainer) ResetCurrent() error {
+	fp, hasFP := c.store.(shieldedBestFastPath)
+	if hasFP && fp.ShieldedCurrentMatchesBest() {
+		return nil
+	}
 	best := c.GetBest()
 	currentPB := c.store.ReadCurrentMerkleTree()
 	if currentPB == nil && best.Size() == 0 {
+		if hasFP {
+			fp.MarkShieldedCurrentMatchesBest()
+		}
 		return nil
 	}
 	if currentPB != nil && proto.Equal(currentPB, best.Proto()) {
+		if hasFP {
+			fp.MarkShieldedCurrentMatchesBest()
+		}
 		return nil
 	}
-	return c.store.WriteCurrentMerkleTree(best.Proto())
+	if err := c.store.WriteCurrentMerkleTree(best.Proto()); err != nil {
+		return err
+	}
+	if hasFP {
+		fp.MarkShieldedCurrentMatchesBest()
+	}
+	return nil
 }
 
 // AppendCommitment is the actuator-side hook: load CURRENT_TREE, append the
@@ -154,11 +177,23 @@ func (c *MerkleContainer) AppendCommitment(cm PedersenHash) error {
 //
 // Mirrors java-tron's `MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree`.
 func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
+	fp, hasFP := c.store.(shieldedBestFastPath)
+	if hasFP {
+		if handled, err := fp.ShieldedAdvanceUnchangedBest(blockNum); handled || err != nil {
+			return err
+		}
+	}
 	cur := c.GetCurrent()
 	last := c.store.ReadLastMerkleTree()
 	if root := c.store.ReadMerkleTreeRootByBlock(blockNum - 1); len(root) == len(PedersenHash{}) {
 		if last != nil && proto.Equal(cur.Proto(), last) {
-			return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
+			if err := c.store.WriteMerkleTreeRootByBlock(blockNum, root); err != nil {
+				return err
+			}
+			if hasFP {
+				fp.RecordShieldedBest(blockNum, root)
+			}
+			return nil
 		}
 		if last == nil && cur.Size() == 0 {
 			if strict, ok := c.store.(strictIncrMerkleTreeReader); ok {
@@ -171,10 +206,22 @@ func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 					// previous block's root-keyed store entry proves the best tree
 					// is still empty; reuse it instead of recomputing the 32-level
 					// Sapling empty root on every post-activation transparent block.
-					return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
+					if err := c.store.WriteMerkleTreeRootByBlock(blockNum, root); err != nil {
+						return err
+					}
+					if hasFP {
+						fp.RecordShieldedBest(blockNum, root)
+					}
+					return nil
 				}
 			} else if c.store.HasIncrMerkleTree(root) && c.store.ReadIncrMerkleTree(root) == nil {
-				return c.store.WriteMerkleTreeRootByBlock(blockNum, root)
+				if err := c.store.WriteMerkleTreeRootByBlock(blockNum, root); err != nil {
+					return err
+				}
+				if hasFP {
+					fp.RecordShieldedBest(blockNum, root)
+				}
+				return nil
 			}
 		}
 	}
@@ -182,7 +229,13 @@ func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 	if err != nil {
 		return err
 	}
-	return c.writeBestRootIndex(blockNum, root, cur)
+	if err := c.writeBestRootIndex(blockNum, root, cur); err != nil {
+		return err
+	}
+	if hasFP {
+		fp.RecordShieldedBest(blockNum, root)
+	}
+	return nil
 }
 
 func (c *MerkleContainer) writeBestRootIndex(blockNum int64, root []byte, tree *IncrementalMerkleTree) error {

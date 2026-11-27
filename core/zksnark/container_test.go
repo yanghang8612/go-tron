@@ -264,3 +264,123 @@ func TestContainerAnchorExists(t *testing.T) {
 		t.Fatal("unrelated root reported as anchor")
 	}
 }
+
+type fastPathCountingStore struct {
+	Store
+	lastReads    int
+	currentReads int
+	rootByReads  int
+	rootByWrites int
+	bestValid    bool
+	bestMatches  bool
+	bestBlock    int64
+	bestRoot     [32]byte
+}
+
+func (s *fastPathCountingStore) ReadLastMerkleTree() *shieldpb.IncrementalMerkleTree {
+	s.lastReads++
+	return s.Store.ReadLastMerkleTree()
+}
+
+func (s *fastPathCountingStore) ReadCurrentMerkleTree() *shieldpb.IncrementalMerkleTree {
+	s.currentReads++
+	return s.Store.ReadCurrentMerkleTree()
+}
+
+func (s *fastPathCountingStore) ReadMerkleTreeRootByBlock(blockNum int64) []byte {
+	s.rootByReads++
+	return s.Store.ReadMerkleTreeRootByBlock(blockNum)
+}
+
+func (s *fastPathCountingStore) WriteMerkleTreeRootByBlock(blockNum int64, root []byte) error {
+	s.rootByWrites++
+	return s.Store.WriteMerkleTreeRootByBlock(blockNum, root)
+}
+
+func (s *fastPathCountingStore) ShieldedCurrentMatchesBest() bool {
+	return s.bestMatches
+}
+
+func (s *fastPathCountingStore) MarkShieldedCurrentMatchesBest() {
+	s.bestMatches = true
+}
+
+func (s *fastPathCountingStore) ShieldedAdvanceUnchangedBest(blockNum int64) (bool, error) {
+	if !s.bestValid || !s.bestMatches || s.bestBlock != blockNum-1 {
+		return false, nil
+	}
+	s.bestBlock = blockNum
+	return true, nil
+}
+
+func (s *fastPathCountingStore) RecordShieldedBest(blockNum int64, root []byte) {
+	if len(root) != 32 {
+		return
+	}
+	s.bestValid = true
+	s.bestMatches = true
+	s.bestBlock = blockNum
+	copy(s.bestRoot[:], root)
+}
+
+func (s *fastPathCountingStore) WriteCurrentMerkleTree(tree *shieldpb.IncrementalMerkleTree) error {
+	s.bestValid = false
+	s.bestMatches = false
+	return s.Store.WriteCurrentMerkleTree(tree)
+}
+
+func TestContainerTransparentBlockFastPath(t *testing.T) {
+	db := memorydb.New()
+	inner := rawDBStore{db}
+	seed := NewTree()
+	if err := seed.Append(PedersenHash{0x11}); err != nil {
+		t.Fatal(err)
+	}
+	root := bytes.Repeat([]byte{0x44}, 32)
+	if err := inner.WriteLastMerkleTree(seed.Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.WriteIncrMerkleTree(root, seed.Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.WriteMerkleTreeRootByBlock(10, root); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := &fastPathCountingStore{Store: inner}
+	c := NewMerkleContainer(fs)
+
+	// Block 11: cold slow path populates fast-path cache.
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveCurrentAsBest(11); err != nil {
+		t.Fatal(err)
+	}
+	if !fs.bestValid || !fs.bestMatches || fs.bestBlock != 11 {
+		t.Fatalf("post-block-11 fast-path state = (%v,%v,%d)", fs.bestValid, fs.bestMatches, fs.bestBlock)
+	}
+
+	// Block 12: consecutive transparent block must skip all DB reads and root writes.
+	fs.lastReads, fs.currentReads, fs.rootByReads, fs.rootByWrites = 0, 0, 0, 0
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveCurrentAsBest(12); err != nil {
+		t.Fatal(err)
+	}
+	if fs.lastReads != 0 || fs.currentReads != 0 || fs.rootByReads != 0 || fs.rootByWrites != 0 {
+		t.Fatalf("transparent block 12 hit backing store: last=%d cur=%d rootR=%d rootW=%d", fs.lastReads, fs.currentReads, fs.rootByReads, fs.rootByWrites)
+	}
+	if fs.bestBlock != 12 {
+		t.Fatalf("bestBlock = %d, want 12", fs.bestBlock)
+	}
+
+	// Simulated AppendCommitment invalidation drops back to slow path.
+	if err := c.AppendCommitment(PedersenHash{0x22}); err != nil {
+		t.Fatal(err)
+	}
+	if fs.bestValid || fs.bestMatches {
+		t.Fatal("AppendCommitment did not invalidate fast path")
+	}
+}

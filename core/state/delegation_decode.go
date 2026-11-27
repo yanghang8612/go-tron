@@ -114,3 +114,42 @@ func consumeDelegatedResourceAddress(data []byte, addr *tcommon.Address) ([]byte
 	}
 	return data, true
 }
+
+// encodeCanonicalDelegatedResource produces byte-identical compact JSON to
+// encoding/json.Marshal for *rawdb.DelegatedResource without reflection.
+func encodeCanonicalDelegatedResource(dr *rawdb.DelegatedResource) []byte {
+	if dr == nil {
+		return []byte("null")
+	}
+	buf := make([]byte, 0, 320)
+	buf = append(buf, `{"from":[`...)
+	buf = appendDelegatedResourceAddress(buf, dr.From)
+	buf = append(buf, `],"to":[`...)
+	buf = appendDelegatedResourceAddress(buf, dr.To)
+	buf = append(buf, `],"frozen_balance_for_bandwidth":`...)
+	buf = strconv.AppendInt(buf, dr.FrozenBalanceForBandwidth, 10)
+	buf = append(buf, `,"frozen_balance_for_energy":`...)
+	buf = strconv.AppendInt(buf, dr.FrozenBalanceForEnergy, 10)
+	buf = append(buf, `,"expire_time_for_bandwidth":`...)
+	buf = strconv.AppendInt(buf, dr.ExpireTimeForBandwidth, 10)
+	buf = append(buf, `,"expire_time_for_energy":`...)
+	buf = strconv.AppendInt(buf, dr.ExpireTimeForEnergy, 10)
+	buf = append(buf, '}')
+	return buf
+}
+
+func appendDelegatedResourceAddress(buf []byte, addr tcommon.Address) []byte {
+	for i, b := range addr {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		if b >= 100 {
+			buf = append(buf, '0'+b/100, '0'+(b/10)%10, '0'+b%10)
+		} else if b >= 10 {
+			buf = append(buf, '0'+b/10, '0'+b%10)
+		} else {
+			buf = append(buf, '0'+b)
+		}
+	}
+	return buf
+}

@@ -256,7 +256,7 @@ func publishManifestLockedWithSync(dir string, manifest *Manifest, syncDir func(
 	}
 	// Every publication is reread for byte-identity cache checks. Compact JSON
 	// reduces both that input and serialization work without changing its schema.
-	data, err := json.Marshal(manifest)
+	data, err := marshalManifestJSON(manifest)
 	if err != nil {
 		return err
 	}

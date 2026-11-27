@@ -537,7 +537,6 @@ func TestTransactionAccessRecorderReplaysCachedResourcePointReads(t *testing.T) 
 		{Kind: TransactionAccessAccountField, Address: account, AccountField: TransactionAccountFieldFrozenResource},
 		{Kind: TransactionAccessAccountKVGeneration, Address: account},
 		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenBandwidthAux, LogicalKey: string(accountFrozenBandwidthKey(0))},
-		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenBandwidthAux, LogicalKey: string(accountFrozenBandwidthKey(1))},
 		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenV2Aux, LogicalKey: string(accountFrozenV2Key(corepb.ResourceCode_BANDWIDTH))},
 		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountResourceAux, LogicalKey: string(accountResourceKey)},
 		{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenV2Aux, LogicalKey: string(accountFrozenV2Key(corepb.ResourceCode_ENERGY))},
@@ -551,6 +550,10 @@ func TestTransactionAccessRecorderReplaysCachedResourcePointReads(t *testing.T) 
 		if mode := got[key]; mode&TransactionAccessRead == 0 {
 			t.Fatalf("cached resource access %v mode = %d, want read (all=%v)", key, mode, got)
 		}
+	}
+	index1Key := TransactionAccessKey{Kind: TransactionAccessAccountKV, Address: account, KVDomain: kvdomains.AccountFrozenBandwidthAux, LogicalKey: string(accountFrozenBandwidthKey(1))}
+	if mode := got[index1Key]; mode != 0 {
+		t.Fatalf("unexpected index-1 V1 bandwidth read %v mode=%d", index1Key, mode)
 	}
 	if recorder.Unsupported() {
 		t.Fatal("cached point reads unexpectedly marked unsupported")

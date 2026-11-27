@@ -128,6 +128,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		clearAccountFrozenV2PointCache(obj)
 		obj.accountFrozenSupplyLoaded = false
 		obj.accountResourceLoaded = false
+		clearAccountResourceRawCache(obj)
 		obj.accountTronPowerLoaded = false
 		obj.dirty = true
 		obj.accountDirty = true
@@ -360,6 +361,7 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	clearAccountFrozenV2PointCache(obj)
 	obj.accountFrozenSupplyLoaded = false
 	obj.accountResourceLoaded = false
+	clearAccountResourceRawCache(obj)
 	clearAccountFrozenBandwidthCache(obj)
 	obj.accountTronPowerLoaded = false
 }

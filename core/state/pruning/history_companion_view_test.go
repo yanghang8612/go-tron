@@ -232,3 +232,229 @@ func TestHistoryCompanionGateFreshManifestBytesAndCancellation(t *testing.T) {
 		t.Fatal("malformed replacement accepted")
 	}
 }
+
+func linearCoversMetadata(segments []snapshotStateDomainCoverageSegment, from, to uint64) bool {
+	next := from
+	for i := range segments {
+		ref := segments[i].ref
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return false
+		}
+		if ref.ToTxNum >= to {
+			return true
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false
+}
+
+func TestHistoryCompanionGateCoversMetadataBinarySearchMatchesLinearScan(t *testing.T) {
+	// Include contiguous, overlapping/nested, and gapped intervals.
+	ranges := [][2]uint64{
+		{0, 9},
+		{5, 19},
+		{10, 15},
+		{20, 29},
+		{20, 24},
+		{35, 44},
+		{40, 60},
+		{61, 70},
+		{80, 99},
+	}
+	segments := make([]snapshotStateDomainCoverageSegment, len(ranges))
+	for i, r := range ranges {
+		segments[i] = snapshotStateDomainCoverageSegment{
+			ref: snapshots.SegmentRef{
+				FromTxNum: r[0],
+				ToTxNum:   r[1],
+				Path:      fmt.Sprintf("seg-%d.seg", i),
+			},
+			verified: true,
+		}
+	}
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].ref.FromTxNum != segments[j].ref.FromTxNum {
+			return segments[i].ref.FromTxNum < segments[j].ref.FromTxNum
+		}
+		return segments[i].ref.ToTxNum < segments[j].ref.ToTxNum
+	})
+	prefixMaxTo := make([]uint64, len(segments))
+	var maxTo uint64
+	for i := range segments {
+		if segments[i].ref.ToTxNum > maxTo {
+			maxTo = segments[i].ref.ToTxNum
+		}
+		prefixMaxTo[i] = maxTo
+	}
+	gate := &snapshotStateDomainCoverageGate{
+		segments:    segments,
+		prefixMaxTo: prefixMaxTo,
+	}
+
+	for from := uint64(0); from <= 105; from++ {
+		for to := from; to <= 105; to++ {
+			want := linearCoversMetadata(segments, from, to)
+			gotMeta := gate.coversMetadata(from, to)
+			gotFull, err := gate.covers(from, to)
+			if err != nil {
+				t.Fatalf("covers(%d,%d) err: %v", from, to, err)
+			}
+			if gotMeta != want || gotFull != want {
+				t.Fatalf("range [%d,%d]: meta=%v full=%v want=%v", from, to, gotMeta, gotFull, want)
+			}
+		}
+	}
+}
+
+func TestHistoryCompanionGateParallelStatErrorOrder(t *testing.T) {
+	dir := t.TempDir()
+	histDir := filepath.Join(dir, "history")
+	if err := os.MkdirAll(histDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const count = 72 // >= parallelStatThreshold (64)
+	refs := make([]snapshots.SegmentRef, 0, count*3)
+	for i := 0; i < count; i++ {
+		from := uint64(i) * 10
+		to := from + 9
+		base := fmt.Sprintf("history/state-domain-change-%d-%d", from, to)
+		specs := []struct {
+			kind snapshots.SegmentKind
+			ext  string
+		}{
+			{snapshots.SegmentHistory, ".seg"},
+			{snapshots.SegmentInverted, ".idx"},
+			{snapshots.SegmentAccessor, ".kv"},
+		}
+		for _, spec := range specs {
+			rel := base + spec.ext
+			full := filepath.Join(dir, rel)
+			if err := os.WriteFile(full, []byte{1}, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			refs = append(refs, snapshots.SegmentRef{
+				Dataset:   snapshots.SegmentDatasetStateDomainChange,
+				Kind:      spec.kind,
+				FromTxNum: from,
+				ToTxNum:   to,
+				Path:      rel,
+				Size:      1,
+				Checksum:  "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			})
+		}
+	}
+	manifest := snapshots.NewManifest(0, uint64(count)*10-1, refs)
+	if err := snapshots.PublishManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	w := Worker{SnapshotDir: dir, Policy: SnapPolicy(1, 1)}
+	gate, err := w.newSnapshotStateDomainChangeCoverageGate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantGate, err := scanSnapshotCoverageGate(w, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gate.segments, wantGate.segments) {
+		t.Fatal("parallel stat gate segments mismatch sequential scan")
+	}
+
+	// Remove files for segments 51 and 17; manifest-order error must pick index 17 first.
+	for _, idx := range []int{51, 17} {
+		from := uint64(idx) * 10
+		to := from + 9
+		_ = os.Remove(filepath.Join(dir, fmt.Sprintf("history/state-domain-change-%d-%d.seg", from, to)))
+	}
+	_, gotErr := w.newSnapshotStateDomainChangeCoverageGate(context.Background())
+	_, wantErr := scanSnapshotCoverageGate(w, context.Background())
+	if gotErr == nil || wantErr == nil || gotErr.Error() != wantErr.Error() {
+		t.Fatalf("parallel error order mismatch: got=%v want=%v", gotErr, wantErr)
+	}
+}
+
+func TestSnapshotCoverageVerificationCachePersistRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	cache := newSnapshotCoverageVerificationCache(dir)
+	for i := 0; i < 8; i++ {
+		from := uint64(i) * 100
+		to := from + 99
+		rec := snapshotHistoryVerificationRecord{
+			History: snapshots.SegmentRef{
+				Dataset:   snapshots.SegmentDatasetStateDomainChange,
+				Kind:      snapshots.SegmentHistory,
+				FromTxNum: from,
+				ToTxNum:   to,
+				Path:      fmt.Sprintf("history/seg-%d.seg", i),
+				Size:      4096,
+				Checksum:  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+			Index: snapshots.SegmentRef{
+				Dataset:   snapshots.SegmentDatasetStateDomainChange,
+				Kind:      snapshots.SegmentInverted,
+				FromTxNum: from,
+				ToTxNum:   to,
+				Path:      fmt.Sprintf("history/seg-%d.idx", i),
+				Size:      1024,
+				Checksum:  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+			Accessor: snapshots.SegmentRef{
+				Dataset:   snapshots.SegmentDatasetStateDomainChange,
+				Kind:      snapshots.SegmentAccessor,
+				FromTxNum: from,
+				ToTxNum:   to,
+				Path:      fmt.Sprintf("history/seg-%d.kvi", i),
+				Size:      512,
+				Checksum:  "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			},
+		}
+		cache.persistent[rec] = struct{}{}
+	}
+	cache.mu.Lock()
+	err := cache.persistLocked()
+	cache.mu.Unlock()
+	if err != nil {
+		t.Fatalf("persistLocked: %v", err)
+	}
+
+	reloaded := newSnapshotCoverageVerificationCache(dir)
+	if err := reloaded.LoadError(); err != nil {
+		t.Fatalf("reload error: %v", err)
+	}
+	if !reflect.DeepEqual(reloaded.persistent, cache.persistent) {
+		t.Fatalf("reloaded cache mismatch: got %d entries, want %d", len(reloaded.persistent), len(cache.persistent))
+	}
+}
+
+func BenchmarkHistoryCompanionGateCovers(b *testing.B) {
+	const count = 5000
+	segments := make([]snapshotStateDomainCoverageSegment, count)
+	prefixMaxTo := make([]uint64, count)
+	for i := 0; i < count; i++ {
+		from := uint64(i) * 1000
+		to := from + 999
+		segments[i] = snapshotStateDomainCoverageSegment{
+			ref:      snapshots.SegmentRef{FromTxNum: from, ToTxNum: to},
+			verified: true,
+		}
+		prefixMaxTo[i] = to
+	}
+	gate := &snapshotStateDomainCoverageGate{
+		segments:    segments,
+		prefixMaxTo: prefixMaxTo,
+	}
+	targetFrom := uint64(count-2) * 1000
+	targetTo := targetFrom + 500
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := gate.covers(targetFrom, targetTo)
+		if err != nil || !ok {
+			b.Fatalf("covers: %v %v", ok, err)
+		}
+	}
+}
