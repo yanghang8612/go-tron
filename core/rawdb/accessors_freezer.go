@@ -66,7 +66,13 @@ func ReadBlockRawStrict(db ethdb.KeyValueReader, number uint64) ([]byte, bool, e
 		}
 	}
 	key := blockKey(number)
-	if reader, ok := db.(interface {
+	kv := db
+	if cdb, ok := db.(*ChainDB); ok && cdb != nil && cdb.KeyValueStore != nil {
+		kv = cdb.KeyValueStore
+	} else if view, ok := db.(*ChainDBReadView); ok && view != nil && view.reader != nil {
+		kv = view.reader
+	}
+	if reader, ok := kv.(interface {
 		GetWithPresence([]byte) ([]byte, bool, error)
 	}); ok {
 		return reader.GetWithPresence(key)
