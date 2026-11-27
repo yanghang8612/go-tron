@@ -22,7 +22,7 @@ import (
 const (
 	snapshotCoverageVerificationCacheVersion = 1
 	snapshotCoverageVerificationCacheFile    = ".state-domain-history-verification-v1.json"
-	maxSnapshotVerificationCacheBytes        = 64 << 20
+	maxSnapshotVerificationCacheBytes        = 512 << 20
 	maxSnapshotVerificationCacheEntries      = 1_000_000
 )
 

@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tronprotocol/go-tron/common"
 )
 
 // The entry count was observed in the 2026-09-15 03:15:55 UTC production
@@ -199,5 +201,60 @@ func BenchmarkChainFreezerVerificationCacheEncoding(b *testing.B) {
 			b.ReportMetric(float64(len(encoded)), "encoded-bytes")
 			b.ReportMetric(float64(len(disk.EventEntries)), "event-records")
 		})
+	}
+}
+
+func TestRecordTrustedEventLogsAdvisoryPersistFailureDoesNotFailOrPoison(t *testing.T) {
+	dir := t.TempDir()
+	row := eventLogV3TestRow(1, 0, 0, common.BytesToAddress(eventLogTestAddress(0x74)),
+		common.Hash{0x32}, common.Hash{0x42}, common.Hash{0xe4}, []byte{0x34})
+	ref, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, "log/advisory-proof.seg", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref}, "log/advisory-proof.idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ref, index})); err != nil {
+		t.Fatal(err)
+	}
+
+	prevLimit := chainFreezerVerificationCacheByteLimit
+	chainFreezerVerificationCacheByteLimit = 64
+	t.Cleanup(func() {
+		chainFreezerVerificationCacheByteLimit = prevLimit
+	})
+
+	cache := NewChainFreezerVerificationCache(dir)
+	if err := cache.recordTrustedEventLogs(dir, index, []SegmentRef{ref}); err != nil {
+		t.Fatalf("recordTrustedEventLogs under byte cap failed: %v", err)
+	}
+	stats := cache.Stats()
+	if stats.EventTrustedRecorded != 1 || stats.EventPersistErrors != 1 || stats.EventEntries != 0 || cache.dirty {
+		t.Fatalf("unexpected stats after advisory persist failure: %+v dirty=%t", stats, cache.dirty)
+	}
+	if _, route, err := cache.verifyEventLogIndex(dir, index, []SegmentRef{ref}); err != nil || route != chainFreezerVerificationMemory {
+		t.Fatalf("expected immediate memory hit after trusted record: route=%v err=%v", route, err)
+	}
+	if got := cache.Stats().EventMemoryHits; got != 1 {
+		t.Fatalf("EventMemoryHits = %d, want 1", got)
+	}
+
+	// Restoring the byte cap lets a subsequent record persist cleanly with no poisoned state.
+	chainFreezerVerificationCacheByteLimit = maxChainFreezerVerificationCacheBytes
+	if err := cache.recordTrustedEventLogs(dir, index, []SegmentRef{ref}); err != nil {
+		t.Fatalf("recordTrustedEventLogs after cap restored: %v", err)
+	}
+	stats = cache.Stats()
+	if stats.EventEntries != 1 || stats.EventPersistErrors != 1 {
+		t.Fatalf("unexpected stats after clean persist: %+v", stats)
+	}
+	reloaded := NewChainFreezerVerificationCache(dir)
+	if err := reloaded.LoadError(); err != nil {
+		t.Fatalf("reload verification cache: %v", err)
+	}
+	if got := reloaded.Stats().EventEntries; got != 1 {
+		t.Fatalf("reloaded EventEntries = %d, want 1", got)
 	}
 }

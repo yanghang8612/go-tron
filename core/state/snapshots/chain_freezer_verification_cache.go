@@ -18,10 +18,12 @@ import (
 const (
 	chainFreezerVerificationCacheVersion    = 1
 	chainFreezerVerificationCacheFile       = ".chain-freezer-verification-v1.json"
-	maxChainFreezerVerificationCacheBytes   = 64 << 20
+	maxChainFreezerVerificationCacheBytes   = 512 << 20
 	maxChainFreezerVerificationCacheEntries = 1_000_000
 	chainFreezerVerificationMetricsPrefix   = "state/snapshot/chain_freezer/verification/"
 )
+
+var chainFreezerVerificationCacheByteLimit int64 = maxChainFreezerVerificationCacheBytes
 
 type chainFreezerFileIdentity struct {
 	size        int64
@@ -479,15 +481,26 @@ func (c *ChainFreezerVerificationCache) recordTrustedChain(dir string, freezerRe
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.verified[key] = struct{}{}
+	wasDirty := c.dirty
+	inserted := false
 	if _, ok := c.persistent[record]; !ok {
 		if len(c.persistent) >= maxChainFreezerVerificationCacheEntries {
 			return fmt.Errorf("snapshots: chain-freezer verification cache entries exceed limit %d", maxChainFreezerVerificationCacheEntries)
 		}
 		c.persistent[record] = struct{}{}
 		c.dirty = true
+		inserted = true
+	}
+	if err := c.persistPendingLocked(); err != nil {
+		if inserted {
+			delete(c.persistent, record)
+			c.dirty = wasDirty
+		}
+		return err
 	}
 	c.stats.TrustedRecorded++
-	return c.persistPendingLocked()
+	c.updateMetricsLocked()
+	return nil
 }
 
 func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, indexRef SegmentRef, eventRefs []SegmentRef) error {
@@ -502,22 +515,44 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 	if err != nil {
 		return err
 	}
+	var warnErr error
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	record.IdentityKey = key.identityKey
 	c.eventVerified[key] = struct{}{}
-	if previous, ok := c.eventPersistent[key.recordKey]; !ok {
-		if len(c.eventPersistent) >= maxChainFreezerVerificationCacheEntries {
-			return fmt.Errorf("snapshots: event-log verification cache entries exceed limit %d", maxChainFreezerVerificationCacheEntries)
-		}
-		c.eventPersistent[key.recordKey] = record
-		c.dirty = true
-	} else if previous.IdentityKey != record.IdentityKey {
-		c.eventPersistent[key.recordKey] = record
-		c.dirty = true
-	}
 	c.stats.EventTrustedRecorded++
-	return c.persistPendingLocked()
+	previous, hadPrevious := c.eventPersistent[key.recordKey]
+	wasDirty := c.dirty
+	if !hadPrevious && len(c.eventPersistent) >= maxChainFreezerVerificationCacheEntries {
+		warnErr = fmt.Errorf("snapshots: event-log verification cache entries exceed limit %d", maxChainFreezerVerificationCacheEntries)
+	} else {
+		if !hadPrevious || previous.IdentityKey != record.IdentityKey {
+			c.eventPersistent[key.recordKey] = record
+			c.dirty = true
+		}
+		if persistErr := c.persistPendingLocked(); persistErr != nil {
+			if hadPrevious {
+				c.eventPersistent[key.recordKey] = previous
+			} else {
+				delete(c.eventPersistent, key.recordKey)
+			}
+			c.dirty = wasDirty
+			warnErr = persistErr
+		}
+	}
+	shouldWarn := false
+	if warnErr != nil {
+		c.stats.EventPersistErrors++
+		shouldWarn = !c.eventPersistWarned
+		c.eventPersistWarned = true
+	} else {
+		c.eventPersistWarned = false
+	}
+	c.updateMetricsLocked()
+	c.mu.Unlock()
+	if shouldWarn {
+		coldSnapshotLog.Warn("Could not persist advisory event-log verification cache", "err", warnErr)
+	}
+	return nil
 }
 
 func (c *ChainFreezerVerificationCache) persistPendingLocked() error {
@@ -578,8 +613,8 @@ func (c *ChainFreezerVerificationCache) load() error {
 	if err != nil {
 		return err
 	}
-	if info.Size() < 0 || info.Size() > maxChainFreezerVerificationCacheBytes {
-		return fmt.Errorf("snapshots: chain-freezer verification cache size %d exceeds limit %d", info.Size(), maxChainFreezerVerificationCacheBytes)
+	if info.Size() < 0 || info.Size() > chainFreezerVerificationCacheByteLimit {
+		return fmt.Errorf("snapshots: chain-freezer verification cache size %d exceeds limit %d", info.Size(), chainFreezerVerificationCacheByteLimit)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -656,8 +691,8 @@ func (c *ChainFreezerVerificationCache) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	if len(data) > maxChainFreezerVerificationCacheBytes {
-		return fmt.Errorf("snapshots: encoded chain-freezer verification cache size %d exceeds limit %d", len(data), maxChainFreezerVerificationCacheBytes)
+	if int64(len(data)) > chainFreezerVerificationCacheByteLimit {
+		return fmt.Errorf("snapshots: encoded chain-freezer verification cache size %d exceeds limit %d", len(data), chainFreezerVerificationCacheByteLimit)
 	}
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return err
