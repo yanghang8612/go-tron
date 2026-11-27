@@ -2,13 +2,35 @@ package state
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+type kvDomainTouchKey struct {
+	addr   tcommon.Address
+	mapKey string
+}
+
+type storageDomainTouchKey struct {
+	addr tcommon.Address
+	slot tcommon.Hash
+}
+
+type domainChangeCollectScratch struct {
+	accounts       map[tcommon.Address]accountDomainJournalTouch
+	kvs            map[kvDomainTouchKey]kvDomainJournalTouch
+	storages       map[storageDomainTouchKey]storageDomainJournalTouch
+	generations    map[tcommon.Address]generationDomainJournalTouch
+	accountKeys    []tcommon.Address
+	generationKeys []tcommon.Address
+	kvKeys         []kvDomainTouchKey
+	storageKeys    []storageDomainTouchKey
+}
 
 type accountDomainJournalTouch struct {
 	addr      tcommon.Address
@@ -20,7 +42,7 @@ type kvDomainJournalTouch struct {
 	addr       tcommon.Address
 	mapKey     string
 	domain     kvdomains.KVDomain
-	key        []byte
+	keyStr     string
 	prev       []byte
 	prevExist  bool
 	prevLoaded bool
@@ -29,7 +51,7 @@ type kvDomainJournalTouch struct {
 type storageDomainJournalTouch struct {
 	addr      tcommon.Address
 	slot      tcommon.Hash
-	prev      []byte
+	prev      tcommon.Hash
 	prevExist bool
 }
 
@@ -37,6 +59,14 @@ type generationDomainJournalTouch struct {
 	addr      tcommon.Address
 	prev      uint64
 	prevExist bool
+}
+
+func splitKVCompositeKeyString(mapKey string) (kvdomains.KVDomain, string, bool) {
+	if len(mapKey) < 2 {
+		return 0, "", false
+	}
+	domain := kvdomains.KVDomain(uint16(mapKey[0])<<8 | uint16(mapKey[1]))
+	return domain, mapKey[2:], true
 }
 
 // Deletion always persists a generation tombstone, including generation zero
@@ -59,40 +89,46 @@ func (s *StateDB) journalDeletedAccountGeneration(obj *stateObject) error {
 	return nil
 }
 
-func (s *StateDB) collectKVJournalTouch(kvs map[string]kvDomainJournalTouch, e *kvChange) {
+func (s *StateDB) collectKVJournalTouch(scratch *domainChangeCollectScratch, e *kvChange) {
 	if e == nil {
 		return
+	}
+	id := kvDomainTouchKey{addr: e.address, mapKey: e.mapKey}
+	if scratch.kvs != nil {
+		if _, ok := scratch.kvs[id]; ok {
+			return
+		}
 	}
 	obj := s.stateObjects[e.address]
 	if obj == nil {
 		return
 	}
-	domain, key, ok := splitKVCompositeKeyView([]byte(e.mapKey))
+	domain, keyStr, ok := splitKVCompositeKeyString(e.mapKey)
 	if !ok {
 		return
 	}
-	id := string(e.address.Bytes()) + e.mapKey
-	if _, ok := kvs[id]; ok {
-		return
+	if scratch.kvs == nil {
+		scratch.kvs = make(map[kvDomainTouchKey]kvDomainJournalTouch)
 	}
 	touch := kvDomainJournalTouch{
 		addr:   e.address,
 		mapKey: e.mapKey,
 		domain: domain,
-		key:    append([]byte(nil), key...),
+		keyStr: keyStr,
 	}
 	if e.hadEntry {
 		touch.prevLoaded = true
 		if !e.prevEntry.deleted {
 			touch.prevExist = true
-			touch.prev = append([]byte(nil), e.prevEntry.val...)
+			touch.prev = e.prevEntry.val
 		}
 	} else if cur, ok := obj.kvDirty[e.mapKey]; ok && cur.prevLoaded {
 		touch.prevLoaded = true
 		touch.prevExist = cur.prevExists
-		touch.prev = append([]byte(nil), cur.prev...)
+		touch.prev = cur.prev
 	}
-	kvs[id] = touch
+	scratch.kvs[id] = touch
+	scratch.kvKeys = append(scratch.kvKeys, id)
 }
 
 func (s *StateDB) FlushDomainChangesSince(mark int, txNum uint64) error {
@@ -122,8 +158,12 @@ func (s *StateDB) publishDomainChangesSince(publisher StateDomainChangePublisher
 }
 
 func (s *StateDB) collectDomainChangesSince(mark int, txNum uint64) ([]*rawdb.StateDomainChange, error) {
+	return s.appendDomainChangesSince(nil, mark, txNum)
+}
+
+func (s *StateDB) appendDomainChangesSince(dst []*rawdb.StateDomainChange, mark int, txNum uint64) ([]*rawdb.StateDomainChange, error) {
 	if s == nil || !s.changeSet.enabled || s.changeSet.captureAtCommit {
-		return nil, nil
+		return dst, nil
 	}
 	if txNum == s.changeSet.endTxNum {
 		if err := s.stageFinalContractABIHistory(); err != nil {
@@ -137,16 +177,20 @@ func (s *StateDB) collectDomainChangesSince(mark int, txNum uint64) ([]*rawdb.St
 		mark = s.journal.length()
 	}
 	s.SetDomainChangeTxNum(txNum)
-	changes, err := s.collectJournalDomainChanges(s.journal.entries[mark:])
-	if err != nil {
-		return nil, err
+	var err error
+	if mark < s.journal.length() {
+		dst, err = s.appendJournalDomainChanges(dst, s.journal.entries[mark:])
+		if err != nil {
+			return nil, err
+		}
 	}
-	noJournalChanges, err := s.collectJournalDomainChanges(s.domainChangeNoJournal)
-	if err != nil {
-		return nil, err
+	if len(s.domainChangeNoJournal) > 0 {
+		dst, err = s.appendJournalDomainChanges(dst, s.domainChangeNoJournal)
+		if err != nil {
+			return nil, err
+		}
 	}
-	changes = append(changes, noJournalChanges...)
-	return changes, nil
+	return dst, nil
 }
 
 func (s *StateDB) finishDomainChangeFlush() {
@@ -157,116 +201,216 @@ func (s *StateDB) finishDomainChangeFlush() {
 	s.changeSet.journalMark = s.journal.length()
 }
 
-func (s *StateDB) collectJournalDomainChanges(entries []journalChange) ([]*rawdb.StateDomainChange, error) {
-	// Copy journal-owned slices exactly once into block-stage ownership. The
-	// values must remain stable across later transactions until the complete
-	// block changeset is encoded by FlushFinal.
-	accounts := make(map[tcommon.Address]accountDomainJournalTouch)
-	kvs := make(map[string]kvDomainJournalTouch)
-	storages := make(map[string]storageDomainJournalTouch)
-	generations := make(map[tcommon.Address]generationDomainJournalTouch)
+func (s *StateDB) appendJournalDomainChanges(dst []*rawdb.StateDomainChange, entries []journalChange) ([]*rawdb.StateDomainChange, error) {
+	if len(entries) == 0 {
+		return dst, nil
+	}
+	const maxRetainedTouchScratch = 256
+	scratch := s.changeSet.scratch
+	if scratch == nil {
+		scratch = &domainChangeCollectScratch{}
+		s.changeSet.scratch = scratch
+	}
+	defer func() {
+		if n := len(scratch.accountKeys); n > 0 {
+			if n > maxRetainedTouchScratch {
+				scratch.accounts = nil
+				scratch.accountKeys = nil
+			} else {
+				if n <= 4 {
+					for _, k := range scratch.accountKeys {
+						delete(scratch.accounts, k)
+					}
+				} else {
+					clear(scratch.accounts)
+				}
+				scratch.accountKeys = scratch.accountKeys[:0]
+			}
+		}
+		if n := len(scratch.generationKeys); n > 0 {
+			if n > maxRetainedTouchScratch {
+				scratch.generations = nil
+				scratch.generationKeys = nil
+			} else {
+				if n <= 4 {
+					for _, k := range scratch.generationKeys {
+						delete(scratch.generations, k)
+					}
+				} else {
+					clear(scratch.generations)
+				}
+				scratch.generationKeys = scratch.generationKeys[:0]
+			}
+		}
+		if n := len(scratch.kvKeys); n > 0 {
+			if n > maxRetainedTouchScratch {
+				scratch.kvs = nil
+				scratch.kvKeys = nil
+			} else {
+				if n <= 4 {
+					for _, k := range scratch.kvKeys {
+						delete(scratch.kvs, k)
+					}
+				} else {
+					clear(scratch.kvs)
+				}
+				clear(scratch.kvKeys)
+				scratch.kvKeys = scratch.kvKeys[:0]
+			}
+		}
+		if n := len(scratch.storageKeys); n > 0 {
+			if n > maxRetainedTouchScratch {
+				scratch.storages = nil
+				scratch.storageKeys = nil
+			} else {
+				if n <= 4 {
+					for _, k := range scratch.storageKeys {
+						delete(scratch.storages, k)
+					}
+				} else {
+					clear(scratch.storages)
+				}
+				scratch.storageKeys = scratch.storageKeys[:0]
+			}
+		}
+	}()
 
+	// Copy journal-owned slices into block-stage ownership only when a domain
+	// change actually emits. The values must remain stable across later
+	// transactions until the complete block changeset is encoded by FlushFinal.
 	for _, entry := range entries {
 		switch e := entry.(type) {
 		case accountChange:
-			if _, ok := accounts[e.address]; ok {
+			if scratch.accounts == nil {
+				scratch.accounts = make(map[tcommon.Address]accountDomainJournalTouch)
+			} else if _, ok := scratch.accounts[e.address]; ok {
 				continue
 			}
-			accounts[e.address] = accountDomainJournalTouch{
+			scratch.accounts[e.address] = accountDomainJournalTouch{
 				addr:      e.address,
-				prev:      append([]byte(nil), e.prevLatest...),
+				prev:      e.prevLatest,
 				prevExist: len(e.prevLatest) > 0 && !e.prevDeleted,
 			}
+			scratch.accountKeys = append(scratch.accountKeys, e.address)
 		case codeChange:
-			if _, ok := accounts[e.address]; ok {
+			if scratch.accounts == nil {
+				scratch.accounts = make(map[tcommon.Address]accountDomainJournalTouch)
+			} else if _, ok := scratch.accounts[e.address]; ok {
 				continue
 			}
-			accounts[e.address] = accountDomainJournalTouch{
+			scratch.accounts[e.address] = accountDomainJournalTouch{
 				addr:      e.address,
-				prev:      append([]byte(nil), e.prevLatest...),
+				prev:      e.prevLatest,
 				prevExist: len(e.prevLatest) > 0,
 			}
+			scratch.accountKeys = append(scratch.accountKeys, e.address)
 		case kvChange:
-			s.collectKVJournalTouch(kvs, &e)
+			s.collectKVJournalTouch(scratch, &e)
 		case *kvChange:
-			s.collectKVJournalTouch(kvs, e)
+			s.collectKVJournalTouch(scratch, e)
 		case contractMetadataKVChange:
-			s.collectKVJournalTouch(kvs, &e.kvChange)
+			s.collectKVJournalTouch(scratch, &e.kvChange)
 		case *storageChange:
-			id := string(e.address.Bytes()) + string(e.key.Bytes())
-			if _, ok := storages[id]; ok {
+			id := storageDomainTouchKey{addr: e.address, slot: e.key}
+			if scratch.storages == nil {
+				scratch.storages = make(map[storageDomainTouchKey]storageDomainJournalTouch)
+			} else if _, ok := scratch.storages[id]; ok {
 				continue
 			}
 			prevExist := e.prevExists && e.prev != (tcommon.Hash{})
-			var prev []byte
-			if prevExist {
-				prev = append([]byte(nil), e.prev.Bytes()...)
-			}
-			storages[id] = storageDomainJournalTouch{
+			scratch.storages[id] = storageDomainJournalTouch{
 				addr:      e.address,
 				slot:      e.key,
-				prev:      prev,
+				prev:      e.prev,
 				prevExist: prevExist,
 			}
+			scratch.storageKeys = append(scratch.storageKeys, id)
 		case kvResetChange:
-			if _, ok := generations[e.address]; ok {
+			if scratch.generations == nil {
+				scratch.generations = make(map[tcommon.Address]generationDomainJournalTouch)
+			} else if _, ok := scratch.generations[e.address]; ok {
 				continue
 			}
-			generations[e.address] = generationDomainJournalTouch{
+			scratch.generations[e.address] = generationDomainJournalTouch{
 				addr:      e.address,
 				prev:      e.prevGeneration,
 				prevExist: e.prevGenerationExists,
 			}
+			scratch.generationKeys = append(scratch.generationKeys, e.address)
 		case kvGenerationHistoryChange:
-			if _, ok := generations[e.address]; ok {
+			if scratch.generations == nil {
+				scratch.generations = make(map[tcommon.Address]generationDomainJournalTouch)
+			} else if _, ok := scratch.generations[e.address]; ok {
 				continue
 			}
-			generations[e.address] = generationDomainJournalTouch{
+			scratch.generations[e.address] = generationDomainJournalTouch{
 				addr:      e.address,
 				prev:      e.previous,
 				prevExist: e.prevExists,
 			}
+			scratch.generationKeys = append(scratch.generationKeys, e.address)
 		}
 	}
 
-	changes := make([]*rawdb.StateDomainChange, 0, len(accounts)+len(generations)+len(kvs)+len(storages))
-	for _, addr := range sortedAccountTouches(accounts) {
-		change, err := s.accountJournalDomainChange(accounts[addr])
+	if len(scratch.accountKeys) > 1 {
+		slices.SortFunc(scratch.accountKeys, func(a, b tcommon.Address) int { return bytes.Compare(a[:], b[:]) })
+	}
+	for _, addr := range scratch.accountKeys {
+		change, err := s.accountJournalDomainChange(scratch.accounts[addr])
 		if err != nil {
 			return nil, err
 		}
 		if change != nil {
-			changes = append(changes, s.prepareJournalDomainChange(change))
+			dst = append(dst, s.prepareJournalDomainChange(change))
 		}
 	}
-	for _, addr := range sortedGenerationTouches(generations) {
-		change, err := s.generationJournalDomainChange(generations[addr])
+	if len(scratch.generationKeys) > 1 {
+		slices.SortFunc(scratch.generationKeys, func(a, b tcommon.Address) int { return bytes.Compare(a[:], b[:]) })
+	}
+	for _, addr := range scratch.generationKeys {
+		change, err := s.generationJournalDomainChange(scratch.generations[addr])
 		if err != nil {
 			return nil, err
 		}
 		if change != nil {
-			changes = append(changes, s.prepareJournalDomainChange(change))
+			dst = append(dst, s.prepareJournalDomainChange(change))
 		}
 	}
-	for _, id := range sortedKVTouches(kvs) {
-		change, err := s.kvJournalDomainChange(kvs[id])
+	if len(scratch.kvKeys) > 1 {
+		slices.SortFunc(scratch.kvKeys, func(a, b kvDomainTouchKey) int {
+			if c := bytes.Compare(a.addr[:], b.addr[:]); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.mapKey, b.mapKey)
+		})
+	}
+	for _, id := range scratch.kvKeys {
+		change, err := s.kvJournalDomainChange(scratch.kvs[id])
 		if err != nil {
 			return nil, err
 		}
 		if change != nil {
-			changes = append(changes, s.prepareJournalDomainChange(change))
+			dst = append(dst, s.prepareJournalDomainChange(change))
 		}
 	}
-	for _, id := range sortedStorageTouches(storages) {
-		change, err := s.storageJournalDomainChange(storages[id])
+	if len(scratch.storageKeys) > 1 {
+		slices.SortFunc(scratch.storageKeys, func(a, b storageDomainTouchKey) int {
+			if c := bytes.Compare(a.addr[:], b.addr[:]); c != 0 {
+				return c
+			}
+			return bytes.Compare(a.slot[:], b.slot[:])
+		})
+	}
+	for _, id := range scratch.storageKeys {
+		change, err := s.storageJournalDomainChange(scratch.storages[id])
 		if err != nil {
 			return nil, err
 		}
 		if change != nil {
-			changes = append(changes, s.prepareJournalDomainChange(change))
+			dst = append(dst, s.prepareJournalDomainChange(change))
 		}
 	}
-	return changes, nil
+	return dst, nil
 }
 
 func (s *StateDB) accountJournalDomainChange(touch accountDomainJournalTouch) (*rawdb.StateDomainChange, error) {
@@ -278,11 +422,15 @@ func (s *StateDB) accountJournalDomainChange(touch accountDomainJournalTouch) (*
 	if touch.prevExist == nextExist && (!nextExist || bytes.Equal(touch.prev, next)) {
 		return nil, nil
 	}
+	var prev []byte
+	if len(touch.prev) > 0 {
+		prev = append([]byte(nil), touch.prev...)
+	}
 	return &rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainAccountLatest,
 		Owner:      touch.addr,
 		PrevExists: touch.prevExist,
-		Prev:       touch.prev,
+		Prev:       prev,
 		NextExists: nextExist,
 		Next:       next,
 	}, nil
@@ -320,8 +468,10 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 	if !ok {
 		return nil, nil
 	}
+	key := []byte(touch.keyStr)
 	prev := touch.prev
 	prevExist := touch.prevExist
+	prevOwned := false
 	if !touch.prevLoaded {
 		if hasFreshAccountKVGeneration(obj) {
 			recordFreshAccountKVPreimageReadAvoided()
@@ -329,16 +479,20 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 			prevExist = false
 		} else {
 			var err error
-			prev, prevExist, err = s.readAccountKVLatest(touch.addr, obj.accountKVGeneration, touch.domain, touch.key)
+			prev, prevExist, err = s.readAccountKVLatest(touch.addr, obj.accountKVGeneration, touch.domain, key)
 			if err != nil {
 				return nil, err
 			}
+			prevOwned = true
 		}
 	}
 	nextExist := !entry.deleted
 	next := entry.val
 	if prevExist == nextExist && (!nextExist || bytes.Equal(prev, next)) {
 		return nil, nil
+	}
+	if !prevOwned && len(prev) > 0 {
+		prev = append([]byte(nil), prev...)
 	}
 	var nextCopy []byte
 	if nextExist {
@@ -349,7 +503,7 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 		Owner:      touch.addr,
 		Generation: obj.accountKVGeneration,
 		Domain:     touch.domain,
-		Key:        touch.key,
+		Key:        key,
 		PrevExists: prevExist,
 		Prev:       prev,
 		NextExists: nextExist,
@@ -364,12 +518,16 @@ func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*
 	}
 	value := obj.storage[touch.slot].value
 	nextExist := value != (tcommon.Hash{})
+	if touch.prevExist == nextExist && (!nextExist || touch.prev == value) {
+		return nil, nil
+	}
+	var prev []byte
+	if touch.prevExist {
+		prev = append([]byte(nil), touch.prev[:]...)
+	}
 	var next []byte
 	if nextExist {
-		next = append([]byte(nil), value.Bytes()...)
-	}
-	if touch.prevExist == nextExist && (!nextExist || bytes.Equal(touch.prev, next)) {
-		return nil, nil
+		next = append([]byte(nil), value[:]...)
 	}
 	rowKey := s.storageRowKey(touch.addr, touch.slot).Bytes()
 	return &rawdb.StateDomainChange{
@@ -379,7 +537,7 @@ func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*
 		Domain:     kvdomains.ContractStorage,
 		Key:        rowKey,
 		PrevExists: touch.prevExist,
-		Prev:       touch.prev,
+		Prev:       prev,
 		NextExists: nextExist,
 		Next:       next,
 	}, nil
@@ -410,40 +568,4 @@ func (c *domainChangeSetCapture) prepareDomainChange(change *rawdb.StateDomainCh
 	change.TxNum = c.txNum
 	change.Seq = c.seq
 	return change
-}
-
-func sortedAccountTouches(touches map[tcommon.Address]accountDomainJournalTouch) []tcommon.Address {
-	out := make([]tcommon.Address, 0, len(touches))
-	for addr := range touches {
-		out = append(out, addr)
-	}
-	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Bytes(), out[j].Bytes()) < 0 })
-	return out
-}
-
-func sortedGenerationTouches(touches map[tcommon.Address]generationDomainJournalTouch) []tcommon.Address {
-	out := make([]tcommon.Address, 0, len(touches))
-	for addr := range touches {
-		out = append(out, addr)
-	}
-	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Bytes(), out[j].Bytes()) < 0 })
-	return out
-}
-
-func sortedKVTouches(touches map[string]kvDomainJournalTouch) []string {
-	out := make([]string, 0, len(touches))
-	for id := range touches {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedStorageTouches(touches map[string]storageDomainJournalTouch) []string {
-	out := make([]string, 0, len(touches))
-	for id := range touches {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
 }

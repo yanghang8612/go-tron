@@ -2588,3 +2588,41 @@ func TestIterateStateAccountKVAsOfPrefixCrossesGenerationReset(t *testing.T) {
 		t.Fatalf("account kv prefix as-of block 1 = %v, want acct/a=a1 acct/b=b2", got)
 	}
 }
+
+func BenchmarkWriteStateDomainChangeBlockRowsMultiOwner2000(b *testing.B) {
+	const numChanges = 2000
+	changes := make([]*StateDomainChange, numChanges)
+	val := bytes.Repeat([]byte{0x5a}, 32)
+	for i := range numChanges {
+		var owner common.Address
+		owner[0] = 0x41
+		binary.BigEndian.PutUint32(owner[16:], uint32(i/4))
+		var key [32]byte
+		binary.BigEndian.PutUint64(key[24:], uint64(i))
+		changes[i] = &StateDomainChange{
+			BlockNum:   82_000_000,
+			BlockHash:  common.Hash{0xaa},
+			TxNum:      100_000_000 + uint64(i/4),
+			Seq:        uint64(i + 1),
+			FlatDomain: StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 0,
+			Domain:     kvdomains.ContractStorage,
+			Key:        key[:],
+			PrevExists: true,
+			Prev:       val,
+			NextExists: true,
+			Next:       val,
+		}
+	}
+	db := ethrawdb.NewMemoryDatabase()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		batch := db.NewBatch()
+		if err := writeStateDomainChangeBlockRows(batch, changes, true, false); err != nil {
+			b.Fatal(err)
+		}
+		batch.Reset()
+	}
+}

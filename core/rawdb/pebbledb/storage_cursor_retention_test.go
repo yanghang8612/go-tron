@@ -16,7 +16,7 @@ func TestStorageCursorRetentionRoleIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Close()
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 20; i++ {
 		for _, k := range []string{"a", "z"} {
 			if err = engine.Set([]byte(k), []byte(fmt.Sprint(i)), pebble.NoSync); err != nil {
 				t.Fatal(err)
@@ -26,7 +26,7 @@ func TestStorageCursorRetentionRoleIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := engine.Metrics().Levels[0].Sublevels; got != 14 {
+	if got := engine.Metrics().Levels[0].Sublevels; got != 20 {
 		t.Fatalf("actual L0=%d", got)
 	}
 	db := &Database{db: engine, boundedPointGet: true}
@@ -43,13 +43,13 @@ func TestStorageCursorRetentionRoleIsolation(t *testing.T) {
 	if found, e := c.View([]byte("m"), func([]byte) error { t.Fatal("unexpected value"); return nil }); found || e != nil {
 		t.Fatalf("missing: %v %v", found, e)
 	}
-	if st := c.inner.Stats(); st.MaxRetained <= 4 || st.MaxRetained > 16 || st.TableFallbackAllLeased != 0 {
+	if st := c.inner.Stats(); st.MaxRetained <= 16 || st.MaxRetained > 32 || st.TableFallbackAllLeased != 0 {
 		t.Fatalf("canonical retention %+v", st)
 	}
 	if err = c.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Commitment keeps four; unbounded prefetch retains eight pairs.
+	// Commitment keeps four; unbounded prefetch retains sixteen pairs.
 	for _, prefix := range [][]byte{nil, []byte("m")} {
 		p, e := db.NewPointReadSnapshot()
 		if e != nil {
@@ -65,7 +65,7 @@ func TestStorageCursorRetentionRoleIsolation(t *testing.T) {
 		stats := r.(*pointReadCursor).getCursor.Stats()
 		want := uint64(4)
 		if len(prefix) == 0 {
-			want = 8
+			want = 16
 		}
 		if stats.MaxRetained != want || stats.TableFallbackAllLeased == 0 {
 			t.Fatalf("noncanonical retention %+v", stats)
@@ -79,7 +79,7 @@ func TestStorageCursorRetentionRoleIsolation(t *testing.T) {
 	}
 }
 
-func TestPrefetchRetentionRecoveryKeepsEightAndSnapshot(t *testing.T) {
+func TestPrefetchRetentionRecoveryKeepsSixteenAndSnapshot(t *testing.T) {
 	fs := &pointGetFailFS{FS: vfs.NewMem()}
 	cache := pebble.NewCache(0)
 	p, e := pebble.Open("recovery-retention", &pebble.Options{FS: fs, Cache: cache, Comparer: exactPointComparer, DisableAutomaticCompactions: true, L0StopWritesThreshold: 64})
@@ -89,7 +89,7 @@ func TestPrefetchRetentionRecoveryKeepsEightAndSnapshot(t *testing.T) {
 	}
 	d := &Database{db: p, boundedPointGet: true}
 	defer d.Close()
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 20; i++ {
 		for _, key := range []string{"a", "z"} {
 			if e = p.Set([]byte(key), []byte(fmt.Sprint(i)), pebble.NoSync); e != nil {
 				t.Fatal(e)
@@ -126,7 +126,7 @@ func TestPrefetchRetentionRecoveryKeepsEightAndSnapshot(t *testing.T) {
 		t.Fatalf("pinned missing retry: %t/%v", ok, e)
 	}
 	stats := r.(*pointReadCursor).getCursor.Stats()
-	if stats.MaxRetained != 8 || stats.TableFallbackAllLeased == 0 {
+	if stats.MaxRetained != 16 || stats.TableFallbackAllLeased == 0 {
 		t.Fatalf("recreated prefetch policy: %+v", stats)
 	}
 }

@@ -46,6 +46,7 @@ var (
 	stateChangeBlockPackRawCounter              = metrics.NewRegisteredCounter("state/history/changeset/block_pack/raw_blocks", nil)
 	stateChangeBlockRawBufferPool               = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 	stateChangeBlockDecodeBufferPool            = sync.Pool{New: func() any { return new([]byte) }}
+	stateChangeBlockRowsPool                    = sync.Pool{New: func() any { return new([]persistedStateDomainChange) }}
 )
 
 // NextStateTxRange returns the compact global txNum range for the next block.
@@ -323,7 +324,26 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 	if firstSeq == 0 {
 		return fmt.Errorf("rawdb: state domain change block %d starts at reserved sequence zero", blockNum)
 	}
-	rows := make([]persistedStateDomainChange, len(changes))
+	const stateChangeBlockPooledRowsMax = 32768
+	rowsPtr := stateChangeBlockRowsPool.Get().(*[]persistedStateDomainChange)
+	if cap(*rowsPtr) < len(changes) {
+		*rowsPtr = make([]persistedStateDomainChange, len(changes))
+	} else {
+		*rowsPtr = (*rowsPtr)[:len(changes)]
+	}
+	rows := *rowsPtr
+	releaseRows := func() {
+		if rowsPtr == nil {
+			return
+		}
+		clear(rows)
+		if cap(rows) <= stateChangeBlockPooledRowsMax {
+			*rowsPtr = rows[:0]
+			stateChangeBlockRowsPool.Put(rowsPtr)
+		}
+		rowsPtr = nil
+	}
+	defer releaseRows()
 	previousTxNum := first.TxNum
 	for i, change := range changes {
 		if change == nil {
@@ -367,6 +387,7 @@ func writeStateDomainChangeBlockRows(db ethdb.KeyValueWriter, changes []*StateDo
 		}
 		return err
 	}
+	releaseRows()
 	uncompressedBytes := rawBuffer.Len()
 	var chunkWork stateChangeChunkWork
 	var reuse *stateChangeChunkWork
@@ -699,20 +720,25 @@ func validateStateDomainChange(change *StateDomainChange) error {
 	if change == nil {
 		return errors.New("rawdb: nil StateDomainChange")
 	}
-	if _, err := stateDomainChangeLatestKey(change); err != nil {
-		return err
-	}
-	if change.PrevExists {
-		if _, err := stateDomainChangeCommitmentValue(change, change.Prev); err != nil {
-			return err
+	switch change.FlatDomain {
+	case StateFlatDomainAccountLatest:
+		return nil
+	case StateFlatDomainKVLatest:
+		if !kvdomains.IsRegistered(change.Domain) {
+			return fmt.Errorf("rawdb: unregistered change KV domain %#04x", uint16(change.Domain))
 		}
-	}
-	if change.NextExists {
-		if _, err := stateDomainChangeCommitmentValue(change, change.Next); err != nil {
-			return err
+		return nil
+	case StateFlatDomainKVGeneration:
+		if change.PrevExists && len(change.Prev) != 8 {
+			return fmt.Errorf("rawdb: bad KV generation change value length %d", len(change.Prev))
 		}
+		if change.NextExists && len(change.Next) != 8 {
+			return fmt.Errorf("rawdb: bad KV generation change value length %d", len(change.Next))
+		}
+		return nil
+	default:
+		return fmt.Errorf("rawdb: unknown state flat domain %d", uint8(change.FlatDomain))
 	}
-	return nil
 }
 
 func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {

@@ -163,7 +163,14 @@ type accountKVLatestBatch struct {
 	pending           map[accountKVLatestPendingMapKey]accountKVLatestPending
 	accountPending    map[tcommon.AccountID]accountLatestPending
 	generationPending map[tcommon.AccountID]kvGenerationPending
-	generation        func(tcommon.Address) (uint64, error)
+	// Per-block FIFO key buckets let prunePendingWithBatchState prune only
+	// keys touched in blocks <= cutoff instead of rescanning every map entry
+	// across the entire inflight window each block. If commitBlock ever moves
+	// backward, pendingBlocksBroken falls back safely to the full-map scan.
+	pendingBlocks       []pendingBlockKeys
+	pendingBlocksHead   int
+	pendingBlocksBroken bool
+	generation          func(tcommon.Address) (uint64, error)
 	changeSet         *domainChangeSetCapture
 	record            func(rawdb.StateCommitmentUpdate)
 	// commitBlock is the block number whose commit is currently writing through
@@ -259,6 +266,13 @@ type kvGenerationPending struct {
 	number     uint64
 	opLayer    uint64
 	hasOpLayer bool
+}
+
+type pendingBlockKeys struct {
+	number     uint64
+	kv         []accountKVLatestPendingMapKey
+	account    []tcommon.AccountID
+	generation []tcommon.AccountID
 }
 
 type accountKVIndexStore interface {
@@ -752,6 +766,12 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 	if w == nil {
 		return
 	}
+	if len(w.pending) == 0 && len(w.accountPending) == 0 && len(w.generationPending) == 0 {
+		w.pendingBlocks = nil
+		w.pendingBlocksHead = 0
+		w.pendingBlocksBroken = false
+		return
+	}
 	var (
 		minRem    uint64
 		hasMinRem bool
@@ -765,6 +785,97 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 		return hasMinRem && hasOpLayer && opLayer <= cutoff && opLayer < minRem
 	}
 	prunedKV := false
+	if !w.pendingBlocksBroken && len(w.pendingBlocks) > w.pendingBlocksHead {
+		end := w.pendingBlocksHead
+		dst := w.pendingBlocksHead
+		for ; end < len(w.pendingBlocks); end++ {
+			b := &w.pendingBlocks[end]
+			if b.number > cutoff {
+				break
+			}
+			keepKV := 0
+			for _, k := range b.kv {
+				e, ok := w.pending[k]
+				if !ok || e.number > cutoff {
+					continue
+				}
+				if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.kvPendingDurable(k, e) {
+					delete(w.pending, k)
+					if k.domain == kvdomains.AccountFrozenBandwidthAux {
+						w.pendingFrozenBandwidth--
+					}
+					prunedKV = true
+				} else {
+					b.kv[keepKV] = k
+					keepKV++
+				}
+			}
+			clear(b.kv[keepKV:])
+			b.kv = b.kv[:keepKV]
+
+			keepAcct := 0
+			for _, k := range b.account {
+				e, ok := w.accountPending[k]
+				if !ok || e.number > cutoff {
+					continue
+				}
+				if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.accountPendingDurable(k, e) {
+					delete(w.accountPending, k)
+				} else {
+					b.account[keepAcct] = k
+					keepAcct++
+				}
+			}
+			b.account = b.account[:keepAcct]
+
+			keepGen := 0
+			for _, k := range b.generation {
+				e, ok := w.generationPending[k]
+				if !ok || e.number > cutoff {
+					continue
+				}
+				if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.generationPendingDurable(k, e) {
+					delete(w.generationPending, k)
+				} else {
+					b.generation[keepGen] = k
+					keepGen++
+				}
+			}
+			b.generation = b.generation[:keepGen]
+
+			if len(b.kv) == 0 && len(b.account) == 0 && len(b.generation) == 0 {
+				*b = pendingBlockKeys{}
+			} else {
+				if dst != end {
+					w.pendingBlocks[dst] = *b
+					*b = pendingBlockKeys{}
+				}
+				dst++
+			}
+		}
+		if prunedKV {
+			w.pendingPrefixes = nil
+			w.pendingPrefixScans = 0
+		}
+		if dst == w.pendingBlocksHead {
+			w.pendingBlocksHead = end
+		} else if dst < end {
+			tail := copy(w.pendingBlocks[dst:], w.pendingBlocks[end:])
+			newLen := dst + tail
+			clear(w.pendingBlocks[newLen:])
+			w.pendingBlocks = w.pendingBlocks[:newLen]
+		}
+		if w.pendingBlocksHead == len(w.pendingBlocks) {
+			w.pendingBlocks = w.pendingBlocks[:0]
+			w.pendingBlocksHead = 0
+		} else if w.pendingBlocksHead >= 16 && w.pendingBlocksHead*2 >= len(w.pendingBlocks) {
+			rem := copy(w.pendingBlocks, w.pendingBlocks[w.pendingBlocksHead:])
+			clear(w.pendingBlocks[rem:])
+			w.pendingBlocks = w.pendingBlocks[:rem]
+			w.pendingBlocksHead = 0
+		}
+		return
+	}
 	for k, e := range w.pending {
 		if e.number > cutoff {
 			continue
@@ -796,6 +907,11 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 		if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.generationPendingDurable(k, e) {
 			delete(w.generationPending, k)
 		}
+	}
+	if len(w.pending) == 0 && len(w.accountPending) == 0 && len(w.generationPending) == 0 {
+		w.pendingBlocks = nil
+		w.pendingBlocksHead = 0
+		w.pendingBlocksBroken = false
 	}
 }
 
@@ -888,6 +1004,9 @@ func (w *accountKVLatestBatch) clearPending() {
 	w.pendingPrefixScans = 0
 	w.accountPending = nil
 	w.generationPending = nil
+	w.pendingBlocks = nil
+	w.pendingBlocksHead = 0
+	w.pendingBlocksBroken = false
 }
 
 func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value []byte) error {
@@ -1236,15 +1355,32 @@ func (w *accountKVLatestBatch) pendingPrefixKeys(group accountKVLatestPendingGro
 	return keys, true
 }
 
-func (w *accountKVLatestBatch) indexPendingKey(key accountKVLatestPendingMapKey) {
-	isFrozenBandwidth := key.domain == kvdomains.AccountFrozenBandwidthAux
-	if w.pendingPrefixes == nil && !isFrozenBandwidth {
+func (w *accountKVLatestBatch) currentPendingBlockBucket() *pendingBlockKeys {
+	if w.pendingBlocksBroken {
+		return nil
+	}
+	if len(w.pendingBlocks) > w.pendingBlocksHead {
+		last := &w.pendingBlocks[len(w.pendingBlocks)-1]
+		if last.number == w.commitBlock {
+			return last
+		}
+		if w.commitBlock < last.number {
+			w.pendingBlocksBroken = true
+			clear(w.pendingBlocks)
+			w.pendingBlocks = nil
+			w.pendingBlocksHead = 0
+			return nil
+		}
+	}
+	w.pendingBlocks = append(w.pendingBlocks, pendingBlockKeys{number: w.commitBlock})
+	return &w.pendingBlocks[len(w.pendingBlocks)-1]
+}
+
+func (w *accountKVLatestBatch) indexPendingKey(key accountKVLatestPendingMapKey, existed bool) {
+	if existed {
 		return
 	}
-	if _, exists := w.pending[key]; exists {
-		return
-	}
-	if isFrozenBandwidth {
+	if key.domain == kvdomains.AccountFrozenBandwidthAux {
 		w.pendingFrozenBandwidth++
 	}
 	if w.pendingPrefixes != nil {
@@ -1282,7 +1418,13 @@ func (w *accountKVLatestBatch) rememberPutWithKey(mapKey accountKVLatestPendingM
 		w.pending = make(map[accountKVLatestPendingMapKey]accountKVLatestPending)
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
-	w.indexPendingKey(mapKey)
+	prev, existed := w.pending[mapKey]
+	w.indexPendingKey(mapKey, existed)
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.kv = append(bucket.kv, mapKey)
+		}
+	}
 	w.pending[mapKey] = accountKVLatestPending{
 		value:      value,
 		number:     w.commitBlock,
@@ -1303,7 +1445,14 @@ func (w *accountKVLatestBatch) rememberAccountLatestPutOwned(owner tcommon.Addre
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
-	w.accountPending[owner.AccountID()] = accountLatestPending{
+	ownerID := owner.AccountID()
+	prev, existed := w.accountPending[ownerID]
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.account = append(bucket.account, ownerID)
+		}
+	}
+	w.accountPending[ownerID] = accountLatestPending{
 		value:      value,
 		number:     w.commitBlock,
 		opLayer:    opLayer,
@@ -1319,7 +1468,14 @@ func (w *accountKVLatestBatch) rememberAccountLatestDelete(owner tcommon.Address
 		w.accountPending = make(map[tcommon.AccountID]accountLatestPending)
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
-	w.accountPending[owner.AccountID()] = accountLatestPending{
+	ownerID := owner.AccountID()
+	prev, existed := w.accountPending[ownerID]
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.account = append(bucket.account, ownerID)
+		}
+	}
+	w.accountPending[ownerID] = accountLatestPending{
 		deleted:    true,
 		number:     w.commitBlock,
 		opLayer:    opLayer,
@@ -1335,7 +1491,14 @@ func (w *accountKVLatestBatch) rememberKVGenerationPut(owner tcommon.Address, ge
 		w.generationPending = make(map[tcommon.AccountID]kvGenerationPending)
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
-	w.generationPending[owner.AccountID()] = kvGenerationPending{
+	ownerID := owner.AccountID()
+	prev, existed := w.generationPending[ownerID]
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.generation = append(bucket.generation, ownerID)
+		}
+	}
+	w.generationPending[ownerID] = kvGenerationPending{
 		generation: generation,
 		number:     w.commitBlock,
 		opLayer:    opLayer,
@@ -1351,7 +1514,14 @@ func (w *accountKVLatestBatch) rememberKVGenerationDelete(owner tcommon.Address)
 		w.generationPending = make(map[tcommon.AccountID]kvGenerationPending)
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
-	w.generationPending[owner.AccountID()] = kvGenerationPending{
+	ownerID := owner.AccountID()
+	prev, existed := w.generationPending[ownerID]
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.generation = append(bucket.generation, ownerID)
+		}
+	}
+	w.generationPending[ownerID] = kvGenerationPending{
 		deleted:    true,
 		number:     w.commitBlock,
 		opLayer:    opLayer,
@@ -1368,7 +1538,13 @@ func (w *accountKVLatestBatch) rememberDelete(owner tcommon.Address, generation 
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
 	mapKey := accountKVLatestPendingKey(owner, generation, domain, logicalKey)
-	w.indexPendingKey(mapKey)
+	prev, existed := w.pending[mapKey]
+	w.indexPendingKey(mapKey, existed)
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.kv = append(bucket.kv, mapKey)
+		}
+	}
 	w.pending[mapKey] = accountKVLatestPending{
 		deleted:    true,
 		number:     w.commitBlock,
@@ -1386,7 +1562,13 @@ func (w *accountKVLatestBatch) rememberDeleteOwned(owner tcommon.Address, genera
 	}
 	opLayer, hasOpLayer := w.lastBatchOpLayer()
 	mapKey := accountKVLatestPendingKeyOwned(owner, generation, domain, logicalKey)
-	w.indexPendingKey(mapKey)
+	prev, existed := w.pending[mapKey]
+	w.indexPendingKey(mapKey, existed)
+	if !existed || prev.number != w.commitBlock {
+		if bucket := w.currentPendingBlockBucket(); bucket != nil {
+			bucket.kv = append(bucket.kv, mapKey)
+		}
+	}
 	w.pending[mapKey] = accountKVLatestPending{
 		deleted:    true,
 		number:     w.commitBlock,

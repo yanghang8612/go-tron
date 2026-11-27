@@ -294,11 +294,27 @@ func TestShieldedBestCacheLifecycleAndInvalidation(t *testing.T) {
 		t.Fatal("WriteCurrentMerkleTree did not invalidate shieldedBest")
 	}
 
-	// RevertToSnapshot invalidates cache cleanly.
+	// Non-shielded RevertToSnapshot preserves shieldedBest cache.
 	sdb.RecordShieldedBest(12, root)
 	snap := sdb.Snapshot()
+	nonShieldedAddr := testAddr(0x88)
+	sdb.AddBalance(nonShieldedAddr, 100)
 	sdb.RevertToSnapshot(snap)
+	if !sdb.ShieldedCurrentMatchesBest() {
+		t.Fatal("non-shielded RevertToSnapshot unexpectedly invalidated shieldedBest")
+	}
+	if handled, err := sdb.ShieldedAdvanceUnchangedBest(13); err != nil || !handled {
+		t.Fatalf("ShieldedAdvanceUnchangedBest(13) after non-shielded revert = (%v,%v), want (true,nil)", handled, err)
+	}
+
+	// Reverting a SystemShielded mutation invalidates shieldedBest cleanly.
+	shieldedSnap := sdb.Snapshot()
+	if err := sdb.WriteCurrentMerkleTree(&contractpb.IncrementalMerkleTree{Left: &contractpb.PedersenHash{Content: []byte{0x01}}}); err != nil {
+		t.Fatal(err)
+	}
+	sdb.RecordShieldedBest(13, root)
+	sdb.RevertToSnapshot(shieldedSnap)
 	if sdb.ShieldedCurrentMatchesBest() {
-		t.Fatal("RevertToSnapshot did not invalidate shieldedBest")
+		t.Fatal("shielded RevertToSnapshot did not invalidate shieldedBest")
 	}
 }

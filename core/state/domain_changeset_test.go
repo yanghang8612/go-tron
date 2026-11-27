@@ -785,3 +785,48 @@ func BenchmarkPrepareAccountDomainChange(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkCollectDomainChangesSince(b *testing.B) {
+	sdb := newTestStateDB(b)
+	contract := testAddr(0x55)
+	sdb.CreateAccount(contract, corepb.AccountType_Contract)
+	sender := testAddr(0x56)
+	sdb.CreateAccount(sender, corepb.AccountType_Normal)
+	sdb.AddBalance(sender, 1_000_000_000)
+	slot := tcommon.HexToHash("0x01")
+	sdb.SetState(contract, slot, tcommon.HexToHash("0x11"))
+	if _, err := sdb.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	disk := ethrawdb.NewMemoryDatabase()
+	b.ReportAllocs()
+	b.ResetTimer()
+	txSeq := uint64(0)
+	for b.Loop() {
+		if txSeq%490 == 0 {
+			b.StopTimer()
+			sdb.journal.reset()
+			sdb.BeginDomainChangeJournalCapture(disk, txSeq/490+1, tcommon.Hash{0x01}, txSeq+1, txSeq+500)
+			b.StartTimer()
+		}
+		mark := sdb.DomainChangeJournalMark()
+		sdb.SubBalance(sender, 1)
+		sdb.AddBalance(contract, 1)
+		var slotVal tcommon.Hash
+		slotVal[31] = byte(txSeq + 1)
+		slotVal[30] = byte((txSeq + 1) >> 8)
+		slotVal[29] = byte((txSeq + 1) >> 16)
+		slotVal[28] = byte((txSeq + 1) >> 24)
+		sdb.SetState(contract, slot, slotVal)
+		changes, err := sdb.collectDomainChangesSince(mark, txSeq+1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkCollectedDomainChanges = changes
+		sdb.finishDomainChangeFlush()
+		txSeq++
+	}
+}
+
+var benchmarkCollectedDomainChanges []*rawdb.StateDomainChange

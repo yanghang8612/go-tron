@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -42,6 +42,20 @@ type historyOwnerSpans struct {
 	spans                                 []historyOwnerSpan
 }
 
+type historyOwnerSpanBuildRun struct {
+	owner      common.Address
+	rows, size uint32
+}
+
+type historyOwnerSpansBuildWork struct {
+	runs    []historyOwnerSpanBuildRun
+	owners  map[common.Address]uint32
+	ordered []common.Address
+	payload []byte
+}
+
+var historyOwnerSpansBuildWorkPool = sync.Pool{New: func() any { return new(historyOwnerSpansBuildWork) }}
+
 // Owner spans are optional derived data, never authoritative rows. Their source
 // is the exact encoded canonical pack, not a block number or a mutable head.
 // Its normal materializer still authenticates all shared chunks and pack SHA.
@@ -58,12 +72,37 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 	if err != nil {
 		return nil, err
 	}
-	type run struct {
-		owner      common.Address
-		rows, size uint32
+	work := historyOwnerSpansBuildWorkPool.Get().(*historyOwnerSpansBuildWork)
+	defer func() {
+		if cap(work.runs) > 16384 {
+			work.runs = nil
+		} else {
+			work.runs = work.runs[:0]
+		}
+		if cap(work.ordered) > 16384 {
+			work.ordered = nil
+		} else {
+			work.ordered = work.ordered[:0]
+		}
+		if cap(work.payload) > 256<<10 {
+			work.payload = nil
+		} else {
+			work.payload = work.payload[:0]
+		}
+		if len(work.owners) > 4096 {
+			work.owners = nil
+		} else if work.owners != nil {
+			clear(work.owners)
+		}
+		historyOwnerSpansBuildWorkPool.Put(work)
+	}()
+
+	runs := work.runs[:0]
+	owners := work.owners
+	if owners == nil {
+		owners = make(map[common.Address]uint32)
 	}
-	var runs []run
-	owners := make(map[common.Address]uint32)
+	ordered := work.ordered[:0]
 	rowBytes, index := rows, uint64(0)
 	var scratch StateDomainChange
 	var previousTx uint64
@@ -95,33 +134,39 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 			runs[len(runs)-1].size += size
 		} else {
 			if len(runs) >= historyOwnerSpansMaxItems {
+				work.runs, work.owners, work.ordered = runs, owners, ordered
 				return nil, nil
 			}
-			runs = append(runs, run{owner: owner, rows: 1, size: size})
-		}
-		owners[owner] = 0
-		if len(owners) > historyOwnerSpansMaxItems {
-			return nil, nil
+			runs = append(runs, historyOwnerSpanBuildRun{owner: owner, rows: 1, size: size})
+			if _, exists := owners[owner]; !exists {
+				if len(owners) >= historyOwnerSpansMaxItems {
+					work.runs, work.owners, work.ordered = runs, owners, ordered
+					return nil, nil
+				}
+				owners[owner] = 0
+				ordered = append(ordered, owner)
+			}
 		}
 		index++
 		rows = rest
 	}
+	work.runs, work.owners, work.ordered = runs, owners, ordered
 	if known != nil && index != uint64(len(known)) {
 		return nil, errors.New("rawdb: owner span writer row count mismatch")
 	}
 	if index < 32 || len(owners) < 2 || uint64(len(raw))/index > 4096 {
 		return nil, nil // Few/huge rows do not justify an additional whole-source hash.
 	}
-	ordered := make([]common.Address, 0, len(owners))
-	for owner := range owners {
-		ordered = append(ordered, owner)
-	}
-	sort.Slice(ordered, func(i, j int) bool { return bytes.Compare(ordered[i][:], ordered[j][:]) < 0 })
+	slices.SortFunc(ordered, func(a, b common.Address) int { return bytes.Compare(a[:], b[:]) })
 	for i, owner := range ordered {
 		owners[owner] = uint32(i)
 	}
-	payload := make([]byte, 0, min(historyOwnerSpansMaxBytes, len(ordered)*21+len(runs)*6+128))
-	for _, n := range []uint64{block, uint64(len(raw)), first, uint64(len(raw) - len(rowBytes)), uint64(len(rowBytes)), index, uint64(len(ordered)), uint64(len(runs))} {
+	needCap := min(historyOwnerSpansMaxBytes, len(ordered)*21+len(runs)*6+128)
+	payload := work.payload[:0]
+	if cap(payload) < needCap {
+		payload = make([]byte, 0, needCap)
+	}
+	for _, n := range [8]uint64{block, uint64(len(raw)), first, uint64(len(raw) - len(rowBytes)), uint64(len(rowBytes)), index, uint64(len(ordered)), uint64(len(runs))} {
 		payload = binary.AppendUvarint(payload, n)
 	}
 	digest := blake2b.Sum256(pack)
@@ -134,14 +179,20 @@ func buildHistoryOwnerSpans(raw, pack []byte, block uint64, known []*StateDomain
 		payload = binary.AppendUvarint(payload, uint64(run.rows))
 		payload = binary.AppendUvarint(payload, uint64(run.size))
 	}
+	work.payload = payload
 	if len(payload) > historyOwnerSpansMaxBytes {
 		return nil, nil
 	}
 	digest = blake2b.Sum256(payload)
-	encoded := append([]byte(nil), historyOwnerSpansMagic[:]...)
-	encoded = binary.AppendUvarint(encoded, uint64(len(payload)))
-	encoded = append(encoded, digest[:]...)
-	return append(encoded, snappy.Encode(nil, payload)...), nil
+	var header [8 + binary.MaxVarintLen64 + 32]byte
+	copy(header[:8], historyOwnerSpansMagic[:])
+	lenEnd := 8 + binary.PutUvarint(header[8:], uint64(len(payload)))
+	copy(header[lenEnd:], digest[:])
+	headerLen := lenEnd + 32
+	encoded := make([]byte, headerLen+snappy.MaxEncodedLen(len(payload)))
+	copy(encoded[:headerLen], header[:headerLen])
+	comp := snappy.Encode(encoded[headerLen:], payload)
+	return encoded[:headerLen+len(comp)], nil
 }
 
 func splitHistoryOwnerRows(raw []byte) (uint64, []byte, error) {

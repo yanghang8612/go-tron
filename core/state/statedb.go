@@ -878,6 +878,7 @@ type domainChangeSetCapture struct {
 	journalMark     int
 	captureAtCommit bool
 	enabled         bool
+	scratch         *domainChangeCollectScratch
 }
 
 // AccountSnapshot is a compact view of the account envelope needed to hydrate
@@ -1005,8 +1006,9 @@ func (s *StateDB) SetDomainChangeSetWriter(writer ethdb.KeyValueWriter, blockNum
 // the range is present so later per-transaction flushes can fill earlier txNums
 // without changing the persisted StateTxRange contract.
 func (s *StateDB) SetDomainChangeSetWriterRange(writer ethdb.KeyValueWriter, blockNum uint64, blockHash tcommon.Hash, beginTxNum, endTxNum uint64) {
+	scratch := s.changeSet.scratch
 	if writer == nil {
-		s.changeSet = domainChangeSetCapture{}
+		s.changeSet = domainChangeSetCapture{scratch: scratch}
 		return
 	}
 	s.changeSet = domainChangeSetCapture{
@@ -1019,6 +1021,7 @@ func (s *StateDB) SetDomainChangeSetWriterRange(writer ethdb.KeyValueWriter, blo
 		journalMark:     s.journal.length(),
 		captureAtCommit: true,
 		enabled:         true,
+		scratch:         scratch,
 	}
 }
 
@@ -2091,11 +2094,12 @@ func (s *StateDB) RevertToSnapshot(id int) {
 		return
 	}
 	journalLen := s.snapshots[id]
-	s.journal.revert(s.stateObjects, s.witnesses, journalLen)
+	if s.journal.revert(s.stateObjects, s.witnesses, journalLen, s.shieldedBest.valid) {
+		s.shieldedBest = shieldedBestCache{}
+	}
 	// accountChange/codeChange/contractMetaChange may delete or replace an
 	// object in stateObjects. Never retain a pointer across journal replay.
 	s.lastStateObject = nil
-	s.shieldedBest = shieldedBestCache{}
 	s.snapshots = s.snapshots[:id]
 	if id < len(s.balanceTraceSnapshots) {
 		snap := s.balanceTraceSnapshots[id]

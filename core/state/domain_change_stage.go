@@ -93,11 +93,13 @@ func (s *DomainChangeStage) FlushFinal() error {
 }
 
 func (s *DomainChangeStage) collectPending(mark int, txNum uint64) error {
-	changes, err := s.state.collectDomainChangesSince(mark, txNum)
+	origLen := len(s.pending)
+	pending, err := s.state.appendDomainChangesSince(s.pending, mark, txNum)
 	if err != nil {
+		s.pending = s.pending[:origLen]
 		return err
 	}
-	s.pending = append(s.pending, changes...)
+	s.pending = pending
 	s.state.finishDomainChangeFlush()
 	return nil
 }

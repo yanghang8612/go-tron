@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -445,9 +446,35 @@ func (j *journal) length() int {
 	return len(j.entries)
 }
 
-func (j *journal) revert(stateObjects map[tcommon.Address]*stateObject, witnesses map[tcommon.Address]*types.Witness, to int) {
+func kvMapKeyIsShielded(mapKey string) bool {
+	return len(mapKey) >= 2 && kvdomains.KVDomain(uint16(mapKey[0])<<8|uint16(mapKey[1])) == kvdomains.SystemShielded
+}
+
+func journalEntryTouchesShielded(entry journalChange) bool {
+	switch e := entry.(type) {
+	case kvChange:
+		return e.address == tcommon.SystemAccountAddress && kvMapKeyIsShielded(e.mapKey)
+	case *kvChange:
+		return e != nil && e.address == tcommon.SystemAccountAddress && kvMapKeyIsShielded(e.mapKey)
+	case contractMetadataKVChange:
+		return e.address == tcommon.SystemAccountAddress && kvMapKeyIsShielded(e.mapKey)
+	case kvResetChange:
+		return e.address == tcommon.SystemAccountAddress
+	case accountChange:
+		return e.address == tcommon.SystemAccountAddress
+	case selfDestructChange:
+		return e.address == tcommon.SystemAccountAddress
+	}
+	return false
+}
+
+func (j *journal) revert(stateObjects map[tcommon.Address]*stateObject, witnesses map[tcommon.Address]*types.Witness, to int, checkShielded bool) bool {
+	revertedShielded := false
 	for i := len(j.entries) - 1; i >= to; i-- {
 		entry := j.entries[i]
+		if checkShielded && !revertedShielded && journalEntryTouchesShielded(entry) {
+			revertedShielded = true
+		}
 		entry.revert(stateObjects, witnesses)
 		if recyclable, ok := entry.(recyclableJournalChange); ok {
 			recyclable.release()
@@ -455,6 +482,7 @@ func (j *journal) revert(stateObjects map[tcommon.Address]*stateObject, witnesse
 		j.entries[i] = nil
 	}
 	j.entries = j.entries[:to]
+	return revertedShielded
 }
 
 func (j *journal) reset() {

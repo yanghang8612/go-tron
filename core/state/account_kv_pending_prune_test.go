@@ -922,3 +922,153 @@ func TestAccountKVLatestBatchDeepAsyncPruneSkipsDurableReadsWhenOpLayerProven(t 
 		t.Fatalf("misaligned o3 entry = (%q, %v, %v), want %q", val, ok, err, pruneTestVal(3))
 	}
 }
+
+func TestAccountKVLatestBatchPendingBucketsHandleOverwritesFrozenAndResiduals(t *testing.T) {
+	domain := kvdomains.AccountFrozenBandwidthAux
+	kOver := []byte("overwritten-key")
+	kDedup := []byte("intra-block-dedup")
+	kStay := []byte("stay-frozen-bw")
+	oShared := pruneTestOwner(10)
+	oStay := pruneTestOwner(11)
+
+	// 1. Cross-block overwrite + intra-block dedup + exact pendingFrozenBandwidth.
+	writer, buf := newPruneTestWriter(t, 8)
+	buf.BeginBlock(pruneBlockHash(1), 1)
+	writer.commitBlock = 1
+	if err := writer.DomainPut(oShared, domain, kOver, pruneTestVal(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.DomainPut(oShared, domain, kDedup, pruneTestVal(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.DomainPut(oShared, domain, kDedup, pruneTestVal(101)); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.pendingBlocks) != 1 || len(writer.pendingBlocks[0].kv) != 2 {
+		t.Fatalf("block 1 bucket = %+v, want 2 deduped keys", writer.pendingBlocks)
+	}
+
+	buf.BeginBlock(pruneBlockHash(2), 2)
+	writer.commitBlock = 2
+	if err := writer.DomainPut(oStay, domain, kStay, pruneTestVal(2)); err != nil {
+		t.Fatal(err)
+	}
+
+	buf.BeginBlock(pruneBlockHash(3), 3)
+	writer.commitBlock = 3
+	if err := writer.DomainPut(oShared, domain, kOver, pruneTestVal(3)); err != nil {
+		t.Fatal(err)
+	}
+	if got := writer.pendingFrozenBandwidth; got != 3 {
+		t.Fatalf("pendingFrozenBandwidth = %d, want 3", got)
+	}
+
+	// Prune block 1: kDedup drops, kOver stays (overwritten in block 3), pendingFrozenBandwidth -> 2.
+	buf.CommitBlock()
+	if err := writer.flushUpTo(1); err != nil {
+		t.Fatal(err)
+	}
+	if writer.pendingFrozenBandwidth != 2 {
+		t.Fatalf("pendingFrozenBandwidth after block 1 prune = %d, want 2", writer.pendingFrozenBandwidth)
+	}
+	if _, ok := writer.pending[accountKVLatestPendingKey(oShared, 0, domain, kDedup)]; ok {
+		t.Fatal("block 1 kDedup was not pruned")
+	}
+	if got, ok, err := writer.readLatest(oShared, 0, domain, kOver); err != nil || !ok || !bytes.Equal(got, pruneTestVal(3)) {
+		t.Fatalf("overwritten kOver after block 1 prune = (%q, %v, %v), want %q", got, ok, err, pruneTestVal(3))
+	}
+
+	// Prune through block 2: kStay drops, kOver still survives, pendingFrozenBandwidth -> 1.
+	buf.CommitBlock()
+	if err := writer.flushUpTo(2); err != nil {
+		t.Fatal(err)
+	}
+	if writer.pendingFrozenBandwidth != 1 {
+		t.Fatalf("pendingFrozenBandwidth after block 2 prune = %d, want 1", writer.pendingFrozenBandwidth)
+	}
+
+	// Prune block 3: kOver drops and all buckets clear.
+	buf.CommitBlock()
+	if err := writer.flushUpTo(3); err != nil {
+		t.Fatal(err)
+	}
+	if writer.pendingFrozenBandwidth != 0 || len(writer.pending) != 0 {
+		t.Fatalf("after full prune pendingFrozenBandwidth=%d len(pending)=%d", writer.pendingFrozenBandwidth, len(writer.pending))
+	}
+
+	// 2. deepAsync residual retention when one key's durable check fails, then succeeds later.
+	writer2, buf2 := newPruneTestWriter(t, 8)
+	writer2.deepAsync = true
+	oRes := pruneTestOwner(20)
+	oClean := pruneTestOwner(21)
+
+	buf2.BeginBlock(pruneBlockHash(1), 1)
+	writer2.commitBlock = 1
+	if err := writer2.DomainPut(oRes, kvdomains.SystemDelegation, []byte("res"), pruneTestVal(1)); err != nil {
+		t.Fatal(err)
+	}
+	// Make oRes fail durable check during flushUpTo(2) by hiding an uncommitted later layer 2 under tag 1.
+	buf2.CommitBlock() // block 1 committed
+
+	buf2.BeginBlock(pruneBlockHash(2), 2)
+	// First tag oClean at block 2 normally:
+	writer2.commitBlock = 2
+	if err := writer2.DomainPut(oClean, kvdomains.SystemDelegation, []byte("clean"), pruneTestVal(2)); err != nil {
+		t.Fatal(err)
+	}
+	buf2.BeginBlock(pruneBlockHash(3), 3)
+	// Commit block 2; keep block 3 active. Put another key in block 3.
+	buf2.CommitBlock()
+	writer2.commitBlock = 3
+	if err := writer2.DomainPut(oRes, kvdomains.SystemDelegation, []byte("later"), pruneTestVal(3)); err != nil {
+		t.Fatal(err)
+	}
+	// Flush block 1+2 via deepAsync=false first would drop; here test residual compaction directly:
+	if err := writer2.flushUpTo(2); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := writer2.pending[accountKVLatestPendingKey(oClean, 0, kvdomains.SystemDelegation, []byte("clean"))]; ok {
+		t.Fatal("block 2 oClean should be pruned")
+	}
+	if _, ok := writer2.pending[accountKVLatestPendingKey(oRes, 0, kvdomains.SystemDelegation, []byte("later"))]; !ok {
+		t.Fatal("block 3 later key should remain retained")
+	}
+}
+
+func BenchmarkAccountKVLatestBatchPrunePendingLag20(b *testing.B) {
+	const (
+		lagBlocks   = 20
+		kvPerBlock  = 2000
+		acctPerBlk  = 500
+		benchDomain = kvdomains.ContractStorage
+	)
+	writer := &accountKVLatestBatch{}
+	block := uint64(1)
+	owners := make([]tcommon.Address, kvPerBlock)
+	keys := make([][]byte, kvPerBlock)
+	val := bytes.Repeat([]byte{0x42}, 32)
+	for i := range kvPerBlock {
+		owners[i] = pruneTestOwner(i + 1)
+		keys[i] = bytes.Repeat([]byte{byte(i), byte(i >> 8)}, 16)
+	}
+	seedBlock := func(bn uint64) {
+		writer.commitBlock = bn
+		for i := range kvPerBlock {
+			writer.rememberPutOwned(pruneTestOwner(int(bn*kvPerBlock)+i+1), 0, benchDomain, keys[i], val)
+		}
+		for i := range acctPerBlk {
+			writer.rememberAccountLatestPutOwned(pruneTestOwner(int(bn*acctPerBlk)+i+1000000), val)
+		}
+	}
+	for ; block <= lagBlocks; block++ {
+		seedBlock(block)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		cutoff := block - lagBlocks
+		writer.prunePendingWithBatchState(cutoff, false)
+		seedBlock(block)
+		block++
+	}
+}

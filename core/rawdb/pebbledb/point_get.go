@@ -15,7 +15,7 @@ import (
 func pointReadGetCursorOptions(unbounded bool) pebble.GetCursorOptions {
 	opts := pebble.GetCursorOptions{UseL6Filters: unbounded}
 	if unbounded {
-		opts.MaxRetainedTables = 8
+		opts.MaxRetainedTables = 16
 	}
 	return opts
 }
