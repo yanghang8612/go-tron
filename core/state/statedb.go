@@ -309,7 +309,8 @@ type StateDB struct {
 	codeColdHistory StateCodeColdHistoryAtOrBefore
 	codeColdTxNum   uint64
 
-	cycleRewardSink CycleRewardSink
+	cycleRewardSink  CycleRewardSink
+	oldRewardVICache *OldRewardVICache
 
 	// This execution-confined scope is deliberately omitted from Copy. Shared
 	// commit readers must never recover it through their original StateDB.
@@ -749,6 +750,12 @@ func (r *commitScopeLatestReader) accountLatestForHydration(owner tcommon.Addres
 func (r *commitScopeLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {
 	if r == nil || r.writer == nil {
 		return 0, false, nil
+	}
+	if r.atomicScope == nil && r.state != nil && r.state.storageReadScope != nil {
+		if gen, exists, handled := r.writer.lookupPendingKVGeneration(owner); handled {
+			return gen, exists, nil
+		}
+		return rawdb.ReadStateKVGeneration(r.state.storageReadScope, owner)
 	}
 	return r.writer.readKVGeneration(owner)
 }

@@ -292,6 +292,7 @@ type BlockChain struct {
 	// apply (same discipline as proposalCache). See forks.VersionPassCache.
 	versionPassCache *forks.VersionPassCache
 	fc               *forks.ForkController
+	oldRewardVICache *state.OldRewardVICache
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -638,6 +639,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
 		proposalCache:     newProposalScanCache(),
 		versionPassCache:  forks.NewVersionPassCache(),
+		oldRewardVICache:  state.NewOldRewardVICache(),
 	}
 	persistedSafetyIncident, hasPersistedSafetyIncident, err := rawdb.ReadExecutionSafetyIncident(db)
 	if err != nil {
@@ -2818,6 +2820,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// it to pending on the new branch; drop the fork-pass memo so the re-applied
 	// branch re-evaluates each version from live fork-stats. See forks.VersionPassCache.
 	bc.versionPassCache.Reset()
+	if bc.oldRewardVICache != nil {
+		bc.oldRewardVICache.Reset()
+	}
 
 	// Rewind currentBlock to LCA so that applyBlock reads the correct parent root.
 	bc.currentBlock.Store(lcaBlock)
@@ -3293,6 +3298,7 @@ func (bc *BlockChain) prepareOpenState(statedb *state.StateDB) error {
 	// writes on StateDB's existing durable writer.
 	statedb.SetStateCodeReader(bc.buffer)
 	statedb.SetAccountKVIndexStore(bc.buffer)
+	statedb.SetOldRewardVICache(bc.oldRewardVICache)
 	return nil
 }
 

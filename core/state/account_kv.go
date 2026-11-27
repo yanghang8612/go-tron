@@ -1049,6 +1049,18 @@ func (w *accountKVLatestBatch) readKVGeneration(owner tcommon.Address) (uint64, 
 	return w.latestStore.ReadKVGeneration(owner)
 }
 
+func (w *accountKVLatestBatch) lookupPendingKVGeneration(owner tcommon.Address) (uint64, bool, bool) {
+	if w != nil {
+		if pending, ok := w.generationPending[owner.AccountID()]; ok {
+			if pending.deleted {
+				return 0, false, true
+			}
+			return pending.generation, true, true
+		}
+	}
+	return 0, false, false
+}
+
 func (w *accountKVLatestBatch) readLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) ([]byte, bool, error) {
 	if w != nil {
 		if pending, ok := w.pending[accountKVLatestPendingLookupKey(owner, generation, domain, logicalKey)]; ok {
@@ -2310,6 +2322,10 @@ func (s *StateDB) deleteAccountKVForObjectWithPrev(obj *stateObject, domain kvdo
 	if domain == kvdomains.SystemShielded {
 		s.shieldedBest = shieldedBestCache{}
 	}
+	if owner == tcommon.SystemAccountAddress && domain == kvdomains.SystemReward && s.oldRewardVICache != nil &&
+		(bytes.HasSuffix(key, []byte("-reward")) || bytes.HasSuffix(key, []byte("-vote"))) {
+		s.oldRewardVICache.Reset()
+	}
 	obj.setKVDirty(mk, entry)
 	invalidateAccountKVMaterialization(obj, domain)
 	obj.markDirty()
@@ -2427,6 +2443,9 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	clearAccountFrozenBandwidthCache(obj)
 	if owner == tcommon.SystemAccountAddress {
 		s.shieldedBest = shieldedBestCache{}
+		if s.oldRewardVICache != nil {
+			s.oldRewardVICache.Reset()
+		}
 	}
 	obj.accountKVGenerationDirty = true
 	obj.markDirty()

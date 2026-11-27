@@ -22,7 +22,7 @@ const (
 	defaultStateReadAheadQueueBlocks = 64
 	defaultStateReadAheadQueueBytes  = 16 << 20
 	maxTransferAssetPrefetchRows     = 256
-	maxStateReadAheadWorkers         = 4
+	maxStateReadAheadWorkers         = 8
 	maxStateReadAheadPlanRows        = 8192
 )
 
@@ -50,9 +50,10 @@ var (
 
 // StateReadAheadConfig bounds the non-consensus bulk-sync warmup pipeline.
 type StateReadAheadConfig struct {
-	Workers     int
-	QueueBlocks int
-	QueueBytes  int64
+	Workers                 int
+	QueueBlocks             int
+	QueueBytes              int64
+	SkipLegacyAssetPrefetch func() bool
 }
 
 // StateReadAheadStats is a point-in-time view of one session's warmup work.
@@ -90,10 +91,11 @@ type stateReadAheadJob struct {
 // StateReadAhead overlaps deterministic latest-state reads from decoded future
 // blocks with ordered canonical execution. It never validates or mutates state.
 type StateReadAhead struct {
-	db         ethdb.KeyValueReader
-	workers    int
-	queueBytes int64
-	work       chan stateReadAheadJob
+	db                      ethdb.KeyValueReader
+	workers                 int
+	queueBytes              int64
+	work                    chan stateReadAheadJob
+	skipLegacyAssetPrefetch func() bool
 
 	mu        sync.RWMutex
 	stopped   bool
@@ -133,7 +135,7 @@ func NewStateReadAhead(db ethdb.KeyValueReader, cfg StateReadAheadConfig) *State
 	}
 	workers := cfg.Workers
 	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0) / 4
+		workers = runtime.GOMAXPROCS(0) / 2
 		if workers < 1 {
 			workers = 1
 		}
@@ -150,10 +152,11 @@ func NewStateReadAhead(db ethdb.KeyValueReader, cfg StateReadAheadConfig) *State
 		queueBytes = defaultStateReadAheadQueueBytes
 	}
 	return &StateReadAhead{
-		db:         db,
-		workers:    workers,
-		queueBytes: queueBytes,
-		work:       make(chan stateReadAheadJob, queueBlocks),
+		db:                      db,
+		workers:                 workers,
+		queueBytes:              queueBytes,
+		work:                    make(chan stateReadAheadJob, queueBlocks),
+		skipLegacyAssetPrefetch: cfg.SkipLegacyAssetPrefetch,
 	}
 }
 
@@ -373,6 +376,7 @@ type stateReadAheadTarget struct {
 	contract           bool
 	owner              bool
 	delegationReceiver bool
+	mayCreate          bool
 	needsBandwidthV1   bool
 	needsBandwidthV2   bool
 	needsEnergyV2      bool
@@ -427,9 +431,18 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		}
 		p.recordRow(ok, err)
 		target := byID[id]
+		if err != nil {
+			return nil
+		}
+		if !ok {
+			if target.mayCreate {
+				rows.AddKVGeneration(target.address)
+			}
+			return nil
+		}
 		_, assetAccount := assetAccounts[target.address]
 		isDelegationSystem := delegationSystem && target.address == tcommon.SystemAccountAddress
-		if err != nil || !ok || (!target.contract && !target.owner && !target.delegationReceiver && len(target.permissions) == 0 && !assetAccount && !isDelegationSystem) {
+		if !target.contract && !target.owner && !target.delegationReceiver && len(target.permissions) == 0 && !assetAccount && !isDelegationSystem {
 			return nil
 		}
 		envelope, err := splitStateAccountV3(encoded)
@@ -535,6 +548,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			balanceRows++
 		}
 	}
+	skipLegacyAsset := p.skipLegacyAssetPrefetch != nil && p.skipLegacyAssetPrefetch()
 	for _, transfer := range assetTransfers {
 		tokenID, err := strconv.ParseInt(string(transfer.assetName), 10, 64)
 		if err != nil {
@@ -544,16 +558,20 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		prefetchKV(transfer.owner, kvdomains.AccountAssetV2, tokenKey, true, true)
 		prefetchKV(transfer.to, kvdomains.AccountAssetV2, tokenKey, true, true)
 	}
-	for _, transfer := range assetTransfers {
-		prefetchKV(transfer.owner, kvdomains.AccountAsset, transfer.assetName, false, true)
-		prefetchKV(transfer.to, kvdomains.AccountAsset, transfer.assetName, false, true)
+	if !skipLegacyAsset {
+		for _, transfer := range assetTransfers {
+			prefetchKV(transfer.owner, kvdomains.AccountAsset, transfer.assetName, false, true)
+			prefetchKV(transfer.to, kvdomains.AccountAsset, transfer.assetName, false, true)
+		}
 	}
 	for _, transfer := range assetTransfers {
-		legacyMeta := assetBytesKey(assetLegacyTag, transfer.assetName)
-		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, legacyMeta, false, false)
-		prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta), false, false)
-		prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsage, transfer.assetName, false, false)
-		prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTime, transfer.assetName, false, false)
+		if !skipLegacyAsset {
+			legacyMeta := assetBytesKey(assetLegacyTag, transfer.assetName)
+			prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, legacyMeta, false, false)
+			prefetchKV(tcommon.SystemAccountAddress, kvdomains.SystemAsset, assetBandwidthKey(legacyMeta), false, false)
+			prefetchKV(transfer.owner, kvdomains.AccountFreeAssetNetUsage, transfer.assetName, false, false)
+			prefetchKV(transfer.owner, kvdomains.AccountAssetOperationTime, transfer.assetName, false, false)
+		}
 
 		tokenID, err := strconv.ParseInt(string(transfer.assetName), 10, 64)
 		if err != nil {
@@ -730,6 +748,18 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 			add(value.GetTransparentToAddress(), false)
 		}
 		switch c := message.(type) {
+		case *contractpb.TransferContract:
+			if toIdx := add(c.ToAddress, false); toIdx >= 0 {
+				targets[toIdx].mayCreate = true
+			}
+		case *contractpb.AccountCreateContract:
+			if idx := add(c.AccountAddress, false); idx >= 0 {
+				targets[idx].mayCreate = true
+			}
+		case *contractpb.ShieldedTransferContract:
+			if toIdx := add(c.TransparentToAddress, false); toIdx >= 0 {
+				targets[toIdx].mayCreate = true
+			}
 		case *contractpb.TriggerSmartContract:
 			if ownerIdx >= 0 {
 				targets[ownerIdx].needsEnergyV2 = true
@@ -739,6 +769,9 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 		case *contractpb.UnDelegateResourceContract:
 			recordDelegation(c.GetOwnerAddress(), c.GetReceiverAddress(), c.GetResource())
 		case *contractpb.TransferAssetContract:
+			if toIdx := add(c.ToAddress, false); toIdx >= 0 {
+				targets[toIdx].mayCreate = true
+			}
 			if len(c.OwnerAddress) == tcommon.AddressLength && len(c.ToAddress) == tcommon.AddressLength {
 				owner := tcommon.BytesToAddress(c.OwnerAddress)
 				to := tcommon.BytesToAddress(c.ToAddress)

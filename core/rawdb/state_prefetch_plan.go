@@ -46,6 +46,10 @@ func (p *StatePrefetchPlan) AddAccount(owner common.Address) int {
 	return p.add(stateAccountLatestKey(owner), false)
 }
 
+func (p *StatePrefetchPlan) AddKVGeneration(owner common.Address) int {
+	return p.add(stateKVGenerationKey(owner), false)
+}
+
 func (p *StatePrefetchPlan) AddKV(owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) int {
 	return p.add(stateKVLatestKey(owner, generation, domain, key), true)
 }
@@ -60,6 +64,7 @@ func (p *StatePrefetchPlan) AddCode(hash common.Hash) int {
 // IsStatePrefetchKey recognizes the physical key shapes produced by the plan.
 func IsStatePrefetchKey(key []byte) bool {
 	return len(key) == len(stateAccountLatestPrefix)+common.AccountIDLength && bytes.HasPrefix(key, stateAccountLatestPrefix) ||
+		len(key) == len(stateKVGenerationPrefix)+common.AccountIDLength && bytes.HasPrefix(key, stateKVGenerationPrefix) ||
 		len(key) >= len(stateKVLatestPrefix)+common.AccountIDLength+8+2 && bytes.HasPrefix(key, stateKVLatestPrefix) ||
 		len(key) == len(stateCodePrefix)+common.HashLength && bytes.HasPrefix(key, stateCodePrefix)
 }

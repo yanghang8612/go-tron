@@ -577,3 +577,118 @@ func TestStateReadAheadWarmsDelegationAndVMSubrows(t *testing.T) {
 		t.Fatalf("delegation/VM read-ahead missed cache: base gets %d -> %d", before, after)
 	}
 }
+
+func TestStateReadAheadWarmsKVGenerationForMissingRecipient(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	owner, missingTo, witness := readAheadAddress(0x71), readAheadAddress(0x72), readAheadAddress(0x73)
+	for _, addr := range []tcommon.Address{owner, witness} {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: 1}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, addr, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Seed a tombstone generation on missingTo (e.g., previously selfdestructed)
+	// so ReadStateKVGeneration has a non-empty entry to warm too.
+	if err := rawdb.WriteStateKVGeneration(disk, missingTo, 4); err != nil {
+		t.Fatal(err)
+	}
+
+	xfer, err := anypb.New(&contractpb.TransferContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    missingTo.Bytes(),
+		Amount:       100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: []*corepb.Transaction{{
+			RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: xfer,
+			}}},
+		}},
+	})
+
+	base := &readAheadCountingReader{KeyValueReader: disk}
+	buffer := blockbuffer.New(base)
+	buffer.SetBaseReadCacheSize(1 << 20)
+	p := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 1})
+	defer p.Close()
+	if !p.EnqueueBlock(block, 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+
+	before := base.gets.Load()
+	gen, ok, err := rawdb.ReadStateKVGeneration(buffer, missingTo)
+	if err != nil || !ok || gen != 4 {
+		t.Fatalf("ReadStateKVGeneration = gen:%d ok:%t err:%v, want 4/true/nil", gen, ok, err)
+	}
+	if after := base.gets.Load(); after != before {
+		t.Fatalf("KVGeneration read-ahead missed cache: base gets %d -> %d", before, after)
+	}
+}
+
+func TestStateReadAheadSkipsLegacyAssetsWhenEnabled(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	owner, to, witness := readAheadAddress(0x81), readAheadAddress(0x82), readAheadAddress(0x83)
+	for _, addr := range []tcommon.Address{owner, to, witness, tcommon.SystemAccountAddress} {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: 3}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, addr, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assetName := []byte("1002000")
+	tokenKey := []byte("1002000")
+	_ = rawdb.WriteStateKVLatest(disk, owner, 3, kvdomains.AccountAssetV2, tokenKey, encodeAccountAuxInt64(50))
+	_ = rawdb.WriteStateKVLatest(disk, owner, 3, kvdomains.AccountAsset, assetName, encodeAccountAuxInt64(50))
+
+	base := &readAheadCountingReader{KeyValueReader: disk}
+	buffer := blockbuffer.New(base)
+	buffer.SetBaseReadCacheSize(1 << 20)
+	p := NewStateReadAhead(buffer, StateReadAheadConfig{
+		Workers:                 1,
+		SkipLegacyAssetPrefetch: func() bool { return true },
+	})
+	defer p.Close()
+	if !p.EnqueueBlock(readAheadTransferAssetBlock(t, owner, to, witness, assetName), 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+
+	stats := p.Stats()
+	if stats.AssetLegacyRows != 0 {
+		t.Fatalf("AssetLegacyRows = %d, want 0 when SkipLegacyAssetPrefetch is enabled", stats.AssetLegacyRows)
+	}
+	if stats.AssetV2Rows == 0 {
+		t.Fatalf("AssetV2Rows = 0, want > 0")
+	}
+
+	before := base.gets.Load()
+	if got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, owner, 3, kvdomains.AccountAssetV2, tokenKey); err != nil || !ok || len(got) == 0 {
+		t.Fatalf("AccountAssetV2 miss: ok=%t err=%v", ok, err)
+	}
+	if after := base.gets.Load(); after != before {
+		t.Fatalf("AccountAssetV2 should have been warmed: %d -> %d", before, after)
+	}
+}
+
+func TestStateReadAheadDefaultWorkers(t *testing.T) {
+	buffer := blockbuffer.New(rawdb.NewMemoryDatabase())
+	p := NewStateReadAhead(buffer, StateReadAheadConfig{})
+	if p.workers < 1 || p.workers > maxStateReadAheadWorkers {
+		t.Fatalf("workers = %d, want [1, %d]", p.workers, maxStateReadAheadWorkers)
+	}
+	explicit := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 12})
+	if explicit.workers != maxStateReadAheadWorkers {
+		t.Fatalf("explicit capped workers = %d, want %d", explicit.workers, maxStateReadAheadWorkers)
+	}
+}

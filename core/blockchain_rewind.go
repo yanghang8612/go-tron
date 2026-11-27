@@ -285,6 +285,9 @@ func (bc *BlockChain) RestartSyncFromHeightWithOptions(height uint64, genesis *p
 	}
 
 	emit("reset", 0)
+	if bc.oldRewardVICache != nil {
+		bc.oldRewardVICache.Reset()
+	}
 	bc.WaitForFlushSettled()
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("restart sync: pending async flush failed: %w", *errPtr)
@@ -1079,5 +1082,8 @@ func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Ha
 	bc.clearRewardAccountCache()
 	bc.clearWitnessBlockCache()
 	bc.clearForkStatsCache()
+	if bc.oldRewardVICache != nil {
+		bc.oldRewardVICache.Reset()
+	}
 	return nil
 }

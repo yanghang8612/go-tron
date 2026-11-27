@@ -385,3 +385,100 @@ func TestComputeVoterReward_MultipleWitnesses(t *testing.T) {
 		t.Fatalf("multi-witness: got %d, want 160", got)
 	}
 }
+
+type countingSnapshotReader struct {
+	rewardCalls int
+	voteCalls   int
+	rewards     map[int64]int64
+	votes       map[int64]int64
+}
+
+func (c *countingSnapshotReader) ReadCycleReward(cycle int64, _ []byte) int64 {
+	c.rewardCalls++
+	return c.rewards[cycle]
+}
+
+func (c *countingSnapshotReader) ReadCycleVote(cycle int64, _ []byte) int64 {
+	c.voteCalls++
+	return c.votes[cycle]
+}
+
+func (c *countingSnapshotReader) ReadWitnessVI(_ int64, _ []byte) *big.Int {
+	return new(big.Int)
+}
+
+func TestOldRewardSumOptSkipsVoteReadWhenRewardZero(t *testing.T) {
+	reader := &countingSnapshotReader{
+		rewards: map[int64]int64{1: 0, 2: 500, 3: 0, 4: 0},
+		votes:   map[int64]int64{1: 100, 2: 1000, 3: 100, 4: 100},
+	}
+	dp := state.NewDynamicProperties()
+	dp.SetNewRewardAlgorithmEffectiveCycle(10)
+	dp.SetAllowOldRewardOpt(true)
+	witness := tcommon.BytesToAddress([]byte{0x41, 0x05})
+	got := ComputeVoterReward(reader, dp, []VoteEntry{{Witness: witness, Count: 200}}, 1, 5)
+	if got != 100 {
+		t.Fatalf("got %d, want 100", got)
+	}
+	if reader.rewardCalls != 4 {
+		t.Fatalf("rewardCalls = %d, want 4", reader.rewardCalls)
+	}
+	if reader.voteCalls != 1 {
+		t.Fatalf("voteCalls = %d, want 1 (only non-zero reward cycle)", reader.voteCalls)
+	}
+}
+
+func BenchmarkOldRewardSumOpt(b *testing.B) {
+	const cycles = 1000
+	db := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(db)
+	seed, err := state.New(tcommon.Hash{}, sdb)
+	if err != nil {
+		b.Fatal(err)
+	}
+	witness := tcommon.BytesToAddress([]byte{0x41, 0x07})
+	for cycle := int64(1); cycle <= cycles; cycle++ {
+		if cycle%5 != 0 {
+			_ = seed.WriteCycleReward(cycle, witness.Bytes(), 1_000_000+cycle)
+			_ = seed.WriteCycleVote(cycle, witness.Bytes(), 10_000_000+cycle)
+		}
+	}
+	root, err := seed.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+	dp := state.NewDynamicProperties()
+	dp.SetNewRewardAlgorithmEffectiveCycle(cycles + 10)
+	dp.SetAllowOldRewardOpt(true)
+	dp.SetCurrentCycleNumber(cycles + 20)
+	votes := []VoteEntry{{Witness: witness, Count: 50_000}}
+
+	uncached, err := state.New(root, sdb)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cached, err := state.New(root, sdb)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cached.SetOldRewardVICache(state.NewOldRewardVICache())
+	// Warm the cache before benchmarking steady-state hits.
+	want := ComputeVoterReward(cached, dp, votes, 1, cycles+1)
+
+	b.Run("uncached_1000_cycles", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if got := ComputeVoterReward(uncached, dp, votes, 1, cycles+1); got != want {
+				b.Fatalf("got %d want %d", got, want)
+			}
+		}
+	})
+	b.Run("cached_1000_cycles", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if got := ComputeVoterReward(cached, dp, votes, 1, cycles+1); got != want {
+				b.Fatalf("got %d want %d", got, want)
+			}
+		}
+	})
+}

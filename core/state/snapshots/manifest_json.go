@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"unicode/utf8"
@@ -103,6 +104,11 @@ func marshalManifestJSON(m *Manifest) ([]byte, error) {
 	}
 
 	buf = append(buf, '}')
+	// manifestCacheCharge accounts for cap(data). Avoid retaining oversized
+	// spare capacity if rare string escaping triggered a slice growth.
+	if cap(buf)-len(buf) > 64<<10 {
+		buf = bytes.Clone(buf)
+	}
 	return buf, nil
 }
 
@@ -263,25 +269,150 @@ func appendJSONString(buf []byte, s string) []byte {
 	return buf
 }
 
+func uintDecimalLen(v uint64) int {
+	n := 1
+	for v >= 10 {
+		v /= 10
+		n++
+	}
+	return n
+}
+
+func intDecimalLen(v int64) int {
+	if v < 0 {
+		return 1 + uintDecimalLen(uint64(-v))
+	}
+	return uintDecimalLen(uint64(v))
+}
+
+func estimateChainIdentityJSONSize(c *ChainIdentity) int {
+	size := len(`{"chainId":`) + intDecimalLen(c.ChainID) +
+		len(`,"networkId":`) + intDecimalLen(int64(c.NetworkID)) +
+		len(`,"genesisHash":`) + 2 + len(c.GenesisHash) + 1
+	if c.ForkConfigHash != "" {
+		size += len(`,"forkConfigHash":`) + 2 + len(c.ForkConfigHash)
+	}
+	return size
+}
+
+func estimateProgressJSONSize(p *Progress) int {
+	size := 2
+	wrote := false
+	addUint := func(key string, val uint64) {
+		if val == 0 {
+			return
+		}
+		if wrote {
+			size++
+		}
+		size += len(key) + uintDecimalLen(val)
+		wrote = true
+	}
+	addUint(`"latestBuildTxNum":`, p.LatestBuildTxNum)
+	addUint(`"historyBuildTxNum":`, p.HistoryBuildTxNum)
+	addUint(`"accessorBuildTxNum":`, p.AccessorBuildTxNum)
+	addUint(`"commitmentFlushTxNum":`, p.CommitmentFlushTxNum)
+	addUint(`"hotPruneTxNum":`, p.HotPruneTxNum)
+	addUint(`"hotPruneBlockNum":`, p.HotPruneBlockNum)
+	addUint(`"stateChangeIndexPruneBlockNum":`, p.StateChangeIndexPruneBlockNum)
+	return size
+}
+
+func estimateSegmentRefsJSONSize(refs []SegmentRef) int {
+	size := 2
+	if len(refs) > 1 {
+		size += len(refs) - 1
+	}
+	for i := range refs {
+		size += estimateSegmentRefJSONSize(&refs[i])
+	}
+	return size
+}
+
 func estimateManifestJSONSize(m *Manifest) int {
-	size := 384 + len(m.CommitmentScheme)
+	if m == nil {
+		return 4
+	}
+	size := 2
+	wrote := false
+	if m.LatestStateTxNum != 0 {
+		size += len(`"latestStateTxNum":`) + uintDecimalLen(m.LatestStateTxNum)
+		wrote = true
+	}
+	if wrote {
+		size++
+	}
+	size += len(`"sourceRows":[`) +
+		uintDecimalLen(m.SourceRows[0]) + 1 +
+		uintDecimalLen(m.SourceRows[1]) + 1 +
+		uintDecimalLen(m.SourceRows[2]) +
+		len(`],"commitmentScheme":`) + 2 + len(m.CommitmentScheme) +
+		len(`,"elementVersion":`) + uintDecimalLen(uint64(m.ElementVersion)) +
+		len(`,"version":`) + uintDecimalLen(uint64(m.Version))
+	if m.Generation != 0 {
+		size += len(`,"generation":`) + uintDecimalLen(m.Generation)
+	}
+	if m.HistoryStagingResetEpoch != 0 {
+		size += len(`,"historyStagingResetEpoch":`) + uintDecimalLen(m.HistoryStagingResetEpoch)
+	}
+	size += len(`,"publishedUnix":`) + intDecimalLen(m.PublishedUnix) +
+		len(`,"visibleTxStart":`) + uintDecimalLen(m.VisibleTxStart) +
+		len(`,"visibleTxEnd":`) + uintDecimalLen(m.VisibleTxEnd)
 	if m.Chain != nil {
-		size += 128 + len(m.Chain.GenesisHash) + len(m.Chain.ForkConfigHash)
+		size += len(`,"chain":`) + estimateChainIdentityJSONSize(m.Chain)
 	}
 	if m.Progress != nil {
-		size += 256
+		size += len(`,"progress":`) + estimateProgressJSONSize(m.Progress)
 	}
-	for i := range m.Segments {
-		size += estimateSegmentRefJSONSize(&m.Segments[i])
+	size += len(`,"segments":`)
+	if m.Segments == nil {
+		size += 4
+	} else {
+		size += estimateSegmentRefsJSONSize(m.Segments)
 	}
-	for i := range m.Retired {
-		size += estimateSegmentRefJSONSize(&m.Retired[i])
+	if len(m.Retired) != 0 {
+		size += len(`,"retired":`) + estimateSegmentRefsJSONSize(m.Retired)
 	}
 	return size
 }
 
 func estimateSegmentRefJSONSize(seg *SegmentRef) int {
-	// Typical compact JSON wrapper and integer fields for SegmentRef (~220B)
-	// plus variable string fields, avoiding a second slice growth allocation.
-	return 240 + len(seg.Dataset) + len(seg.Kind) + len(seg.Path) + len(seg.Checksum) + len(seg.LookupRoot)
+	size := 2
+	wrote := false
+	if seg.Rows != 0 {
+		size += len(`"rows":`) + uintDecimalLen(seg.Rows)
+		wrote = true
+	}
+	if seg.Dataset != "" {
+		if wrote {
+			size++
+		}
+		size += len(`"dataset":`) + 2 + len(seg.Dataset)
+		wrote = true
+	}
+	if seg.Domain != 0 {
+		if wrote {
+			size++
+		}
+		size += len(`"domain":`) + uintDecimalLen(uint64(seg.Domain))
+		wrote = true
+	}
+	if wrote {
+		size++
+	}
+	size += len(`"kind":`) + 2 + len(seg.Kind) +
+		len(`,"fromTxNum":`) + uintDecimalLen(seg.FromTxNum) +
+		len(`,"toTxNum":`) + uintDecimalLen(seg.ToTxNum)
+	if seg.AggregationSteps != 0 {
+		size += len(`,"aggregationSteps":`) + uintDecimalLen(seg.AggregationSteps)
+	}
+	size += len(`,"path":`) + 2 + len(seg.Path) +
+		len(`,"size":`) + uintDecimalLen(seg.Size)
+	if seg.Checksum != "" {
+		size += len(`,"checksum":`) + 2 + len(seg.Checksum)
+	}
+	if seg.LookupRoot != "" {
+		size += len(`,"lookupRoot":`) + 2 + len(seg.LookupRoot)
+	}
+	return size
 }

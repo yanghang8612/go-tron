@@ -99,6 +99,7 @@ func TestStateDBCopyTopLevelFieldPolicy(t *testing.T) {
 		"changeSet": "reset-temporal-capture", "codeStore": "share-code-store",
 		"codeColdHistory": "share-immutable-reader", "codeColdTxNum": "copy",
 		"cycleRewardSink":        "reset-external-mutable-sink",
+		"oldRewardVICache":       "reset-execution-cache",
 		"storageReadScope":       "reset-execution-scope",
 		"storageReadScopeReader": "reset-execution-scope-reader",
 		"shieldedBest":           "reset-cache",

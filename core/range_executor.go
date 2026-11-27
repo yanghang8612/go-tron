@@ -259,7 +259,12 @@ func (e *canonicalRangeExecutor) enableStateReadAhead() {
 	if e == nil || e.bc == nil || e.bc.buffer == nil || e.readAhead != nil {
 		return
 	}
-	e.readAhead = state.NewStateReadAhead(e.bc.buffer, state.StateReadAheadConfig{})
+	e.readAhead = state.NewStateReadAhead(e.bc.buffer, state.StateReadAheadConfig{
+		SkipLegacyAssetPrefetch: func() bool {
+			dp := e.bc.DynProps()
+			return dp != nil && dp.AllowSameTokenName()
+		},
+	})
 	e.readAhead.Start()
 }
 

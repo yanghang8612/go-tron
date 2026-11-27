@@ -162,8 +162,48 @@ func TestMarshalManifestJSONRealistic10KMatchesEncodingJSON(t *testing.T) {
 		t.Fatalf("10k manifest mismatch (len got=%d want=%d)", len(got), len(want))
 	}
 	// Capacity should stay tightly sized so manifestCacheCharge isn't inflated.
-	if cap(got) > len(got)*2 {
+	if cap(got)-len(got) > 64<<10 {
 		t.Fatalf("overallocated capacity: len=%d cap=%d", len(got), cap(got))
+	}
+}
+
+func TestMarshalManifestJSONFitsTightCacheBudget(t *testing.T) {
+	m := makeBenchmarkManifest(10000)
+	// Include omitted-optional segments (.idx / .kv) matching production manifests.
+	for i := 0; i < len(m.Segments); i += 3 {
+		m.Segments[i].Rows = 0
+		m.Segments[i].AggregationSteps = 0
+		m.Segments[i].LookupRoot = ""
+	}
+	want, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := marshalManifestJSON(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("manifest mismatch (len got=%d want=%d)", len(got), len(want))
+	}
+	if cap(got) != len(got) {
+		t.Fatalf("expected exact capacity for ASCII manifest: len=%d cap=%d", len(got), cap(got))
+	}
+	wantCharge := manifestCacheCharge(want, m)
+	gotCharge := manifestCacheCharge(got, m)
+	if gotCharge > wantCharge+(32<<10) {
+		t.Fatalf("manifestCacheCharge inflated: got=%d want<=%d", gotCharge, wantCharge+(32<<10))
+	}
+
+	var cache manifestDecodeCache
+	budget := wantCharge + (1 << 20)
+	cache.retainPublished(got, m, budget)
+	cache.mu.Lock()
+	residentManifest := cache.manifest
+	residentCharge := cache.charge
+	cache.mu.Unlock()
+	if residentManifest == nil || residentCharge > budget {
+		t.Fatalf("retainPublished failed tight budget: resident=%v charge=%d budget=%d", residentManifest != nil, residentCharge, budget)
 	}
 }
 

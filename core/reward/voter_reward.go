@@ -31,6 +31,10 @@ type SnapshotReader interface {
 	ReadWitnessVI(cycle int64, addr []byte) *big.Int
 }
 
+type oldRewardVISumProvider interface {
+	OldRewardVISum(witness tcommon.Address, begin, end, currentCycle int64) (*big.Int, bool)
+}
+
 // ComputeVoterReward computes the pending reward for a voter across cycles
 // [beginCycle, endCycle). Uses the old pro-rata algorithm for cycles before
 // new_reward_algorithm_effective_cycle and the VI-based algorithm after.
@@ -53,7 +57,7 @@ func ComputeVoterReward(store SnapshotReader, dp *state.DynamicProperties, votes
 		// loses up to 1 SUN per old cycle relative to java's opt path — a latent
 		// reward (balance) fork once #79 is active.
 		if dp.AllowOldRewardOpt() {
-			reward += oldRewardSumOpt(store, votes, beginCycle, oldEnd)
+			reward += oldRewardSumOpt(store, votes, beginCycle, oldEnd, dp.CurrentCycleNumber())
 		} else {
 			reward += oldRewardSum(store, votes, beginCycle, oldEnd)
 		}
@@ -118,26 +122,45 @@ func viDifferenceReward(store SnapshotReader, votes []VoteEntry, beginCycle, end
 // returns REMARK == -1 when absent, so an absent cycle has reward == 0 and is
 // skipped). The whole-segment delta is floored ONCE per witness, matching java's
 // single divide and signum guard.
-func oldRewardSumOpt(store SnapshotReader, votes []VoteEntry, begin, end int64) int64 {
+func oldRewardSumOpt(store SnapshotReader, votes []VoteEntry, begin, end, currentCycle int64) int64 {
 	var reward int64
+	provider, hasCache := store.(oldRewardVISumProvider)
+	numScratch := new(big.Int)
+	denScratch := new(big.Int)
+	deltaScratch := new(big.Int)
 	for _, v := range votes {
-		viSum := new(big.Int)
-		for cycle := begin; cycle < end; cycle++ {
-			totalReward := store.ReadCycleReward(cycle, v.Witness.Bytes())
-			totalVote := store.ReadCycleVote(cycle, v.Witness.Bytes())
-			if totalReward == 0 || totalVote == 0 {
-				continue
+		var viSum *big.Int
+		if hasCache {
+			if cachedSum, ok := provider.OldRewardVISum(v.Witness, begin, end, currentCycle); ok {
+				viSum = cachedSum
 			}
-			delta := new(big.Int).Mul(big.NewInt(totalReward), DecimalOfViReward)
-			delta.Quo(delta, big.NewInt(totalVote))
-			viSum.Add(viSum, delta)
+		}
+		if viSum == nil {
+			viSum = new(big.Int)
+			witnessBytes := v.Witness.Bytes()
+			for cycle := begin; cycle < end; cycle++ {
+				totalReward := store.ReadCycleReward(cycle, witnessBytes)
+				if totalReward == 0 {
+					continue
+				}
+				totalVote := store.ReadCycleVote(cycle, witnessBytes)
+				if totalVote == 0 {
+					continue
+				}
+				numScratch.SetInt64(totalReward)
+				numScratch.Mul(numScratch, DecimalOfViReward)
+				denScratch.SetInt64(totalVote)
+				deltaScratch.Quo(numScratch, denScratch)
+				viSum.Add(viSum, deltaScratch)
+			}
 		}
 		if viSum.Sign() <= 0 {
 			continue
 		}
-		share := new(big.Int).Mul(viSum, big.NewInt(v.Count))
-		share.Quo(share, DecimalOfViReward)
-		reward += share.Int64()
+		numScratch.SetInt64(v.Count)
+		numScratch.Mul(viSum, numScratch)
+		numScratch.Quo(numScratch, DecimalOfViReward)
+		reward += numScratch.Int64()
 	}
 	return reward
 }
