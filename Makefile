@@ -117,6 +117,10 @@ system-test-cross-flows: gtron txsign
 # The crate is from 2019-era Rust (rand 0.4, blake2-rfc git rev); a recent
 # stable toolchain may need a pinned older `rust-toolchain` or `cargo +1.65`.
 # See docs/dev/shielded-merkle-audit.md for the verified Rust version.
+#
+# Go 1.27's cgo linker security check rejects LLVM/GCC LTO bitcode sections
+# carried by Rust sysroot objects inside librustzcash.a, so strip_zksnark_lto.sh
+# removes them after building.
 zksnark-deps:
 	@if [ ! -f third_party/librustzcash/Cargo.toml ]; then \
 		echo "third_party/librustzcash submodule missing — run \`git submodule update --init --recursive\` first."; \
@@ -127,6 +131,7 @@ zksnark-deps:
 		exit 1; \
 	}
 	cd third_party/librustzcash && cargo build --release --manifest-path librustzcash/Cargo.toml
+	./scripts/strip_zksnark_lto.sh third_party/librustzcash/target/release/librustzcash.a
 	@echo "Built third_party/librustzcash/target/release/librustzcash.{a,so,dylib}"
 
 # Sapling-enabled gtron build. CGO_ENABLED=1 serves both the librustzcash C ABI
