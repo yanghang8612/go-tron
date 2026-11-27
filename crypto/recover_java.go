@@ -3,6 +3,7 @@ package crypto
 import (
 	"errors"
 	"hash"
+	"strings"
 	"sync"
 
 	decdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
@@ -113,5 +114,5 @@ func recoveryYieldsInfinity(hash, recoverySig []byte) bool {
 	compact[0] = 27 + recid
 	copy(compact[1:], recoverySig[:ethcrypto.RecoveryIDOffset])
 	_, _, err := decdsa.RecoverCompact(compact[:], hash)
-	return err != nil && err.Error() == errInfinity.Error()
+	return errors.Is(err, decdsa.ErrPointNotOnCurve) && strings.Contains(err.Error(), errInfinity.Error())
 }
