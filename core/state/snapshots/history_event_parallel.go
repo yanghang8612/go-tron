@@ -14,7 +14,7 @@ import (
 // decision permits exactly two builders, not additional independent leases or
 // larger worker pools. Idle derived builders keep their original ordering.
 func (r *Runner) parallelHistoryEventReady(events, derived bool, now time.Time) bool {
-	return events && !derived && r.cfg.EventLogVersion == EventLogSegmentV4Version &&
+	return events && !derived && r.cfg.EventLogVersion >= EventLogSegmentV4Version &&
 		r.cfg.HeavyWorkGate != nil && r.throughputCatchup() && r.historySyncBudgetActive() &&
 		runtime.GOMAXPROCS(0) >= 8 && r.historyLoad.cpuBurstReady(now) &&
 		r.cfg.ParallelHistoryEventReady != nil && r.cfg.ParallelHistoryEventReady()

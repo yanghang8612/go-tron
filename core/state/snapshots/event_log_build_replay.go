@@ -68,10 +68,18 @@ func (s eventLogSnapshotStore) Close() error {
 }
 
 func buildEventLogV4ChainReplay(chain *rawdb.ChainDB, dir, relPath string, from, to uint64) (ref SegmentRef, err error) {
+	return buildEventLogChainReplayVersion(chain, dir, relPath, from, to, EventLogSegmentV4Version)
+}
+
+func buildEventLogV5ChainReplay(chain *rawdb.ChainDB, dir, relPath string, from, to uint64) (ref SegmentRef, err error) {
+	return buildEventLogChainReplayVersion(chain, dir, relPath, from, to, EventLogSegmentV5Version)
+}
+
+func buildEventLogChainReplayVersion(chain *rawdb.ChainDB, dir, relPath string, from, to uint64, version uint32) (ref SegmentRef, err error) {
 	snapshot, err := chain.NewKeyValueSnapshot()
 	if errors.Is(err, pointread.ErrKeyValueSnapshotUnsupported) {
 		eventReplayMetrics.unavailable.Inc(1)
-		return BuildEventLogV4SegmentFromReader(eventLogV3ChainReader{chain: chain, identities: newEventLogChainIdentityCache()}, dir, relPath, from, to)
+		return buildEventLogVersionFromReader(eventLogV3ChainReader{chain: chain, identities: newEventLogChainIdentityCache()}, dir, relPath, from, to, version)
 	}
 	if err != nil {
 		return ref, err
@@ -87,7 +95,29 @@ func buildEventLogV4ChainReplay(chain *rawdb.ChainDB, dir, relPath string, from,
 	view.KeyValueStore = eventLogSnapshotStore{KeyValueStore: chain.KeyValueStore, snapshot: snapshot}
 	replay := &eventLogBuildReplay{EventLogReader: eventLogV3ChainReader{chain: &view, identities: newEventLogChainIdentityCache()}, limit: eventLogReplayMemory}
 	defer eventReplayMetrics.record(replay)
-	return BuildEventLogV4SegmentFromReader(replay, dir, relPath, from, to)
+	return buildEventLogVersionFromReader(replay, dir, relPath, from, to, version)
+}
+
+func buildEventLogV5PairChainReplay(chain *rawdb.ChainDB, dir string, from, to uint64) (eventRef, indexRef SegmentRef, err error) {
+	snapshot, err := chain.NewKeyValueSnapshot()
+	if errors.Is(err, pointread.ErrKeyValueSnapshotUnsupported) {
+		eventReplayMetrics.unavailable.Inc(1)
+		return buildEventLogV5PairFromReaderWorkers(eventLogV3ChainReader{chain: chain, identities: newEventLogChainIdentityCache()}, dir, from, to, eventLogPayloadWorkers())
+	}
+	if err != nil {
+		return eventRef, indexRef, err
+	}
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			eventRef, indexRef = SegmentRef{}, SegmentRef{}
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	view := *chain
+	view.KeyValueStore = eventLogSnapshotStore{KeyValueStore: chain.KeyValueStore, snapshot: snapshot}
+	replay := &eventLogBuildReplay{EventLogReader: eventLogV3ChainReader{chain: &view, identities: newEventLogChainIdentityCache()}, limit: eventLogReplayMemory}
+	defer eventReplayMetrics.record(replay)
+	return buildEventLogV5PairFromReaderWorkers(replay, dir, from, to, eventLogPayloadWorkers())
 }
 
 // A build-local cache of owned verified rows. Exceeding the charged budget

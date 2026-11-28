@@ -418,8 +418,8 @@ func normalizedEventLogBuildVersion(version uint32) (uint32, error) {
 	if version == 0 {
 		version = EventLogSegmentVersion
 	}
-	if version != EventLogSegmentVersion && version != EventLogSegmentV4Version {
-		return 0, fmt.Errorf("snapshots: event-log build version %d is unsupported; use 2 or 4", version)
+	if version != EventLogSegmentVersion && version != EventLogSegmentV4Version && version != EventLogSegmentV5Version {
+		return 0, fmt.Errorf("snapshots: event-log build version %d is unsupported; use 2, 4, or 5", version)
 	}
 	return version, nil
 }
@@ -452,6 +452,13 @@ func buildEventLogPairFromChain(chain *rawdb.ChainDB, dir string, fromBlock, toB
 	version, err := normalizedEventLogBuildVersion(opts.Version)
 	if err != nil {
 		return nil, err
+	}
+	if version == EventLogSegmentV5Version {
+		ref, indexRef, err := buildEventLogV5PairChainReplay(chain, dir, fromBlock, toBlock)
+		if err != nil {
+			return nil, err
+		}
+		return []SegmentRef{ref, indexRef}, nil
 	}
 	if version == EventLogSegmentV4Version {
 		ref, err := BuildEventLogV4SegmentFromChain(chain, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
@@ -503,6 +510,13 @@ func buildEventLogPairFromReader(reader rawdb.EventLogReader, dir string, fromBl
 			}
 		}
 	}()
+	if version == EventLogSegmentV5Version {
+		ref, indexRef, err := buildEventLogV5PairFromReaderWorkers(reader, dir, fromBlock, toBlock, eventLogPayloadWorkers())
+		if err != nil {
+			return nil, err
+		}
+		return []SegmentRef{ref, indexRef}, nil
+	}
 	if version == EventLogSegmentV4Version {
 		ref, err := BuildEventLogV4SegmentFromReader(reader, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 		if err != nil {

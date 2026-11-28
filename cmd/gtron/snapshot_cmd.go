@@ -174,9 +174,42 @@ var (
 	}
 	snapshotEventLogVersionFlag = &cli.UintFlag{
 		Name:    "snapshot.event-log.version",
-		Usage:   "Main event-log snapshot writer version: 2 (legacy) or 4 (topic-deduplicated dictionary + framed Zstd)",
-		Value:   statesnapshots.EventLogSegmentV4Version,
+		Usage:   "Main event-log snapshot writer version: 2 (legacy), 4 (topic-deduplicated dictionary + framed Zstd), or 5 (compressed row/lookup + bloom sidecar)",
+		Value:   statesnapshots.EventLogSegmentV5Version,
 		EnvVars: []string{"GTRON_SNAPSHOT_EVENT_LOG_VERSION"},
+	}
+	snapshotCompactEventLogsFlag = &cli.BoolFlag{
+		Name:    "snapshot.compact-event-logs",
+		Usage:   "Enable gated background compaction of legacy/small event-log segments into 65k-block V5+V3 pairs",
+		Value:   true,
+		EnvVars: []string{"GTRON_SNAPSHOT_COMPACT_EVENT_LOGS"},
+	}
+	snapshotEventLogCompactTargetBlocksFlag = &cli.Uint64Flag{
+		Name:  "target-blocks",
+		Usage: "Target maximum block span per compacted event-log segment",
+		Value: 65_536,
+	}
+	snapshotEventLogCompactMaxSourcesFlag = &cli.IntFlag{
+		Name:  "max-source-segments",
+		Usage: "Maximum source segments merged in a single batch",
+		Value: 128,
+	}
+	snapshotEventLogCompactMaxSourceMiBFlag = &cli.Uint64Flag{
+		Name:  "max-source-mib",
+		Usage: "Soft cap on total source main segment bytes (MiB) per compaction batch",
+		Value: 256,
+	}
+	snapshotEventLogCompactMaxPassesFlag = &cli.IntFlag{
+		Name:  "max-passes",
+		Usage: "Maximum compaction batches to run (0 = drain until settled)",
+	}
+	snapshotEventLogCompactDryRunFlag = &cli.BoolFlag{
+		Name:  "dry-run",
+		Usage: "Plan the next event-log compaction batches without writing or publishing changes",
+	}
+	snapshotEventLogCompactRetainFlag = &cli.BoolFlag{
+		Name:  "retain-obsolete",
+		Usage: "Keep replaced event-log files on disk instead of deleting retired obsolete files",
 	}
 	snapshotEventLogV4MergeFlag = &cli.Uint64Flag{
 		Name:  "snapshot.event-log.merge",
@@ -472,6 +505,23 @@ func snapshotCommand() *cli.Command {
 					snapshotEventLogV4PublishFlag,
 				},
 				Action: snapshotMigrateEventLogsV4Cmd,
+			},
+			{
+				Name:        "compact-event-logs",
+				Usage:       "Compact legacy or small event-log segments into 65k-block V5+V3 pairs",
+				Description: "Merges consecutive event-log segments into compressed V5 main segments + V3 bloom filter indexes, verifies outputs, atomically updates manifest.json, and reclaims obsolete retired files.",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+					snapshotEventLogCompactTargetBlocksFlag,
+					snapshotEventLogCompactMaxSourcesFlag,
+					snapshotEventLogCompactMaxSourceMiBFlag,
+					snapshotEventLogCompactMaxPassesFlag,
+					snapshotEventLogCompactDryRunFlag,
+					snapshotEventLogCompactRetainFlag,
+					snapshotHistoryMigrateJSONFlag,
+				},
+				Action: snapshotCompactEventLogsCmd,
 			},
 			{
 				Name:  "prune-chain-lookups",
@@ -1795,10 +1845,55 @@ func contextOrBackground(ctx *cli.Context) context.Context {
 	return context.Background()
 }
 
+func snapshotCompactEventLogsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	dir := snapshotDir(ctx, cfg.DataDir)
+	maxPasses := ctx.Int("max-passes")
+	maxSourceMiB := ctx.Uint64("max-source-mib")
+	compCfg := statesnapshots.EventLogCompactionConfig{
+		TargetBlocks:           ctx.Uint64("target-blocks"),
+		MaxSourceSegments:      ctx.Int("max-source-segments"),
+		MaxSourceMainBytes:     maxSourceMiB << 20,
+		RetainObsoleteSegments: ctx.Bool("retain-obsolete"),
+		DryRun:                 ctx.Bool("dry-run"),
+	}
+	var results []statesnapshots.EventLogCompactionResult
+	for pass := 0; maxPasses <= 0 || pass < maxPasses; pass++ {
+		res, err := statesnapshots.CompactEventLogsContext(contextOrBackground(ctx), dir, compCfg)
+		if err != nil {
+			return err
+		}
+		if !res.Compacted && !res.DryRun {
+			break
+		}
+		results = append(results, res)
+		if res.DryRun {
+			break
+		}
+		compCfg.MinFromBlockHint = res.FromBlock
+	}
+	if ctx.Bool("json") {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(results)
+	}
+	var totalBefore, totalAfter uint64
+	var deletedFiles, retiredTrimmed int
+	for _, r := range results {
+		totalBefore += r.SourceMainBytes + r.SourceIndexBytes
+		totalAfter += r.NewMainBytes + r.NewIndexBytes
+		deletedFiles += r.DeletedFiles
+		retiredTrimmed += r.RetiredTrimmed
+	}
+	fmt.Printf("Event-log compaction finished: batches=%d before=%s after=%s deletedFiles=%d retiredTrimmed=%d\n",
+		len(results), formatIEC(totalBefore), formatIEC(totalAfter), deletedFiles, retiredTrimmed)
+	return nil
+}
+
 func snapshotEventLogBuildVersion(ctx *cli.Context) (uint32, error) {
 	version := uint32(ctx.Uint("snapshot.event-log.version"))
-	if version != statesnapshots.EventLogSegmentVersion && version != statesnapshots.EventLogSegmentV4Version {
-		return 0, fmt.Errorf("--snapshot.event-log.version must be 2 or 4, got %d", version)
+	if version != statesnapshots.EventLogSegmentVersion && version != statesnapshots.EventLogSegmentV4Version && version != statesnapshots.EventLogSegmentV5Version {
+		return 0, fmt.Errorf("--snapshot.event-log.version must be 2, 4, or 5, got %d", version)
 	}
 	return version, nil
 }

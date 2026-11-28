@@ -1460,8 +1460,8 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read event-log segment: %v", err)
 	}
-	if len(rawSegment) < 8 || string(rawSegment[:8]) != "gtevlg4\n" {
-		t.Fatalf("event-log does not use V4 magic")
+	if len(rawSegment) < 8 || string(rawSegment[:8]) != "gtevlg5\n" {
+		t.Fatalf("event-log does not use V5 magic")
 	}
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {
@@ -3077,10 +3077,14 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 	return cli.NewContext(app, set, nil)
 }
 
-func TestSnapshotEventLogBuildVersionDefaultsToV4AndAllowsRollback(t *testing.T) {
+func TestSnapshotEventLogBuildVersionDefaultsToV5AndAllowsRollback(t *testing.T) {
 	version, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, nil))
+	if err != nil || version != statesnapshots.EventLogSegmentV5Version {
+		t.Fatalf("default event-log version = %d/%v, want V5", version, err)
+	}
+	version, err = snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "4"}))
 	if err != nil || version != statesnapshots.EventLogSegmentV4Version {
-		t.Fatalf("default event-log version = %d/%v, want V4", version, err)
+		t.Fatalf("rollback event-log version = %d/%v, want V4", version, err)
 	}
 	version, err = snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "2"}))
 	if err != nil || version != statesnapshots.EventLogSegmentVersion {
@@ -3088,6 +3092,104 @@ func TestSnapshotEventLogBuildVersionDefaultsToV4AndAllowsRollback(t *testing.T)
 	}
 	if _, err := snapshotEventLogBuildVersion(makeSnapshotRestoreTestContext(t, []string{"--snapshot.event-log.version", "99"})); err == nil {
 		t.Fatal("unsupported event-log version was accepted")
+	}
+}
+
+func TestSnapshotCompactEventLogsCmd(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	dir := filepath.Join(root, "snapshot")
+	seedCtx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", dir,
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	db, err := openPebbleDB(seedCtx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	defer db.Close()
+	chainDB := rawdb.NewChainDB(db, nil)
+	addr := []byte{0x41, 0x77, 0x78, 0x79, 0x7a}
+	topic := common.Hash{0x11}
+	for _, height := range []uint64{1, 2} {
+		blk, txHash, _ := snapshotCmdBlockWithTx(t, height)
+		if err := rawdb.WriteBlock(db, blk); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, height, []*corepb.TransactionInfo{{
+			Id: txHash[:], BlockNumber: int64(height),
+			Log: []*corepb.TransactionInfo_Log{{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{byte(height)}}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Seed two legacy V4+V2 pairs.
+	res1, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(chainDB, 1, 1, statesnapshots.EventLogBuildOptions{Version: statesnapshots.EventLogSegmentV4Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res2, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithBuildOptions(chainDB, 2, 2, statesnapshots.EventLogBuildOptions{Version: statesnapshots.EventLogSegmentV4Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res1.Segments) != 2 || len(res2.Segments) != 2 {
+		t.Fatalf("unexpected seed segments: %d / %d", len(res1.Segments), len(res2.Segments))
+	}
+
+	makeCtx := func(args []string) *cli.Context {
+		app := cli.NewApp()
+		app.Flags = []cli.Flag{
+			dataDirFlag,
+			snapshotDirFlag,
+			snapshotEventLogCompactTargetBlocksFlag,
+			snapshotEventLogCompactMaxSourcesFlag,
+			snapshotEventLogCompactMaxSourceMiBFlag,
+			snapshotEventLogCompactMaxPassesFlag,
+			snapshotEventLogCompactDryRunFlag,
+			snapshotEventLogCompactRetainFlag,
+			snapshotHistoryMigrateJSONFlag,
+		}
+		set := flag.NewFlagSet("compact-event-logs-test", flag.ContinueOnError)
+		for _, f := range app.Flags {
+			if err := f.Apply(set); err != nil {
+				t.Fatalf("apply flag: %v", err)
+			}
+		}
+		if err := set.Parse(args); err != nil {
+			t.Fatalf("parse flags: %v", err)
+		}
+		return cli.NewContext(app, set, nil)
+	}
+
+	if err := snapshotCompactEventLogsCmd(makeCtx([]string{"--snapshot.dir", dir, "--dry-run", "--json"})); err != nil {
+		t.Fatalf("dry-run compact-event-logs: %v", err)
+	}
+	if err := snapshotCompactEventLogsCmd(makeCtx([]string{"--snapshot.dir", dir, "--json"})); err != nil {
+		t.Fatalf("compact-event-logs: %v", err)
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Retired) != 0 {
+		t.Fatalf("manifest still has retired refs: %+v", manifest.Retired)
+	}
+	var eventCount, indexCount int
+	for _, ref := range manifest.Segments {
+		if ref.Kind == statesnapshots.SegmentEventLog {
+			eventCount++
+			if ref.FromTxNum != 1 || ref.ToTxNum != 2 {
+				t.Fatalf("unexpected merged event ref [%d,%d]", ref.FromTxNum, ref.ToTxNum)
+			}
+		} else if ref.Kind == statesnapshots.SegmentEventLogIndex {
+			indexCount++
+		}
+	}
+	if eventCount != 1 || indexCount != 1 {
+		t.Fatalf("event=%d index=%d, want 1/1", eventCount, indexCount)
 	}
 }
 

@@ -239,8 +239,13 @@ type Config struct {
 	// BuildEventLogs builds registered cold event-log sidecars for the same
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
+	// CompactEventLogs enables gated background merging of legacy/small
+	// event-log pairs into 65k-block V5 segments + V3 compact filter indexes.
+	CompactEventLogs   bool
+	EventLogCompaction EventLogCompactionConfig
 	// EventLogVersion selects the main event-log writer. Zero/2 retains the
-	// legacy V2 writer; 4 writes topic-deduplicated dictionary/framed segments.
+	// legacy V2 writer; 4 writes topic-deduplicated dictionary/framed segments;
+	// 5 writes compressed row/lookup segments with V3 filter indexes.
 	EventLogVersion uint32
 	// ColdChainVerificationCache carries the exact locally built event-log and
 	// index pair into the chain-freezer lifecycle's semantic-proof cache. Only

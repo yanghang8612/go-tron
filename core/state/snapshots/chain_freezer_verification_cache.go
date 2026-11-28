@@ -566,6 +566,45 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 	return nil
 }
 
+// pruneEventLogIndexRecords drops retired event-log-index entries replaced by
+// compaction so in-memory and persistent verification caches shrink smoothly.
+func (c *ChainFreezerVerificationCache) pruneEventLogIndexRecords(replaced []SegmentRef) {
+	if c == nil || len(replaced) == 0 {
+		return
+	}
+	paths := make(map[string]struct{}, len(replaced))
+	for _, ref := range replaced {
+		if ref.Path != "" {
+			paths[ref.Path] = struct{}{}
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prunedKeys := make(map[string]struct{})
+	for recordKey, record := range c.eventPersistent {
+		if _, ok := paths[record.Index.Path]; ok {
+			prunedKeys[recordKey] = struct{}{}
+			delete(c.eventPersistent, recordKey)
+			c.dirty = true
+		}
+	}
+	if len(prunedKeys) > 0 {
+		for key := range c.eventVerified {
+			if _, ok := prunedKeys[key.recordKey]; ok {
+				delete(c.eventVerified, key)
+			}
+		}
+	}
+	if c.dirty && !c.shouldDeferEventPersistLocked(now) {
+		_ = c.persistPendingLocked()
+	}
+	c.updateMetricsLocked()
+}
+
 func (c *ChainFreezerVerificationCache) shouldDeferEventPersistLocked(now time.Time) bool {
 	if c.dir == "" || len(c.eventPersistent) <= chainFreezerEventPersistDeferThreshold {
 		return false

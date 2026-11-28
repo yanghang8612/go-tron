@@ -28,6 +28,8 @@ import (
 const (
 	eventLogV3HeaderSize       = 176
 	eventLogV3RowFrameRows     = 256
+	eventLogV5RowFrameRows     = 512
+	eventLogV5FrameStoredRaw   = uint32(1 << 31)
 	eventLogV3PayloadTarget    = 32 << 10
 	eventLogV3FrameDirEntry    = 32
 	eventLogV3LookupHeaderSize = 16
@@ -89,25 +91,32 @@ type eventLogV3Header struct {
 }
 
 type eventLogV3Reader struct {
-	header            eventLogV3Header
-	rowFrameCount     uint64
-	payloadFrames     uint64
-	blockCount        uint64
-	txCount           uint64
-	addressCount      uint64
-	topicCount        uint64
-	cacheFrame        uint64
-	cacheRows         []eventLogV3Row
-	cacheFrameValid   bool
-	cachePayload      uint64
-	cachePayloadBytes []byte
-	cachePayloadValid bool
-	cacheAddressBlock uint64
-	cacheAddressKeys  [][]byte
-	cacheAddressValid bool
-	topicLookup       eventLogV3LookupV2Header
-	cacheTopicBlocks  map[uint64][][]byte
-	cacheTopicOrder   []uint64
+	version              uint32
+	header               eventLogV3Header
+	rowFrameCount        uint64
+	payloadFrames        uint64
+	blockCount           uint64
+	txCount              uint64
+	addressCount         uint64
+	topicCount           uint64
+	cacheFrame           uint64
+	cacheRows            []eventLogV3Row
+	cacheFrameValid      bool
+	cachePayload         uint64
+	cachePayloadBytes    []byte
+	cachePayloadValid    bool
+	cacheAddressBlock    uint64
+	cacheAddressKeys     [][]byte
+	cacheAddressValid    bool
+	addressLookupVersion int
+	addressLookupV3      eventLogV3LookupV2Header
+	addressLookupV4      eventLogLookupV4Header
+	topicLookupVersion   int
+	topicLookup          eventLogV3LookupV2Header
+	topicLookupV4        eventLogLookupV4Header
+	topicBlockKeys       uint32
+	cacheTopicBlocks     map[uint64][][]byte
+	cacheTopicOrder      []uint64
 }
 
 type eventLogV3Frame struct {
@@ -247,6 +256,15 @@ func BuildEventLogV4SegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, 
 	})
 }
 
+func BuildEventLogV5SegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	if chain == nil {
+		return SegmentRef{}, errors.New("snapshots: nil chain database")
+	}
+	return buildAnchoredEventLogFromChain(chain, toBlock, func() (SegmentRef, error) {
+		return buildEventLogV5ChainReplay(chain, dir, relPath, fromBlock, toBlock)
+	})
+}
+
 type EventLogV4PhysicalStats struct {
 	HeaderBytes             uint64 `json:"headerBytes"`
 	BlockDictionaryBytes    uint64 `json:"blockDictionaryBytes"`
@@ -273,8 +291,8 @@ func InspectEventLogV4Physical(dir string, ref SegmentRef) (EventLogV4PhysicalSt
 		return EventLogV4PhysicalStats{}, err
 	}
 	defer seg.Close()
-	if seg.header.version != EventLogSegmentV4Version {
-		return EventLogV4PhysicalStats{}, fmt.Errorf("snapshots: event log %q is version %d, want V4", ref.Path, seg.header.version)
+	if !isEventLogCompactSegmentVersion(seg.header.version) {
+		return EventLogV4PhysicalStats{}, fmt.Errorf("snapshots: event log %q is version %d, want V4 or V5", ref.Path, seg.header.version)
 	}
 	h := seg.v3.header
 	out := EventLogV4PhysicalStats{
@@ -287,7 +305,11 @@ func InspectEventLogV4Physical(dir string, ref SegmentRef) (EventLogV4PhysicalSt
 		if err != nil {
 			return EventLogV4PhysicalStats{}, err
 		}
-		out.MaxRowFrameReadBytes = max(out.MaxRowFrameReadBytes, uint64(frame.dataLen))
+		storedLen := frame.dataLen
+		if seg.header.version == EventLogSegmentV5Version {
+			storedLen &^= eventLogV5FrameStoredRaw
+		}
+		out.MaxRowFrameReadBytes = max(out.MaxRowFrameReadBytes, uint64(storedLen))
 	}
 	for i := uint64(0); i < seg.v3.payloadFrames; i++ {
 		frame, err := readEventLogV3FrameAt(seg.file, h.payloadDirOffset, i, seg.v3.payloadFrames)
@@ -318,12 +340,12 @@ func InspectEventLogV4Physical(dir string, ref SegmentRef) (EventLogV4PhysicalSt
 }
 
 func maxEventLogV3LookupKeyAtRead(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return 0, err
 	}
-	if !compact {
-		return uint64(keySize + eventLogV3LookupKeyTail), nil
+	if format == eventLogLookupV4Format {
+		return maxEventLogLookupV4KeyAtRead(file, offset, length, size, keySize)
 	}
 	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
 	if err != nil {
@@ -342,45 +364,14 @@ func maxEventLogV3LookupKeyAtRead(file io.ReaderAt, offset, length, size uint64,
 }
 
 func maxEventLogV3LookupRead(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return 0, err
 	}
-	if compact {
-		return maxEventLogV3LookupV2Read(file, offset, length, size, keySize)
+	if format == eventLogLookupV4Format {
+		return maxEventLogLookupV4Read(file, offset, length, size, keySize)
 	}
-	keys, frames, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
-	if err != nil {
-		return 0, err
-	}
-	entrySize := uint64(keySize + eventLogV3LookupKeyTail)
-	frameDir := offset + eventLogV3LookupHeaderSize + keys*entrySize
-	var searchReads uint64
-	for n := keys; n > 0; n >>= 1 {
-		searchReads += entrySize
-	}
-	var maximum uint64
-	for i := uint64(0); i < keys; i++ {
-		var tail [eventLogV3LookupKeyTail]byte
-		if _, err := file.ReadAt(tail[:], int64(offset+eventLogV3LookupHeaderSize+i*entrySize+uint64(keySize))); err != nil {
-			return 0, err
-		}
-		first := binary.BigEndian.Uint64(tail[0:8])
-		count := uint64(binary.BigEndian.Uint32(tail[8:12]))
-		if first+count > frames {
-			return 0, errors.New("snapshots: V4 lookup frame range outside directory")
-		}
-		read := searchReads + count*eventLogV3LookupFrameEntry
-		for j := uint64(0); j < count; j++ {
-			var raw [eventLogV3LookupFrameEntry]byte
-			if _, err := file.ReadAt(raw[:], int64(frameDir+(first+j)*eventLogV3LookupFrameEntry)); err != nil {
-				return 0, err
-			}
-			read += uint64(binary.BigEndian.Uint32(raw[8:12]))
-		}
-		maximum = max(maximum, read)
-	}
-	return maximum, nil
+	return maxEventLogV3LookupV2Read(file, offset, length, size, keySize)
 }
 
 func maxEventLogV3LookupV2Read(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, error) {
@@ -435,6 +426,29 @@ func (b *eventLogV3LookupBuild) length() uint64 {
 	return eventLogV3LookupHeaderSize + uint64(len(b.keys))*(b.keySize+eventLogV3LookupKeyTail) + uint64(len(b.frames))*eventLogV3LookupFrameEntry + b.dataLen
 }
 
+type eventLogLookupAny interface {
+	close()
+	length() uint64
+}
+
+func buildEventLogV5PairFromReaderWorkers(reader rawdb.EventLogReader, dir string, fromBlock, toBlock uint64, workers int) (SegmentRef, SegmentRef, error) {
+	eventRef, addressKeys, topicKeys, err := buildEventLogCompactSegmentWithKeys(reader, dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, EventLogSegmentV5Version, workers)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, err
+	}
+	indexRef, err := writeEventLogIndexV3Segment(dir, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      EventLogIndexSegmentPath(fromBlock, toBlock),
+	}, addressKeys, topicKeys)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, err
+	}
+	return eventRef, indexRef, nil
+}
+
 // BuildEventLogV4SegmentFromReader rewrites a continuously covered immutable
 // range without opening chaindata. It performs two passes over the pinned
 // reader so large protobuf payloads are never retained in memory.
@@ -442,34 +456,56 @@ func BuildEventLogV4SegmentFromReader(reader rawdb.EventLogReader, dir, relPath 
 	return buildEventLogV4SegmentFromReaderWorkers(reader, dir, relPath, fromBlock, toBlock, eventLogPayloadWorkers())
 }
 
+// BuildEventLogV5SegmentFromReader writes a compressed-row, compact-lookup V5
+// segment without opening chaindata.
+func BuildEventLogV5SegmentFromReader(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	ref, _, _, err := buildEventLogCompactSegmentWithKeys(reader, dir, relPath, fromBlock, toBlock, EventLogSegmentV5Version, eventLogPayloadWorkers())
+	return ref, err
+}
+
+func buildEventLogVersionFromReader(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, version uint32) (SegmentRef, error) {
+	if version == EventLogSegmentV5Version {
+		return BuildEventLogV5SegmentFromReader(reader, dir, relPath, fromBlock, toBlock)
+	}
+	return BuildEventLogV4SegmentFromReader(reader, dir, relPath, fromBlock, toBlock)
+}
+
 func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, workers int) (SegmentRef, error) {
+	ref, _, _, err := buildEventLogCompactSegmentWithKeys(reader, dir, relPath, fromBlock, toBlock, EventLogSegmentV4Version, workers)
+	return ref, err
+}
+
+func buildEventLogCompactSegmentWithKeys(reader rawdb.EventLogReader, dir, relPath string, fromBlock, toBlock uint64, version uint32, workers int) (SegmentRef, []string, []string, error) {
+	if !isEventLogCompactSegmentVersion(version) {
+		return SegmentRef{}, nil, nil, fmt.Errorf("snapshots: unsupported compact event-log version %d", version)
+	}
 	if reader == nil {
-		return SegmentRef{}, errors.New("snapshots: nil V3 event log reader")
+		return SegmentRef{}, nil, nil, errors.New("snapshots: nil V3 event log reader")
 	}
 	if dir == "" {
-		return SegmentRef{}, errors.New("snapshots: V4 event log directory is empty")
+		return SegmentRef{}, nil, nil, errors.New("snapshots: V4 event log directory is empty")
 	}
 	if toBlock < fromBlock {
-		return SegmentRef{}, fmt.Errorf("snapshots: V4 event log range [%d,%d] is inverted", fromBlock, toBlock)
+		return SegmentRef{}, nil, nil, fmt.Errorf("snapshots: V4 event log range [%d,%d] is inverted", fromBlock, toBlock)
 	}
 	covered, err := reader.EventLogRangeCovered(fromBlock, toBlock)
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	if !covered {
-		return SegmentRef{}, fmt.Errorf("snapshots: V4 event log reader does not cover [%d,%d]", fromBlock, toBlock)
+		return SegmentRef{}, nil, nil, fmt.Errorf("snapshots: V4 event log reader does not cover [%d,%d]", fromBlock, toBlock)
 	}
 	if relPath == "" {
 		relPath = EventLogSegmentPath(fromBlock, toBlock)
 	}
 	ref := SegmentRef{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: fromBlock, ToTxNum: toBlock, Path: filepath.ToSlash(relPath)}
 	if err := validateSegmentRef(ref); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 
 	blocks, txHashes, addresses, topics, rowCount, err := scanEventLogV3Dictionaries(reader, fromBlock, toBlock)
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	blockIDs := make(map[uint64]uint64, len(blocks))
 	for i, block := range blocks {
@@ -496,33 +532,51 @@ func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, r
 
 	leafDir := filepath.Join(dir, filepath.Dir(ref.Path))
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	rowData, rowName, err := createStateDomainChangeBinaryTempFileInDir(leafDir, "event-log-v3-row")
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	defer func() { _ = rowData.Close(); _ = os.Remove(rowName) }()
 	payloadData, payloadName, err := createStateDomainChangeBinaryTempFileInDir(leafDir, "event-log-v3-payload")
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	defer func() { _ = payloadData.Close(); _ = os.Remove(payloadName) }()
 
-	rowFrames, payloadFrames, addressPostings, topicPostings, err := writeEventLogV3Frames(reader, fromBlock, toBlock, rowCount, blockIDs, txHashes, addressIDs, topicIDs, addresses, topics, rowData, payloadData, workers)
-	if err != nil {
-		return SegmentRef{}, err
+	rowFrameRows := uint64(eventLogV3RowFrameRows)
+	if version == EventLogSegmentV5Version {
+		rowFrameRows = eventLogV5RowFrameRows
 	}
-	addressLookup, err := buildEventLogV3Lookup(leafDir, "event-log-v3-address", eventLogAddressLookupKeySize, addressPostings)
+	rowFrames, payloadFrames, addressPostings, topicPostings, err := writeEventLogV3FramesWithVersion(reader, fromBlock, toBlock, rowCount, version, rowFrameRows, blockIDs, txHashes, addressIDs, topicIDs, addresses, topics, rowData, payloadData, workers)
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
-	defer addressLookup.close()
-	topicLookup, err := buildEventLogV3Lookup(leafDir, "event-log-v3-topic", eventLogTopicLookupKeySize, topicPostings)
-	if err != nil {
-		return SegmentRef{}, err
+	var addressLookup, topicLookup eventLogLookupAny
+	if version == EventLogSegmentV5Version {
+		addressLookup, err = buildEventLogLookupV4(leafDir, "event-log-v5-address", eventLogAddressLookupKeySize, addressPostings)
+		if err != nil {
+			return SegmentRef{}, nil, nil, err
+		}
+		defer addressLookup.close()
+		topicLookup, err = buildEventLogLookupV4(leafDir, "event-log-v5-topic", eventLogTopicLookupKeySize, topicPostings)
+		if err != nil {
+			return SegmentRef{}, nil, nil, err
+		}
+		defer topicLookup.close()
+	} else {
+		addressLookup, err = buildEventLogV3Lookup(leafDir, "event-log-v3-address", eventLogAddressLookupKeySize, addressPostings)
+		if err != nil {
+			return SegmentRef{}, nil, nil, err
+		}
+		defer addressLookup.close()
+		topicLookup, err = buildEventLogV3Lookup(leafDir, "event-log-v3-topic", eventLogTopicLookupKeySize, topicPostings)
+		if err != nil {
+			return SegmentRef{}, nil, nil, err
+		}
+		defer topicLookup.close()
 	}
-	defer topicLookup.close()
 
 	blockDictLength := uint64(8 + len(blocks)*(8+common.HashLength))
 	txDictLength := uint64(8 + len(txHashes)*common.HashLength)
@@ -530,13 +584,13 @@ func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, r
 	payloadDirLength := uint64(8 + len(payloadFrames)*eventLogV3FrameDirEntry)
 	rowStat, err := rowData.Stat()
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	payloadStat, err := payloadData.Stat()
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
-	h := eventLogV3Header{fromBlock: fromBlock, toBlock: toBlock, rowCount: rowCount, rowFrameRows: eventLogV3RowFrameRows, payloadTarget: eventLogV3PayloadTarget}
+	h := eventLogV3Header{fromBlock: fromBlock, toBlock: toBlock, rowCount: rowCount, rowFrameRows: rowFrameRows, payloadTarget: eventLogV3PayloadTarget}
 	h.blockDictOffset, h.blockDictLength = eventLogV3HeaderSize, blockDictLength
 	h.txDictOffset, h.txDictLength = h.blockDictOffset+h.blockDictLength, txDictLength
 	h.rowDirOffset, h.rowDirLength = h.txDictOffset+h.txDictLength, rowDirLength
@@ -548,7 +602,7 @@ func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, r
 
 	finalTmp, finalName, err := createStateDomainChangeBinaryTempFileInDir(leafDir, filepath.Base(ref.Path))
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	removeFinalTmp := true
 	defer func() {
@@ -559,31 +613,31 @@ func buildEventLogV4SegmentFromReaderWorkers(reader rawdb.EventLogReader, dir, r
 			_ = os.Remove(finalName)
 		}
 	}()
-	if err := writeEventLogV3File(finalTmp, h, blocks, txHashes, rowFrames, rowData, payloadFrames, payloadData, addressLookup, topicLookup); err != nil {
-		return SegmentRef{}, err
+	if err := writeEventLogV3FileWithVersion(finalTmp, version, h, blocks, txHashes, rowFrames, rowData, payloadFrames, payloadData, addressLookup, topicLookup); err != nil {
+		return SegmentRef{}, nil, nil, err
 	}
 	size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(finalTmp, finalName)
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	finalTmp = nil
 	finalAbs := contentAddressedSnapshotPath(filepath.Join(dir, ref.Path), checksum)
 	if err := publishStateDomainChangeBinaryTemp(finalName, finalAbs); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	removeFinalTmp = false
 	if err := syncSnapshotDir(filepath.Dir(finalAbs)); err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	rel, err := filepath.Rel(dir, finalAbs)
 	if err != nil {
-		return SegmentRef{}, err
+		return SegmentRef{}, nil, nil, err
 	}
 	ref.Path, ref.Size, ref.Checksum = filepath.ToSlash(rel), size, checksum
 	if err := CheckEventLogSegment(dir, ref); err != nil {
-		return SegmentRef{}, fmt.Errorf("snapshots: verify newly written V4 event log: %w", err)
+		return SegmentRef{}, nil, nil, fmt.Errorf("snapshots: verify newly written V%d event log: %w", version, err)
 	}
-	return ref, nil
+	return ref, addressKeys, topicKeys, nil
 }
 
 func scanEventLogV3Dictionaries(reader rawdb.EventLogReader, fromBlock, toBlock uint64) ([]eventLogV3Block, []common.Hash, map[string]uint64, map[string]uint64, uint64, error) {
@@ -699,9 +753,9 @@ func (w *eventLogV3PayloadWriter) flushSerial(firstRow uint64) error {
 	return nil
 }
 
-func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, wantRows uint64, blockIDs map[uint64]uint64, txHashes []common.Hash, addressIDs, topicIDs, addressCounts, topicCounts map[string]uint64, rowData, payloadData *os.File, workers int) ([]eventLogV3Frame, []eventLogV3Frame, map[string][]uint64, map[string][]uint64, error) {
+func writeEventLogV3FramesWithVersion(reader rawdb.EventLogReader, fromBlock, toBlock, wantRows uint64, version uint32, rowFrameRows uint64, blockIDs map[uint64]uint64, txHashes []common.Hash, addressIDs, topicIDs, addressCounts, topicCounts map[string]uint64, rowData, payloadData *os.File, workers int) ([]eventLogV3Frame, []eventLogV3Frame, map[string][]uint64, map[string][]uint64, error) {
 	var rowFrames []eventLogV3Frame
-	rowBuf := make([]eventLogV3Row, 0, eventLogV3RowFrameRows)
+	rowBuf := make([]eventLogV3Row, 0, int(rowFrameRows))
 	var topicArena []uint64
 	payload := newEventLogV3PayloadWriter(payloadData, workers)
 	defer payload.close()
@@ -719,14 +773,39 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 			return nil
 		}
 		raw := encodeEventLogV3Rows(rowBuf)
-		off, err := rowData.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return err
+		if version == EventLogSegmentV5Version {
+			if len(raw) >= int(eventLogV5FrameStoredRaw) {
+				return errors.New("snapshots: V5 row frame exceeds uint32 length limit")
+			}
+			enc, _, err := cbCodec()
+			if err != nil {
+				return err
+			}
+			stored := raw
+			storedLen := uint32(len(raw)) | eventLogV5FrameStoredRaw
+			compressed := enc.EncodeAll(raw, nil)
+			if len(compressed) < len(raw) && len(compressed) < int(eventLogV5FrameStoredRaw) {
+				stored = compressed
+				storedLen = uint32(len(compressed))
+			}
+			off, err := rowData.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return err
+			}
+			if _, err := rowData.Write(stored); err != nil {
+				return err
+			}
+			rowFrames = append(rowFrames, eventLogV3Frame{firstRow: rowIndex - uint64(len(rowBuf)), dataOff: uint64(off), dataLen: storedLen, rowCount: uint32(len(rowBuf)), checksum: crc32.ChecksumIEEE(raw), rawLen: uint32(len(raw))})
+		} else {
+			off, err := rowData.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return err
+			}
+			if _, err := rowData.Write(raw); err != nil {
+				return err
+			}
+			rowFrames = append(rowFrames, eventLogV3Frame{firstRow: rowIndex - uint64(len(rowBuf)), dataOff: uint64(off), dataLen: uint32(len(raw)), rowCount: uint32(len(rowBuf)), checksum: crc32.ChecksumIEEE(raw), rawLen: uint32(len(raw))})
 		}
-		if _, err := rowData.Write(raw); err != nil {
-			return err
-		}
-		rowFrames = append(rowFrames, eventLogV3Frame{firstRow: rowIndex - uint64(len(rowBuf)), dataOff: uint64(off), dataLen: uint32(len(raw)), rowCount: uint32(len(rowBuf)), checksum: crc32.ChecksumIEEE(raw), rawLen: uint32(len(raw))})
 		rowBuf = rowBuf[:0]
 		topicArena = topicArena[:0]
 		return nil
@@ -767,8 +846,8 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 		rowTopics := row.Log.GetTopics()
 		if len(rowTopics) > 0 && topicArena == nil {
 			// Only one row frame holds these IDs. Small and empty builds do
-			// not reserve a full 256-row frame.
-			arenaRows := min(wantRows, uint64(eventLogV3RowFrameRows))
+			// not reserve a full frame.
+			arenaRows := min(wantRows, rowFrameRows)
 			topicArena = make([]uint64, 0, int(arenaRows)*min(len(rowTopics), 8))
 		}
 		topicStart := len(topicArena)
@@ -803,7 +882,7 @@ func writeEventLogV3Frames(reader rawdb.EventLogReader, fromBlock, toBlock, want
 		}
 		rowBuf = append(rowBuf, eventLogV3Row{blockID: blockID, txIndex: row.TxIndex, logIndex: row.LogIndex, txID: txID, addressID: addressID, payloadFrame: frame, payloadOffset: offset, payloadLength: uint64(len(raw)), topicIDs: topicArena[topicStart:len(topicArena)]})
 		rowIndex++
-		if len(rowBuf) == eventLogV3RowFrameRows {
+		if uint64(len(rowBuf)) == rowFrameRows {
 			if err := flushRows(); err != nil {
 				return false, err
 			}
@@ -1020,8 +1099,8 @@ func commonPrefixLength(a, b []byte) int {
 	return limit
 }
 
-func writeEventLogV3File(dst *os.File, h eventLogV3Header, blocks []eventLogV3Block, txHashes []common.Hash, rowFrames []eventLogV3Frame, rowData *os.File, payloadFrames []eventLogV3Frame, payloadData *os.File, address, topic *eventLogV3LookupBuild) error {
-	if err := writeEventLogV3Header(dst, h); err != nil {
+func writeEventLogV3FileWithVersion(dst *os.File, version uint32, h eventLogV3Header, blocks []eventLogV3Block, txHashes []common.Hash, rowFrames []eventLogV3Frame, rowData *os.File, payloadFrames []eventLogV3Frame, payloadData *os.File, address, topic eventLogLookupAny) error {
+	if err := writeEventLogV3HeaderWithVersion(dst, version, h); err != nil {
 		return err
 	}
 	if err := binary.Write(dst, binary.BigEndian, uint64(len(blocks))); err != nil {
@@ -1055,10 +1134,21 @@ func writeEventLogV3File(dst *os.File, h eventLogV3Header, blocks []eventLogV3Bl
 	if err := copyEventLogV3Temp(dst, payloadData); err != nil {
 		return err
 	}
-	if err := writeEventLogV3Lookup(dst, h.addressIndexOffset, address); err != nil {
+	if err := writeEventLogAnyLookup(dst, h.addressIndexOffset, address); err != nil {
 		return err
 	}
-	return writeEventLogV3Lookup(dst, h.topicIndexOffset, topic)
+	return writeEventLogAnyLookup(dst, h.topicIndexOffset, topic)
+}
+
+func writeEventLogAnyLookup(w *os.File, sectionOffset uint64, lookup eventLogLookupAny) error {
+	switch b := lookup.(type) {
+	case *eventLogV3LookupBuild:
+		return writeEventLogV3Lookup(w, sectionOffset, b)
+	case *eventLogLookupV4Build:
+		return writeEventLogLookupV4(w, sectionOffset, b)
+	default:
+		return fmt.Errorf("snapshots: unsupported lookup builder %T", lookup)
+	}
 }
 
 func copyEventLogV3Temp(dst *os.File, src *os.File) error {
@@ -1165,9 +1255,13 @@ func writeEventLogV3LookupV2(w *os.File, sectionOffset uint64, b *eventLogV3Look
 	return copyEventLogV3Temp(w, b.data)
 }
 
-func writeEventLogV3Header(w io.Writer, h eventLogV3Header) error {
+func writeEventLogV3HeaderWithVersion(w io.Writer, version uint32, h eventLogV3Header) error {
 	var raw [eventLogV3HeaderSize]byte
-	copy(raw[:8], eventLogMagicV4[:])
+	if version == EventLogSegmentV5Version {
+		copy(raw[:8], eventLogMagicV5[:])
+	} else {
+		copy(raw[:8], eventLogMagicV4[:])
+	}
 	values := []uint64{h.fromBlock, h.toBlock, h.rowCount, h.rowFrameRows, h.payloadTarget, h.blockDictOffset, h.blockDictLength, h.txDictOffset, h.txDictLength, h.rowDirOffset, h.rowDirLength, h.rowDataOffset, h.rowDataLength, h.payloadDirOffset, h.payloadDirLength, h.payloadDataOffset, h.payloadDataLength, h.addressIndexOffset, h.addressIndexLength, h.topicIndexOffset, h.topicIndexLength}
 	for i, value := range values {
 		binary.BigEndian.PutUint64(raw[8+i*8:16+i*8], value)
@@ -1188,32 +1282,36 @@ func readEventLogV3HeaderRest(r io.Reader) (eventLogV3Header, error) {
 	return eventLogV3Header{fromBlock: values[0], toBlock: values[1], rowCount: values[2], rowFrameRows: values[3], payloadTarget: values[4], blockDictOffset: values[5], blockDictLength: values[6], txDictOffset: values[7], txDictLength: values[8], rowDirOffset: values[9], rowDirLength: values[10], rowDataOffset: values[11], rowDataLength: values[12], payloadDirOffset: values[13], payloadDirLength: values[14], payloadDataOffset: values[15], payloadDataLength: values[16], addressIndexOffset: values[17], addressIndexLength: values[18], topicIndexOffset: values[19], topicIndexLength: values[20]}, nil
 }
 
-func validateEventLogV3Header(ref SegmentRef, h eventLogV3Header, fileSize uint64) error {
+func validateEventLogV3Header(ref SegmentRef, version uint32, h eventLogV3Header, fileSize uint64) error {
 	if h.fromBlock != ref.FromTxNum || h.toBlock != ref.ToTxNum {
-		return fmt.Errorf("snapshots: V4 event log %q range [%d,%d], want [%d,%d]", ref.Path, h.fromBlock, h.toBlock, ref.FromTxNum, ref.ToTxNum)
+		return fmt.Errorf("snapshots: V%d event log %q range [%d,%d], want [%d,%d]", version, ref.Path, h.fromBlock, h.toBlock, ref.FromTxNum, ref.ToTxNum)
 	}
-	if h.toBlock < h.fromBlock || h.rowFrameRows != eventLogV3RowFrameRows || h.payloadTarget != eventLogV3PayloadTarget {
-		return fmt.Errorf("snapshots: V4 event log %q has unsupported framing", ref.Path)
+	wantFrameRows := uint64(eventLogV3RowFrameRows)
+	if version == EventLogSegmentV5Version {
+		wantFrameRows = eventLogV5RowFrameRows
+	}
+	if h.toBlock < h.fromBlock || h.rowFrameRows != wantFrameRows || h.payloadTarget != eventLogV3PayloadTarget {
+		return fmt.Errorf("snapshots: V%d event log %q has unsupported framing", version, ref.Path)
 	}
 	sections := [][2]uint64{{h.blockDictOffset, h.blockDictLength}, {h.txDictOffset, h.txDictLength}, {h.rowDirOffset, h.rowDirLength}, {h.rowDataOffset, h.rowDataLength}, {h.payloadDirOffset, h.payloadDirLength}, {h.payloadDataOffset, h.payloadDataLength}, {h.addressIndexOffset, h.addressIndexLength}, {h.topicIndexOffset, h.topicIndexLength}}
 	next := uint64(eventLogV3HeaderSize)
 	for i, section := range sections {
 		if section[0] != next {
-			return fmt.Errorf("snapshots: V4 event log %q section %d offset %d, want %d", ref.Path, i, section[0], next)
+			return fmt.Errorf("snapshots: V%d event log %q section %d offset %d, want %d", version, ref.Path, i, section[0], next)
 		}
 		end, overflow := checkedAdd(section[0], section[1])
 		if overflow || end > fileSize {
-			return fmt.Errorf("snapshots: V4 event log %q section %d outside file", ref.Path, i)
+			return fmt.Errorf("snapshots: V%d event log %q section %d outside file", version, ref.Path, i)
 		}
 		next = end
 	}
 	if next != fileSize {
-		return fmt.Errorf("snapshots: V4 event log %q ends at %d, file size %d", ref.Path, next, fileSize)
+		return fmt.Errorf("snapshots: V%d event log %q ends at %d, file size %d", version, ref.Path, next, fileSize)
 	}
 	return nil
 }
 
-func openEventLogV3Reader(file io.ReaderAt, h eventLogV3Header, size uint64) (*eventLogV3Reader, error) {
+func openEventLogV3Reader(file io.ReaderAt, version uint32, h eventLogV3Header, size uint64) (*eventLogV3Reader, error) {
 	blockCount, err := readEventLogUint64At(file, h.blockDictOffset)
 	if err != nil {
 		return nil, err
@@ -1241,7 +1339,7 @@ func openEventLogV3Reader(file io.ReaderAt, h eventLogV3Header, size uint64) (*e
 	if overflow || addOverflow || h.rowDirLength != rowDirLength {
 		return nil, errors.New("snapshots: invalid V3 row directory length")
 	}
-	if rowFrames != ceilDiv(h.rowCount, eventLogV3RowFrameRows) {
+	if rowFrames != ceilDiv(h.rowCount, h.rowFrameRows) {
 		return nil, errors.New("snapshots: invalid V3 row frame count")
 	}
 	payloadFrames, err := readEventLogUint64At(file, h.payloadDirOffset)
@@ -1256,19 +1354,65 @@ func openEventLogV3Reader(file io.ReaderAt, h eventLogV3Header, size uint64) (*e
 	if (h.rowCount == 0 && payloadFrames != 0) || (h.rowCount != 0 && payloadFrames == 0) {
 		return nil, errors.New("snapshots: invalid V3 payload frame count")
 	}
-	addressCount, _, err := readEventLogV3LookupCounts(file, h.addressIndexOffset, h.addressIndexLength, size, eventLogAddressLookupKeySize)
+	wantLookupFormat := eventLogLookupV3Format
+	if version == EventLogSegmentV5Version {
+		wantLookupFormat = eventLogLookupV4Format
+	}
+	addrFormat, err := detectEventLogCompactLookupFormat(file, h.addressIndexOffset, h.addressIndexLength, size)
 	if err != nil {
 		return nil, err
 	}
-	topicLookup, err := readEventLogV3LookupV2Header(file, h.topicIndexOffset, h.topicIndexLength, size, eventLogTopicLookupKeySize)
+	if addrFormat != wantLookupFormat {
+		return nil, fmt.Errorf("snapshots: V%d event-log address lookup format %d, want %d", version, addrFormat, wantLookupFormat)
+	}
+	topFormat, err := detectEventLogCompactLookupFormat(file, h.topicIndexOffset, h.topicIndexLength, size)
 	if err != nil {
 		return nil, err
 	}
-	return &eventLogV3Reader{
-		header: h, rowFrameCount: rowFrames, payloadFrames: payloadFrames, blockCount: blockCount, txCount: txCount,
-		addressCount: addressCount, topicCount: topicLookup.keyCount, topicLookup: topicLookup,
-		cacheTopicBlocks: make(map[uint64][][]byte),
-	}, nil
+	if topFormat != wantLookupFormat {
+		return nil, fmt.Errorf("snapshots: V%d event-log topic lookup format %d, want %d", version, topFormat, wantLookupFormat)
+	}
+	out := &eventLogV3Reader{
+		version:              version,
+		header:               h,
+		rowFrameCount:        rowFrames,
+		payloadFrames:        payloadFrames,
+		blockCount:           blockCount,
+		txCount:              txCount,
+		addressLookupVersion: addrFormat,
+		topicLookupVersion:   topFormat,
+		cacheTopicBlocks:     make(map[uint64][][]byte),
+	}
+	if addrFormat == eventLogLookupV4Format {
+		addrHdr, err := readEventLogLookupV4Header(file, h.addressIndexOffset, h.addressIndexLength, size, eventLogAddressLookupKeySize)
+		if err != nil {
+			return nil, err
+		}
+		topHdr, err := readEventLogLookupV4Header(file, h.topicIndexOffset, h.topicIndexLength, size, eventLogTopicLookupKeySize)
+		if err != nil {
+			return nil, err
+		}
+		out.addressCount = addrHdr.keyCount
+		out.addressLookupV4 = addrHdr
+		out.topicCount = topHdr.keyCount
+		out.topicLookupV4 = topHdr
+		out.topicBlockKeys = topHdr.blockKeys
+	} else {
+		addrHdr, err := readEventLogV3LookupV2Header(file, h.addressIndexOffset, h.addressIndexLength, size, eventLogAddressLookupKeySize)
+		if err != nil {
+			return nil, err
+		}
+		topHdr, err := readEventLogV3LookupV2Header(file, h.topicIndexOffset, h.topicIndexLength, size, eventLogTopicLookupKeySize)
+		if err != nil {
+			return nil, err
+		}
+		out.addressCount = addrHdr.keyCount
+		out.addressLookupV3 = addrHdr
+		out.topicCount = topHdr.keyCount
+		out.topicLookup = topHdr
+		out.topicBlockKeys = topHdr.blockKeys
+	}
+	return out, nil
 }
 
 func readEventLogV3FrameAt(file io.ReaderAt, dirOffset, index, count uint64) (eventLogV3Frame, error) {
@@ -1286,35 +1430,67 @@ func (s *EventLogSegment) readEventLogV3Row(rowIndex uint64) (eventLogV3Row, err
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	if rowIndex >= s.header.rowCount {
-		return eventLogV3Row{}, fmt.Errorf("snapshots: V4 row %d outside count %d", rowIndex, s.header.rowCount)
+		return eventLogV3Row{}, fmt.Errorf("snapshots: V%d row %d outside count %d", s.v3.version, rowIndex, s.header.rowCount)
 	}
-	frameIndex := rowIndex / eventLogV3RowFrameRows
+	frameRows := s.v3.header.rowFrameRows
+	frameIndex := rowIndex / frameRows
 	if !s.v3.cacheFrameValid || s.v3.cacheFrame != frameIndex {
 		frame, err := readEventLogV3FrameAt(s.file, s.v3.header.rowDirOffset, frameIndex, s.v3.rowFrameCount)
 		if err != nil {
 			return eventLogV3Row{}, err
 		}
-		expectedRows := uint32(eventLogV3RowFrameRows)
-		if remaining := s.header.rowCount - frameIndex*eventLogV3RowFrameRows; remaining < uint64(expectedRows) {
+		expectedRows := uint32(frameRows)
+		if remaining := s.header.rowCount - frameIndex*frameRows; remaining < uint64(expectedRows) {
 			expectedRows = uint32(remaining)
 		}
-		if frame.firstRow != frameIndex*eventLogV3RowFrameRows || frame.rowCount != expectedRows || frame.rawLen != frame.dataLen || frame.dataOff < s.v3.header.rowDataOffset {
-			return eventLogV3Row{}, fmt.Errorf("snapshots: V4 row frame %d metadata mismatch", frameIndex)
+		if frame.firstRow != frameIndex*frameRows || frame.rowCount != expectedRows || frame.dataOff < s.v3.header.rowDataOffset {
+			return eventLogV3Row{}, fmt.Errorf("snapshots: V%d row frame %d metadata mismatch", s.v3.version, frameIndex)
 		}
-		raw, err := readEventLogPayloadAt(s.file, frame.dataOff, uint64(frame.dataLen), s.v3.header.rowDataOffset+s.v3.header.rowDataLength)
-		if err != nil {
-			return eventLogV3Row{}, err
+		var raw []byte
+		if s.v3.version == EventLogSegmentV5Version {
+			storedLen := frame.dataLen &^ eventLogV5FrameStoredRaw
+			isRaw := frame.dataLen&eventLogV5FrameStoredRaw != 0
+			if isRaw && storedLen != frame.rawLen {
+				return eventLogV3Row{}, fmt.Errorf("snapshots: V5 raw row frame %d length mismatch", frameIndex)
+			}
+			stored, err := readEventLogPayloadAt(s.file, frame.dataOff, uint64(storedLen), s.v3.header.rowDataOffset+s.v3.header.rowDataLength)
+			if err != nil {
+				return eventLogV3Row{}, err
+			}
+			raw = stored
+			if !isRaw {
+				_, dec, err := cbCodec()
+				if err != nil {
+					return eventLogV3Row{}, err
+				}
+				raw, err = dec.DecodeAll(stored, make([]byte, 0, int(frame.rawLen)))
+				if err != nil {
+					return eventLogV3Row{}, err
+				}
+			}
+			if uint32(len(raw)) != frame.rawLen {
+				return eventLogV3Row{}, fmt.Errorf("snapshots: V5 row frame %d decoded length mismatch", frameIndex)
+			}
+		} else {
+			if frame.rawLen != frame.dataLen {
+				return eventLogV3Row{}, fmt.Errorf("snapshots: V4 row frame %d metadata mismatch", frameIndex)
+			}
+			var err error
+			raw, err = readEventLogPayloadAt(s.file, frame.dataOff, uint64(frame.dataLen), s.v3.header.rowDataOffset+s.v3.header.rowDataLength)
+			if err != nil {
+				return eventLogV3Row{}, err
+			}
 		}
 		if crc32.ChecksumIEEE(raw) != frame.checksum {
-			return eventLogV3Row{}, fmt.Errorf("snapshots: V4 row frame %d checksum mismatch", frameIndex)
+			return eventLogV3Row{}, fmt.Errorf("snapshots: V%d row frame %d checksum mismatch", s.v3.version, frameIndex)
 		}
 		rows, err := decodeEventLogV3Rows(raw, int(frame.rowCount))
 		if err != nil {
-			return eventLogV3Row{}, fmt.Errorf("snapshots: V4 row frame %d: %w", frameIndex, err)
+			return eventLogV3Row{}, fmt.Errorf("snapshots: V%d row frame %d: %w", s.v3.version, frameIndex, err)
 		}
 		s.v3.cacheFrame, s.v3.cacheRows, s.v3.cacheFrameValid = frameIndex, rows, true
 	}
-	return s.v3.cacheRows[rowIndex%eventLogV3RowFrameRows], nil
+	return s.v3.cacheRows[rowIndex%frameRows], nil
 }
 
 // eventLogV4BlockIDLowerBound returns the first block dictionary id whose
@@ -1540,23 +1716,38 @@ const eventLogV4TopicCacheBlocks = 32
 // thrashes; a small FIFO keeps the current block for every common position and
 // bounds memory independently of segment cardinality.
 func (s *EventLogSegment) readEventLogV4TopicLocked(index uint64) ([]byte, error) {
-	if index >= s.v3.topicLookup.keyCount {
+	if index >= s.v3.topicCount {
 		return nil, errors.New("snapshots: V4 topic index outside dictionary")
 	}
-	blockIndex := index / uint64(s.v3.topicLookup.blockKeys)
+	blockIndex := index / uint64(s.v3.topicBlockKeys)
 	keys, ok := s.v3.cacheTopicBlocks[blockIndex]
 	if !ok {
-		block, err := readEventLogV3LookupV2Block(s.file, s.v3.header.topicIndexOffset, s.v3.topicLookup, blockIndex)
-		if err != nil {
-			return nil, err
-		}
-		records, _, err := readEventLogV3LookupV2Records(s.file, s.v3.header.topicIndexOffset, s.v3.header.topicIndexLength, s.v3.topicLookup, block)
-		if err != nil {
-			return nil, err
-		}
-		keys = make([][]byte, len(records))
-		for i := range records {
-			keys[i] = records[i].key
+		if s.v3.topicLookupVersion == eventLogLookupV4Format {
+			block, err := readEventLogLookupV4Block(s.file, s.v3.header.topicIndexOffset, s.v3.topicLookupV4, blockIndex)
+			if err != nil {
+				return nil, err
+			}
+			records, _, err := readEventLogLookupV4Records(s.file, s.v3.header.topicIndexOffset, s.v3.header.topicIndexLength, s.v3.topicLookupV4, block)
+			if err != nil {
+				return nil, err
+			}
+			keys = make([][]byte, len(records))
+			for i := range records {
+				keys[i] = records[i].key
+			}
+		} else {
+			block, err := readEventLogV3LookupV2Block(s.file, s.v3.header.topicIndexOffset, s.v3.topicLookup, blockIndex)
+			if err != nil {
+				return nil, err
+			}
+			records, _, err := readEventLogV3LookupV2Records(s.file, s.v3.header.topicIndexOffset, s.v3.header.topicIndexLength, s.v3.topicLookup, block)
+			if err != nil {
+				return nil, err
+			}
+			keys = make([][]byte, len(records))
+			for i := range records {
+				keys[i] = records[i].key
+			}
 		}
 		if len(s.v3.cacheTopicOrder) == eventLogV4TopicCacheBlocks {
 			delete(s.v3.cacheTopicBlocks, s.v3.cacheTopicOrder[0])
@@ -1566,7 +1757,7 @@ func (s *EventLogSegment) readEventLogV4TopicLocked(index uint64) ([]byte, error
 		s.v3.cacheTopicBlocks[blockIndex] = keys
 		s.v3.cacheTopicOrder = append(s.v3.cacheTopicOrder, blockIndex)
 	}
-	within := index % uint64(s.v3.topicLookup.blockKeys)
+	within := index % uint64(s.v3.topicBlockKeys)
 	if within >= uint64(len(keys)) {
 		return nil, errors.New("snapshots: V4 topic index outside dictionary block")
 	}
@@ -1592,17 +1783,34 @@ func (s *EventLogSegment) readEventLogV3Address(index uint64) ([]byte, error) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	offset, length := s.v3.header.addressIndexOffset, s.v3.header.addressIndexLength
-	compact, err := isEventLogV3LookupV2(s.file, offset, length, s.size)
-	if err != nil {
-		return nil, err
+	if s.v3.addressLookupVersion == eventLogLookupV4Format {
+		h := s.v3.addressLookupV4
+		if index >= h.keyCount {
+			return nil, errors.New("snapshots: V5 compact lookup key index outside directory")
+		}
+		blockIndex := index / uint64(h.blockKeys)
+		if !s.v3.cacheAddressValid || s.v3.cacheAddressBlock != blockIndex {
+			block, err := readEventLogLookupV4Block(s.file, offset, h, blockIndex)
+			if err != nil {
+				return nil, err
+			}
+			records, _, err := readEventLogLookupV4Records(s.file, offset, length, h, block)
+			if err != nil {
+				return nil, err
+			}
+			keys := make([][]byte, len(records))
+			for i := range records {
+				keys[i] = records[i].key
+			}
+			s.v3.cacheAddressBlock, s.v3.cacheAddressKeys, s.v3.cacheAddressValid = blockIndex, keys, true
+		}
+		within := index % uint64(h.blockKeys)
+		if within >= uint64(len(s.v3.cacheAddressKeys)) {
+			return nil, errors.New("snapshots: V5 compact lookup address index outside block")
+		}
+		return s.v3.cacheAddressKeys[within], nil
 	}
-	if !compact {
-		return readEventLogV3LookupKeyAt(s.file, offset, length, s.size, eventLogAddressLookupKeySize, index)
-	}
-	h, err := readEventLogV3LookupV2Header(s.file, offset, length, s.size, eventLogAddressLookupKeySize)
-	if err != nil {
-		return nil, err
-	}
+	h := s.v3.addressLookupV3
 	if index >= h.keyCount {
 		return nil, errors.New("snapshots: V4 compact lookup key index outside directory")
 	}
@@ -1630,24 +1838,32 @@ func (s *EventLogSegment) readEventLogV3Address(index uint64) ([]byte, error) {
 }
 
 func readEventLogV3LookupKeyAt(file io.ReaderAt, offset, length, size uint64, keySize int, index uint64) ([]byte, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return nil, err
 	}
-	if !compact {
-		keys, _, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
+	if format == eventLogLookupV4Format {
+		h, err := readEventLogLookupV4Header(file, offset, length, size, keySize)
 		if err != nil {
 			return nil, err
 		}
-		if index >= keys {
-			return nil, errors.New("snapshots: V4 lookup key index outside directory")
+		if index >= h.keyCount {
+			return nil, errors.New("snapshots: V5 compact lookup key index outside directory")
 		}
-		entrySize := uint64(keySize + eventLogV3LookupKeyTail)
-		key := make([]byte, keySize)
-		if _, err := file.ReadAt(key, int64(offset+eventLogV3LookupHeaderSize+index*entrySize)); err != nil {
+		blockIndex := index / uint64(h.blockKeys)
+		block, err := readEventLogLookupV4Block(file, offset, h, blockIndex)
+		if err != nil {
 			return nil, err
 		}
-		return key, nil
+		records, _, err := readEventLogLookupV4Records(file, offset, length, h, block)
+		if err != nil {
+			return nil, err
+		}
+		within := index % uint64(h.blockKeys)
+		if within >= uint64(len(records)) {
+			return nil, errors.New("snapshots: V5 compact lookup key index outside block")
+		}
+		return records[within].key, nil
 	}
 	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
 	if err != nil {
@@ -1764,17 +1980,11 @@ func (s *EventLogSegment) lookupEventLogV3CandidateRows(filter EventLogFilter) (
 }
 
 func isEventLogV3LookupV2(file io.ReaderAt, offset, length, size uint64) (bool, error) {
-	if length < 8 || offset > size || length > size-offset || offset > math.MaxInt64 {
-		return false, errors.New("snapshots: invalid V3 lookup bounds")
-	}
-	var magic [8]byte
-	if _, err := file.ReadAt(magic[:], int64(offset)); err != nil {
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
+	if err != nil {
 		return false, err
 	}
-	if magic != eventLogV3LookupV2Magic {
-		return false, errors.New("snapshots: unsupported V3 lookup format; compact lookup magic required")
-	}
-	return true, nil
+	return format >= eventLogLookupV3Format, nil
 }
 
 func readEventLogV3LookupV2Header(file io.ReaderAt, offset, length, size uint64, wantKeySize int) (eventLogV3LookupV2Header, error) {
@@ -2011,127 +2221,32 @@ func readEventLogV3LookupV2RecordRows(file io.ReaderAt, offset, length uint64, h
 }
 
 func readEventLogV3LookupCounts(file io.ReaderAt, offset, length, size uint64, keySize int) (uint64, uint64, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return 0, 0, err
 	}
-	if compact {
-		h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	if format == eventLogLookupV4Format {
+		h, err := readEventLogLookupV4Header(file, offset, length, size, keySize)
 		return h.keyCount, h.blockCount, err
 	}
-	if length < eventLogV3LookupHeaderSize || offset+length > size {
-		return 0, 0, errors.New("snapshots: invalid V3 lookup bounds")
-	}
-	keys, err := readEventLogUint64At(file, offset)
-	if err != nil {
-		return 0, 0, err
-	}
-	frames, err := readEventLogUint64At(file, offset+8)
-	return keys, frames, err
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
+	return h.keyCount, h.blockCount, err
 }
 
 func readEventLogV3LookupRows(file io.ReaderAt, offset, length, size uint64, keySize int, want []byte, maxRows uint64) ([]uint64, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return nil, err
 	}
-	if compact {
-		return readEventLogV3LookupV2Rows(file, offset, length, size, keySize, want, maxRows)
+	if format == eventLogLookupV4Format {
+		return readEventLogLookupV4Rows(file, offset, length, size, keySize, want, maxRows)
 	}
-	keys, frames, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
-	if err != nil {
-		return nil, err
-	}
-	entrySize := uint64(keySize + eventLogV3LookupKeyTail)
-	frameDir := offset + eventLogV3LookupHeaderSize + keys*entrySize
-	dataStart := frameDir + frames*eventLogV3LookupFrameEntry
-	if dataStart > offset+length {
-		return nil, errors.New("snapshots: V4 lookup directories outside section")
-	}
-	lo, hi := uint64(0), keys
-	raw := make([]byte, keySize+eventLogV3LookupKeyTail)
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		if _, err := file.ReadAt(raw, int64(offset+eventLogV3LookupHeaderSize+mid*entrySize)); err != nil {
-			return nil, err
-		}
-		cmp := bytes.Compare(raw[:keySize], want)
-		if cmp < 0 {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	if lo >= keys {
-		return nil, nil
-	}
-	if _, err := file.ReadAt(raw, int64(offset+eventLogV3LookupHeaderSize+lo*entrySize)); err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(raw[:keySize], want) {
-		return nil, nil
-	}
-	tail := raw[keySize:]
-	firstFrame := binary.BigEndian.Uint64(tail[0:8])
-	frameCount := binary.BigEndian.Uint32(tail[8:12])
-	postingCount := binary.BigEndian.Uint64(tail[12:20])
-	if firstFrame+uint64(frameCount) > frames {
-		return nil, errors.New("snapshots: V4 lookup frame range outside directory")
-	}
-	rows := make([]uint64, 0, postingCount)
-	for i := uint64(0); i < uint64(frameCount); i++ {
-		var fr [eventLogV3LookupFrameEntry]byte
-		if _, err := file.ReadAt(fr[:], int64(frameDir+(firstFrame+i)*eventLogV3LookupFrameEntry)); err != nil {
-			return nil, err
-		}
-		dataOff := binary.BigEndian.Uint64(fr[0:8])
-		dataLen := binary.BigEndian.Uint32(fr[8:12])
-		count := binary.BigEndian.Uint32(fr[12:16])
-		first := binary.BigEndian.Uint64(fr[16:24])
-		checksum := binary.BigEndian.Uint32(fr[24:28])
-		if dataOff < uint64(dataStart) || dataOff+uint64(dataLen) > offset+length {
-			return nil, errors.New("snapshots: V4 lookup data outside section")
-		}
-		data, err := readEventLogPayloadAt(file, dataOff, uint64(dataLen), offset+length)
-		if err != nil {
-			return nil, err
-		}
-		if crc32.ChecksumIEEE(data) != checksum {
-			return nil, errors.New("snapshots: V4 lookup frame checksum mismatch")
-		}
-		br := bytes.NewReader(data)
-		var prev uint64
-		for j := uint32(0); j < count; j++ {
-			value, err := binary.ReadUvarint(br)
-			if err != nil {
-				return nil, err
-			}
-			if j == 0 {
-				prev = value
-				if prev != first {
-					return nil, errors.New("snapshots: V4 lookup first posting mismatch")
-				}
-			} else {
-				if value == 0 || math.MaxUint64-prev < value {
-					return nil, errors.New("snapshots: V4 lookup posting delta invalid")
-				}
-				prev += value
-			}
-			rows = append(rows, prev)
-		}
-		if br.Len() != 0 {
-			return nil, errors.New("snapshots: V4 lookup trailing bytes")
-		}
-	}
-	if uint64(len(rows)) != postingCount {
-		return nil, errors.New("snapshots: V4 lookup posting count mismatch")
-	}
-	return rows, nil
+	return readEventLogV3LookupV2Rows(file, offset, length, size, keySize, want, maxRows)
 }
 
 func checkEventLogV3Segment(file *os.File, ref SegmentRef, header eventLogHeader, size uint64) error {
 	validationStarted := time.Now()
-	reader, err := openEventLogV3Reader(file, *header.v3, size)
+	reader, err := openEventLogV3Reader(file, header.version, *header.v3, size)
 	if err != nil {
 		return err
 	}
@@ -2142,15 +2257,25 @@ func checkEventLogV3Segment(file *os.File, ref SegmentRef, header eventLogHeader
 		if err != nil {
 			return err
 		}
-		expectedRows := uint32(eventLogV3RowFrameRows)
+		expectedRows := uint32(reader.header.rowFrameRows)
 		if remaining := header.rowCount - nextRow; remaining < uint64(expectedRows) {
 			expectedRows = uint32(remaining)
 		}
-		if frame.firstRow != nextRow || frame.rowCount != expectedRows || frame.dataOff != nextRowOffset || frame.rawLen != frame.dataLen {
-			return fmt.Errorf("snapshots: V4 row frame %d metadata mismatch", i)
+		if reader.version == EventLogSegmentV5Version {
+			storedLen := frame.dataLen &^ eventLogV5FrameStoredRaw
+			isRaw := frame.dataLen&eventLogV5FrameStoredRaw != 0
+			if frame.firstRow != nextRow || frame.rowCount != expectedRows || frame.dataOff != nextRowOffset || (isRaw && storedLen != frame.rawLen) {
+				return fmt.Errorf("snapshots: V5 row frame %d metadata mismatch", i)
+			}
+			nextRow += uint64(frame.rowCount)
+			nextRowOffset += uint64(storedLen)
+		} else {
+			if frame.firstRow != nextRow || frame.rowCount != expectedRows || frame.dataOff != nextRowOffset || frame.rawLen != frame.dataLen {
+				return fmt.Errorf("snapshots: V4 row frame %d metadata mismatch", i)
+			}
+			nextRow += uint64(frame.rowCount)
+			nextRowOffset += uint64(frame.dataLen)
 		}
-		nextRow += uint64(frame.rowCount)
-		nextRowOffset += uint64(frame.dataLen)
 	}
 	if nextRow != header.rowCount || nextRowOffset != reader.header.rowDataOffset+reader.header.rowDataLength {
 		return errors.New("snapshots: V4 row frames do not cover row section")
@@ -2287,11 +2412,20 @@ func checkEventLogV3Segment(file *os.File, ref SegmentRef, header eventLogHeader
 	}
 	postingFillDuration := time.Since(postingFillStarted)
 	lookupStarted := time.Now()
-	if err := checkEventLogV4LookupPostings(file, header.v3.addressIndexOffset, header.v3.addressIndexLength, size, eventLogAddressLookupKeySize, header.rowCount, "address", expectedAddress, nil); err != nil {
-		return fmt.Errorf("snapshots: V4 event log %q: %w", ref.Path, err)
-	}
-	if err := checkEventLogV4LookupPostings(file, header.v3.topicIndexOffset, header.v3.topicIndexLength, size, eventLogTopicLookupKeySize, header.rowCount, "topic", expectedTopic, topicPositions); err != nil {
-		return err
+	if reader.version == EventLogSegmentV5Version {
+		if err := checkEventLogLookupV4Postings(file, header.v3.addressIndexOffset, header.v3.addressIndexLength, size, eventLogAddressLookupKeySize, header.rowCount, "address", expectedAddress, nil); err != nil {
+			return fmt.Errorf("snapshots: V5 event log %q: %w", ref.Path, err)
+		}
+		if err := checkEventLogLookupV4Postings(file, header.v3.topicIndexOffset, header.v3.topicIndexLength, size, eventLogTopicLookupKeySize, header.rowCount, "topic", expectedTopic, topicPositions); err != nil {
+			return err
+		}
+	} else {
+		if err := checkEventLogV4LookupPostings(file, header.v3.addressIndexOffset, header.v3.addressIndexLength, size, eventLogAddressLookupKeySize, header.rowCount, "address", expectedAddress, nil); err != nil {
+			return fmt.Errorf("snapshots: V4 event log %q: %w", ref.Path, err)
+		}
+		if err := checkEventLogV4LookupPostings(file, header.v3.topicIndexOffset, header.v3.topicIndexLength, size, eventLogTopicLookupKeySize, header.rowCount, "topic", expectedTopic, topicPositions); err != nil {
+			return err
+		}
 	}
 	recordEventLogV4Validation(header.rowCount, size, time.Since(validationStarted), semanticDuration, postingFillDuration, time.Since(lookupStarted))
 	return nil
@@ -2707,109 +2841,69 @@ func checkEventLogV4PostingRows(reader io.Reader, postingLen uint64, checksum ui
 }
 
 func readAllEventLogV3Lookup(file io.ReaderAt, offset, length, size uint64, keySize int, maxRows uint64) (map[string][]uint64, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return nil, err
 	}
-	if compact {
-		h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
-		if err != nil {
-			return nil, err
-		}
-		out := make(map[string][]uint64, h.keyCount)
-		var previous []byte
-		expectedKeyOff := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
-		var expectedPostingOff uint64
-		for i := uint64(0); i < h.blockCount; i++ {
-			block, err := readEventLogV3LookupV2Block(file, offset, h, i)
-			if err != nil {
-				return nil, err
-			}
-			storedLen := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
-			if block.dataOff != expectedKeyOff {
-				return nil, errors.New("snapshots: V4 compact lookup key blocks are not contiguous")
-			}
-			expectedKeyOff += storedLen
-			records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
-			if err != nil {
-				return nil, err
-			}
-			for _, record := range records {
-				if len(previous) != 0 && bytes.Compare(previous, record.key) >= 0 {
-					return nil, errors.New("snapshots: V4 compact lookup blocks not strictly sorted")
-				}
-				if record.postingOff != expectedPostingOff {
-					return nil, errors.New("snapshots: V4 compact lookup postings are not contiguous")
-				}
-				expectedPostingOff += record.postingLen
-				rows, err := readEventLogV3LookupV2RecordRows(file, offset, length, h, record, maxRows)
-				if err != nil {
-					return nil, err
-				}
-				out[string(record.key)] = rows
-				previous = record.key
-			}
-		}
-		if uint64(len(out)) != h.keyCount {
-			return nil, errors.New("snapshots: V4 compact lookup key count mismatch")
-		}
-		if expectedKeyOff != offset+eventLogV3LookupV2HeaderSize+h.blockDirLen+h.keyDataLen || expectedPostingOff != h.postingDataLen {
-			return nil, errors.New("snapshots: V4 compact lookup data coverage mismatch")
-		}
-		return out, nil
+	if format == eventLogLookupV4Format {
+		return readAllEventLogLookupV4(file, offset, length, size, keySize, maxRows)
 	}
-	keys, _, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
+	h, err := readEventLogV3LookupV2Header(file, offset, length, size, keySize)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]uint64, keys)
-	entrySize := uint64(keySize + eventLogV3LookupKeyTail)
-	var prev []byte
-	for i := uint64(0); i < keys; i++ {
-		key := make([]byte, keySize)
-		if _, err := file.ReadAt(key, int64(offset+eventLogV3LookupHeaderSize+i*entrySize)); err != nil {
-			return nil, err
-		}
-		if i > 0 && bytes.Compare(prev, key) >= 0 {
-			return nil, errors.New("snapshots: V4 lookup keys not sorted")
-		}
-		rows, err := readEventLogV3LookupRows(file, offset, length, size, keySize, key, maxRows)
+	out := make(map[string][]uint64, h.keyCount)
+	var previous []byte
+	expectedKeyOff := offset + eventLogV3LookupV2HeaderSize + h.blockDirLen
+	var expectedPostingOff uint64
+	for i := uint64(0); i < h.blockCount; i++ {
+		block, err := readEventLogV3LookupV2Block(file, offset, h, i)
 		if err != nil {
 			return nil, err
 		}
-		out[string(key)] = rows
-		prev = key
+		storedLen := uint64(block.dataLen &^ eventLogV3LookupV2StoredRaw)
+		if block.dataOff != expectedKeyOff {
+			return nil, errors.New("snapshots: V4 compact lookup key blocks are not contiguous")
+		}
+		expectedKeyOff += storedLen
+		records, _, err := readEventLogV3LookupV2Records(file, offset, length, h, block)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			if len(previous) != 0 && bytes.Compare(previous, record.key) >= 0 {
+				return nil, errors.New("snapshots: V4 compact lookup blocks not strictly sorted")
+			}
+			if record.postingOff != expectedPostingOff {
+				return nil, errors.New("snapshots: V4 compact lookup postings are not contiguous")
+			}
+			expectedPostingOff += record.postingLen
+			rows, err := readEventLogV3LookupV2RecordRows(file, offset, length, h, record, maxRows)
+			if err != nil {
+				return nil, err
+			}
+			out[string(record.key)] = rows
+			previous = record.key
+		}
+	}
+	if uint64(len(out)) != h.keyCount {
+		return nil, errors.New("snapshots: V4 compact lookup key count mismatch")
+	}
+	if expectedKeyOff != offset+eventLogV3LookupV2HeaderSize+h.blockDirLen+h.keyDataLen || expectedPostingOff != h.postingDataLen {
+		return nil, errors.New("snapshots: V4 compact lookup data coverage mismatch")
 	}
 	return out, nil
 }
 
 func readEventLogV3LookupKeys(file io.ReaderAt, offset, length, size uint64, keySize int) ([][]byte, error) {
-	compact, err := isEventLogV3LookupV2(file, offset, length, size)
+	format, err := detectEventLogCompactLookupFormat(file, offset, length, size)
 	if err != nil {
 		return nil, err
 	}
-	if compact {
-		return readEventLogV3LookupV2Keys(file, offset, length, size, keySize)
+	if format == eventLogLookupV4Format {
+		return readEventLogLookupV4Keys(file, offset, length, size, keySize)
 	}
-	count, _, err := readEventLogV3LookupCounts(file, offset, length, size, keySize)
-	if err != nil {
-		return nil, err
-	}
-	entrySize := uint64(keySize + eventLogV3LookupKeyTail)
-	keys := make([][]byte, 0, count)
-	var previous []byte
-	for i := uint64(0); i < count; i++ {
-		key := make([]byte, keySize)
-		if _, err := file.ReadAt(key, int64(offset+eventLogV3LookupHeaderSize+i*entrySize)); err != nil {
-			return nil, err
-		}
-		if i > 0 && bytes.Compare(previous, key) >= 0 {
-			return nil, errors.New("snapshots: V4 lookup keys not strictly sorted")
-		}
-		keys = append(keys, key)
-		previous = key
-	}
-	return keys, nil
+	return readEventLogV3LookupV2Keys(file, offset, length, size, keySize)
 }
 
 func readEventLogV3LookupV2Keys(file io.ReaderAt, offset, length, size uint64, keySize int) ([][]byte, error) {
@@ -2848,8 +2942,8 @@ func writeFreshEventLogV4Index(dir string, eventRef SegmentRef, relPath string) 
 		return SegmentRef{}, err
 	}
 	defer seg.Close()
-	if seg.header.version != EventLogSegmentV4Version {
-		return SegmentRef{}, fmt.Errorf("snapshots: event log %q is not V3", eventRef.Path)
+	if !isEventLogCompactSegmentVersion(seg.header.version) {
+		return SegmentRef{}, fmt.Errorf("snapshots: event log %q is not V4/V5", eventRef.Path)
 	}
 	addressKeys, err := readEventLogV3LookupKeys(seg.file, seg.v3.header.addressIndexOffset, seg.v3.header.addressIndexLength, seg.size, eventLogAddressLookupKeySize)
 	if err != nil {
@@ -2859,6 +2953,21 @@ func writeFreshEventLogV4Index(dir string, eventRef SegmentRef, relPath string) 
 	if err != nil {
 		return SegmentRef{}, err
 	}
+	if relPath == "" {
+		relPath = EventLogIndexSegmentPath(eventRef.FromTxNum, eventRef.ToTxNum)
+	}
+	ref := SegmentRef{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: eventRef.FromTxNum, ToTxNum: eventRef.ToTxNum, Path: filepath.ToSlash(relPath)}
+	if seg.header.version == EventLogSegmentV5Version {
+		addressStrings := make([]string, len(addressKeys))
+		for i, k := range addressKeys {
+			addressStrings[i] = string(k)
+		}
+		topicStrings := make([]string, len(topicKeys))
+		for i, k := range topicKeys {
+			topicStrings[i] = string(k)
+		}
+		return writeEventLogIndexV3Segment(dir, ref, addressStrings, topicStrings)
+	}
 	addressPostings := make(map[string][]uint64, len(addressKeys))
 	for _, key := range addressKeys {
 		addressPostings[string(key)] = []uint64{eventRef.FromTxNum}
@@ -2867,9 +2976,5 @@ func writeFreshEventLogV4Index(dir string, eventRef SegmentRef, relPath string) 
 	for _, key := range topicKeys {
 		topicPostings[string(key)] = []uint64{eventRef.FromTxNum}
 	}
-	if relPath == "" {
-		relPath = EventLogIndexSegmentPath(eventRef.FromTxNum, eventRef.ToTxNum)
-	}
-	ref := SegmentRef{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: eventRef.FromTxNum, ToTxNum: eventRef.ToTxNum, Path: filepath.ToSlash(relPath)}
 	return writeEventLogIndexSegment(dir, ref, addressPostings, topicPostings)
 }

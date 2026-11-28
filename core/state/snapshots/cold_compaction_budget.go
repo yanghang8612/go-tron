@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/maintenance"
@@ -20,14 +21,16 @@ const (
 // Protected by Runner.passMu. A merge recovery belongs to optional compaction,
 // independently of the deadline for publishing and pruning new cold history.
 type historyCompactionBudgetState struct {
-	notBefore            time.Time
-	pending              bool
-	pendingAt            time.Time
-	inputCosts           *historyCompactionCostCache
-	outerMetrics         *historyCompactionOuterMetrics
-	routingRetiredCursor retiredMetadataSweepCursor
-	systemRouting        systemRoutingRefreshState
-	preferMetadata       bool
+	notBefore              time.Time
+	pending                bool
+	pendingAt              time.Time
+	inputCosts             *historyCompactionCostCache
+	outerMetrics           *historyCompactionOuterMetrics
+	routingRetiredCursor   retiredMetadataSweepCursor
+	systemRouting          systemRoutingRefreshState
+	preferMetadata         bool
+	eventLogCompactHintBlk uint64
+	eventLogCompactIdleGen uint64
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -106,6 +109,42 @@ func (r *Runner) hasPotentialBusyCompaction() (bool, error) {
 		previous = candidate.history
 		if sources >= 2 && (sources >= maxSources || bytes == busyHistoryCompactionInputBytes) {
 			return true, nil
+		}
+	}
+	if r.cfg.CompactEventLogs && r.cfg.BuildEventLogs && r.compactionBudget.eventLogCompactIdleGen != manifest.Generation {
+		evCfg := r.cfg.EventLogCompaction.withDefaults()
+		evRefs := eventLogRefs(manifest)
+		startIdx := 0
+		if r.compactionBudget.eventLogCompactHintBlk > 0 {
+			startIdx = sort.Search(len(evRefs), func(i int) bool {
+				return evRefs[i].FromTxNum >= r.compactionBudget.eventLogCompactHintBlk
+			})
+		}
+		var runStart, prevEnd, runBytes uint64
+		var runCount int
+		for _, ref := range evRefs[startIdx:] {
+			if ref.AggregationSteps == 0 {
+				return true, nil
+			}
+			span := ref.ToTxNum - ref.FromTxNum + 1
+			if ref.ToTxNum-ref.FromTxNum == math.MaxUint64 {
+				span = math.MaxUint64
+			}
+			if span >= evCfg.TargetBlocks || ref.Size >= evCfg.MaxSourceMainBytes/2 {
+				runCount = 0
+				continue
+			}
+			if runCount == 0 || prevEnd == math.MaxUint64 || ref.FromTxNum != prevEnd+1 ||
+				ref.ToTxNum-runStart >= evCfg.TargetBlocks || ref.Size > evCfg.MaxSourceMainBytes-runBytes {
+				runStart, prevEnd, runBytes, runCount = ref.FromTxNum, ref.ToTxNum, ref.Size, 1
+				continue
+			}
+			prevEnd = ref.ToTxNum
+			runBytes += ref.Size
+			runCount++
+			if runCount >= evCfg.MinV5MergeSegments || ref.ToTxNum-runStart+1 >= evCfg.TargetBlocks/2 || runBytes >= evCfg.MaxSourceMainBytes/2 {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
@@ -199,9 +238,9 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 	defer release()
 	started := time.Now()
 	defer func() {
-		if busy && (total.Merged || total.RoutingBuilt || err != nil || total.Deferred) {
+		if busy && (total.Merged || total.RoutingBuilt || total.EventLogsCompacted || err != nil || total.Deferred) {
 			total.Recovery = historyCompactionRecovery(time.Since(started), err != nil)
-			if err == nil && !total.Merged && !total.RoutingBuilt && total.DeferReason != "import-load" {
+			if err == nil && !total.Merged && !total.RoutingBuilt && !total.EventLogsCompacted && total.DeferReason != "import-load" {
 				// The cheap manifest hint cannot see oversized logical values or
 				// record counts. Do not prioritize the same empty selection after
 				// every newly published leaf when the detailed budget rejects it.
@@ -303,7 +342,48 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			return total, err
 		}
 		if !result.Merged {
+			if r.cfg.CompactEventLogs && r.cfg.BuildEventLogs && !total.Merged && !total.RoutingBuilt {
+				evCfg := r.cfg.EventLogCompaction
+				evCfg.RetainObsoleteSegments = r.cfg.RetainObsoleteSegments
+				if evCfg.VerificationCache == nil {
+					evCfg.VerificationCache = r.cfg.ColdChainVerificationCache
+				}
+				if evCfg.MinFromBlockHint == 0 {
+					evCfg.MinFromBlockHint = r.compactionBudget.eventLogCompactHintBlk
+				}
+				evRes, evErr := CompactEventLogsContext(ctx, r.cfg.Dir, evCfg)
+				if evErr != nil {
+					return total, evErr
+				}
+				if evRes.Compacted {
+					r.compactionBudget.eventLogCompactIdleGen = 0
+					resolved := evCfg.withDefaults()
+					span := evRes.ToBlock - evRes.FromBlock + 1
+					if span >= resolved.TargetBlocks || evRes.NewMainBytes >= resolved.MaxSourceMainBytes/2 {
+						r.compactionBudget.eventLogCompactHintBlk = evRes.ToBlock + 1
+					} else {
+						r.compactionBudget.eventLogCompactHintBlk = evRes.FromBlock
+					}
+					total.EventLogsCompacted = true
+					total.EventLogCompaction = evRes
+					coldSnapshotLog.Info("Compacted cold event-log segments",
+						"fromBlock", evRes.FromBlock,
+						"toBlock", evRes.ToBlock,
+						"sources", evRes.SourceSegments,
+						"beforeBytes", evRes.SourceMainBytes+evRes.SourceIndexBytes,
+						"afterBytes", evRes.NewMainBytes+evRes.NewIndexBytes,
+						"savedBytes", evRes.BytesSaved,
+						"deletedFiles", evRes.DeletedFiles,
+						"retiredTrimmed", evRes.RetiredTrimmed)
+				} else if evRes.Generation > 0 {
+					r.compactionBudget.eventLogCompactIdleGen = evRes.Generation
+				}
+			}
 			if !total.Merged {
+				if total.EventLogsCompacted {
+					total.DeferReason = ""
+					return total, nil
+				}
 				total = result
 			}
 			return total, nil

@@ -46,6 +46,10 @@ type HistoryCompactionResult struct {
 	// RoutingBuilt publishes only an exact auxiliary absence index; canonical
 	// rows and pruning frontiers are unchanged.
 	RoutingBuilt bool
+	// EventLogsCompacted reports that an idle/gated pass merged legacy or small
+	// event-log pairs into V5+V3 segments.
+	EventLogsCompacted bool
+	EventLogCompaction EventLogCompactionResult
 	// MergePasses is one for CompactHistoryDomain. Runner summaries may drain
 	// multiple ready ranges and aggregate every emitted output for work metrics.
 	MergePasses       int
