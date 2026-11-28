@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/maintenance"
@@ -319,5 +321,201 @@ func TestEventLogCompactorConcurrentManifestSafety(t *testing.T) {
 	// 2. Concurrent change inside selected range MUST fail closed without mutating manifest.
 	if _, err := publishEventLogCompactionManifest(dir, sel, []SegmentRef{v5Ref, idxRef}); err == nil || !strings.Contains(err.Error(), "changed concurrently") {
 		t.Fatalf("expected fail-closed error when range already mutated concurrently, got %v", err)
+	}
+}
+
+func TestColdBuilderEventLogCompactionDoesNotStarveBehindRoutingAndHistory(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	addr := common.BytesToAddress(eventLogTestAddress(0x77))
+
+	var refs []SegmentRef
+	for block := uint64(1); block <= 12; block++ {
+		refs = append(refs, writeCompactionStateDomainChangeSegment(t, dir, block, block,
+			binaryStateDomainChange(block, block, 1, fmt.Sprintf("account-%d", block)))...)
+	}
+	ev1, idx1 := buildV4TestPairForCompactor(t, dir, 1, 5, common.Hash{1}, []EventLog{
+		eventLogV3TestRow(1, 0, 0, addr, common.Hash{1}, common.Hash{11}, common.Hash{21}, []byte("ev-1")),
+	})
+	ev2, idx2 := buildV4TestPairForCompactor(t, dir, 6, 10, common.Hash{2}, []EventLog{
+		eventLogV3TestRow(6, 0, 0, addr, common.Hash{2}, common.Hash{12}, common.Hash{22}, []byte("ev-2")),
+	})
+	refs = append(refs, ev1, idx1, ev2, idx2)
+	if err := PublishManifest(dir, NewManifest(1, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(&priorityCompactionTestChain{idle: false}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryDataset:     SegmentDatasetStateDomainChange,
+		HistoryCatchupMode: HistoryCatchupThroughput,
+		CompactMaxSteps:    4,
+		BuildEventLogs:     true,
+		CompactEventLogs:   true,
+		HeavyWorkGate:      maintenance.NewHeavyWorkGate(),
+		MetricsNamespace:   "test/" + strings.ReplaceAll(t.Name(), "/", "_") + "/",
+	})
+	t.Cleanup(runner.cancel)
+
+	// Turn 1 runs state-history routing or history compaction and increments nonEventCompactionTurns.
+	turn1, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	if (!turn1.RoutingBuilt && !turn1.Merged) || turn1.EventLogsCompacted {
+		t.Fatalf("turn 1 should prioritize routing/history first: %+v", turn1)
+	}
+	if runner.compactionBudget.nonEventCompactionTurns != 1 {
+		t.Fatalf("turn 1 nonEventCompactionTurns = %d, want 1", runner.compactionBudget.nonEventCompactionTurns)
+	}
+
+	// Turn 2 must preempt further routing/history backlog and compact the legacy event-log pairs.
+	runner.compactionBudget.notBefore = time.Time{}
+	runner.cfg.HeavyWorkGate = maintenance.NewHeavyWorkGate()
+	turn2, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+	if !turn2.EventLogsCompacted || !turn2.EventLogCompaction.Compacted ||
+		turn2.EventLogCompaction.FromBlock != 1 || turn2.EventLogCompaction.ToBlock != 10 {
+		t.Fatalf("turn 2 should compact legacy event logs without starvation: %+v", turn2)
+	}
+	if turn2.RoutingBuilt || turn2.Merged {
+		t.Fatalf("turn 2 unexpectedly mixed non-event compaction with event-log compaction: %+v", turn2)
+	}
+	if runner.compactionBudget.nonEventCompactionTurns != 0 {
+		t.Fatalf("turn 2 nonEventCompactionTurns = %d, want 0", runner.compactionBudget.nonEventCompactionTurns)
+	}
+	manifest, err := loadProductionManifestReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evList := eventLogRefs(manifest)
+	if len(evList) != 1 || evList[0].FromTxNum != 1 || evList[0].ToTxNum != 10 {
+		t.Fatalf("expected settled single V5 event-log segment after turn 2, got %+v", evList)
+	}
+	for _, oldRef := range []SegmentRef{ev1, idx1, ev2, idx2} {
+		if _, statErr := os.Stat(filepath.Join(dir, oldRef.Path)); !os.IsNotExist(statErr) {
+			t.Fatalf("old segment %q should have been deleted, statErr=%v", oldRef.Path, statErr)
+		}
+	}
+
+	// Turn 3 alternates cleanly back to routing/history work.
+	runner.compactionBudget.notBefore = time.Time{}
+	runner.cfg.HeavyWorkGate = maintenance.NewHeavyWorkGate()
+	turn3, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 3: %v", err)
+	}
+	if (!turn3.RoutingBuilt && !turn3.Merged) || turn3.EventLogsCompacted {
+		t.Fatalf("turn 3 should return to routing/history work: %+v", turn3)
+	}
+	if runner.compactionBudget.nonEventCompactionTurns != 1 {
+		t.Fatalf("turn 3 nonEventCompactionTurns = %d, want 1", runner.compactionBudget.nonEventCompactionTurns)
+	}
+	beforeTurn4, err := loadProductionManifestReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Turn 4 probes event-log compaction, finds none left, records idle gen, and falls through in the same turn.
+	runner.compactionBudget.notBefore = time.Time{}
+	runner.cfg.HeavyWorkGate = maintenance.NewHeavyWorkGate()
+	turn4, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 4: %v", err)
+	}
+	if (!turn4.RoutingBuilt && !turn4.Merged) || turn4.EventLogsCompacted {
+		t.Fatalf("turn 4 should fall through to routing/history when event logs are settled: %+v", turn4)
+	}
+	if runner.compactionBudget.eventLogCompactIdleGen != beforeTurn4.Generation {
+		t.Fatalf("turn 4 eventLogCompactIdleGen = %d, want %d", runner.compactionBudget.eventLogCompactIdleGen, beforeTurn4.Generation)
+	}
+}
+
+func TestColdBuilderEventLogCompactionSoftLoadArmsPendingAndBusyCap(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	addr := common.BytesToAddress(eventLogTestAddress(0x78))
+	ev1, idx1 := buildV4TestPairForCompactor(t, dir, 1, 5, common.Hash{1}, []EventLog{
+		eventLogV3TestRow(1, 0, 0, addr, common.Hash{1}, common.Hash{11}, common.Hash{21}, []byte("soft-1")),
+	})
+	ev2, idx2 := buildV4TestPairForCompactor(t, dir, 6, 10, common.Hash{2}, []EventLog{
+		eventLogV3TestRow(6, 0, 0, addr, common.Hash{2}, common.Hash{12}, common.Hash{22}, []byte("soft-2")),
+	})
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ev1, idx1, ev2, idx2})); err != nil {
+		t.Fatal(err)
+	}
+
+	softLoad := true
+	probe := func() maintenance.StoragePressure {
+		now := time.Now()
+		p := healthyHistoryLoad(now)
+		if softLoad {
+			p.DeviceBusyPPM = 960_000
+			p.DeviceQueueMilli = 3_000
+			p.DeviceAwait = 10 * time.Millisecond
+		}
+		return p
+	}
+	runner := NewRunner(&priorityCompactionTestChain{idle: false}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryDataset:     "", // intentionally empty to prove event-log readiness does not require HistoryDataset
+		HistoryCatchupMode: HistoryCatchupThroughput,
+		CompactMaxSteps:    1, // < 2 to prove small CompactMaxSteps still reports event-log readiness
+		BuildEventLogs:     true,
+		CompactEventLogs:   true,
+		HeavyWorkGate:      maintenance.NewHeavyWorkGate(),
+		HistoryLoadProbe:   probe,
+		MetricsNamespace:   "test/" + strings.ReplaceAll(t.Name(), "/", "_") + "/",
+	})
+	t.Cleanup(runner.cancel)
+
+	if got := runner.effectiveEventLogCompactionConfig(true).MaxSourceMainBytes; got != busyEventLogCompactionMaxSourceMainBytes {
+		t.Fatalf("busy MaxSourceMainBytes = %d, want %d", got, busyEventLogCompactionMaxSourceMainBytes)
+	}
+	runner.syncEventLogCompactionMode(true)
+	runner.compactionBudget.eventLogCompactHintBlk = 12345
+	runner.compactionBudget.eventLogCompactIdleGen = 99
+	runner.syncEventLogCompactionMode(false)
+	if runner.compactionBudget.eventLogCompactHintBlk != 0 || runner.compactionBudget.eventLogCompactIdleGen != 0 {
+		t.Fatalf("busy->idle did not reset hint/idle gen: hint=%d gen=%d",
+			runner.compactionBudget.eventLogCompactHintBlk, runner.compactionBudget.eventLogCompactIdleGen)
+	}
+
+	potential, err := runner.hasPotentialBusyCompaction()
+	if err != nil || !potential {
+		t.Fatalf("hasPotentialBusyCompaction = (%v, %v), want (true, nil)", potential, err)
+	}
+
+	// Under soft pressure (level=1, !hard), busy compaction returns import-load with zero RetryDeadline and arms pending.
+	deferred, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("soft-load compactHistory: %v", err)
+	}
+	if !deferred.Deferred || deferred.DeferReason != "import-load" || !deferred.RetryDeadline.IsZero() {
+		t.Fatalf("unexpected soft-load defer result: %+v", deferred)
+	}
+	if !runner.compactionBudget.pending {
+		t.Fatal("soft-load import-load did not arm compactionBudget.pending")
+	}
+
+	// While level stays 1, shouldPrioritizePendingCompaction keeps returning false without clearing pending.
+	if runner.shouldPrioritizePendingCompaction(time.Now()) || !runner.compactionBudget.pending {
+		t.Fatal("shouldPrioritizePendingCompaction should wait silently at level=1 without clearing pending")
+	}
+
+	// Recover storage load to level 2 across two spaced healthy samples; pending priority must trigger cleanly.
+	softLoad = false
+	runner.historyLoad.lastAccepted = time.Now().Add(-10 * time.Second)
+	runner.refreshHistoryLoad(time.Now())
+	runner.historyLoad.lastAccepted = time.Now().Add(-10 * time.Second)
+	if !runner.shouldPrioritizePendingCompaction(time.Now()) {
+		t.Fatalf("expected shouldPrioritizePendingCompaction=true once recovered to level=%d", runner.historyLoad.level)
+	}
+	if runner.compactionBudget.pending {
+		t.Fatal("shouldPrioritizePendingCompaction did not consume pending")
 	}
 }

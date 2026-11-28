@@ -11,26 +11,30 @@ import (
 )
 
 const (
-	busyHistoryCompactionInputBytes       = uint64(128 << 20)
-	busyHistoryCompactionLogicalBytes     = uint64(512 << 20)
-	busyHistoryCompactionInputRecords     = uint64(400_000)
-	busyHistoryCompactionSources          = uint64(4)
-	busyHistoryCompactionNoCandidateRetry = 30 * time.Second
+	busyHistoryCompactionInputBytes          = uint64(128 << 20)
+	busyHistoryCompactionLogicalBytes        = uint64(512 << 20)
+	busyHistoryCompactionInputRecords        = uint64(400_000)
+	busyHistoryCompactionSources             = uint64(4)
+	busyHistoryCompactionNoCandidateRetry    = 30 * time.Second
+	busyEventLogCompactionMaxSourceMainBytes = uint64(128 << 20)
+	eventLogCompactionFairShareInterval      = 1
 )
 
 // Protected by Runner.passMu. A merge recovery belongs to optional compaction,
 // independently of the deadline for publishing and pruning new cold history.
 type historyCompactionBudgetState struct {
-	notBefore              time.Time
-	pending                bool
-	pendingAt              time.Time
-	inputCosts             *historyCompactionCostCache
-	outerMetrics           *historyCompactionOuterMetrics
-	routingRetiredCursor   retiredMetadataSweepCursor
-	systemRouting          systemRoutingRefreshState
-	preferMetadata         bool
-	eventLogCompactHintBlk uint64
-	eventLogCompactIdleGen uint64
+	notBefore               time.Time
+	pending                 bool
+	pendingAt               time.Time
+	inputCosts              *historyCompactionCostCache
+	outerMetrics            *historyCompactionOuterMetrics
+	routingRetiredCursor    retiredMetadataSweepCursor
+	systemRouting           systemRoutingRefreshState
+	preferMetadata          bool
+	nonEventCompactionTurns int
+	eventLogCompactHintBlk  uint64
+	eventLogCompactIdleGen  uint64
+	eventLogCompactLastBusy bool
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -67,87 +71,175 @@ func (r *Runner) hasPotentialBusyCompaction() (bool, error) {
 		return false, err
 	}
 	cfg, ok := DefaultDomainRegistry().Dataset(r.cfg.HistoryDataset)
-	if !ok {
-		return false, nil
-	}
 	maxSources := busyHistoryCompactionSources
 	if r.cfg.CompactMaxSteps > 0 {
 		maxSources = min(maxSources, r.cfg.CompactMaxSteps)
 	}
-	if maxSources < 2 {
-		return false, nil
-	}
-	var sources, bytes uint64
-	var previous SegmentRef
-	for _, candidate := range filterHistoryProofProtectedCandidates(r.cfg.Dir, historyCompactionCandidates(manifest, cfg)) {
-		if candidate.history.effectiveAggregationSteps() != 1 {
-			sources, bytes = 0, 0
-			continue
-		}
-		if sources > 0 && !historySegmentsAreContiguous(previous, candidate.history) {
-			sources, bytes = 0, 0
-		}
-		size := candidate.history.Size
-		for _, companion := range candidate.companions {
-			if companion.Size > math.MaxUint64-size {
-				size = math.MaxUint64
-				break
-			}
-			size += companion.Size
-		}
-		if size > busyHistoryCompactionInputBytes-bytes {
-			if sources >= 2 {
-				return true, nil
-			}
-			sources, bytes = 0, 0
-		}
-		if size > busyHistoryCompactionInputBytes {
-			continue
-		}
-		sources++
-		bytes += size
-		previous = candidate.history
-		if sources >= 2 && (sources >= maxSources || bytes == busyHistoryCompactionInputBytes) {
-			return true, nil
-		}
-	}
-	if r.cfg.CompactEventLogs && r.cfg.BuildEventLogs && r.compactionBudget.eventLogCompactIdleGen != manifest.Generation {
-		evCfg := r.cfg.EventLogCompaction.withDefaults()
-		evRefs := eventLogRefs(manifest)
-		startIdx := 0
-		if r.compactionBudget.eventLogCompactHintBlk > 0 {
-			startIdx = sort.Search(len(evRefs), func(i int) bool {
-				return evRefs[i].FromTxNum >= r.compactionBudget.eventLogCompactHintBlk
-			})
-		}
-		var runStart, prevEnd, runBytes uint64
-		var runCount int
-		for _, ref := range evRefs[startIdx:] {
-			if ref.AggregationSteps == 0 {
-				return true, nil
-			}
-			span := ref.ToTxNum - ref.FromTxNum + 1
-			if ref.ToTxNum-ref.FromTxNum == math.MaxUint64 {
-				span = math.MaxUint64
-			}
-			if span >= evCfg.TargetBlocks || ref.Size >= evCfg.MaxSourceMainBytes/2 {
-				runCount = 0
+	if ok && maxSources >= 2 {
+		var sources, bytes uint64
+		var previous SegmentRef
+		for _, candidate := range filterHistoryProofProtectedCandidates(r.cfg.Dir, historyCompactionCandidates(manifest, cfg)) {
+			if candidate.history.effectiveAggregationSteps() != 1 {
+				sources, bytes = 0, 0
 				continue
 			}
-			if runCount == 0 || prevEnd == math.MaxUint64 || ref.FromTxNum != prevEnd+1 ||
-				ref.ToTxNum-runStart >= evCfg.TargetBlocks || ref.Size > evCfg.MaxSourceMainBytes-runBytes {
-				runStart, prevEnd, runBytes, runCount = ref.FromTxNum, ref.ToTxNum, ref.Size, 1
+			if sources > 0 && !historySegmentsAreContiguous(previous, candidate.history) {
+				sources, bytes = 0, 0
+			}
+			size := candidate.history.Size
+			for _, companion := range candidate.companions {
+				if companion.Size > math.MaxUint64-size {
+					size = math.MaxUint64
+					break
+				}
+				size += companion.Size
+			}
+			if size > busyHistoryCompactionInputBytes-bytes {
+				if sources >= 2 {
+					return true, nil
+				}
+				sources, bytes = 0, 0
+			}
+			if size > busyHistoryCompactionInputBytes {
 				continue
 			}
-			prevEnd = ref.ToTxNum
-			runBytes += ref.Size
-			runCount++
-			if runCount >= evCfg.MinV5MergeSegments || ref.ToTxNum-runStart+1 >= evCfg.TargetBlocks/2 || runBytes >= evCfg.MaxSourceMainBytes/2 {
+			sources++
+			bytes += size
+			previous = candidate.history
+			if sources >= 2 && (sources >= maxSources || bytes == busyHistoryCompactionInputBytes) {
 				return true, nil
 			}
 		}
 	}
-	return false, nil
+	return r.hasPotentialEventLogCompaction(manifest, true), nil
+}
+
+func (r *Runner) syncEventLogCompactionMode(busy bool) {
+	if r.compactionBudget.eventLogCompactLastBusy != busy {
+		r.compactionBudget.eventLogCompactIdleGen = 0
+		if !busy {
+			// Transitioning from busy (128 MiB cap) to idle (256 MiB cap) can
+			// settle earlier partial merges into full 65k-block segments.
+			r.compactionBudget.eventLogCompactHintBlk = 0
+		}
+		r.compactionBudget.eventLogCompactLastBusy = busy
+	}
+}
+
+func (r *Runner) effectiveEventLogCompactionConfig(busy bool) EventLogCompactionConfig {
+	evCfg := r.cfg.EventLogCompaction.withDefaults()
+	evCfg.RetainObsoleteSegments = r.cfg.RetainObsoleteSegments
+	if evCfg.VerificationCache == nil {
+		evCfg.VerificationCache = r.cfg.ColdChainVerificationCache
+	}
+	if evCfg.MinFromBlockHint == 0 {
+		evCfg.MinFromBlockHint = r.compactionBudget.eventLogCompactHintBlk
+	}
+	if busy && evCfg.MaxSourceMainBytes > busyEventLogCompactionMaxSourceMainBytes {
+		evCfg.MaxSourceMainBytes = busyEventLogCompactionMaxSourceMainBytes
+	}
+	return evCfg
+}
+
+func (r *Runner) hasPotentialEventLogCompaction(manifest *Manifest, busy bool) bool {
+	if !r.cfg.CompactEventLogs || !r.cfg.BuildEventLogs || manifest == nil {
+		return false
+	}
+	sameMode := r.compactionBudget.eventLogCompactLastBusy == busy
+	if sameMode && r.compactionBudget.eventLogCompactIdleGen == manifest.Generation {
+		return false
+	}
+	evCfg := r.effectiveEventLogCompactionConfig(busy)
+	if !sameMode && !busy {
+		evCfg.MinFromBlockHint = 0
+	}
+	evRefs := eventLogRefs(manifest)
+	startIdx := 0
+	if evCfg.MinFromBlockHint > 0 {
+		startIdx = sort.Search(len(evRefs), func(i int) bool {
+			return evRefs[i].FromTxNum >= evCfg.MinFromBlockHint
+		})
+	}
+	var runStart, prevEnd, runBytes uint64
+	var runCount int
+	for _, ref := range evRefs[startIdx:] {
+		if ref.AggregationSteps == 0 {
+			return true
+		}
+		span := ref.ToTxNum - ref.FromTxNum + 1
+		if ref.ToTxNum-ref.FromTxNum == math.MaxUint64 {
+			span = math.MaxUint64
+		}
+		if span >= evCfg.TargetBlocks || ref.Size >= evCfg.MaxSourceMainBytes/2 {
+			runCount = 0
+			continue
+		}
+		if runCount == 0 || prevEnd == math.MaxUint64 || ref.FromTxNum != prevEnd+1 ||
+			ref.ToTxNum-runStart >= evCfg.TargetBlocks || ref.Size > evCfg.MaxSourceMainBytes-runBytes {
+			runStart, prevEnd, runBytes, runCount = ref.FromTxNum, ref.ToTxNum, ref.Size, 1
+			continue
+		}
+		prevEnd = ref.ToTxNum
+		runBytes += ref.Size
+		runCount++
+		if runCount >= evCfg.MinV5MergeSegments || ref.ToTxNum-runStart+1 >= evCfg.TargetBlocks/2 || runBytes >= evCfg.MaxSourceMainBytes/2 {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) tryCompactEventLogs(ctx context.Context, busy bool) (EventLogCompactionResult, bool, error) {
+	if !r.cfg.CompactEventLogs || !r.cfg.BuildEventLogs {
+		return EventLogCompactionResult{}, false, nil
+	}
+	r.syncEventLogCompactionMode(busy)
+	if r.compactionBudget.eventLogCompactIdleGen != 0 {
+		manifest, err := loadProductionManifestReadOnly(r.cfg.Dir)
+		if err == nil && manifest.Generation == r.compactionBudget.eventLogCompactIdleGen {
+			r.compactionBudget.nonEventCompactionTurns = 0
+			return EventLogCompactionResult{Generation: manifest.Generation}, false, nil
+		}
+	}
+	evCfg := r.effectiveEventLogCompactionConfig(busy)
+	evRes, evErr := CompactEventLogsContext(ctx, r.cfg.Dir, evCfg)
+	if evErr != nil {
+		return EventLogCompactionResult{}, false, evErr
+	}
+	if evRes.Compacted {
+		r.compactionBudget.eventLogCompactIdleGen = 0
+		r.compactionBudget.nonEventCompactionTurns = 0
+		resolved := evCfg.withDefaults()
+		span := evRes.ToBlock - evRes.FromBlock + 1
+		if evRes.ToBlock-evRes.FromBlock == math.MaxUint64 {
+			span = math.MaxUint64
+		}
+		if span >= resolved.TargetBlocks || evRes.NewMainBytes >= resolved.MaxSourceMainBytes/2 {
+			if evRes.ToBlock < math.MaxUint64 {
+				r.compactionBudget.eventLogCompactHintBlk = evRes.ToBlock + 1
+			} else {
+				r.compactionBudget.eventLogCompactHintBlk = evRes.ToBlock
+			}
+		} else {
+			r.compactionBudget.eventLogCompactHintBlk = evRes.FromBlock
+		}
+		coldSnapshotLog.Info("Compacted cold event-log segments",
+			"fromBlock", evRes.FromBlock,
+			"toBlock", evRes.ToBlock,
+			"sources", evRes.SourceSegments,
+			"beforeBytes", evRes.SourceMainBytes+evRes.SourceIndexBytes,
+			"afterBytes", evRes.NewMainBytes+evRes.NewIndexBytes,
+			"savedBytes", evRes.BytesSaved,
+			"deletedFiles", evRes.DeletedFiles,
+			"retiredTrimmed", evRes.RetiredTrimmed,
+			"busy", busy)
+		return evRes, true, nil
+	}
+	if evRes.Generation > 0 {
+		r.compactionBudget.eventLogCompactIdleGen = evRes.Generation
+	}
+	r.compactionBudget.nonEventCompactionTurns = 0
+	return evRes, false, nil
 }
 
 func historyCompactionRecovery(work time.Duration, failed bool) time.Duration {
@@ -199,6 +291,16 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 	// behind. That transition must not admit an unbounded catch-up merge.
 	busy := r.throughputCatchup() && (catchingUp || r.historySyncBudgetActive())
 	if busy && !r.historyLoadPermitsMerge() {
+		if !r.historyLoad.hard && !time.Now().Before(r.compactionBudget.notBefore) {
+			potential, err := r.hasPotentialBusyCompaction()
+			if err != nil {
+				return total, err
+			}
+			if potential {
+				r.compactionBudget.pending = true
+				r.compactionBudget.pendingAt = r.compactionBudget.notBefore
+			}
+		}
 		return HistoryCompactionResult{Deferred: true, DeferReason: "import-load"}, nil
 	}
 	now := time.Now()
@@ -251,6 +353,20 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			total.RetryDeadline = r.compactionBudget.notBefore
 		}
 	}()
+	// Fair-share turn: give cold event-log compaction a periodic slot even while
+	// state-history routing refreshes and leaf merges have pending backlog.
+	if r.cfg.CompactEventLogs && r.cfg.BuildEventLogs && r.compactionBudget.nonEventCompactionTurns >= eventLogCompactionFairShareInterval {
+		evRes, compacted, evErr := r.tryCompactEventLogs(ctx, busy)
+		if evErr != nil {
+			return total, evErr
+		}
+		if compacted {
+			total.Dataset = r.cfg.HistoryDataset
+			total.EventLogsCompacted = true
+			total.EventLogCompaction = evRes
+			return total, nil
+		}
+	}
 	// The small singleton routing index removes cross-segment negative reads
 	// without rewriting canonical rows or enlarging streaming merge budgets.
 	if r.cfg.HistoryDataset == SegmentDatasetStateDomainChange {
@@ -277,6 +393,7 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			}
 			if built {
 				r.compactionBudget.preferMetadata = !r.compactionBudget.preferMetadata
+				r.compactionBudget.nonEventCompactionTurns++
 				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 			}
 		}
@@ -288,6 +405,7 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			return total, routeErr
 		}
 		if built {
+			r.compactionBudget.nonEventCompactionTurns++
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
 		var expansionDenied bool
@@ -304,6 +422,7 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			return total, routeErr
 		}
 		if built {
+			r.compactionBudget.nonEventCompactionTurns++
 			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 		}
 		if expansionDenied {
@@ -342,41 +461,14 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			return total, err
 		}
 		if !result.Merged {
-			if r.cfg.CompactEventLogs && r.cfg.BuildEventLogs && !total.Merged && !total.RoutingBuilt {
-				evCfg := r.cfg.EventLogCompaction
-				evCfg.RetainObsoleteSegments = r.cfg.RetainObsoleteSegments
-				if evCfg.VerificationCache == nil {
-					evCfg.VerificationCache = r.cfg.ColdChainVerificationCache
-				}
-				if evCfg.MinFromBlockHint == 0 {
-					evCfg.MinFromBlockHint = r.compactionBudget.eventLogCompactHintBlk
-				}
-				evRes, evErr := CompactEventLogsContext(ctx, r.cfg.Dir, evCfg)
+			if !total.Merged && !total.RoutingBuilt {
+				evRes, compacted, evErr := r.tryCompactEventLogs(ctx, busy)
 				if evErr != nil {
 					return total, evErr
 				}
-				if evRes.Compacted {
-					r.compactionBudget.eventLogCompactIdleGen = 0
-					resolved := evCfg.withDefaults()
-					span := evRes.ToBlock - evRes.FromBlock + 1
-					if span >= resolved.TargetBlocks || evRes.NewMainBytes >= resolved.MaxSourceMainBytes/2 {
-						r.compactionBudget.eventLogCompactHintBlk = evRes.ToBlock + 1
-					} else {
-						r.compactionBudget.eventLogCompactHintBlk = evRes.FromBlock
-					}
+				if compacted {
 					total.EventLogsCompacted = true
 					total.EventLogCompaction = evRes
-					coldSnapshotLog.Info("Compacted cold event-log segments",
-						"fromBlock", evRes.FromBlock,
-						"toBlock", evRes.ToBlock,
-						"sources", evRes.SourceSegments,
-						"beforeBytes", evRes.SourceMainBytes+evRes.SourceIndexBytes,
-						"afterBytes", evRes.NewMainBytes+evRes.NewIndexBytes,
-						"savedBytes", evRes.BytesSaved,
-						"deletedFiles", evRes.DeletedFiles,
-						"retiredTrimmed", evRes.RetiredTrimmed)
-				} else if evRes.Generation > 0 {
-					r.compactionBudget.eventLogCompactIdleGen = evRes.Generation
 				}
 			}
 			if !total.Merged {
@@ -388,6 +480,7 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			}
 			return total, nil
 		}
+		r.compactionBudget.nonEventCompactionTurns++
 		mergeHistoryCompactionResult(&total, result)
 		if !drain || r.cfg.MaxCompactionPasses > 0 && uint64(total.MergePasses) >= r.cfg.MaxCompactionPasses {
 			return total, nil

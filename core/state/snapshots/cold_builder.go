@@ -1176,7 +1176,11 @@ func (r *Runner) onePassWithMaintenanceContext(ctx context.Context, beforeMerge 
 		// A pending merge's priority pass intentionally does not build history.
 		// Its verified published/eligible boundaries still describe archive debt;
 		// using HistoryNeedsCatchup (which requires Built) loses that budget.
-		result.Compaction, err = r.compactHistory(ctx, result.PublishedBlock < result.EligibleCutoffBlock)
+		compactionCatchingUp := result.PublishedBlock < result.EligibleCutoffBlock
+		if !historyPassRan && !compactionCatchingUp {
+			compactionCatchingUp = r.lastPublishedBlock.Load() < r.lastEligibleCutoff.Load()
+		}
+		result.Compaction, err = r.compactHistory(ctx, compactionCatchingUp)
 		result.CompactionDuration = coldSnapshotPhaseDuration(phaseStart)
 		r.recordCompactionBudget(result.Compaction)
 		if err == nil {
@@ -3109,7 +3113,7 @@ func (r *Runner) recordPass(result PassResult, start time.Time, passErr error) {
 		r.segmentsCompacted.Add(uint64(result.Compaction.SegmentsMerged))
 		r.compactionMerges.Add(uint64(result.Compaction.MergePasses))
 	}
-	if result.HistoryNeedsCatchup() && !result.Compaction.Merged && !result.Compaction.RoutingBuilt {
+	if result.HistoryNeedsCatchup() && !result.Compaction.Merged && !result.Compaction.RoutingBuilt && !result.Compaction.EventLogsCompacted {
 		r.compactionCatchupDefers.Add(1)
 	}
 	if result.DerivedSidecarsDeferred {

@@ -132,7 +132,7 @@ func CompactEventLogsContext(ctx context.Context, dir string, cfg EventLogCompac
 	cfg = cfg.withDefaults()
 	started := time.Now()
 
-	manifest, err := LoadProductionManifest(dir)
+	manifest, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		return EventLogCompactionResult{}, err
 	}
@@ -160,10 +160,7 @@ func CompactEventLogsContext(ctx context.Context, dir string, cfg EventLogCompac
 		return EventLogCompactionResult{}, err
 	}
 
-	pinned, err := OpenPinnedManager(dir, manifest)
-	if err != nil {
-		return EventLogCompactionResult{}, err
-	}
+	pinned := newPinnedManager(dir, manifestLookupView(manifest), cfg.VerificationCache)
 	reader, release, err := pinEventLogRewriteReader(pinned)
 	if err != nil {
 		return EventLogCompactionResult{}, err
@@ -538,7 +535,7 @@ func publishEventLogCompactionManifest(dir string, sel eventLogCompactionSelecti
 	manifestPublicationMu.Lock()
 	defer manifestPublicationMu.Unlock()
 
-	current, err := LoadProductionManifest(dir)
+	current, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +615,7 @@ func deleteObsoleteEventLogCompactionFiles(dir string, sources, replacedIndexes,
 	}
 	defer release()
 
-	manifest, err := LoadProductionManifest(dir)
+	manifest, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +662,7 @@ func trimUnlinkedEventLogRetiredManifest(dir string, deletedPaths map[string]str
 	manifestPublicationMu.Lock()
 	defer manifestPublicationMu.Unlock()
 
-	current, err := LoadProductionManifest(dir)
+	current, err := loadProductionManifestReadOnly(dir)
 	if err != nil {
 		return 0, err
 	}
