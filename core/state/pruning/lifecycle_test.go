@@ -1442,3 +1442,21 @@ func TestSnapshotLifecyclePureEventLogPassBootstrapsThenDefersPrune(t *testing.T
 		t.Fatalf("pruner passes after deferred pass 2 = %d, want %d", got, passesAfterOne)
 	}
 }
+
+func TestHasStateDomainHistoryRef(t *testing.T) {
+	if hasStateDomainHistoryRef(nil) {
+		t.Fatal("nil refs unexpectedly reported state history")
+	}
+	if hasStateDomainHistoryRef([]snapshots.SegmentRef{
+		{Dataset: snapshots.SegmentDatasetEventLog, Kind: snapshots.SegmentEventLog, FromTxNum: 1, ToTxNum: 2, Path: "log/1-2.seg"},
+		{Dataset: snapshots.SegmentDatasetStateDomainChange, Kind: snapshots.SegmentInverted, FromTxNum: 1, ToTxNum: 2, Path: "history/1-2.idx"},
+	}) {
+		t.Fatal("non-history refs unexpectedly reported state history")
+	}
+	if !hasStateDomainHistoryRef([]snapshots.SegmentRef{
+		{Dataset: snapshots.SegmentDatasetEventLog, Kind: snapshots.SegmentEventLog, FromTxNum: 1, ToTxNum: 2, Path: "log/1-2.seg"},
+		{Dataset: snapshots.SegmentDatasetStateDomainChange, Kind: snapshots.SegmentHistory, FromTxNum: 1, ToTxNum: 2, Path: "history/1-2.seg"},
+	}) {
+		t.Fatal("missing state-domain history detection")
+	}
+}

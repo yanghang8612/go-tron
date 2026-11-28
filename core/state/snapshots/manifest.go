@@ -426,7 +426,7 @@ func (m *Manifest) validate(ordered bool) error {
 	if err := validateChainIndexCompanions(m); err != nil {
 		return err
 	}
-	if err := validateEventLogIndexCompanions(m); err != nil {
+	if err := validateEventLogIndexCompanionsWithOrder(m, ordered); err != nil {
 		return err
 	}
 	return nil
@@ -574,7 +574,7 @@ func validateHistoryBinaryCompanionTriples(manifest *Manifest, byPath map[string
 	if manifest == nil {
 		return nil
 	}
-	historyByCompanion := make(map[string]struct{})
+	historyByCompanion := make(map[string]struct{}, len(manifest.Segments)/2)
 	registry := DefaultDomainRegistry()
 	// Duplicate paths have already failed Validate. Retain every identity
 	// predicate of DomainCfg.historyCompanionRef, including the legacy zero
@@ -771,10 +771,34 @@ func validateSegmentRef(seg SegmentRef) error {
 	if seg.ToTxNum < seg.FromTxNum {
 		return fmt.Errorf("snapshots: segment %q range [%d,%d] is inverted", seg.Path, seg.FromTxNum, seg.ToTxNum)
 	}
-	if seg.Path == "" || filepath.IsAbs(seg.Path) || filepath.Clean(seg.Path) != seg.Path || seg.Path == "." || hasParentDir(seg.Path) {
+	if seg.Path == "" || (!isCleanRelativeSlashPath(seg.Path) && (filepath.IsAbs(seg.Path) || filepath.Clean(seg.Path) != seg.Path || seg.Path == "." || hasParentDir(seg.Path))) {
 		return fmt.Errorf("snapshots: invalid relative segment path %q", seg.Path)
 	}
 	return nil
+}
+
+func isCleanRelativeSlashPath(path string) bool {
+	if filepath.Separator != '/' || path == "" || path[0] == '/' || path[len(path)-1] == '/' {
+		return false
+	}
+	segStart := 0
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) {
+			part := path[segStart:]
+			return part != "" && part != "." && part != ".."
+		}
+		if path[i] == '\\' {
+			return false
+		}
+		if path[i] == '/' {
+			part := path[segStart:i]
+			if part == "" || part == "." || part == ".." {
+				return false
+			}
+			segStart = i + 1
+		}
+	}
+	return true
 }
 
 func isChainBlockSegmentKind(kind SegmentKind) bool {

@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const eventLogReplayMemory = 8 << 20
+const eventLogReplayMemory = 192 << 20
 
 var eventReplayMetrics = newEventReplayMetrics(defaultColdSnapshotMetrics + "history/event_replay/")
 
@@ -143,6 +143,7 @@ func (r *eventLogBuildReplay) IterateEventLogs(from, to uint64, filter EventLogF
 		return r.EventLogReader.IterateEventLogs(from, to, filter, fn)
 	}
 	r.replayed = true
+	defer func() { r.rows = nil }()
 	for _, row := range r.rows {
 		if cont, err := fn(row); err != nil || !cont {
 			return err

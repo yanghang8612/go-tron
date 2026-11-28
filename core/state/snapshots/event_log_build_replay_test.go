@@ -64,8 +64,8 @@ func TestEventLogBuildReplayEquivalentAndBounded(t *testing.T) {
 			if replay.sourcePasses != wantScans || replay.sourceRows != uint64(len(rows)) || replay.peakCharge > limit || replay.replayed == overflow {
 				t.Fatalf("incorrect replay telemetry: %+v", replay)
 			}
-			if !overflow && replay.peakCharge != charge {
-				t.Fatal("peak charge does not account for all retained rows")
+			if !overflow && (replay.peakCharge != charge || len(replay.rows) != 0) {
+				t.Fatalf("replay peakCharge=%d want=%d or retained rows=%d", replay.peakCharge, charge, len(replay.rows))
 			}
 			prefix := "test/" + t.Name() + "/"
 			m := newEventReplayMetrics(prefix)

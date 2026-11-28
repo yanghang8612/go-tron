@@ -382,3 +382,87 @@ func TestManifestRejectsUnsafePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestIsCleanRelativeSlashPathMatchesFilepathClean(t *testing.T) {
+	cases := []string{
+		"history/a-1-2.seg",
+		"log/00001-00002.idx",
+		"single.seg",
+		"a/.hidden",
+		"",
+		"/",
+		"/abs.seg",
+		"trailing/",
+		".",
+		"..",
+		"./rel.seg",
+		"../parent.seg",
+		"a/./b.seg",
+		"a/../b.seg",
+		"a//b.seg",
+		`a\b.seg`,
+	}
+	for _, p := range cases {
+		legacyReject := p == "" || filepath.IsAbs(p) || filepath.Clean(p) != p || p == "." || hasParentDir(p)
+		fastAccept := isCleanRelativeSlashPath(p)
+		if fastAccept && legacyReject {
+			t.Fatalf("fast path accepted unsafe path %q", p)
+		}
+		if filepath.Separator == '/' && !legacyReject && p != `a\b.seg` && !fastAccept {
+			t.Fatalf("fast path rejected clean path %q", p)
+		}
+	}
+}
+
+func TestValidateEventLogIndexCompanionsOrderedMatchesUnordered(t *testing.T) {
+	refs := []SegmentRef{
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 20, Path: "log/10-20.seg", Size: 100},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 1, ToTxNum: 9, Path: "log/1-9.seg", Size: 100},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 1, ToTxNum: 20, Path: "log/1-20.idx", Size: 50},
+	}
+	orderedManifest := &Manifest{Segments: append([]SegmentRef(nil), refs...)}
+	sortSegments(orderedManifest.Segments)
+	if err := validateEventLogIndexCompanionsWithOrder(orderedManifest, true); err != nil {
+		t.Fatalf("ordered companion validation failed: %v", err)
+	}
+	if err := validateEventLogIndexCompanionsWithOrder(orderedManifest, false); err != nil {
+		t.Fatalf("unordered companion validation failed: %v", err)
+	}
+
+	gapped := &Manifest{Segments: []SegmentRef{
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 1, ToTxNum: 9, Path: "log/1-9.seg", Size: 100},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 11, ToTxNum: 20, Path: "log/11-20.seg", Size: 100},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 1, ToTxNum: 20, Path: "log/1-20.idx", Size: 50},
+	}}
+	sortSegments(gapped.Segments)
+	if err := validateEventLogIndexCompanionsWithOrder(gapped, true); err == nil {
+		t.Fatal("ordered companion validation accepted gap")
+	}
+}
+
+func TestNextEventLogCatchupRangeZeroCopyMatchesCases(t *testing.T) {
+	empty := &Manifest{}
+	if got, ok := nextEventLogCatchupRange(empty, 100, 10); !ok || got.from != 1 || got.to != 10 {
+		t.Fatalf("empty range = %+v ok=%v, want [1,10]", got, ok)
+	}
+
+	contiguous := &Manifest{Segments: []SegmentRef{
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 1, ToTxNum: 10, Path: "log/1-10.seg", Size: 1},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 1, ToTxNum: 10, Path: "log/1-10.idx", Size: 1},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 15, ToTxNum: 20, Path: "log/15-20.seg", Size: 1},
+	}}
+	if got, ok := nextEventLogCatchupRange(contiguous, 25, 10); !ok || got.from != 11 || got.to != 14 {
+		t.Fatalf("gap range = %+v ok=%v, want [11,14]", got, ok)
+	}
+
+	// Overlapping companion beyond covered=5 expands to full connected component [6,9].
+	overlap := &Manifest{Segments: []SegmentRef{
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 1, ToTxNum: 5, Path: "log/1-5.seg", Size: 1},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 1, ToTxNum: 5, Path: "log/1-5.idx", Size: 1},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 6, ToTxNum: 8, Path: "log/6-8.seg", Size: 1},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 7, ToTxNum: 9, Path: "log/7-9.idx", Size: 1},
+	}}
+	if got, ok := nextEventLogCatchupRange(overlap, 20, 2); !ok || got.from != 6 || got.to != 9 {
+		t.Fatalf("overlap range = %+v ok=%v, want [6,9]", got, ok)
+	}
+}

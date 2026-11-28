@@ -693,7 +693,6 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 	if segmentCapacity > 0 {
 		segments = make([]SegmentRef, 0, segmentCapacity)
 	}
-	segments = append(segments, refs...)
 	generation := uint64(1)
 	var retired []SegmentRef
 	if retiredCapacity > 0 {
@@ -722,6 +721,9 @@ func (a *Aggregator) integrateWithManifestMode(visibleStart, visibleEnd uint64, 
 			}
 		}
 	}
+	// Append new refs after the already-sorted existing prefix so PublishManifest
+	// sorts a nearly sorted slice instead of shifting everything from index 0.
+	segments = append(segments, refs...)
 	// These slices are already private to this integration. PublishManifest
 	// performs the one required sort and validation before durable publication.
 	manifest := &Manifest{

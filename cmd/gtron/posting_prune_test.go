@@ -69,7 +69,7 @@ func TestRuntimePostingPruneRechecksAfterCoreWait(t *testing.T) {
 					pressure.DeviceAwait = 3 * time.Millisecond
 				case "debt-relief-late-queue":
 					pressure.CompactionDebt = 40 << 30
-					pressure.DeviceQueueMilli = 8_001
+					pressure.DeviceQueueMilli = 16_001
 				case "stale-device":
 					pressure.DeviceSampledAt = time.Now().Add(-16 * time.Second)
 				case "unavailable":

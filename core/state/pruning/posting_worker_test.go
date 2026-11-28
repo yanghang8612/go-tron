@@ -330,8 +330,8 @@ func TestPostingPruneWorkerPressureAdmission(t *testing.T) {
 			p.CompactionDebt = 40 << 30
 			p.DeviceAwait = 2*time.Millisecond + 1
 		}, false},
-		{"debt-relief-queue-limit", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 8_000 }, true},
-		{"debt-relief-queue-over", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 8_001 }, false},
+		{"debt-relief-queue-limit", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 16_000 }, true},
+		{"debt-relief-queue-over", func(p *maintenance.StoragePressure) { p.CompactionDebt = 40 << 30; p.DeviceQueueMilli = 16_001 }, false},
 		{"negative-latency", func(p *maintenance.StoragePressure) { p.DeviceAwait = -1 }, false},
 		{"queue-limit", func(p *maintenance.StoragePressure) { p.DeviceQueueMilli = 32_001 }, false},
 		{"memtable-near-stop", func(p *maintenance.StoragePressure) { p.MemTableCount = 7 }, false},

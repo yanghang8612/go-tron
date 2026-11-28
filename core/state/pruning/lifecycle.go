@@ -270,6 +270,7 @@ func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error)
 	}()
 	var stopErr error
 	prunedBeforeMerge := false
+	recordedPublished := false
 	if l.builder != nil {
 		if err := l.builder.PreflightCatalog(); err != nil {
 			return out, err
@@ -277,8 +278,11 @@ func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error)
 		var beforeMergeMetadata, beforeMergeHistoryGC time.Duration
 		result, err := l.builder.OnePassWithDeferredMaintenanceContext(l.ctx, func(ctx context.Context, published snapshots.PassResult) error {
 			metadataStarted := time.Now()
-			if err := l.pruner.RecordTrustedSnapshotSegments(published.Segments); err != nil {
-				return err
+			if hasStateDomainHistoryRef(published.Segments) {
+				if err := l.pruner.RecordTrustedSnapshotSegments(published.Segments); err != nil {
+					return err
+				}
+				recordedPublished = true
 			}
 			// The trusted path checks active refs and file identities; it does
 			// not re-read segment content. Current hot-prune content verification
@@ -318,9 +322,17 @@ func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error)
 		if err != nil {
 			return out, err
 		}
-		trusted := append(append([]snapshots.SegmentRef(nil), result.Segments...), result.Compaction.Segments...)
-		if err := l.pruner.RecordTrustedSnapshotSegments(trusted); err != nil {
-			return out, err
+		var trusted []snapshots.SegmentRef
+		if !recordedPublished && hasStateDomainHistoryRef(result.Segments) {
+			trusted = append(trusted, result.Segments...)
+		}
+		if hasStateDomainHistoryRef(result.Compaction.Segments) {
+			trusted = append(trusted, result.Compaction.Segments...)
+		}
+		if len(trusted) > 0 {
+			if err := l.pruner.RecordTrustedSnapshotSegments(trusted); err != nil {
+				return out, err
+			}
 		}
 		// A resource-deferred history pass means another heavy stage owns the
 		// shared admission window. A rate-limited pass, however, deliberately
@@ -749,6 +761,15 @@ func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, b
 
 func (s snapshotChainSource) CanonicalBlockHashStrict(blockNum uint64) (common.Hash, bool, error) {
 	return canonicalBlockHashLookupFromChainSource(s.chain, blockNum)
+}
+
+func hasStateDomainHistoryRef(refs []snapshots.SegmentRef) bool {
+	for _, ref := range refs {
+		if ref.NormalizedDataset() == snapshots.SegmentDatasetStateDomainChange && ref.Kind == snapshots.SegmentHistory {
+			return true
+		}
+	}
+	return false
 }
 
 var _ snapshots.ChainSource = snapshotChainSource{}

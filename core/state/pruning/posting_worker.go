@@ -227,7 +227,7 @@ func PostingPrunePressureAdmission(p maintenance.StoragePressure, now time.Time)
 		return false, false
 	}
 	if p.CompactionDebt >= 32<<30 {
-		ready = p.DeviceAwait <= 2*time.Millisecond && p.DeviceQueueMilli <= 8_000
+		ready = p.DeviceAwait <= 2*time.Millisecond && p.DeviceQueueMilli <= 16_000
 		return ready, ready
 	}
 	return p.DeviceAwait <= 5*time.Millisecond && p.DeviceQueueMilli <= 32_000, false

@@ -2590,7 +2590,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 	}
 	// Reconcile the manifest-first/stage-second publication boundary even when
 	// another sidecar family is still blocked on incomplete hot source rows.
-	if err := r.reconcileEventLogBuildStageWithHint(manifest, true); err != nil {
+	if err := r.reconcileEventLogBuildStageWithHint(manifest, true, 0); err != nil {
 		return false, err
 	}
 	if !result.DerivedSidecarsPending {
@@ -2715,6 +2715,11 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 			return syncCriticalEventLog, err
 		}
 	}
+	var preEventBlock uint64
+	var preEventOK bool
+	if result.EventLogBuilt && r.cfg.EventLogIndependentFrontier {
+		preEventBlock, preEventOK = eventLogBuildBlockFromManifest(manifest)
+	}
 	publishStarted := time.Now()
 	updated, err := NewAggregator(r.cfg.Dir).integrateWithManifest(manifest.VisibleTxStart, manifest.VisibleTxEnd, refs, manifest)
 	if err != nil {
@@ -2728,7 +2733,11 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 		if err := r.cfg.ColdChainVerificationCache.recordTrustedEventLogs(r.cfg.Dir, eventLogIndexRef, []SegmentRef{eventLogRef}); err != nil {
 			return syncCriticalEventLog, fmt.Errorf("snapshots: record trusted sidecar catch-up event-log range [%d,%d]: %w", plan.event.from, plan.event.to, err)
 		}
-		if err := r.reconcileEventLogBuildStage(updated); err != nil {
+		verifiedPrefix := uint64(0)
+		if r.cfg.EventLogIndependentFrontier && preEventOK && preEventBlock > 0 && plan.event != nil && plan.event.from == preEventBlock+1 {
+			verifiedPrefix = preEventBlock
+		}
+		if err := r.reconcileEventLogBuildStageWithHint(updated, false, verifiedPrefix); err != nil {
 			return syncCriticalEventLog, err
 		}
 	}
@@ -2853,10 +2862,10 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 }
 
 func (r *Runner) reconcileEventLogBuildStage(manifest *Manifest) error {
-	return r.reconcileEventLogBuildStageWithHint(manifest, false)
+	return r.reconcileEventLogBuildStageWithHint(manifest, false, 0)
 }
 
-func (r *Runner) reconcileEventLogBuildStageWithHint(manifest *Manifest, skipIfStageMatches bool) error {
+func (r *Runner) reconcileEventLogBuildStageWithHint(manifest *Manifest, skipIfStageMatches bool, verifiedPrefix uint64) error {
 	if r == nil || !r.cfg.BuildEventLogs || manifest == nil {
 		return nil
 	}
@@ -2879,11 +2888,21 @@ func (r *Runner) reconcileEventLogBuildStageWithHint(manifest *Manifest, skipIfS
 				}
 			}
 		}
+		verifyFrom := uint64(1)
+		if verifiedPrefix > 0 && verifiedPrefix <= cap {
+			existing, exists, readErr := rawdb.ReadStageProgressRow(chainDB, rawdb.StageSnapshotEventLogBuild)
+			if readErr == nil && exists && existing.HasBlockHash && existing.BlockNum == verifiedPrefix {
+				curHash, present, hashErr := canonicalEventSourceHash(r.chain, verifiedPrefix)
+				if hashErr == nil && present && curHash == existing.BlockHash {
+					verifyFrom = verifiedPrefix + 1
+				}
+			}
+		}
 		policy := eventCanonicalScopePolicy{
 			verify:              canonicalEventLogTerminalVerifier(r.chain, cap),
 			legacyStateBoundary: newLazyLegacyEventStateBoundary(r.chain, cap),
 		}
-		verified, err := verifyEventSourceRefsWithPolicy(eventRefs, 1, cap, policy)
+		verified, err := verifyEventSourceRefsWithPolicy(eventRefs, verifyFrom, cap, policy)
 		if err != nil || !verified {
 			return err
 		}
@@ -2949,12 +2968,15 @@ func nextEventLogCatchupRange(manifest *Manifest, toBlock, batchBlocks uint64) (
 		}
 		next = covered + 1
 	}
-	refs := append(eventLogRefs(manifest), eventLogIndexRefs(manifest)...)
 	start, end := next, next
 	foundOverlap := false
 	for {
 		changed := false
-		for _, ref := range refs {
+		for i := range manifest.Segments {
+			ref := &manifest.Segments[i]
+			if ref.normalizedDataset() != SegmentDatasetEventLog || (ref.Kind != SegmentEventLog && ref.Kind != SegmentEventLogIndex) {
+				continue
+			}
 			if ref.FromTxNum > end || ref.ToTxNum < start {
 				continue
 			}
@@ -2976,7 +2998,11 @@ func nextEventLogCatchupRange(manifest *Manifest, toBlock, batchBlocks uint64) (
 		return coldSidecarBlockRange{from: start, to: end}, true
 	}
 	end = toBlock
-	for _, ref := range refs {
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.normalizedDataset() != SegmentDatasetEventLog || (ref.Kind != SegmentEventLog && ref.Kind != SegmentEventLogIndex) {
+			continue
+		}
 		if ref.FromTxNum > start && ref.FromTxNum-1 < end {
 			end = ref.FromTxNum - 1
 		}

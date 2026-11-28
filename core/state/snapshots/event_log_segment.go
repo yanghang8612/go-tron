@@ -2311,10 +2311,31 @@ func eventLogIndexRefs(manifest *Manifest) []SegmentRef {
 }
 
 func validateEventLogIndexCompanions(manifest *Manifest) error {
+	return validateEventLogIndexCompanionsWithOrder(manifest, false)
+}
+
+func validateEventLogIndexCompanionsWithOrder(manifest *Manifest, ordered bool) error {
 	if manifest == nil {
 		return nil
 	}
-	var eventRows, indexRows []int
+	var eventCount, indexCount int
+	for i := range manifest.Segments {
+		ref := &manifest.Segments[i]
+		if ref.normalizedDataset() != SegmentDatasetEventLog {
+			continue
+		}
+		switch ref.Kind {
+		case SegmentEventLog:
+			eventCount++
+		case SegmentEventLogIndex:
+			indexCount++
+		}
+	}
+	if indexCount == 0 {
+		return nil
+	}
+	eventRows := make([]int, 0, eventCount)
+	indexRows := make([]int, 0, indexCount)
 	for i := range manifest.Segments {
 		ref := &manifest.Segments[i]
 		if ref.normalizedDataset() != SegmentDatasetEventLog {
@@ -2327,27 +2348,29 @@ func validateEventLogIndexCompanions(manifest *Manifest) error {
 			indexRows = append(indexRows, i)
 		}
 	}
-	less := func(a, b int) bool {
-		left, right := &manifest.Segments[a], &manifest.Segments[b]
-		if left.normalizedDataset() != right.normalizedDataset() {
-			return left.normalizedDataset() < right.normalizedDataset()
+	if !ordered {
+		less := func(a, b int) bool {
+			left, right := &manifest.Segments[a], &manifest.Segments[b]
+			if left.normalizedDataset() != right.normalizedDataset() {
+				return left.normalizedDataset() < right.normalizedDataset()
+			}
+			if left.Domain != right.Domain {
+				return left.Domain < right.Domain
+			}
+			if left.Kind != right.Kind {
+				return left.Kind < right.Kind
+			}
+			if left.FromTxNum != right.FromTxNum {
+				return left.FromTxNum < right.FromTxNum
+			}
+			if left.ToTxNum != right.ToTxNum {
+				return left.ToTxNum < right.ToTxNum
+			}
+			return left.Path < right.Path
 		}
-		if left.Domain != right.Domain {
-			return left.Domain < right.Domain
-		}
-		if left.Kind != right.Kind {
-			return left.Kind < right.Kind
-		}
-		if left.FromTxNum != right.FromTxNum {
-			return left.FromTxNum < right.FromTxNum
-		}
-		if left.ToTxNum != right.ToTxNum {
-			return left.ToTxNum < right.ToTxNum
-		}
-		return left.Path < right.Path
+		sort.Slice(eventRows, func(i, j int) bool { return less(eventRows[i], eventRows[j]) })
+		sort.Slice(indexRows, func(i, j int) bool { return less(indexRows[i], indexRows[j]) })
 	}
-	sort.Slice(eventRows, func(i, j int) bool { return less(eventRows[i], eventRows[j]) })
-	sort.Slice(indexRows, func(i, j int) bool { return less(indexRows[i], indexRows[j]) })
 	start := 0
 	for _, indexRow := range indexRows {
 		indexRef := &manifest.Segments[indexRow]

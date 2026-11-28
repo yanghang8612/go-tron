@@ -484,3 +484,80 @@ func TestIndependentEventLegacyV4UnanchoredCompatAndBoundary(t *testing.T) {
 		t.Fatalf("legacy unanchored without SnapshotBuild trusted: %v/%v", covered, err)
 	}
 }
+
+type canonicalHashCountChain struct {
+	*coldBuilderChain
+	calls map[uint64]int
+}
+
+func (c *canonicalHashCountChain) CanonicalBlockHashStrict(n uint64) (common.Hash, bool, error) {
+	c.calls[n]++
+	return c.coldBuilderChain.CanonicalBlockHashStrict(n)
+}
+
+func TestReconcileEventLogBuildStageIncrementalVerifiesOnlyNewSuffixAndFallsBack(t *testing.T) {
+	r, baseChain := independentEventFixture(t)
+	counted := &canonicalHashCountChain{coldBuilderChain: baseChain, calls: make(map[uint64]int)}
+	r.chain = counted
+	r.cfg.SyncEventLogTargetBlock = func() (uint64, bool, bool) { return 4, true, false }
+
+	// Pass 1 builds [1,2] and writes StageSnapshotEventLogBuild=2.
+	if res, err := r.OnePass(); err != nil || !res.EventLogBuilt {
+		t.Fatalf("pass 1: %+v %v", res, err)
+	}
+	// Pass 2 appends [3,4] monotonically: pre-build skips via stage match,
+	// post-publish checks anchor block 2 once and new suffix block 4 without
+	// re-reading older segment anchors on subsequent appends.
+	if res, err := r.OnePass(); err != nil || !res.EventLogBuilt {
+		t.Fatalf("pass 2: %+v %v", res, err)
+	}
+	if n, ok, err := rawdb.ReadVerifiedStageProgressBlock(baseChain.db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || n != 4 {
+		t.Fatalf("stage after incremental pass 2 = %d/%v/%v, want 4", n, ok, err)
+	}
+	// Extend chain to 6 blocks and test pass 3 skips block 2 completely.
+	chainDB := baseChain.db.(*rawdb.ChainDB)
+	for n := uint64(5); n <= 6; n++ {
+		block, infos := coldBuilderEventLogBlock(t, n, []*corepb.TransactionInfo_Log{{Address: eventLogTestAddress(0x51), Data: []byte{byte(n)}}})
+		if err := rawdb.WriteBlock(chainDB, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(chainDB, n, infos); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h6, ok, err := rawdb.ReadBlockHashByNumberStrict(chainDB, 6)
+	if err != nil || !ok {
+		t.Fatal(h6, ok, err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(chainDB, rawdb.StageFinish, 6, h6); err != nil {
+		t.Fatal(err)
+	}
+	baseChain.solidified = 6
+	r.cfg.SyncEventLogTargetBlock = func() (uint64, bool, bool) { return 6, true, false }
+	counted.calls = make(map[uint64]int)
+	if res, err := r.OnePass(); err != nil || !res.EventLogBuilt {
+		t.Fatalf("pass 3: %+v %v", res, err)
+	}
+	if counted.calls[2] != 0 {
+		t.Fatalf("incremental append unnecessarily re-verified older segment block 2 (%d calls)", counted.calls[2])
+	}
+	// If StageSnapshotEventLogBuild is missing/tampered, reconcileEventLogBuildStageWithHint
+	// falls back to full verification of all segments [1,4] (checking block 2 anchor).
+	manifest, err := LoadProductionManifest(r.cfg.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(baseChain.db.(*rawdb.ChainDB), rawdb.StageSnapshotEventLogBuild, 2, common.Hash{0xaa}); err != nil {
+		t.Fatal(err)
+	}
+	counted.calls = make(map[uint64]int)
+	if err := r.reconcileEventLogBuildStageWithHint(manifest, false, 2); err != nil {
+		t.Fatalf("fallback full verify on mismatched stage failed: %v", err)
+	}
+	if counted.calls[2] == 0 || counted.calls[4] == 0 {
+		t.Fatalf("fallback did not verify both blocks 2 and 4: calls=%v", counted.calls)
+	}
+	if n, ok, err := rawdb.ReadVerifiedStageProgressBlock(baseChain.db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || n != 6 {
+		t.Fatalf("stage after fallback = %d/%v/%v, want 6", n, ok, err)
+	}
+}
