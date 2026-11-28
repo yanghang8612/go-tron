@@ -124,8 +124,8 @@ func (s *StateDB) ReadContractStateStrict(addr tcommon.Address) (*types.Contract
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	pb := new(contractpb.ContractState)
-	if err := statecodec.Unmarshal(data, pb); err != nil {
+	pb, err := statecodec.UnmarshalContractState(data)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode contract state %s: %w", addr.Hex(), err)
 	}
 	return types.NewContractStateFromPB(pb), true, nil

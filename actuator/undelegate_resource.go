@@ -120,10 +120,14 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Update delegation record
-	if err := ctx.State.UnlockExpiredDelegatedResource(ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
+	unlockRes, lockRes, unlockLoaded, err := ctx.State.UnlockExpiredDelegatedResourceResult(ownerAddr, receiverAddr, ctx.PrevBlockTime)
+	if err != nil {
 		return nil, err
 	}
-	dr := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false)
+	dr := unlockRes
+	if !unlockLoaded {
+		dr = ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false)
+	}
 	if dr == nil {
 		return nil, errors.New("unlocked delegation record not found")
 	}
@@ -137,7 +141,7 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 		if err := ctx.State.DeleteDelegatedResourceV2(ownerAddr, receiverAddr, false); err != nil {
 			return nil, err
 		}
-		if ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true) == nil {
+		if lockRes == nil {
 			if err := ctx.State.WriteDrAccountIndexUnDelegate(true, ownerAddr[:], receiverAddr[:]); err != nil {
 				return nil, err
 			}

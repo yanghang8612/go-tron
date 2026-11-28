@@ -26,14 +26,17 @@ const OptimizedStorageRowKeyLength = storageKeyPrefixBytes + tcommon.HashLength
 // OptimizedStorageRowKey returns the java-tron 48-byte storage migration key.
 func OptimizedStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.SmartContract) []byte {
 	addrHash := javaStorageAddressHash(addr, meta.GetTrxHash())
+	var row [OptimizedStorageRowKeyLength]byte
+	return appendOptimizedStorageRowKeyWithAddrHash(row[:0], addrHash, key)
+}
+
+func appendOptimizedStorageRowKeyWithAddrHash(dst []byte, addrHash, key tcommon.Hash) []byte {
 	var seed [2 * tcommon.HashLength]byte
 	copy(seed[:], addrHash[:])
 	copy(seed[tcommon.HashLength:], key[:])
 	slotHash := tcommon.Keccak256(seed[:])
-	var row [OptimizedStorageRowKeyLength]byte
-	copy(row[:storageKeyPrefixBytes], addrHash[:storageKeyPrefixBytes])
-	copy(row[storageKeyPrefixBytes:], slotHash[:])
-	return row[:]
+	dst = append(dst, addrHash[:storageKeyPrefixBytes]...)
+	return append(dst, slotHash[:]...)
 }
 
 func javaStorageKeyLayout(addr tcommon.Address, meta *contractpb.SmartContract) ([storageKeyPrefixBytes]byte, bool) {

@@ -164,20 +164,20 @@ func isVersionedAccountRow(data []byte) bool {
 	return len(data) >= len(accountRowMagic) && bytes.Equal(data[:len(accountRowMagic)], accountRowMagic[:])
 }
 
-func newAccountRowDecoder(data []byte, kind byte) (*accountRowDecoder, error) {
+func newAccountRowDecoder(data []byte, kind byte) (accountRowDecoder, error) {
 	if !isVersionedAccountRow(data) {
-		return nil, errors.New("non-native account rooted-state row")
+		return accountRowDecoder{}, errors.New("non-native account rooted-state row")
 	}
 	if len(data) < 6 {
-		return nil, errors.New("truncated account row header")
+		return accountRowDecoder{}, errors.New("truncated account row header")
 	}
 	if data[4] != accountRowVersion {
-		return nil, fmt.Errorf("unsupported account row version %d", data[4])
+		return accountRowDecoder{}, fmt.Errorf("unsupported account row version %d", data[4])
 	}
 	if data[5] != kind {
-		return nil, fmt.Errorf("account row kind %d, want %d", data[5], kind)
+		return accountRowDecoder{}, fmt.Errorf("account row kind %d, want %d", data[5], kind)
 	}
-	return &accountRowDecoder{data: data, off: 6}, nil
+	return accountRowDecoder{data: data, off: 6}, nil
 }
 
 func (d *accountRowDecoder) take(n int) ([]byte, error) {
@@ -230,7 +230,7 @@ func (d *accountRowDecoder) i64() (int64, error) {
 	}
 	return int64(v>>1) ^ -int64(v&1), nil
 }
-func (d *accountRowDecoder) bytes() ([]byte, error) {
+func (d *accountRowDecoder) bytesView() ([]byte, error) {
 	n, err := d.uvarint()
 	if err != nil {
 		return nil, err
@@ -238,7 +238,10 @@ func (d *accountRowDecoder) bytes() ([]byte, error) {
 	if n > uint64(len(d.data)-d.off) {
 		return nil, errors.New("truncated account row byte field")
 	}
-	v, err := d.take(int(n))
+	return d.take(int(n))
+}
+func (d *accountRowDecoder) bytes() ([]byte, error) {
+	v, err := d.bytesView()
 	if err != nil {
 		return nil, err
 	}
@@ -260,11 +263,14 @@ func appendProtoUnknown(e *accountRowEncoder, message proto.Message) {
 }
 
 func restoreProtoUnknown(d *accountRowDecoder, message proto.Message) error {
-	unknown, err := d.bytes()
+	raw, err := d.bytesView()
 	if err != nil {
 		return err
 	}
-	message.ProtoReflect().SetUnknown(unknown)
+	if len(raw) == 0 {
+		return nil
+	}
+	message.ProtoReflect().SetUnknown(append([]byte(nil), raw...))
 	return nil
 }
 
@@ -297,7 +303,7 @@ func decodeAccountFrozen(value []byte) (*corepb.Account_Frozen, error) {
 		return nil, err
 	}
 	entry := &corepb.Account_Frozen{FrozenBalance: balance, ExpireTime: expireTime}
-	if err := restoreProtoUnknown(d, entry); err != nil {
+	if err := restoreProtoUnknown(&d, entry); err != nil {
 		return nil, err
 	}
 	return entry, d.done()
@@ -332,7 +338,7 @@ func decodeAccountVote(value []byte) (*corepb.Vote, error) {
 		return nil, err
 	}
 	vote := &corepb.Vote{VoteAddress: address, VoteCount: count}
-	if err := restoreProtoUnknown(d, vote); err != nil {
+	if err := restoreProtoUnknown(&d, vote); err != nil {
 		return nil, err
 	}
 	return vote, d.done()
@@ -372,7 +378,7 @@ func decodeAccountUnfrozenV2(value []byte) (*corepb.Account_UnFreezeV2, error) {
 		return nil, err
 	}
 	entry := &corepb.Account_UnFreezeV2{Type: corepb.ResourceCode(resource), UnfreezeAmount: amount, UnfreezeExpireTime: expireTime}
-	if err := restoreProtoUnknown(d, entry); err != nil {
+	if err := restoreProtoUnknown(&d, entry); err != nil {
 		return nil, err
 	}
 	return entry, d.done()
@@ -438,26 +444,37 @@ func decodeAccountResource(value []byte) (*corepb.Account_AccountResource, error
 		if frozen.ExpireTime, err = d.i64(); err != nil {
 			return nil, err
 		}
-		if err := restoreProtoUnknown(d, frozen); err != nil {
+		if err := restoreProtoUnknown(&d, frozen); err != nil {
 			return nil, err
 		}
 		resource.FrozenBalanceForEnergy = frozen
 	}
-	fields := []*int64{
-		&resource.LatestConsumeTimeForEnergy,
-		&resource.AcquiredDelegatedFrozenBalanceForEnergy,
-		&resource.DelegatedFrozenBalanceForEnergy,
-		&resource.StorageLimit,
-		&resource.StorageUsage,
-		&resource.LatestExchangeStorageTime,
-		&resource.EnergyWindowSize,
-		&resource.DelegatedFrozenV2BalanceForEnergy,
-		&resource.AcquiredDelegatedFrozenV2BalanceForEnergy,
+	if resource.LatestConsumeTimeForEnergy, err = d.i64(); err != nil {
+		return nil, err
 	}
-	for _, field := range fields {
-		if *field, err = d.i64(); err != nil {
-			return nil, err
-		}
+	if resource.AcquiredDelegatedFrozenBalanceForEnergy, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.DelegatedFrozenBalanceForEnergy, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.StorageLimit, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.StorageUsage, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.LatestExchangeStorageTime, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.EnergyWindowSize, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.DelegatedFrozenV2BalanceForEnergy, err = d.i64(); err != nil {
+		return nil, err
+	}
+	if resource.AcquiredDelegatedFrozenV2BalanceForEnergy, err = d.i64(); err != nil {
+		return nil, err
 	}
 	optimized, err := d.u8()
 	if err != nil {
@@ -467,7 +484,7 @@ func decodeAccountResource(value []byte) (*corepb.Account_AccountResource, error
 		return nil, fmt.Errorf("invalid energy-window boolean %d", optimized)
 	}
 	resource.EnergyWindowOptimized = optimized == 1
-	if err := restoreProtoUnknown(d, resource); err != nil {
+	if err := restoreProtoUnknown(&d, resource); err != nil {
 		return nil, err
 	}
 	return resource, d.done()
@@ -506,6 +523,32 @@ func appendAccountPermission(dst []byte, permission *corepb.Permission) ([]byte,
 	return e.finish()
 }
 
+type singleKeyPermissionAlloc struct {
+	perm    corepb.Permission
+	key     corepb.Key
+	keys    [1]*corepb.Key
+	addrBuf [32]byte
+	opsBuf  [32]byte
+}
+
+func decodeAccountPermissionName(raw []byte) (string, error) {
+	if !utf8.Valid(raw) {
+		return "", errors.New("account permission name is not valid UTF-8")
+	}
+	switch string(raw) {
+	case "owner":
+		return "owner", nil
+	case "active0":
+		return "active0", nil
+	case "active":
+		return "active", nil
+	case "witness":
+		return "witness", nil
+	default:
+		return string(raw), nil
+	}
+}
+
 func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 	d, err := newAccountRowDecoder(value, accountRowPermission)
 	if err != nil {
@@ -519,12 +562,13 @@ func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 	if err != nil {
 		return nil, err
 	}
-	name, err := d.bytes()
+	nameRaw, err := d.bytesView()
 	if err != nil {
 		return nil, err
 	}
-	if !utf8.Valid(name) {
-		return nil, errors.New("account permission name is not valid UTF-8")
+	name, err := decodeAccountPermissionName(nameRaw)
+	if err != nil {
+		return nil, err
 	}
 	threshold, err := d.i64()
 	if err != nil {
@@ -534,7 +578,7 @@ func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 	if err != nil {
 		return nil, err
 	}
-	operations, err := d.bytes()
+	opsRaw, err := d.bytesView()
 	if err != nil {
 		return nil, err
 	}
@@ -547,10 +591,101 @@ func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 	if count > uint64(len(d.data)-d.off) {
 		return nil, errors.New("account permission key count exceeds remaining row")
 	}
+	if count == 1 && len(opsRaw) <= 32 {
+		present, err := d.u8()
+		if err != nil {
+			return nil, err
+		}
+		if present == 1 {
+			addrRaw, err := d.bytesView()
+			if err != nil {
+				return nil, err
+			}
+			weight, err := d.i64()
+			if err != nil {
+				return nil, err
+			}
+			keyUnknown, err := d.bytesView()
+			if err != nil {
+				return nil, err
+			}
+			permUnknown, err := d.bytesView()
+			if err != nil {
+				return nil, err
+			}
+			if err := d.done(); err != nil {
+				return nil, err
+			}
+			if len(addrRaw) <= 32 && len(keyUnknown) == 0 && len(permUnknown) == 0 {
+				alloc := &singleKeyPermissionAlloc{
+					perm: corepb.Permission{
+						Type:           corepb.Permission_PermissionType(typeValue),
+						Id:             id,
+						PermissionName: name,
+						Threshold:      threshold,
+						ParentId:       parentID,
+					},
+					key: corepb.Key{Weight: weight},
+				}
+				if len(opsRaw) != 0 {
+					n := copy(alloc.opsBuf[:], opsRaw)
+					alloc.perm.Operations = alloc.opsBuf[:n:n]
+				}
+				if len(addrRaw) != 0 {
+					n := copy(alloc.addrBuf[:], addrRaw)
+					alloc.key.Address = alloc.addrBuf[:n:n]
+				}
+				alloc.keys[0] = &alloc.key
+				alloc.perm.Keys = alloc.keys[:]
+				return &alloc.perm, nil
+			}
+			var ops []byte
+			if len(opsRaw) != 0 {
+				ops = append([]byte(nil), opsRaw...)
+			}
+			var addr []byte
+			if len(addrRaw) != 0 {
+				addr = append([]byte(nil), addrRaw...)
+			}
+			key := &corepb.Key{Address: addr, Weight: weight}
+			if len(keyUnknown) != 0 {
+				key.ProtoReflect().SetUnknown(append([]byte(nil), keyUnknown...))
+			}
+			perm := &corepb.Permission{
+				Type: corepb.Permission_PermissionType(typeValue), Id: id,
+				PermissionName: name, Threshold: threshold, ParentId: parentID,
+				Operations: ops, Keys: []*corepb.Key{key},
+			}
+			if len(permUnknown) != 0 {
+				perm.ProtoReflect().SetUnknown(append([]byte(nil), permUnknown...))
+			}
+			return perm, nil
+		}
+		if present != 0 {
+			return nil, fmt.Errorf("invalid account permission key presence %d", present)
+		}
+		var ops []byte
+		if len(opsRaw) != 0 {
+			ops = append([]byte(nil), opsRaw...)
+		}
+		perm := &corepb.Permission{
+			Type: corepb.Permission_PermissionType(typeValue), Id: id,
+			PermissionName: name, Threshold: threshold, ParentId: parentID,
+			Operations: ops, Keys: []*corepb.Key{nil},
+		}
+		if err := restoreProtoUnknown(&d, perm); err != nil {
+			return nil, err
+		}
+		return perm, d.done()
+	}
+	var ops []byte
+	if len(opsRaw) != 0 {
+		ops = append([]byte(nil), opsRaw...)
+	}
 	permission := &corepb.Permission{
 		Type: corepb.Permission_PermissionType(typeValue), Id: id,
-		PermissionName: string(name), Threshold: threshold, ParentId: parentID,
-		Operations: operations, Keys: make([]*corepb.Key, 0, int(count)),
+		PermissionName: name, Threshold: threshold, ParentId: parentID,
+		Operations: ops, Keys: make([]*corepb.Key, 0, int(count)),
 	}
 	for i := uint64(0); i < count; i++ {
 		present, err := d.u8()
@@ -573,12 +708,12 @@ func decodeAccountPermissionValue(value []byte) (*corepb.Permission, error) {
 			return nil, err
 		}
 		key := &corepb.Key{Address: address, Weight: weight}
-		if err := restoreProtoUnknown(d, key); err != nil {
+		if err := restoreProtoUnknown(&d, key); err != nil {
 			return nil, err
 		}
 		permission.Keys = append(permission.Keys, key)
 	}
-	if err := restoreProtoUnknown(d, permission); err != nil {
+	if err := restoreProtoUnknown(&d, permission); err != nil {
 		return nil, err
 	}
 	return permission, d.done()

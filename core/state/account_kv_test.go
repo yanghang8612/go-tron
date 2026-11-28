@@ -2817,3 +2817,105 @@ func (s *countingKVIndexStore) resetCounts() {
 	s.deletes = 0
 	clear(s.getsByDomain)
 }
+
+func TestAccountKVPendingPrefixSkipsContractStorageAndSystemDomains(t *testing.T) {
+	batch := newAccountKVLatestBatch(rawdb.NewMemoryDatabase(), nil)
+	batch.commitBlock = 1
+
+	contract := testAddr(0x81)
+	user := testAddr(0x82)
+
+	// Populate >256 ContractStorage rows for a hot contract plus a few
+	// account-local aux rows and a SystemDelegation row.
+	for i := 0; i < 300; i++ {
+		var key [32]byte
+		key[0] = byte(i)
+		key[1] = byte(i >> 8)
+		batch.rememberPut(contract, 0, kvdomains.ContractStorage, key[:], []byte{1})
+	}
+	batch.rememberPut(user, 0, kvdomains.AccountAssetV2, []byte("1000001"), []byte{2})
+	batch.rememberPut(tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, []byte("del-a"), []byte{3})
+
+	// Trigger lazy pendingPrefixes build via >4 account-local prefix scans.
+	for range 6 {
+		_ = batch.iterateLatestPrefix(user, 0, kvdomains.AccountAssetV2, nil, func(k, v []byte) (bool, error) {
+			return true, nil
+		})
+	}
+
+	batch.pendingPrefixMu.Lock()
+	if len(batch.pendingPrefixes[contract.AccountID()]) != 0 {
+		batch.pendingPrefixMu.Unlock()
+		t.Fatalf("ContractStorage leaked into pendingPrefixes: %d entries", len(batch.pendingPrefixes[contract.AccountID()]))
+	}
+	if len(batch.pendingPrefixes[tcommon.SystemAccountAddress.AccountID()]) != 0 {
+		batch.pendingPrefixMu.Unlock()
+		t.Fatalf("SystemDelegation leaked into pendingPrefixes")
+	}
+	if len(batch.pendingPrefixes[user.AccountID()]) != 1 {
+		batch.pendingPrefixMu.Unlock()
+		t.Fatalf("AccountAssetV2 missing from pendingPrefixes: got %d, want 1", len(batch.pendingPrefixes[user.AccountID()]))
+	}
+	batch.pendingPrefixMu.Unlock()
+
+	// Prefix scans on non-indexed domains (e.g. SystemDelegation, ContractStorage)
+	// must still see pending puts/deletes via the direct scan fallback.
+	gotDel := map[string]byte{}
+	if err := batch.iterateLatestPrefix(tcommon.SystemAccountAddress, 0, kvdomains.SystemDelegation, []byte("del-"), func(k, v []byte) (bool, error) {
+		gotDel[string(k)] = v[0]
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gotDel["del-a"] != 3 {
+		t.Fatalf("SystemDelegation fallback prefix scan missed pending row: %v", gotDel)
+	}
+
+	// Pruning contract storage must not remove indexed user rows and must keep
+	// incremental pruning working when an indexed row is later pruned.
+	batch.commitBlock = 2
+	batch.rememberPut(user, 0, kvdomains.AccountAssetV2, []byte("1000002"), []byte{4})
+	batch.prunePending(1)
+
+	gotAssets := map[string]byte{}
+	if err := batch.iterateLatestPrefix(user, 0, kvdomains.AccountAssetV2, nil, func(k, v []byte) (bool, error) {
+		gotAssets[string(k)] = v[0]
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotAssets) != 1 || gotAssets["1000002"] != 4 {
+		t.Fatalf("AccountAssetV2 after prune = %v, want {1000002:4}", gotAssets)
+	}
+}
+
+func BenchmarkPrunePendingPrefixHotContractStorage(b *testing.B) {
+	contract := testAddr(0x91)
+	user := testAddr(0x92)
+	const hotSlots = 2048
+
+	batch := newAccountKVLatestBatch(rawdb.NewMemoryDatabase(), nil)
+	batch.commitBlock = 1
+	for i := 0; i < hotSlots; i++ {
+		var key [32]byte
+		binary.BigEndian.PutUint32(key[:4], uint32(i))
+		batch.rememberPut(contract, 0, kvdomains.ContractStorage, key[:], []byte{1})
+	}
+	for i := 0; i < 8; i++ {
+		batch.rememberPut(user, 0, kvdomains.AccountAssetV2, []byte{byte('a' + i)}, []byte{1})
+	}
+	for range 6 {
+		_ = batch.iterateLatestPrefix(user, 0, kvdomains.AccountAssetV2, nil, func(k, v []byte) (bool, error) {
+			return true, nil
+		})
+	}
+
+	b.ReportAllocs()
+	var slot [32]byte
+	for i := 0; b.Loop(); i++ {
+		batch.commitBlock = uint64(i + 2)
+		binary.BigEndian.PutUint32(slot[:4], uint32(hotSlots+i))
+		batch.rememberPut(contract, 0, kvdomains.ContractStorage, slot[:], []byte{1})
+		batch.prunePending(uint64(i + 1))
+	}
+}

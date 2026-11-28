@@ -75,6 +75,7 @@ func (v *TVMStorage) cache(s *StateDB, key string, slot tvmStorageSlot) {
 // Read returns the slot, whether a storage row contributes to SSTORE energy,
 // and whether java-tron's storage alias guard requires OUT_OF_TIME.
 func (v *TVMStorage) Read(s *StateDB, addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, bool, bool, error) {
+	s.recordObservedStorageSlot(addr, slot)
 	legacy := s.storageRowKey(addr, slot)
 	ownerKey := storageOwnerKey{address: addr, row: legacy}
 	owner, owned := v.owners[ownerKey]
@@ -178,28 +179,34 @@ func (s *StateDB) LegacyTVMStorageRowKey(addr tcommon.Address, slot tcommon.Hash
 
 // ReadLegacyTVMStorageRow reads the backing row before the current TVM frame's
 // slot cache is published. Present zero values remain distinguishable from misses.
-func (s *StateDB) ReadLegacyTVMStorageRow(addr tcommon.Address, slot, key tcommon.Hash) (tcommon.Hash, []byte, bool, error) {
+// Standard 32-byte rows return beforeNon32 == nil with hasBefore == true so callers
+// can reconstruct the exact pre-image from value[:] without a per-read clone.
+func (s *StateDB) ReadLegacyTVMStorageRow(addr tcommon.Address, slot, key tcommon.Hash) (value tcommon.Hash, beforeNon32 []byte, hasBefore, before32, exists bool, err error) {
+	s.recordObservedStorageSlot(addr, slot)
 	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil || obj.deleted {
-		return tcommon.Hash{}, nil, false, nil
+		return tcommon.Hash{}, nil, false, false, false, nil
 	}
 	if _, physical := lookupKVEntry(obj.kvDirty, kvdomains.ContractStorage, key[:]); !physical {
 		if _, dirty := obj.dirtyStorage[slot]; dirty {
 			s.recordStorageRead(addr, slot)
 			row := obj.storage[slot]
 			// The logical overlay is not the physical before-image.
-			return row.value, nil, row.exists, nil
+			return row.value, nil, false, false, row.exists, nil
 		}
 	}
 	raw, exists, err := s.getAccountKVForDecodingFromObject(obj, addr, kvdomains.ContractStorage, key[:])
 	if err != nil || !exists {
-		return tcommon.Hash{}, nil, exists, err
+		return tcommon.Hash{}, nil, false, false, exists, err
 	}
-	value, err := decodeStorageValueHash("read legacy TVM row", raw)
+	value, err = decodeStorageValueHash("read legacy TVM row", raw)
 	if err != nil {
-		return tcommon.Hash{}, nil, false, s.recordStateError("read legacy TVM row", err)
+		return tcommon.Hash{}, nil, false, false, false, s.recordStateError("read legacy TVM row", err)
 	}
-	return value, bytes.Clone(raw), true, nil
+	if len(raw) == tcommon.HashLength {
+		return value, nil, true, true, true, nil
+	}
+	return value, bytes.Clone(raw), true, false, true, nil
 }
 
 // WriteLegacyTVMStorageRow publishes a physical row at the root VM commit.

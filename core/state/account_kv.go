@@ -789,6 +789,7 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 	hasPrefixIndex := w.pendingPrefixes != nil
 	w.pendingPrefixMu.Unlock()
 	prunedKVCount := 0
+	prunedPrefixKVCount := 0
 	var prunedOwners map[tcommon.AccountID]struct{}
 	if !w.pendingBlocksBroken && len(w.pendingBlocks) > w.pendingBlocksHead {
 		end := w.pendingBlocksHead
@@ -808,7 +809,8 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 					delete(w.pending, k)
 					w.adjustPendingDomainCount(k.domain, -1)
 					prunedKVCount++
-					if hasPrefixIndex {
+					if hasPrefixIndex && isPendingPrefixIndexedDomain(k.domain) {
+						prunedPrefixKVCount++
 						if prunedOwners == nil {
 							prunedOwners = make(map[tcommon.AccountID]struct{})
 						}
@@ -862,8 +864,8 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 				dst++
 			}
 		}
-		if prunedKVCount > 0 {
-			w.prunePendingPrefixIndex(prunedKVCount, prunedOwners)
+		if prunedKVCount > 0 && hasPrefixIndex && (prunedPrefixKVCount > 0 || len(w.pending) <= 256) {
+			w.prunePendingPrefixIndex(prunedPrefixKVCount, prunedOwners)
 		}
 		if dst == w.pendingBlocksHead {
 			w.pendingBlocksHead = end
@@ -892,7 +894,8 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 			delete(w.pending, k)
 			w.adjustPendingDomainCount(k.domain, -1)
 			prunedKVCount++
-			if hasPrefixIndex {
+			if hasPrefixIndex && isPendingPrefixIndexedDomain(k.domain) {
+				prunedPrefixKVCount++
 				if prunedOwners == nil {
 					prunedOwners = make(map[tcommon.AccountID]struct{})
 				}
@@ -900,8 +903,8 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 			}
 		}
 	}
-	if prunedKVCount > 0 {
-		w.prunePendingPrefixIndex(prunedKVCount, prunedOwners)
+	if prunedKVCount > 0 && hasPrefixIndex && (prunedPrefixKVCount > 0 || len(w.pending) <= 256) {
+		w.prunePendingPrefixIndex(prunedPrefixKVCount, prunedOwners)
 	}
 	for k, e := range w.accountPending {
 		if e.number > cutoff {
@@ -1392,11 +1395,32 @@ func (w *accountKVLatestBatch) mergePendingPrefix(owner tcommon.Address, generat
 	}
 }
 
+// isPendingPrefixIndexedDomain excludes high-churn point-only domains (notably
+// ContractStorage, SystemDelegation, SystemDynamicProperty, SystemTapos) from
+// pendingPrefixes so prunePendingPrefixIndex never rescans thousands of pending
+// storage slots or system keys per block for hot owners such as USDT or
+// SystemAccountAddress. Non-indexed domains safely fall back to the direct
+// w.pending scan in mergePendingPrefix.
+func isPendingPrefixIndexedDomain(domain kvdomains.KVDomain) bool {
+	switch domain {
+	case kvdomains.ContractStorage,
+		kvdomains.SystemDelegation,
+		kvdomains.SystemDynamicProperty,
+		kvdomains.SystemTapos:
+		return false
+	default:
+		return true
+	}
+}
+
 // pendingPrefixKeys amortizes a full overlay walk across repeated prefix
 // requests. Small overlays and the first four requests per prune interval keep
 // the original scan, avoiding index construction for sparse prefix workloads.
 // Keys reference immutable, owned pending strings.
 func (w *accountKVLatestBatch) pendingPrefixKeys(group accountKVLatestPendingGroup) ([]accountKVPendingPrefixKey, bool) {
+	if !isPendingPrefixIndexedDomain(group.domain) {
+		return nil, false
+	}
 	w.pendingPrefixMu.Lock()
 	defer w.pendingPrefixMu.Unlock()
 	if len(w.pending) == 0 {
@@ -1411,13 +1435,21 @@ func (w *accountKVLatestBatch) pendingPrefixKeys(group accountKVLatestPendingGro
 			return nil, false
 		}
 		counts := make(map[tcommon.AccountID]int)
+		totalIndexed := 0
 		for key := range w.pending {
+			if !isPendingPrefixIndexedDomain(key.domain) {
+				continue
+			}
 			counts[key.owner]++
+			totalIndexed++
 		}
 		// Pack owner buckets in one arena. Full member identity keeps equal
 		// logical keys from different generations/domains independent. Exact
 		// capacities ensure later appends cannot overwrite an adjacent bucket.
-		arena := make([]accountKVPendingPrefixKey, len(w.pending))
+		var arena []accountKVPendingPrefixKey
+		if totalIndexed > 0 {
+			arena = make([]accountKVPendingPrefixKey, totalIndexed)
+		}
 		index := make(map[tcommon.AccountID][]accountKVPendingPrefixKey, len(counts))
 		offset := 0
 		for group, size := range counts {
@@ -1425,6 +1457,9 @@ func (w *accountKVLatestBatch) pendingPrefixKeys(group accountKVLatestPendingGro
 			offset += size
 		}
 		for key := range w.pending {
+			if !isPendingPrefixIndexedDomain(key.domain) {
+				continue
+			}
 			index[key.owner] = append(index[key.owner], key.prefixKey())
 		}
 		w.pendingPrefixes = index
@@ -1462,6 +1497,9 @@ func (w *accountKVLatestBatch) indexPendingKey(key accountKVLatestPendingMapKey,
 		return
 	}
 	w.adjustPendingDomainCount(key.domain, 1)
+	if !isPendingPrefixIndexedDomain(key.domain) {
+		return
+	}
 	w.pendingPrefixMu.Lock()
 	if w.pendingPrefixes != nil {
 		w.pendingPrefixes[key.owner] = append(w.pendingPrefixes[key.owner], key.prefixKey())

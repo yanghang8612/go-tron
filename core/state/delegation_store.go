@@ -123,11 +123,13 @@ func (s *StateDB) ReadDelegatedResourceLegacyStrict(from, to tcommon.Address) (*
 }
 
 func (s *StateDB) ReadDelegatedResourceV2(from, to tcommon.Address, locked bool) *rawdb.DelegatedResource {
-	return s.readDelegatedResourceByKey(rawdb.DelegatedResourceV2StateKey(from, to, locked))
+	var keyBuf [64]byte
+	return s.readDelegatedResourceByKey(rawdb.AppendDelegatedResourceV2StateKey(keyBuf[:0], from, to, locked))
 }
 
 func (s *StateDB) ReadDelegatedResourceV2Strict(from, to tcommon.Address, locked bool) (*rawdb.DelegatedResource, bool, error) {
-	return s.readDelegatedResourceByKeyStrict(rawdb.DelegatedResourceV2StateKey(from, to, locked), fmt.Sprintf("delegated resource v2 locked=%v", locked))
+	var keyBuf [64]byte
+	return s.readDelegatedResourceByKeyStrict(rawdb.AppendDelegatedResourceV2StateKey(keyBuf[:0], from, to, locked), fmt.Sprintf("delegated resource v2 locked=%v", locked))
 }
 
 func (s *StateDB) readDelegatedResourceByKey(key []byte) *rawdb.DelegatedResource {
@@ -164,7 +166,8 @@ func (s *StateDB) WriteDelegatedResourceLegacy(from, to tcommon.Address, dr *raw
 }
 
 func (s *StateDB) WriteDelegatedResourceV2(from, to tcommon.Address, locked bool, dr *rawdb.DelegatedResource) error {
-	return s.writeDelegatedResourceByKey(rawdb.DelegatedResourceV2StateKey(from, to, locked), dr)
+	var keyBuf [64]byte
+	return s.writeDelegatedResourceByKey(rawdb.AppendDelegatedResourceV2StateKey(keyBuf[:0], from, to, locked), dr)
 }
 
 func (s *StateDB) writeDelegatedResourceByKey(key []byte, dr *rawdb.DelegatedResource) error {
@@ -176,16 +179,25 @@ func (s *StateDB) DeleteDelegatedResourceLegacy(from, to tcommon.Address) error 
 }
 
 func (s *StateDB) DeleteDelegatedResourceV2(from, to tcommon.Address, locked bool) error {
-	return s.deleteSystemDelegation(rawdb.DelegatedResourceV2StateKey(from, to, locked))
+	var keyBuf [64]byte
+	return s.deleteSystemDelegation(rawdb.AppendDelegatedResourceV2StateKey(keyBuf[:0], from, to, locked))
 }
 
 func (s *StateDB) UnlockExpiredDelegatedResource(from, to tcommon.Address, now int64) error {
+	_, _, _, err := s.UnlockExpiredDelegatedResourceResult(from, to, now)
+	return err
+}
+
+// UnlockExpiredDelegatedResourceResult reconciles expired locked delegations into
+// the unlocked row and returns the resulting rows (along with whether unlocked was
+// already loaded) so callers do not issue duplicate V2 reads.
+func (s *StateDB) UnlockExpiredDelegatedResourceResult(from, to tcommon.Address, now int64) (unlocked, locked *rawdb.DelegatedResource, unlockedLoaded bool, err error) {
 	lockResource := s.ReadDelegatedResourceV2(from, to, true)
 	if lockResource == nil {
-		return nil
+		return nil, nil, false, nil
 	}
 	if lockResource.ExpireTimeForEnergy >= now && lockResource.ExpireTimeForBandwidth >= now {
-		return nil
+		return nil, lockResource, false, nil
 	}
 
 	unlockResource := s.ReadDelegatedResourceV2(from, to, false)
@@ -204,12 +216,19 @@ func (s *StateDB) UnlockExpiredDelegatedResource(from, to tcommon.Address, now i
 	}
 	if lockResource.FrozenBalanceForBandwidth == 0 && lockResource.FrozenBalanceForEnergy == 0 {
 		if err := s.DeleteDelegatedResourceV2(from, to, true); err != nil {
-			return err
+			return nil, nil, true, err
 		}
-	} else if err := s.WriteDelegatedResourceV2(from, to, true, lockResource); err != nil {
-		return err
+		locked = nil
+	} else {
+		if err := s.WriteDelegatedResourceV2(from, to, true, lockResource); err != nil {
+			return nil, nil, true, err
+		}
+		locked = lockResource
 	}
-	return s.WriteDelegatedResourceV2(from, to, false, unlockResource)
+	if err := s.WriteDelegatedResourceV2(from, to, false, unlockResource); err != nil {
+		return nil, locked, true, err
+	}
+	return unlockResource, locked, true, nil
 }
 
 func (s *StateDB) WriteDelegationIndex(from tcommon.Address, receivers []tcommon.Address) error {
@@ -386,25 +405,26 @@ func (s *StateDB) WriteDrAccountIndexDelegate(v2 bool, from, to []byte, timestam
 		fromDir, toDir = rawdb.DrAccIdxV2From, rawdb.DrAccIdxV2To
 	}
 
-	fromPayload, err := statecodec.Marshal(&corepb.DelegatedResourceAccountIndex{
-		Account:   append([]byte(nil), to...),
+	fromPayload, err := statecodec.MarshalDelegationIndex(&corepb.DelegatedResourceAccountIndex{
+		Account:   to,
 		Timestamp: timestamp,
 	})
 	if err != nil {
 		return fmt.Errorf("dr account index: marshal from: %w", err)
 	}
-	if err := s.writeSystemDelegation(rawdb.DrAccountIndexStateKey(fromDir, from, to), fromPayload); err != nil {
+	var keyBuf [64]byte
+	if err := s.writeSystemDelegation(rawdb.AppendDrAccountIndexStateKey(keyBuf[:0], fromDir, from, to), fromPayload); err != nil {
 		return err
 	}
 
-	toPayload, err := statecodec.Marshal(&corepb.DelegatedResourceAccountIndex{
-		Account:   append([]byte(nil), from...),
+	toPayload, err := statecodec.MarshalDelegationIndex(&corepb.DelegatedResourceAccountIndex{
+		Account:   from,
 		Timestamp: timestamp,
 	})
 	if err != nil {
 		return fmt.Errorf("dr account index: marshal to: %w", err)
 	}
-	return s.writeSystemDelegation(rawdb.DrAccountIndexStateKey(toDir, to, from), toPayload)
+	return s.writeSystemDelegation(rawdb.AppendDrAccountIndexStateKey(keyBuf[:0], toDir, to, from), toPayload)
 }
 
 func (s *StateDB) WriteDrAccountIndexUnDelegate(v2 bool, from, to []byte) error {
@@ -415,14 +435,16 @@ func (s *StateDB) WriteDrAccountIndexUnDelegate(v2 bool, from, to []byte) error 
 	if v2 {
 		fromDir, toDir = rawdb.DrAccIdxV2From, rawdb.DrAccIdxV2To
 	}
-	if err := s.deleteSystemDelegation(rawdb.DrAccountIndexStateKey(fromDir, from, to)); err != nil {
+	var keyBuf [64]byte
+	if err := s.deleteSystemDelegation(rawdb.AppendDrAccountIndexStateKey(keyBuf[:0], fromDir, from, to)); err != nil {
 		return err
 	}
-	return s.deleteSystemDelegation(rawdb.DrAccountIndexStateKey(toDir, to, from))
+	return s.deleteSystemDelegation(rawdb.AppendDrAccountIndexStateKey(keyBuf[:0], toDir, to, from))
 }
 
 func (s *StateDB) ReadDrAccountIndexEntry(dir rawdb.DrAccIdxDirection, anchor, counterparty []byte) *corepb.DelegatedResourceAccountIndex {
-	data, ok := s.readSystemDelegationForDecoding(rawdb.DrAccountIndexStateKey(dir, anchor, counterparty))
+	var keyBuf [64]byte
+	data, ok := s.readSystemDelegationForDecoding(rawdb.AppendDrAccountIndexStateKey(keyBuf[:0], dir, anchor, counterparty))
 	if !ok {
 		return nil
 	}
@@ -430,16 +452,17 @@ func (s *StateDB) ReadDrAccountIndexEntry(dir rawdb.DrAccIdxDirection, anchor, c
 		s.recordStateError(fmt.Sprintf("decode dr account index entry dir=%d anchor=%x counterparty=%x", dir, anchor, counterparty), fmt.Errorf("empty value"))
 		return nil
 	}
-	var rec corepb.DelegatedResourceAccountIndex
-	if err := statecodec.Unmarshal(data, &rec); err != nil {
+	rec, err := statecodec.UnmarshalDelegationIndex(data)
+	if err != nil {
 		s.recordStateError(fmt.Sprintf("decode dr account index entry dir=%d anchor=%x counterparty=%x", dir, anchor, counterparty), err)
 		return nil
 	}
-	return &rec
+	return rec
 }
 
 func (s *StateDB) ReadDrAccountIndexEntryStrict(dir rawdb.DrAccIdxDirection, anchor, counterparty []byte) (*corepb.DelegatedResourceAccountIndex, bool, error) {
-	return s.readDrAccountIndexByKeyStrict(rawdb.DrAccountIndexStateKey(dir, anchor, counterparty), fmt.Sprintf("dr account index entry dir=%d", dir))
+	var keyBuf [64]byte
+	return s.readDrAccountIndexByKeyStrict(rawdb.AppendDrAccountIndexStateKey(keyBuf[:0], dir, anchor, counterparty), fmt.Sprintf("dr account index entry dir=%d", dir))
 }
 
 func (s *StateDB) readDrAccountIndexByKeyStrict(key []byte, context string) (*corepb.DelegatedResourceAccountIndex, bool, error) {
@@ -447,22 +470,22 @@ func (s *StateDB) readDrAccountIndexByKeyStrict(key []byte, context string) (*co
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	var rec corepb.DelegatedResourceAccountIndex
-	if err := statecodec.Unmarshal(data, &rec); err != nil {
+	rec, err := statecodec.UnmarshalDelegationIndex(data)
+	if err != nil {
 		return nil, true, fmt.Errorf("decode %s: %w", context, err)
 	}
-	return &rec, true, nil
+	return rec, true, nil
 }
 
 func (s *StateDB) IterateDrAccountIndex(dir rawdb.DrAccIdxDirection, anchor []byte, fn func(counterparty []byte, rec *corepb.DelegatedResourceAccountIndex) error) error {
 	prefix := rawdb.DrAccountIndexAnchorStatePrefix(dir, anchor)
 	return s.IterateAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, prefix, func(key, value []byte) (bool, error) {
 		counterparty := append([]byte(nil), key[len(prefix):]...)
-		var rec corepb.DelegatedResourceAccountIndex
-		if err := statecodec.Unmarshal(value, &rec); err != nil {
+		rec, err := statecodec.UnmarshalDelegationIndex(value)
+		if err != nil {
 			return false, fmt.Errorf("dr account index: decode %x: %w", key, err)
 		}
-		if err := fn(counterparty, &rec); err != nil {
+		if err := fn(counterparty, rec); err != nil {
 			return false, err
 		}
 		return true, nil

@@ -981,14 +981,18 @@ func delegationKey(from, to []byte) []byte {
 
 func delegationKeyV2(from, to []byte, locked bool) []byte {
 	k := make([]byte, 0, len(delegationPrefix)+1+len(from)+len(to))
-	k = append(k, delegationPrefix...)
+	return appendDelegationKeyV2(k, from, to, locked)
+}
+
+func appendDelegationKeyV2(dst, from, to []byte, locked bool) []byte {
+	dst = append(dst, delegationPrefix...)
 	if locked {
-		k = append(k, 0x02)
+		dst = append(dst, 0x02)
 	} else {
-		k = append(k, 0x01)
+		dst = append(dst, 0x01)
 	}
-	k = append(k, from...)
-	return append(k, to...)
+	dst = append(dst, from...)
+	return append(dst, to...)
 }
 
 func delegationIndexKey(from []byte) []byte {
@@ -1261,10 +1265,14 @@ func rewardViIsDoneKey() []byte {
 // the prefix byte selecting V1/V2 × from/to.
 func drAccIdxKey(dir DrAccIdxDirection, anchor, counterparty []byte) []byte {
 	k := make([]byte, 0, len(drAccIdxPrefix)+1+len(anchor)+len(counterparty))
-	k = append(k, drAccIdxPrefix...)
-	k = append(k, byte(dir))
-	k = append(k, anchor...)
-	return append(k, counterparty...)
+	return appendDrAccIdxKey(k, dir, anchor, counterparty)
+}
+
+func appendDrAccIdxKey(dst []byte, dir DrAccIdxDirection, anchor, counterparty []byte) []byte {
+	dst = append(dst, drAccIdxPrefix...)
+	dst = append(dst, byte(dir))
+	dst = append(dst, anchor...)
+	return append(dst, counterparty...)
 }
 
 func drAccIdxLegacyKey(account []byte) []byte {

@@ -46,8 +46,13 @@ var (
 	stateReadAheadAssetCappedCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/asset/cap/rejected_attempts", nil)
 	stateReadAheadAssetLegacyCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/asset/legacy/rows", nil)
 	stateReadAheadAssetV2Counter        = metrics.NewRegisteredCounter("core/state_read_ahead/asset/v2/rows", nil)
-	stateReadAheadAssetBalanceCounter   = metrics.NewRegisteredCounter("core/state_read_ahead/asset/balance/rows", nil)
-	stateReadAheadAssetPlanFullCounter  = metrics.NewRegisteredCounter("core/state_read_ahead/asset/plan_full/rows", nil)
+	stateReadAheadAssetBalanceCounter      = metrics.NewRegisteredCounter("core/state_read_ahead/asset/balance/rows", nil)
+	stateReadAheadAssetPlanFullCounter     = metrics.NewRegisteredCounter("core/state_read_ahead/asset/plan_full/rows", nil)
+	stateReadAheadStorageLearnedCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/storage/learned/contracts", nil)
+	stateReadAheadStorageRowsCounter       = metrics.NewRegisteredCounter("core/state_read_ahead/storage/rows", nil)
+	stateReadAheadStoragePresentCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/storage/present", nil)
+	stateReadAheadStorageMissingCounter    = metrics.NewRegisteredCounter("core/state_read_ahead/storage/missing", nil)
+	stateReadAheadStorageCappedCounter     = metrics.NewRegisteredCounter("core/state_read_ahead/storage/capped_attempts", nil)
 )
 
 // StateReadAheadConfig bounds the non-consensus bulk-sync warmup pipeline.
@@ -56,6 +61,7 @@ type StateReadAheadConfig struct {
 	QueueBlocks             int
 	QueueBytes              int64
 	SkipLegacyAssetPrefetch func() bool
+	UseOptimizedStorage     func() bool
 }
 
 // StateReadAheadStats is a point-in-time view of one session's warmup work.
@@ -63,25 +69,30 @@ type StateReadAheadConfig struct {
 // AssetCappedAttempts counts rejected hint attempts, including repeats of a
 // key rejected earlier in the same block.
 type StateReadAheadStats struct {
-	EnqueuedBlocks       uint64
-	EnqueuedBytes        uint64
-	QueuedBytes          int64
-	DroppedBlocks        uint64
-	DroppedBytes         uint64
-	ProcessedBlocks      uint64
-	StaleBlocks          uint64
-	Rows                 uint64
-	Present              uint64
-	Missing              uint64
-	Errors               uint64
-	CompletedBeforeApply uint64
-	CompletedAfterApply  uint64
-	AssetCapBlocks       uint64
-	AssetCappedAttempts  uint64
-	AssetLegacyRows      uint64
-	AssetV2Rows          uint64
-	AssetBalanceRows     uint64
-	AssetPlanFullRows    uint64
+	EnqueuedBlocks          uint64
+	EnqueuedBytes           uint64
+	QueuedBytes             int64
+	DroppedBlocks           uint64
+	DroppedBytes            uint64
+	ProcessedBlocks         uint64
+	StaleBlocks             uint64
+	Rows                    uint64
+	Present                 uint64
+	Missing                 uint64
+	Errors                  uint64
+	CompletedBeforeApply    uint64
+	CompletedAfterApply     uint64
+	AssetCapBlocks          uint64
+	AssetCappedAttempts     uint64
+	AssetLegacyRows         uint64
+	AssetV2Rows             uint64
+	AssetBalanceRows        uint64
+	AssetPlanFullRows       uint64
+	StorageLearnedContracts uint64
+	StorageRows             uint64
+	StoragePresent          uint64
+	StorageMissing          uint64
+	StorageCappedAttempts   uint64
 }
 
 type stateReadAheadJob struct {
@@ -98,6 +109,9 @@ type StateReadAhead struct {
 	queueBytes              int64
 	work                    chan stateReadAheadJob
 	skipLegacyAssetPrefetch func() bool
+	useOptimizedStorage     func() bool
+	layoutCache             *contractStorageLayoutCache
+	slotLearner             *contractSlotLearner
 
 	mu        sync.RWMutex
 	stopped   bool
@@ -110,24 +124,29 @@ type StateReadAhead struct {
 	applyingBlock atomic.Uint64
 	queuedBytes   atomic.Int64
 
-	enqueuedBlocks       atomic.Uint64
-	enqueuedBytes        atomic.Uint64
-	droppedBlocks        atomic.Uint64
-	droppedBytes         atomic.Uint64
-	processed            atomic.Uint64
-	stale                atomic.Uint64
-	rows                 atomic.Uint64
-	present              atomic.Uint64
-	missing              atomic.Uint64
-	errors               atomic.Uint64
-	completedBeforeApply atomic.Uint64
-	completedAfterApply  atomic.Uint64
-	assetCapBlocks       atomic.Uint64
-	assetCappedAttempts  atomic.Uint64
-	assetLegacyRows      atomic.Uint64
-	assetV2Rows          atomic.Uint64
-	assetBalanceRows     atomic.Uint64
-	assetPlanFullRows    atomic.Uint64
+	enqueuedBlocks          atomic.Uint64
+	enqueuedBytes           atomic.Uint64
+	droppedBlocks           atomic.Uint64
+	droppedBytes            atomic.Uint64
+	processed               atomic.Uint64
+	stale                   atomic.Uint64
+	rows                    atomic.Uint64
+	present                 atomic.Uint64
+	missing                 atomic.Uint64
+	errors                  atomic.Uint64
+	completedBeforeApply    atomic.Uint64
+	completedAfterApply     atomic.Uint64
+	assetCapBlocks          atomic.Uint64
+	assetCappedAttempts     atomic.Uint64
+	assetLegacyRows         atomic.Uint64
+	assetV2Rows             atomic.Uint64
+	assetBalanceRows        atomic.Uint64
+	assetPlanFullRows       atomic.Uint64
+	storageLearnedContracts atomic.Uint64
+	storageRows             atomic.Uint64
+	storagePresent          atomic.Uint64
+	storageMissing          atomic.Uint64
+	storageCappedAttempts   atomic.Uint64
 }
 
 // NewStateReadAhead builds a bounded session-level read-ahead pipeline.
@@ -159,6 +178,9 @@ func NewStateReadAhead(db ethdb.KeyValueReader, cfg StateReadAheadConfig) *State
 		queueBytes:              queueBytes,
 		work:                    make(chan stateReadAheadJob, queueBlocks),
 		skipLegacyAssetPrefetch: cfg.SkipLegacyAssetPrefetch,
+		useOptimizedStorage:     cfg.UseOptimizedStorage,
+		layoutCache:             newContractStorageLayoutCache(),
+		slotLearner:             newContractSlotLearner(),
 	}
 }
 
@@ -334,8 +356,34 @@ func (p *StateReadAhead) Stats() StateReadAheadStats {
 		AssetCappedAttempts:  p.assetCappedAttempts.Load(),
 		AssetLegacyRows:      p.assetLegacyRows.Load(),
 		AssetV2Rows:          p.assetV2Rows.Load(),
-		AssetBalanceRows:     p.assetBalanceRows.Load(),
-		AssetPlanFullRows:    p.assetPlanFullRows.Load(),
+		AssetBalanceRows:        p.assetBalanceRows.Load(),
+		AssetPlanFullRows:       p.assetPlanFullRows.Load(),
+		StorageLearnedContracts: p.storageLearnedContracts.Load(),
+		StorageRows:             p.storageRows.Load(),
+		StoragePresent:          p.storagePresent.Load(),
+		StorageMissing:          p.storageMissing.Load(),
+		StorageCappedAttempts:   p.storageCappedAttempts.Load(),
+	}
+}
+
+// NeedsStorageObservation reports whether canonical execution should sample
+// ContractStorage slot reads for (contract, generation, selector).
+func (p *StateReadAhead) NeedsStorageObservation(contract tcommon.Address, generation uint64, selector [4]byte) bool {
+	if p == nil {
+		return false
+	}
+	return p.slotLearner.needsObservation(contract, generation, selector)
+}
+
+// ObserveContractSlots records observed ContractStorage slots from a successful
+// standard-ABI TriggerSmartContract transaction so future blocks can prefetch them.
+func (p *StateReadAhead) ObserveContractSlots(contract tcommon.Address, generation uint64, selector [4]byte, caller20, arg0, arg1 [20]byte, observed []tcommon.Hash) {
+	if p == nil {
+		return
+	}
+	if p.slotLearner.observe(contract, generation, selector, caller20, arg0, arg1, observed) {
+		p.storageLearnedContracts.Add(1)
+		stateReadAheadStorageLearnedCounter.Inc(1)
 	}
 }
 
@@ -409,8 +457,16 @@ type stateReadAheadKVTarget struct {
 	key        string
 }
 
+type stateReadAheadStorageTrigger struct {
+	contract tcommon.Address
+	selector [4]byte
+	caller20 [20]byte
+	arg0     [20]byte
+	arg1     [20]byte
+}
+
 func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
-	targets, assetTransfers, delegations, rewardOwners := stateReadAheadTargets(job.block)
+	targets, assetTransfers, delegations, rewardOwners, storageTriggers := stateReadAheadTargets(job.block)
 	assetAccounts := make(map[tcommon.Address]struct{}, len(assetTransfers)*2+1)
 	if len(assetTransfers) > 0 {
 		assetAccounts[tcommon.SystemAccountAddress] = struct{}{}
@@ -433,6 +489,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 	}
 	generations := make(map[tcommon.Address]uint64, len(targets))
 	rows := rawdb.NewStatePrefetchPlan(maxStateReadAheadPlanRows)
+	var metaIDs map[int]tcommon.Address
 	stale := errors.New("state read-ahead epoch changed")
 	err := accounts.Execute(p.db, func(id int, encoded []byte, ok bool, err error) error {
 		if job.epoch != p.epoch.Load() {
@@ -490,7 +547,12 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			}
 		}
 		if target.contract {
-			rows.AddKV(target.address, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+			if metaID := rows.AddKV(target.address, generation, kvdomains.ContractMetadata, contractMetaKVKey); metaID >= 0 {
+				if metaIDs == nil {
+					metaIDs = make(map[int]tcommon.Address, 4)
+				}
+				metaIDs[metaID] = target.address
+			}
 			rows.AddKV(target.address, generation, kvdomains.ContractRuntimeState, contractStateKVKey)
 			rows.AddCode(tcommon.BytesToHash(envelope.codeHash))
 		}
@@ -645,13 +707,98 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		p.assetPlanFullRows.Add(planFullRows)
 		stateReadAheadAssetPlanFullCounter.Inc(int64(planFullRows))
 	}
-	err = rows.Execute(p.db, func(_ int, _ []byte, present bool, err error) error {
+	var storagePlanned, storageCapped uint64
+	var storageRowIDs map[int]struct{}
+	if len(storageTriggers) > 0 && p.slotLearner != nil && p.layoutCache != nil {
+		useOptimized := p.useOptimizedStorage != nil && p.useOptimizedStorage()
+		var predicted [16]tcommon.Hash
+		var optKeyBuf [OptimizedStorageRowKeyLength]byte
+		for _, trig := range storageTriggers {
+			gen, hasGen := generations[trig.contract]
+			if !hasGen {
+				continue
+			}
+			layout, hasLayout := p.layoutCache.get(trig.contract, gen)
+			if !hasLayout {
+				continue
+			}
+			tpl, hasTemplate := p.slotLearner.learnedTemplate(trig.contract, gen, trig.selector)
+			if !hasTemplate {
+				continue
+			}
+			slots := appendPredictedStorageSlots(predicted[:0], tpl, trig.caller20, trig.arg0, trig.arg1)
+			for _, slot := range slots {
+				if storagePlanned >= maxStoragePrefetchRows {
+					storageCapped++
+					continue
+				}
+				legacyKey := storageRowKeyWithLayout(slot, layout.prefix, layout.hashSlot)
+				if id := rows.AddKV(trig.contract, gen, kvdomains.ContractStorage, legacyKey[:]); id >= 0 {
+					if storageRowIDs == nil {
+						storageRowIDs = make(map[int]struct{}, len(slots)*2)
+					}
+					if _, exists := storageRowIDs[id]; !exists {
+						storageRowIDs[id] = struct{}{}
+						storagePlanned++
+					}
+				}
+				if useOptimized {
+					if storagePlanned >= maxStoragePrefetchRows {
+						storageCapped++
+						continue
+					}
+					optKey := appendOptimizedStorageRowKeyWithAddrHash(optKeyBuf[:0], layout.addrHash, slot)
+					if id := rows.AddKV(trig.contract, gen, kvdomains.ContractStorage, optKey); id >= 0 {
+						if storageRowIDs == nil {
+							storageRowIDs = make(map[int]struct{}, len(slots)*2)
+						}
+						if _, exists := storageRowIDs[id]; !exists {
+							storageRowIDs[id] = struct{}{}
+							storagePlanned++
+						}
+					}
+				}
+			}
+		}
+	}
+	if storagePlanned > 0 {
+		p.storageRows.Add(storagePlanned)
+		stateReadAheadStorageRowsCounter.Inc(int64(storagePlanned))
+	}
+	if storageCapped > 0 {
+		p.storageCappedAttempts.Add(storageCapped)
+		stateReadAheadStorageCappedCounter.Inc(int64(storageCapped))
+	}
+	var storagePresent, storageMissing uint64
+	err = rows.Execute(p.db, func(id int, value []byte, present bool, err error) error {
 		if job.epoch != p.epoch.Load() {
 			return stale
 		}
 		p.recordRow(present, err)
+		if err == nil && present {
+			if addr, isMeta := metaIDs[id]; isMeta {
+				if gen, hasGen := generations[addr]; hasGen {
+					p.layoutCache.setEncoded(addr, gen, value)
+				}
+			}
+		}
+		if _, isStorage := storageRowIDs[id]; isStorage && err == nil {
+			if present {
+				storagePresent++
+			} else {
+				storageMissing++
+			}
+		}
 		return nil
 	})
+	if storagePresent > 0 {
+		p.storagePresent.Add(storagePresent)
+		stateReadAheadStoragePresentCounter.Inc(int64(storagePresent))
+	}
+	if storageMissing > 0 {
+		p.storageMissing.Add(storageMissing)
+		stateReadAheadStorageMissingCounter.Inc(int64(storageMissing))
+	}
 	if errors.Is(err, stale) {
 		return false
 	}
@@ -682,9 +829,9 @@ func (p *StateReadAhead) recordError() {
 	stateReadAheadErrorsCounter.Inc(1)
 }
 
-func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset, []stateReadAheadDelegation, []stateReadAheadRewardOwner) {
+func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset, []stateReadAheadDelegation, []stateReadAheadRewardOwner, []stateReadAheadStorageTrigger) {
 	if block == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	transactions := block.Transactions()
 	index := make(map[tcommon.Address]int)
@@ -692,6 +839,7 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 	assetTransfers := make([]stateReadAheadTransferAsset, 0)
 	delegations := make([]stateReadAheadDelegation, 0)
 	var rewardOwners []stateReadAheadRewardOwner
+	var storageTriggers []stateReadAheadStorageTrigger
 	add := func(raw []byte, contract bool) int {
 		if len(raw) != tcommon.AddressLength {
 			return -1
@@ -820,6 +968,20 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 			if ownerIdx >= 0 {
 				targets[ownerIdx].needsEnergyV2 = true
 			}
+			if len(c.ContractAddress) == tcommon.AddressLength {
+				contractAddr := tcommon.BytesToAddress(c.ContractAddress)
+				if contractAddr.ValidPrefix() {
+					if sel, caller20, arg0, arg1, ok := ExtractTriggerStorageCall(c.OwnerAddress, c.Data); ok {
+						storageTriggers = append(storageTriggers, stateReadAheadStorageTrigger{
+							contract: contractAddr,
+							selector: sel,
+							caller20: caller20,
+							arg0:     arg0,
+							arg1:     arg1,
+						})
+					}
+				}
+			}
 		case *contractpb.DelegateResourceContract:
 			recordDelegation(c.GetOwnerAddress(), c.GetReceiverAddress(), c.GetResource())
 		case *contractpb.UnDelegateResourceContract:
@@ -846,5 +1008,5 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 			}
 		}
 	}
-	return targets, assetTransfers, delegations, rewardOwners
+	return targets, assetTransfers, delegations, rewardOwners, storageTriggers
 }

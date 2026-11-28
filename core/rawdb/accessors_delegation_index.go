@@ -275,6 +275,12 @@ func DrAccountIndexStateKey(dir DrAccIdxDirection, anchor, counterparty []byte) 
 	return drAccIdxKey(dir, anchor, counterparty)
 }
 
+// AppendDrAccountIndexStateKey appends the canonical directional delegation
+// account-index key to dst so hot read/write/delete callers can reuse stack buffers.
+func AppendDrAccountIndexStateKey(dst []byte, dir DrAccIdxDirection, anchor, counterparty []byte) []byte {
+	return appendDrAccIdxKey(dst, dir, anchor, counterparty)
+}
+
 func DrAccountIndexAnchorStatePrefix(dir DrAccIdxDirection, anchor []byte) []byte {
 	return drAccIdxAnchorPrefix(dir, anchor)
 }

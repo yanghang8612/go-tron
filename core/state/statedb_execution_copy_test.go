@@ -30,7 +30,8 @@ func TestStateObjectCopyFieldPolicy(t *testing.T) {
 		"accountResourceLoaded": "copy", "accountResourceRaw": "deep-copy",
 		"accountResourceRawExists": "copy", "accountResourceRawLoaded": "copy",
 		"accountFrozenBandwidthLoaded": "copy",
-		"accountFrozenBandwidthMode": "copy", "accountFrozenBandwidthPoints": "clone-immutable-values",
+		"accountFrozenBandwidthMode": "copy", "accountFrozenBandwidthMissMask": "copy",
+		"accountFrozenBandwidthPoints": "clone-immutable-values",
 		"accountTronPowerLoaded": "copy", "trc10PointDomain": "copy",
 		"trc10PointKey": "copy-immutable", "trc10PointValue": "copy",
 		"trc10PointExists": "copy", "trc10PointLoaded": "copy",
@@ -100,9 +101,13 @@ func TestStateDBCopyTopLevelFieldPolicy(t *testing.T) {
 		"codeColdHistory": "share-immutable-reader", "codeColdTxNum": "copy",
 		"cycleRewardSink":        "reset-external-mutable-sink",
 		"oldRewardVICache":       "reset-execution-cache",
-		"storageReadScope":       "reset-execution-scope",
-		"storageReadScopeReader": "reset-execution-scope-reader",
-		"shieldedBest":           "reset-cache",
+		"storageReadScope":            "reset-execution-scope",
+		"storageReadScopeReader":      "reset-execution-scope-reader",
+		"shieldedBest":                "reset-cache",
+		"storageReadObserverActive":   "reset-execution-observer",
+		"storageReadObserverContract": "reset-execution-observer",
+		"storageReadObserverSlots":    "reset-execution-observer",
+		"storageReadObserverCount":    "reset-execution-observer",
 	}
 	typ := reflect.TypeOf(StateDB{})
 	if len(policies) != typ.NumField() {

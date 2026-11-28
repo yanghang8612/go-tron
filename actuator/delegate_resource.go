@@ -145,12 +145,20 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// Track incoming delegation on receiver
 	ctx.State.AddAcquiredDelegatedFrozenV2(receiverAddr, c.Resource, c.Balance)
 
-	if err := ctx.State.UnlockExpiredDelegatedResource(ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
+	unlockRes, lockRes, unlockLoaded, err := ctx.State.UnlockExpiredDelegatedResourceResult(ownerAddr, receiverAddr, ctx.PrevBlockTime)
+	if err != nil {
 		return nil, err
 	}
 
 	locked := c.Lock
-	dr := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, locked)
+	var dr *rawdb.DelegatedResource
+	if locked {
+		dr = lockRes
+	} else if unlockLoaded {
+		dr = unlockRes
+	} else {
+		dr = ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false)
+	}
 	if dr == nil {
 		dr = &rawdb.DelegatedResource{From: ownerAddr, To: receiverAddr}
 	}

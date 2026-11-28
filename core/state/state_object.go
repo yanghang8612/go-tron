@@ -156,9 +156,10 @@ type stateObject struct {
 	accountResourceRaw            []byte
 	accountResourceRawExists      bool
 	accountResourceRawLoaded      bool
-	accountFrozenBandwidthLoaded  bool
-	accountFrozenBandwidthMode    uint8
-	accountFrozenBandwidthPoints  *accountFrozenBandwidthPointCache
+	accountFrozenBandwidthLoaded   bool
+	accountFrozenBandwidthMode     uint8
+	accountFrozenBandwidthMissMask uint8
+	accountFrozenBandwidthPoints   *accountFrozenBandwidthPointCache
 	accountTronPowerLoaded        bool
 	// trc10Point caches the last durable TRC10 balance point-read for this
 	// account. TransferAsset validation, bandwidth charging, execution, and the

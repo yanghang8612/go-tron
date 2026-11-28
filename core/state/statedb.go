@@ -319,6 +319,12 @@ type StateDB struct {
 
 	// Execution-confined fast-path cache for SystemShielded transparent blocks.
 	shieldedBest shieldedBestCache
+
+	// Execution-confined single-transaction slot observer for StateReadAhead slot learning.
+	storageReadObserverActive   bool
+	storageReadObserverContract tcommon.Address
+	storageReadObserverSlots    [32]tcommon.Hash
+	storageReadObserverCount    int
 }
 
 type shieldedBestCache struct {
@@ -349,6 +355,55 @@ func (s *StateDB) SwapTransactionAccessRecorder(recorder *TransactionAccessRecor
 		s.journal.transactionAccess = recorder
 	}
 	return previous
+}
+
+// BeginStorageReadObservation enables capture of ContractStorage logical slots
+// read for contract during the current transaction execution.
+func (s *StateDB) BeginStorageReadObservation(contract tcommon.Address) {
+	if s == nil {
+		return
+	}
+	s.storageReadObserverContract = contract
+	s.storageReadObserverCount = 0
+	s.storageReadObserverActive = true
+}
+
+// FinishStorageReadObservation stops capture and returns the observed logical
+// storage slots from the current transaction execution.
+func (s *StateDB) FinishStorageReadObservation() []tcommon.Hash {
+	if s == nil || !s.storageReadObserverActive {
+		return nil
+	}
+	s.storageReadObserverActive = false
+	count := s.storageReadObserverCount
+	s.storageReadObserverCount = 0
+	return s.storageReadObserverSlots[:count]
+}
+
+func (s *StateDB) recordObservedStorageSlot(addr tcommon.Address, slot tcommon.Hash) {
+	if s.storageReadObserverActive && addr == s.storageReadObserverContract && s.storageReadObserverCount < len(s.storageReadObserverSlots) {
+		s.storageReadObserverSlots[s.storageReadObserverCount] = slot
+		s.storageReadObserverCount++
+	}
+}
+
+// PeekAccountKVGeneration returns the contract's cached KV generation without
+// triggering a durable lookup when the object is not loaded yet.
+func (s *StateDB) PeekAccountKVGeneration(addr tcommon.Address) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	if s.lastStateObject != nil && s.lastStateObject.address == addr {
+		if s.lastStateObject.deleted {
+			return 0, false
+		}
+		return s.lastStateObject.accountKVGeneration, true
+	}
+	obj := s.stateObjects[addr]
+	if obj == nil || obj.deleted {
+		return 0, false
+	}
+	return obj.accountKVGeneration, true
 }
 
 // CommitStats breaks StateDB.Commit wall-clock time into the write phases that
@@ -3189,6 +3244,7 @@ func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash 
 // row even though both read as zero.
 func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool) {
 	s.recordStorageRead(addr, key)
+	s.recordObservedStorageSlot(addr, key)
 	s.recordContractMetadataRead(addr)
 	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
 	if obj == nil {
@@ -3517,8 +3573,8 @@ func (s *StateDB) ReadContractState(addr tcommon.Address) *types.ContractState {
 		s.recordStateError(fmt.Sprintf("decode contract runtime state %s", addr.Hex()), errors.New("empty value"))
 		return nil
 	}
-	pb := new(contractpb.ContractState)
-	if err := statecodec.Unmarshal(data, pb); err != nil {
+	pb, err := statecodec.UnmarshalContractState(data)
+	if err != nil {
 		s.recordStateError(fmt.Sprintf("decode contract runtime state %s", addr.Hex()), err)
 		return nil
 	}
@@ -3530,7 +3586,7 @@ func (s *StateDB) WriteContractState(addr tcommon.Address, cs *types.ContractSta
 	if cs == nil {
 		return nil
 	}
-	data, err := statecodec.Marshal(cs.Proto())
+	data, err := statecodec.MarshalContractState(cs.Proto())
 	if err != nil {
 		return err
 	}
@@ -3871,9 +3927,10 @@ func (s *StateDB) copyStateObjectInto(cp *StateDB, addr tcommon.Address, obj *st
 		accountResourceRaw:            bytes.Clone(obj.accountResourceRaw),
 		accountResourceRawExists:      obj.accountResourceRawExists,
 		accountResourceRawLoaded:      obj.accountResourceRawLoaded,
-		accountFrozenBandwidthLoaded:  obj.accountFrozenBandwidthLoaded,
-		accountFrozenBandwidthMode:    obj.accountFrozenBandwidthMode,
-		accountFrozenBandwidthPoints:  cloneAccountFrozenBandwidthPoints(obj.accountFrozenBandwidthPoints),
+		accountFrozenBandwidthLoaded:   obj.accountFrozenBandwidthLoaded,
+		accountFrozenBandwidthMode:     obj.accountFrozenBandwidthMode,
+		accountFrozenBandwidthMissMask: obj.accountFrozenBandwidthMissMask,
+		accountFrozenBandwidthPoints:   cloneAccountFrozenBandwidthPoints(obj.accountFrozenBandwidthPoints),
 		accountTronPowerLoaded:        obj.accountTronPowerLoaded,
 		trc10PointDomain:              obj.trc10PointDomain,
 		trc10PointKey:                 obj.trc10PointKey,

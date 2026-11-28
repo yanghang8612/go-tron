@@ -148,3 +148,81 @@ func TestLegacyStorageRejectsMixedTransactionWriteFamilies(t *testing.T) {
 		t.Fatal("mixed writes to the same storage row were accepted")
 	}
 }
+
+func TestReadLegacyTVMStorageRowBeforeImages(t *testing.T) {
+	s := newTestStateDB(t)
+	addr := testAddr(0x55)
+	slot32 := tcommon.Hash{31: 1}
+	slotShort := tcommon.Hash{31: 2}
+	val32 := tcommon.Hash{31: 99}
+	shortBytes := []byte{0x07, 0x08}
+
+	key32 := s.LegacyTVMStorageRowKey(addr, slot32)
+	keyShort := s.LegacyTVMStorageRowKey(addr, slotShort)
+	if err := s.SetAccountKV(addr, kvdomains.ContractStorage, key32[:], val32[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountKV(addr, kvdomains.ContractStorage, keyShort[:], shortBytes); err != nil {
+		t.Fatal(err)
+	}
+	root, err := s.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root, s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got32, beforeNon32, hasBefore, before32, exists, err := reopened.ReadLegacyTVMStorageRow(addr, slot32, key32)
+	if err != nil || !exists || !hasBefore || !before32 || beforeNon32 != nil || got32 != val32 {
+		t.Fatalf("32-byte row = (%x, %x, hasBefore=%v, before32=%v, exists=%v, err=%v)", got32, beforeNon32, hasBefore, before32, exists, err)
+	}
+	gotShort, beforeShort, hasShort, isShort32, existsShort, err := reopened.ReadLegacyTVMStorageRow(addr, slotShort, keyShort)
+	if err != nil || !existsShort || !hasShort || isShort32 || !bytes.Equal(beforeShort, shortBytes) || gotShort != (tcommon.Hash{30: 0x07, 31: 0x08}) {
+		t.Fatalf("short row = (%x, %x, hasBefore=%v, before32=%v, exists=%v, err=%v)", gotShort, beforeShort, hasShort, isShort32, existsShort, err)
+	}
+
+	// Verify 32-byte SLOAD commits properly with reconstructed value[:].
+	next := tcommon.Hash{31: 123}
+	if err := reopened.WriteLegacyTVMStorageRow(addr, key32, next, got32[:]); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.GetState(addr, slot32); got != next {
+		t.Fatalf("updated state = %x, want %x", got, next)
+	}
+}
+
+var (
+	benchLegacyStorageHashSink tcommon.Hash
+	benchLegacyStorageBoolSink bool
+)
+
+func BenchmarkReadLegacyTVMStorageRow(b *testing.B) {
+	s := newTestStateDB(b)
+	addr := testAddr(0x56)
+	slot := tcommon.Hash{31: 11}
+	val := tcommon.Hash{0: 1, 31: 9}
+	key := s.LegacyTVMStorageRowKey(addr, slot)
+	if err := s.SetAccountKV(addr, kvdomains.ContractStorage, key[:], val[:]); err != nil {
+		b.Fatal(err)
+	}
+	root, err := s.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+	reopened, err := New(root, s.db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		v, _, hasBefore, _, exists, err := reopened.ReadLegacyTVMStorageRow(addr, slot, key)
+		if err != nil || !exists || !hasBefore {
+			b.Fatalf("read failed: exists=%v hasBefore=%v err=%v", exists, hasBefore, err)
+		}
+		benchLegacyStorageHashSink = v
+		benchLegacyStorageBoolSink = exists
+	}
+}

@@ -14,9 +14,13 @@ var (
 	accountOwnerPermissionKey   = []byte{0x00}
 	accountWitnessPermissionKey = []byte{0x01}
 	accountActivePermissionRoot = []byte{0x02}
+	accountActivePermission2Key = []byte{0x02, 0x00, 0x00, 0x00, 0x02}
 )
 
 func accountActivePermissionKey(id int32) []byte {
+	if id == 2 {
+		return accountActivePermission2Key
+	}
 	var key [5]byte
 	key[0] = accountActivePermissionRoot[0]
 	binary.BigEndian.PutUint32(key[1:], uint32(id))

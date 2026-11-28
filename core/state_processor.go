@@ -1006,6 +1006,7 @@ type processBlockOptions struct {
 	saveInternalTx                 bool
 	saveFeaturedInternalTx         bool
 	saveCancelAllUnfreezeV2Details bool
+	storageLearner                 *state.StateReadAhead
 }
 
 // errSpeculativePublicationAudit marks a publication attempt that cannot
@@ -1853,7 +1854,40 @@ func processBlockWithOptions(statedb *state.StateDB, dynProps *state.DynamicProp
 		internalTxArena.Reset()
 		executionLogArena := &txInfoSlots[i].executionLogArena
 		executionLogArena.Reset()
+		var (
+			observeStorage                          bool
+			observeContract                         tcommon.Address
+			observeSelector                         [4]byte
+			observeCaller, observeArg0, observeArg1 [20]byte
+		)
+		if options.storageLearner != nil && tx.ContractType() == corepb.Transaction_Contract_TriggerSmartContract {
+			if msg, decErr := tx.DecodedContract(); decErr == nil {
+				if trig, ok := msg.(*contractpb.TriggerSmartContract); ok && len(trig.ContractAddress) == tcommon.AddressLength {
+					if sel, caller20, arg0, arg1, matched := state.ExtractTriggerStorageCall(trig.OwnerAddress, trig.Data); matched {
+						contractAddr := tcommon.BytesToAddress(trig.ContractAddress)
+						gen, hasGen := statedb.PeekAccountKVGeneration(contractAddr)
+						if !hasGen || options.storageLearner.NeedsStorageObservation(contractAddr, gen, sel) {
+							observeStorage = true
+							observeContract = contractAddr
+							observeSelector = sel
+							observeCaller = caller20
+							observeArg0 = arg0
+							observeArg1 = arg1
+							statedb.BeginStorageReadObservation(contractAddr)
+						}
+					}
+				}
+			}
+		}
 		result, err := applyTransactionWithScratch(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), transactionDB, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache, txTracer, &txScratch, internalTxArena, executionLogArena)
+		if observeStorage {
+			observedSlots := statedb.FinishStorageReadObservation()
+			if err == nil && result != nil && result.ContractRet == int32(corepb.Transaction_Result_SUCCESS) && len(observedSlots) > 0 {
+				if gen, hasGen := statedb.PeekAccountKVGeneration(observeContract); hasGen {
+					options.storageLearner.ObserveContractSlots(observeContract, gen, observeSelector, observeCaller, observeArg0, observeArg1, observedSlots)
+				}
+			}
+		}
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}

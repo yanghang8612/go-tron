@@ -62,10 +62,22 @@ func cloneAccountFrozenBandwidthPoints(c *accountFrozenBandwidthPointCache) *acc
 	return &cp
 }
 
+var (
+	accountFrozenBandwidthKey0 = []byte{0, 0, 0, 0}
+	accountFrozenBandwidthKey1 = []byte{0, 0, 0, 1}
+)
+
 func accountFrozenBandwidthKey(index uint32) []byte {
-	var key [4]byte
-	binary.BigEndian.PutUint32(key[:], index)
-	return key[:]
+	switch index {
+	case 0:
+		return accountFrozenBandwidthKey0
+	case 1:
+		return accountFrozenBandwidthKey1
+	default:
+		var key [4]byte
+		binary.BigEndian.PutUint32(key[:], index)
+		return key[:]
+	}
 }
 
 func decodeAccountFrozenBandwidthRow(key, value []byte) (accountFrozenBandwidthRow, error) {
@@ -113,6 +125,7 @@ func clearAccountStakeV1Proto(pb *corepb.Account) {
 func clearAccountFrozenBandwidthCache(obj *stateObject) {
 	if obj != nil {
 		obj.accountFrozenBandwidthPoints = nil
+		obj.accountFrozenBandwidthMissMask = 0
 	}
 	clearAccountFrozenBandwidthMaterialization(obj)
 }
@@ -242,35 +255,45 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 			err = s.recordStateError(fmt.Sprintf("read account frozen bandwidth %s index=%d", obj.address.Hex(), index), err)
 		}
 	}()
-	key := s.accountUint32Key(index)
+	var key []byte
+	if index < 2 {
+		key = accountFrozenBandwidthKey(index)
+	} else {
+		key = s.accountUint32Key(index)
+	}
 	s.recordAccountFieldRead(obj.address, TransactionAccountFieldExistence)
 	s.recordAccountKVRead(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	// Deleted objects retain historical cache containers until revert/eviction.
 	// The generic reader makes that incarnation absent; neither a point hit nor
 	// a cached miss may bypass or overwrite its deletion boundary.
 	cacheable := index < 2 && !obj.deleted && s.transactionVersionedReader == nil
-	if cacheable && obj.accountFrozenBandwidthPoints != nil && obj.accountFrozenBandwidthPoints.generation == obj.accountKVGeneration {
-		c := obj.accountFrozenBandwidthPoints
+	if cacheable {
 		mask := uint8(1 << index)
-		if c.loaded&mask != 0 {
-			if c.exists&mask == 0 {
-				return accountFrozenBandwidthRow{}, false, nil
+		if obj.accountFrozenBandwidthMissMask&mask != 0 {
+			return accountFrozenBandwidthRow{}, false, nil
+		}
+		if obj.accountFrozenBandwidthPoints != nil && obj.accountFrozenBandwidthPoints.generation == obj.accountKVGeneration {
+			c := obj.accountFrozenBandwidthPoints
+			if c.loaded&mask != 0 {
+				if c.exists&mask == 0 {
+					return accountFrozenBandwidthRow{}, false, nil
+				}
+				v := c.rows[index]
+				entry := &corepb.Account_Frozen{FrozenBalance: v.balance, ExpireTime: v.expiry}
+				if len(v.unknown) != 0 {
+					entry.ProtoReflect().SetUnknown([]byte(v.unknown))
+				}
+				return accountFrozenBandwidthRow{index: index, entry: entry}, true, nil
 			}
-			v := c.rows[index]
-			entry := &corepb.Account_Frozen{FrozenBalance: v.balance, ExpireTime: v.expiry}
-			if len(v.unknown) != 0 {
-				entry.ProtoReflect().SetUnknown([]byte(v.unknown))
-			}
-			return accountFrozenBandwidthRow{index: index, entry: entry}, true, nil
 		}
 	}
-	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenBandwidthAux, key)
+	value, exists, err := s.getAccountKVForDecodingFromObject(obj, obj.address, kvdomains.AccountFrozenBandwidthAux, key)
 	if err != nil || !exists {
 		if err == nil && cacheable {
-			if obj.accountFrozenBandwidthPoints == nil || obj.accountFrozenBandwidthPoints.generation != obj.accountKVGeneration {
-				obj.accountFrozenBandwidthPoints = &accountFrozenBandwidthPointCache{generation: obj.accountKVGeneration}
+			obj.accountFrozenBandwidthMissMask |= 1 << index
+			if obj.accountFrozenBandwidthPoints != nil && obj.accountFrozenBandwidthPoints.generation == obj.accountKVGeneration {
+				obj.accountFrozenBandwidthPoints.loaded |= 1 << index
 			}
-			obj.accountFrozenBandwidthPoints.loaded |= 1 << index
 		}
 		return accountFrozenBandwidthRow{}, exists, err
 	}
@@ -279,6 +302,7 @@ func (s *StateDB) accountFrozenBandwidthRowAt(obj *stateObject, index uint32) (_
 		return accountFrozenBandwidthRow{}, false, err
 	}
 	if cacheable {
+		obj.accountFrozenBandwidthMissMask &^= 1 << index
 		if obj.accountFrozenBandwidthPoints == nil || obj.accountFrozenBandwidthPoints.generation != obj.accountKVGeneration {
 			obj.accountFrozenBandwidthPoints = &accountFrozenBandwidthPointCache{generation: obj.accountKVGeneration}
 		}

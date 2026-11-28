@@ -49,6 +49,7 @@ type canonicalBlockExecution struct {
 	txInfoBatch          *transactionInfoBatch
 	txInfoBatchPool      *transactionInfoBatchPool
 	txInfoBatchHandedOff bool
+	readAhead            *state.StateReadAhead
 }
 
 type canonicalCommitResult struct {
@@ -264,6 +265,10 @@ func (e *canonicalRangeExecutor) enableStateReadAhead() {
 			dp := e.bc.DynProps()
 			return dp != nil && dp.AllowSameTokenName()
 		},
+		UseOptimizedStorage: func() bool {
+			dp := e.bc.DynProps()
+			return dp != nil && (dp.AllowOptimizeTvmStorage() || dp.AllowOptimizeTvmStorageKey())
+		},
 	})
 	e.readAhead.Start()
 }
@@ -363,6 +368,7 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		deferStateHistoryIndex: e.deferStateHistoryIndex,
 		txInfoBatch:            e.txInfoBatches.acquire(),
 		txInfoBatchPool:        e.txInfoBatches,
+		readAhead:              e.readAhead,
 	}
 	defer func() {
 		if !plan.txInfoBatchHandedOff {

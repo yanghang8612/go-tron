@@ -27,10 +27,25 @@ type accountUnfrozenV2Row struct {
 	entry *corepb.Account_UnFreezeV2
 }
 
+var (
+	accountFrozenV2BandwidthKey = []byte{0, 0, 0, byte(corepb.ResourceCode_BANDWIDTH)}
+	accountFrozenV2EnergyKey    = []byte{0, 0, 0, byte(corepb.ResourceCode_ENERGY)}
+	accountFrozenV2TronPowerKey = []byte{0, 0, 0, byte(corepb.ResourceCode_TRON_POWER)}
+)
+
 func accountFrozenV2Key(resource corepb.ResourceCode) []byte {
-	var key [4]byte
-	binary.BigEndian.PutUint32(key[:], uint32(resource))
-	return key[:]
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		return accountFrozenV2BandwidthKey
+	case corepb.ResourceCode_ENERGY:
+		return accountFrozenV2EnergyKey
+	case corepb.ResourceCode_TRON_POWER:
+		return accountFrozenV2TronPowerKey
+	default:
+		var key [4]byte
+		binary.BigEndian.PutUint32(key[:], uint32(resource))
+		return key[:]
+	}
 }
 
 func encodeAccountFrozenV2Value(ordinal uint32, amount int64) []byte {
@@ -232,7 +247,7 @@ func (s *StateDB) accountFrozenV2Amount(obj *stateObject, resource corepb.Resour
 	if amount, exists, loaded := cachedAccountFrozenV2Point(obj, resource); loaded {
 		return amount, exists, nil
 	}
-	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenV2Aux, key)
+	value, exists, err := s.getAccountKVForDecodingFromObject(obj, obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if err != nil || !exists {
 		if err == nil {
 			cacheAccountFrozenV2Point(obj, resource, 0, false)
@@ -252,7 +267,7 @@ func (s *StateDB) setAccountFrozenV2Amount(obj *stateObject, resource corepb.Res
 		return nil
 	}
 	key := accountFrozenV2Key(resource)
-	value, exists, err := s.getAccountKVForDecoding(obj.address, kvdomains.AccountFrozenV2Aux, key)
+	value, exists, err := s.getAccountKVForDecodingFromObject(obj, obj.address, kvdomains.AccountFrozenV2Aux, key)
 	if err != nil {
 		return err
 	}

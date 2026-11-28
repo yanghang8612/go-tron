@@ -1822,6 +1822,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		saveInternalTx:                 bc.saveInternalTx,
 		saveFeaturedInternalTx:         bc.saveFeaturedInternalTx,
 		saveCancelAllUnfreezeV2Details: bc.saveCancelAllUnfreezeV2Details,
+		storageLearner:                 plan.readAhead,
 	}
 	processorTiming := processBlockTiming{}
 	processorOptions.timing = &processorTiming

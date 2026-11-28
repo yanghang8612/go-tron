@@ -132,7 +132,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 		// for a never-seen account.
 		switch permID {
 		case 0:
-			perm = types.MakeDefaultOwnerPermission(ownerAddr)
+			return validateDefaultOwnerPermission(tx, ownerAddr, dp, sigs, pqSigs)
 		case 2:
 			if dp == nil {
 				return ErrPermissionNotFound
@@ -157,7 +157,7 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 			if permID != 0 {
 				return ErrPermissionNotFound
 			}
-			perm = types.MakeDefaultOwnerPermission(ownerAddr)
+			return validateDefaultOwnerPermission(tx, ownerAddr, dp, sigs, pqSigs)
 		}
 	}
 
@@ -268,6 +268,41 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	}
 	if totalWeight < perm.Threshold {
 		return ErrInsufficientWeight
+	}
+	return nil
+}
+
+func validateDefaultOwnerPermission(tx *types.Transaction, ownerAddr tcommon.Address, dp *state.DynamicProperties, sigs [][]byte, pqSigs []*corepb.PQAuthSig) error {
+	// Default owner permission allows all operations, has threshold 1, and holds
+	// a single key (ownerAddr, weight=1). Validating directly avoids allocating
+	// a temporary Permission/Key protobuf graph on every legacy/new-account tx.
+	if len(sigs)+len(pqSigs) > 1 {
+		return ErrTooManySignatures
+	}
+	if len(sigs) == 1 {
+		addrs, err := tx.RecoverSigners()
+		if err != nil {
+			return ErrInvalidTxSignature
+		}
+		if len(addrs) != 1 || addrs[0] != ownerAddr {
+			return ErrUnauthorizedSigner
+		}
+		return nil
+	}
+	auth := pqSigs[0]
+	if dp == nil || !pqTxSchemeAllowed(auth.GetScheme(), dp) {
+		return ErrInvalidTxSignature
+	}
+	addr, err := pq.Address(auth.GetScheme(), auth.GetPublicKey())
+	if err != nil {
+		return ErrInvalidTxSignature
+	}
+	if addr != ownerAddr {
+		return ErrUnauthorizedSigner
+	}
+	digest := tx.Hash()
+	if err := pq.Validate(auth, addr, digest[:]); err != nil {
+		return ErrInvalidTxSignature
 	}
 	return nil
 }

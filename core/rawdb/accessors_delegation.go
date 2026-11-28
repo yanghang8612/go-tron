@@ -248,6 +248,12 @@ func DelegatedResourceV2StateKey(from, to common.Address, locked bool) []byte {
 	return delegationKeyV2(from[:], to[:], locked)
 }
 
+// AppendDelegatedResourceV2StateKey appends the canonical V2 delegation state key
+// to dst, allowing callers with stack scratch buffers to avoid heap allocation.
+func AppendDelegatedResourceV2StateKey(dst []byte, from, to common.Address, locked bool) []byte {
+	return appendDelegationKeyV2(dst, from[:], to[:], locked)
+}
+
 func DelegationIndexStateKey(from common.Address) []byte {
 	return delegationIndexKey(from[:])
 }

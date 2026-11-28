@@ -10,10 +10,13 @@ import (
 // Java Storage caches by DataWord and commits the physical row captured at
 // insertion. Cached reads can affect the HashMap traversal of dirty rows.
 type legacyStorageRow struct {
-	key    tcommon.Hash
-	value  tcommon.Hash
-	dirty  bool
-	before []byte
+	key          tcommon.Hash
+	value        tcommon.Hash
+	initialValue tcommon.Hash
+	beforeNon32  []byte
+	hasBefore    bool
+	before32     bool
+	dirty        bool
 }
 
 type legacyStorageCache struct {
@@ -100,7 +103,16 @@ func (tvm *TVM) enterLegacyStorageFrame(snapshot int, outErr *error) func() {
 		}
 		for addr, cache := range frame.caches {
 			err := cache.commit(func(row legacyStorageRow) error {
-				return tvm.StateDB.WriteLegacyTVMStorageRow(addr, row.key, row.value, row.before)
+				var before []byte
+				if row.hasBefore {
+					if row.before32 {
+						initial := row.initialValue
+						before = initial[:]
+					} else {
+						before = row.beforeNon32
+					}
+				}
+				return tvm.StateDB.WriteLegacyTVMStorageRow(addr, row.key, row.value, before)
 			})
 			if err != nil {
 				tvm.StateDB.RevertToSnapshot(snapshot)
@@ -154,9 +166,16 @@ func (tvm *TVM) readLegacyStorage(addr tcommon.Address, slot tcommon.Hash) (tcom
 	if cached {
 		return row.value, true, nil
 	}
-	value, before, exists, err := tvm.StateDB.ReadLegacyTVMStorageRow(addr, slot, key)
+	value, beforeNon32, hasBefore, before32, exists, err := tvm.StateDB.ReadLegacyTVMStorageRow(addr, slot, key)
 	if exists {
-		cache.put(slot, legacyStorageRow{key: key, value: value, before: before})
+		cache.put(slot, legacyStorageRow{
+			key:          key,
+			value:        value,
+			initialValue: value,
+			beforeNon32:  beforeNon32,
+			hasBefore:    hasBefore,
+			before32:     before32,
+		})
 	}
 	return value, exists, err
 }
