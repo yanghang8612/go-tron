@@ -1309,13 +1309,13 @@ func (c *checkUnDelegateResource) Run(tvm *TVM, _ tcommon.Address, input []byte,
 	if !ok || amount <= 0 {
 		return make([]byte, 96), cost, nil
 	}
-	acc := tvm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.AccountDelegationResourceReference(addr, resType)
 	if acc == nil {
 		return make([]byte, 96), cost, nil
 	}
 
-	usage, restoreSeconds := resourceUsageBalanceAndRestoreSeconds(tvm, addr, resType)
-	resourceLimit := totalResourceBalance(acc, resType)
+	usage, restoreSeconds := resourceUsageBalanceAndRestoreSecondsForAccount(tvm, addr, acc, resType)
+	resourceLimit := totalResourceBalanceWithFrozenV2(acc, resType, tvm.StateDB.GetFrozenV2Amount(addr, resType))
 	if amount > resourceLimit {
 		amount = resourceLimit
 	}
@@ -1341,10 +1341,14 @@ func (c *resourceUsage) Run(tvm *TVM, _ tcommon.Address, input []byte, energy ui
 	}
 	addr := tronAddrFromWord(input[0:32])
 	resType, ok := stakingResourceFromInt(parseInt64SafeFromWord(input, 32))
-	if !ok || tvm.StateDB.GetAccount(addr) == nil {
+	if !ok {
 		return make([]byte, 64), cost, nil
 	}
-	usage, restoreSeconds := resourceUsageBalanceAndRestoreSeconds(tvm, addr, resType)
+	acc := tvm.StateDB.AccountResourceReference(addr)
+	if acc == nil {
+		return make([]byte, 64), cost, nil
+	}
+	usage, restoreSeconds := resourceUsageBalanceAndRestoreSecondsForAccount(tvm, addr, acc, resType)
 	return encodeInt64Words(usage, restoreSeconds), cost, nil
 }
 
@@ -1365,11 +1369,11 @@ func (c *totalResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy ui
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
-	acc := tvm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.AccountDelegationResourceReference(addr, resType)
 	if acc == nil {
 		return make([]byte, 32), cost, nil
 	}
-	return int64ToBytes32(totalResourceBalance(acc, resType)), cost, nil
+	return int64ToBytes32(totalResourceBalanceWithFrozenV2(acc, resType, tvm.StateDB.GetFrozenV2Amount(addr, resType))), cost, nil
 }
 
 // ── 0x01000014 TotalDelegatedResource ────────────────────────────────────────
@@ -1389,7 +1393,7 @@ func (c *totalDelegatedResource) Run(tvm *TVM, _ tcommon.Address, input []byte, 
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
-	acc := tvm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.AccountResourceReference(addr)
 	if acc == nil {
 		return make([]byte, 32), cost, nil
 	}
@@ -1413,7 +1417,7 @@ func (c *totalAcquiredResource) Run(tvm *TVM, _ tcommon.Address, input []byte, e
 	if !ok {
 		return make([]byte, 32), cost, nil
 	}
-	acc := tvm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.AccountResourceReference(addr)
 	if acc == nil {
 		return make([]byte, 32), cost, nil
 	}
@@ -1461,15 +1465,15 @@ func delegatedPairV2(tvm *TVM, from, to tcommon.Address, resType corepb.Resource
 }
 
 func delegatableFrozenV2(tvm *TVM, addr tcommon.Address, resType corepb.ResourceCode) int64 {
-	acc := tvm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.AccountDelegationResourceReference(addr, resType)
 	if acc == nil {
 		return 0
 	}
-	frozenV2 := acc.GetFrozenV2Amount(resType)
+	frozenV2 := tvm.StateDB.GetFrozenV2Amount(addr, resType)
 	if frozenV2 <= 0 {
 		return 0
 	}
-	usage, _ := resourceUsageBalanceAndRestoreSeconds(tvm, addr, resType)
+	usage, _ := resourceUsageBalanceAndRestoreSecondsForAccount(tvm, addr, acc, resType)
 	if usage <= 0 {
 		return frozenV2
 	}
@@ -1496,7 +1500,11 @@ func delegatableFrozenV2(tvm *TVM, addr tcommon.Address, resType corepb.Resource
 }
 
 func resourceUsageBalanceAndRestoreSeconds(tvm *TVM, addr tcommon.Address, resType corepb.ResourceCode) (int64, int64) {
-	acc := tvm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.AccountResourceReference(addr)
+	return resourceUsageBalanceAndRestoreSecondsForAccount(tvm, addr, acc, resType)
+}
+
+func resourceUsageBalanceAndRestoreSecondsForAccount(tvm *TVM, addr tcommon.Address, acc *types.Account, resType corepb.ResourceCode) (int64, int64) {
 	dp := stakingDynamicProperties(tvm)
 	if acc == nil || dp == nil {
 		return 0, 0
@@ -1531,16 +1539,20 @@ func resourceUsageBalanceAndRestoreSeconds(tvm *TVM, addr tcommon.Address, resTy
 }
 
 func totalResourceBalance(acc *types.Account, resType corepb.ResourceCode) int64 {
+	return totalResourceBalanceWithFrozenV2(acc, resType, acc.GetFrozenV2Amount(resType))
+}
+
+func totalResourceBalanceWithFrozenV2(acc *types.Account, resType corepb.ResourceCode, frozenV2 int64) int64 {
 	switch resType {
 	case corepb.ResourceCode_BANDWIDTH:
 		return acc.TotalFrozenBandwidth() +
 			acc.AcquiredDelegatedFrozenBandwidth() +
-			acc.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH) +
+			frozenV2 +
 			acc.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 	case corepb.ResourceCode_ENERGY:
 		return acc.FrozenEnergyAmount() +
 			acc.AcquiredDelegatedFrozenEnergy() +
-			acc.GetFrozenV2Amount(corepb.ResourceCode_ENERGY) +
+			frozenV2 +
 			acc.AcquiredDelegatedFrozenV2BalanceForEnergy()
 	}
 	return 0

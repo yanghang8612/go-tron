@@ -879,6 +879,7 @@ type domainChangeSetCapture struct {
 	captureAtCommit bool
 	enabled         bool
 	scratch         *domainChangeCollectScratch
+	arena           domainChangeBlockArena
 }
 
 // AccountSnapshot is a compact view of the account envelope needed to hydrate
@@ -4408,24 +4409,22 @@ func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool
 	if s == nil || !s.changeSet.enabled || !s.changeSet.captureAtCommit {
 		return nil
 	}
-	prev, prevExists, err := s.readStateAccountLatest(addr)
-	if err != nil {
+	if prev, prevExists, err := s.readStateAccountLatest(addr); err != nil {
 		return err
+	} else {
+		commitment.recordAccountLatestBefore(addr, prev, prevExists, true)
+		if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
+			return nil
+		}
+		return s.changeSet.publishCommitDomainChange(&rawdb.StateDomainChange{
+			FlatDomain: rawdb.StateFlatDomainAccountLatest,
+			Owner:      addr,
+			PrevExists: prevExists,
+			Prev:       prev,
+			NextExists: nextExists,
+			Next:       next,
+		})
 	}
-	if err := commitment.recordPhysicalBefore(rawdb.StateAccountLatestCommitmentKey(addr), prev, prevExists); err != nil {
-		return err
-	}
-	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
-		return nil
-	}
-	return s.changeSet.publishCommitDomainChange(&rawdb.StateDomainChange{
-		FlatDomain: rawdb.StateFlatDomainAccountLatest,
-		Owner:      addr,
-		PrevExists: prevExists,
-		Prev:       prev,
-		NextExists: nextExists,
-		Next:       next,
-	})
 }
 
 func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
@@ -4682,9 +4681,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 					if item.entry.prevExists {
 						before = rawdb.EncodeStateKVLatestValue(item.entry.prev)
 					}
-					if err := commitmentState.recordPhysicalBefore(rawdb.StateKVLatestCommitmentKey(plan.addr, plan.obj.accountKVGeneration, item.domain, item.logicalKey), before, item.entry.prevExists); err != nil {
-						return tcommon.Hash{}, stats, err
-					}
+					commitmentState.recordKVLatestBefore(plan.addr, plan.obj.accountKVGeneration, item.domain, item.logicalKey, before, item.entry.prevExists, true, true)
 				}
 			}
 		}
@@ -4739,7 +4736,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	clear(s.dirtyObjects)
 	mark(&stats.Finalize)
 
-	touchBatch, err := commitmentState.latestUpdateBatchFromTouches()
+	touchBatch, err := commitmentState.latestUpdateBatchFromTouchesSorted(false)
 	if err != nil {
 		if scope != nil {
 			scope.discard()

@@ -3,6 +3,9 @@ package actuator
 import (
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -236,5 +239,67 @@ func TestUnfreezeV2_Execute_DecrementsTotalWeight(t *testing.T) {
 	// 10_000_000 → 6_000_000 sun → 10 → 6 TRX → delta -4.
 	if got := ctx.DynProps.TotalNetWeight(); got != 6 {
 		t.Errorf("total_net_weight: want 6 (10 - 4), got %d", got)
+	}
+}
+
+func TestUnfreezeV2SelectiveReadsAvoidUnrelatedPrefixScans(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	defer disk.Close()
+	seedDB := state.NewDatabase(disk)
+	defer seedDB.Close()
+	s, err := state.New(common.Hash{}, seedDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := makeTestAddr(0x20)
+	witness := makeTestAddr(0x30)
+	seedAccount(s, owner, 12345)
+	for i := 0; i < 8; i++ {
+		name := string([]byte{'a', byte('0' + i)})
+		s.SetTRC10BalanceByName(owner, []byte(name), int64(i+1))
+		s.SetTRC10Balance(owner, 1000000+int64(i), int64(2*i+1))
+		s.SetFreeAssetNetUsage(owner, name, int64(3*i))
+		s.SetFreeAssetNetUsageV2(owner, name, int64(4*i))
+		s.SetLatestAssetOperationTime(owner, name, int64(5*i))
+		s.SetLatestAssetOperationTimeV2(owner, name, int64(6*i))
+	}
+	s.SetVotes(owner, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 100}})
+	s.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5_000_000)
+	s.InvalidateOldTronPower(owner)
+	root, err := s.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrapped := &rewardLayerDatabase{Database: disk, overlay: blockbuffer.New(disk)}
+	wrappedDB := state.NewDatabaseWithConfig(wrapped, state.DatabaseConfig{})
+	defer wrappedDB.Close()
+	reopened, err := state.New(root, wrappedDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrapped.prefixReads = 0
+	tx := makeUnfreezeV2Tx(0x20, 1_000_000, corepb.ResourceCode_BANDWIDTH)
+	ctx := setupContext(t, reopened, tx)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetAllowNewResourceModel(true)
+
+	act := &UnfreezeBalanceV2Actuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	// Validate should open only 1 prefix iterator (AccountUnfrozenV2Aux), never 6x TRC10 aux scans.
+	if wrapped.prefixReads != 1 {
+		t.Fatalf("Validate prefix reads = %d, want 1", wrapped.prefixReads)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// Validate opens 1 prefix iterator (AccountUnfrozenV2Aux) and Execute opens 2
+	// (RemoveExpiredUnfreezeV2 + AddUnfreezeV2), while updateVotesAfterUnfreezeV2
+	// uses OldTronPowerIsInvalid without calling GetAccount.
+	if wrapped.prefixReads != 3 {
+		t.Fatalf("total prefix reads after Execute = %d, want 3", wrapped.prefixReads)
 	}
 }

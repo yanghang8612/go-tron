@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/holiman/uint256"
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -320,5 +322,131 @@ func TestStakingV2TotalResourceIncludesV1AndV2(t *testing.T) {
 	}
 	if got := int64FromWord(out); got != 0 {
 		t.Fatalf("invalid totalResource type: got %d, want 0", got)
+	}
+}
+
+func TestStakingPrecompilesMatchGetAccountWithAuxiliaryDomains(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	defer disk.Close()
+	db := state.NewDatabase(disk)
+	defer db.Close()
+	statedb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dp := state.NewDynamicProperties()
+	dp.SetLatestBlockHeaderTimestamp(86_400_000)
+	dp.SetAllowDelegateResource(true)
+	statedb.SetDynamicProperties(dp)
+	owner := stakingPrecompileAddr(0x51)
+	contractOwner := stakingPrecompileAddr(0x52)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(contractOwner, corepb.AccountType_Contract)
+
+	// Populate auxiliary domains (TRC10 assets, votes, permissions) alongside staking fields.
+	for i := 0; i < 8; i++ {
+		statedb.SetTRC10Balance(owner, int64(1000001+i), int64(50+i))
+		statedb.SetFreeAssetNetUsageV2(owner, "1000001", 10)
+	}
+	statedb.SetVotes(owner, []*corepb.Vote{{VoteAddress: contractOwner.Bytes(), VoteCount: 5}})
+	statedb.FreezeV1Bandwidth(owner, 2_000_000, 1000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 3_000_000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 4_000_000)
+	statedb.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 1_500_000)
+	statedb.AddAcquiredDelegatedFrozenV2(owner, corepb.ResourceCode_ENERGY, 2_500_000)
+
+	// Commit and reopen fresh StateDB so objects are cold (no cached accountMapsLoaded).
+	root, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := state.New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.SetDynamicProperties(dp)
+	tvm := NewTVM(reopened, dp, owner, 1, 86_400_000, contractOwner, 0, TVMConfig{})
+	tvm.SetDB(disk)
+
+	// Verify opDelegateResource rejects Contract receiver via GetAccountType.
+	stack := stakingOpcodeStack(contractOwner, corepb.ResourceCode_BANDWIDTH, uint256.NewInt(1_000_000))
+	c := NewContract(owner, owner, 0, 100_000)
+	if _, err := opDelegateResource(nil, tvm.interpreter, c, nil, stack); err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.pop(); !got.IsZero() {
+		t.Fatalf("delegate to contract returned %s, want 0", got.String())
+	}
+
+	// Open a separate reference StateDB for GetAccount() so reopened stays cold.
+	refState, err := state.New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullAcc := refState.GetAccount(owner)
+	if fullAcc == nil {
+		t.Fatal("missing full account")
+	}
+
+	// Each resource iteration reopens a cold StateDB so cached accountStakeV2Loaded cannot mask cold behavior.
+	for _, res := range []struct {
+		code corepb.ResourceCode
+		word int64
+	}{
+		{corepb.ResourceCode_BANDWIDTH, 0},
+		{corepb.ResourceCode_ENERGY, 1},
+	} {
+		cold, err := state.New(root, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cold.SetDynamicProperties(dp)
+		coldTVM := NewTVM(cold, dp, owner, 1, 86_400_000, contractOwner, 0, TVMConfig{})
+		coldTVM.SetDB(disk)
+
+		input := stakingInput(stakingAddrWord(owner), int64ToBytes32(res.word))
+		out, _, err := (&totalResource{}).Run(coldTVM, zeroCaller, input, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := int64FromWord(out), totalResourceBalance(fullAcc, res.code); got != want {
+			t.Fatalf("totalResource(%v) = %d, want %d", res.code, got, want)
+		}
+		out, _, err = (&totalDelegatedResource{}).Run(coldTVM, zeroCaller, input, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := int64FromWord(out), totalDelegatedResourceBalance(fullAcc, res.code); got != want {
+			t.Fatalf("totalDelegatedResource(%v) = %d, want %d", res.code, got, want)
+		}
+		out, _, err = (&totalAcquiredResource{}).Run(coldTVM, zeroCaller, input, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := int64FromWord(out), totalAcquiredResourceBalance(fullAcc, res.code); got != want {
+			t.Fatalf("totalAcquiredResource(%v) = %d, want %d", res.code, got, want)
+		}
+		out, _, err = (&delegatableResource{}).Run(coldTVM, zeroCaller, input, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := int64FromWord(out), fullAcc.GetFrozenV2Amount(res.code); got != want {
+			t.Fatalf("delegatableResource(%v) = %d, want %d", res.code, got, want)
+		}
+		out, _, err = (&resourceUsage{}).Run(coldTVM, zeroCaller, input, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := stakingWordAt(out, 0); got != 0 {
+			t.Fatalf("resourceUsage(%v) = %d, want 0", res.code, got)
+		}
+		checkInput := stakingInput(stakingAddrWord(owner), int64ToBytes32(1_000_000), int64ToBytes32(res.word))
+		out, _, err = (&checkUnDelegateResource{}).Run(coldTVM, zeroCaller, checkInput, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := stakingWordAt(out, 0); got != 1_000_000 {
+			t.Fatalf("checkUnDelegateResource(%v) clean = %d, want 1000000", res.code, got)
+		}
 	}
 }

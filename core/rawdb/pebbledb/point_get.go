@@ -9,13 +9,13 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
-// Prefetch can traverse all populated LSM levels within one whole-Get lease.
-// Keep commitment's default four pairs and canonical storage's separate policy.
+// Prefetch can traverse up to 32 overlapping L0/L-level tables across
+// chains of point reads, matching canonical storage retention.
 // Overflow backing remains lazy in Pebble and is allocated only on table five.
 func pointReadGetCursorOptions(unbounded bool) pebble.GetCursorOptions {
 	opts := pebble.GetCursorOptions{UseL6Filters: unbounded}
 	if unbounded {
-		opts.MaxRetainedTables = 16
+		opts.MaxRetainedTables = 32
 	}
 	return opts
 }

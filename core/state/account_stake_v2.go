@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -351,4 +352,38 @@ func (s *StateDB) clearAccountUnfrozenV2(obj *stateObject) error {
 	}
 	s.invalidateAccountStakeV2(obj)
 	return nil
+}
+
+// GetUnfrozenV2 returns the account's pending V2 unfreeze entries without
+// materializing unrelated split account domains.
+func (s *StateDB) GetUnfrozenV2(addr tcommon.Address) []*corepb.Account_UnFreezeV2 {
+	obj := s.getStateObjectForField(addr, TransactionAccountFieldExistence)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return nil
+	}
+	if obj.accountStakeV2Loaded {
+		if s.transactionAccess != nil {
+			s.recordAccountKVPrefixRead(addr)
+		}
+		return obj.account.UnfrozenV2()
+	}
+	rows, err := s.accountUnfrozenV2Rows(obj)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	out := make([]*corepb.Account_UnFreezeV2, len(rows))
+	for i, row := range rows {
+		out[i] = row.entry
+	}
+	return out
+}
+
+// OldTronPowerIsInvalid reports whether the account's legacy old_tron_power
+// snapshot has been marked invalid (-1) without loading split KV domains.
+func (s *StateDB) OldTronPowerIsInvalid(addr tcommon.Address) bool {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted || obj.account == nil {
+		return false
+	}
+	return obj.account.OldTronPowerIsInvalid()
 }

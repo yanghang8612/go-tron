@@ -212,8 +212,11 @@ func TestPendingPrefixIndexAdmissionAndDeepPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.prunePending(4)
-	if w.pendingPrefixes != nil || w.pendingPrefixScans != 0 || len(w.pending) != 300 {
-		t.Fatal("durable deep prune did not invalidate index")
+	if len(w.pending) != 300 {
+		t.Fatalf("durable deep prune pending len = %d, want 300", len(w.pending))
+	}
+	if _, stillIndexed := w.pendingPrefixes[owner.AccountID()]; stillIndexed {
+		t.Fatal("durable deep prune left pruned owner in pendingPrefixes index")
 	}
 }
 

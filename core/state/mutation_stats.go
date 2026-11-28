@@ -52,6 +52,21 @@ var kvDomainStatOrder = [...]kvdomains.KVDomain{
 
 const kvDomainStatCount = len(kvDomainStatOrder)
 
+const kvDomainStatLUTSize = 1024
+
+var kvDomainStatLUT [kvDomainStatLUTSize]int8
+
+func init() {
+	for i := range kvDomainStatLUT {
+		kvDomainStatLUT[i] = -1
+	}
+	for i, domain := range kvDomainStatOrder {
+		if int(domain) < len(kvDomainStatLUT) {
+			kvDomainStatLUT[domain] = int8(i)
+		}
+	}
+}
+
 // KVDomainMutationStats counts final committed KV mutations for one domain.
 type KVDomainMutationStats struct {
 	Puts    int
@@ -210,6 +225,13 @@ func (s *CommitMutationStats) addKV(domain kvdomains.KVDomain, deleted bool) {
 }
 
 func kvDomainStatIndex(domain kvdomains.KVDomain) (int, bool) {
+	if int(domain) < len(kvDomainStatLUT) {
+		idx := kvDomainStatLUT[domain]
+		if idx >= 0 {
+			return int(idx), true
+		}
+		return 0, false
+	}
 	for i, registered := range kvDomainStatOrder {
 		if registered == domain {
 			return i, true

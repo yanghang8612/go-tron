@@ -13,6 +13,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -21,7 +22,8 @@ import (
 const (
 	defaultStateReadAheadQueueBlocks = 64
 	defaultStateReadAheadQueueBytes  = 16 << 20
-	maxTransferAssetPrefetchRows     = 256
+	maxTransferAssetPrefetchRows     = 1024
+	maxWithdrawRewardPrefetchOwners  = 32
 	maxStateReadAheadWorkers         = 8
 	maxStateReadAheadPlanRows        = 8192
 )
@@ -376,11 +378,17 @@ type stateReadAheadTarget struct {
 	contract           bool
 	owner              bool
 	delegationReceiver bool
+	rewardVotes        bool
 	mayCreate          bool
 	needsBandwidthV1   bool
 	needsBandwidthV2   bool
 	needsEnergyV2      bool
 	permissions        []int32
+}
+
+type stateReadAheadRewardOwner struct {
+	owner     tcommon.Address
+	withVotes bool
 }
 
 type stateReadAheadTransferAsset struct {
@@ -402,7 +410,7 @@ type stateReadAheadKVTarget struct {
 }
 
 func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
-	targets, assetTransfers, delegations := stateReadAheadTargets(job.block)
+	targets, assetTransfers, delegations, rewardOwners := stateReadAheadTargets(job.block)
 	assetAccounts := make(map[tcommon.Address]struct{}, len(assetTransfers)*2+1)
 	if len(assetTransfers) > 0 {
 		assetAccounts[tcommon.SystemAccountAddress] = struct{}{}
@@ -412,6 +420,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		}
 	}
 	delegationSystem := len(delegations) > 0
+	rewardSystem := len(rewardOwners) > 0
 	// Stage one resolves account generations. Stage two groups all predictable
 	// subrows into a deduplicated physical read plan. Hints may observe an old
 	// generation, but canonical access still reopens the current envelope.
@@ -442,7 +451,8 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		}
 		_, assetAccount := assetAccounts[target.address]
 		isDelegationSystem := delegationSystem && target.address == tcommon.SystemAccountAddress
-		if !target.contract && !target.owner && !target.delegationReceiver && len(target.permissions) == 0 && !assetAccount && !isDelegationSystem {
+		isRewardSystem := rewardSystem && target.address == tcommon.SystemAccountAddress
+		if !target.contract && !target.owner && !target.delegationReceiver && !target.rewardVotes && len(target.permissions) == 0 && !assetAccount && !isDelegationSystem && !isRewardSystem {
 			return nil
 		}
 		envelope, err := splitStateAccountV3(encoded)
@@ -481,6 +491,7 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 		}
 		if target.contract {
 			rows.AddKV(target.address, generation, kvdomains.ContractMetadata, contractMetaKVKey)
+			rows.AddKV(target.address, generation, kvdomains.ContractRuntimeState, contractStateKVKey)
 			rows.AddCode(tcommon.BytesToHash(envelope.codeHash))
 		}
 		return nil
@@ -505,6 +516,34 @@ func (p *StateReadAhead) warmBlock(job stateReadAheadJob) bool {
 			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(d.owner, d.receiver, true))
 			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2From, d.owner[:], d.receiver[:]))
 			rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemDelegation, rawdb.DrAccountIndexStateKey(rawdb.DrAccIdxV2To, d.receiver[:], d.owner[:]))
+		}
+	}
+	if sysGen, ok := generations[tcommon.SystemAccountAddress]; ok && len(rewardOwners) > 0 {
+		seenReward := make(map[tcommon.Address]bool, len(rewardOwners))
+		for _, ro := range rewardOwners {
+			if _, exists := seenReward[ro.owner]; !exists {
+				rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemReward, rawdb.BeginCycleStateKey(ro.owner[:]))
+				rows.AddKV(tcommon.SystemAccountAddress, sysGen, kvdomains.SystemReward, rawdb.EndCycleStateKey(ro.owner[:]))
+			}
+			seenReward[ro.owner] = seenReward[ro.owner] || ro.withVotes
+		}
+		voteOwners := 0
+		for _, ro := range rewardOwners {
+			if !ro.withVotes || !seenReward[ro.owner] {
+				continue
+			}
+			seenReward[ro.owner] = false
+			if voteOwners >= maxWithdrawRewardPrefetchOwners {
+				break
+			}
+			ownerGen, exists := generations[ro.owner]
+			if !exists {
+				continue
+			}
+			voteOwners++
+			for index := uint32(0); index < uint32(params.MaxVoteNumber); index++ {
+				rows.AddKV(ro.owner, ownerGen, kvdomains.AccountVotesAux, accountVoteKey(index))
+			}
 		}
 	}
 	// Prioritize the balance rows used by Validate across the whole block before
@@ -643,15 +682,16 @@ func (p *StateReadAhead) recordError() {
 	stateReadAheadErrorsCounter.Inc(1)
 }
 
-func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset, []stateReadAheadDelegation) {
+func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateReadAheadTransferAsset, []stateReadAheadDelegation, []stateReadAheadRewardOwner) {
 	if block == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	transactions := block.Transactions()
 	index := make(map[tcommon.Address]int)
 	targets := make([]stateReadAheadTarget, 0, len(transactions)*2+1)
 	assetTransfers := make([]stateReadAheadTransferAsset, 0)
 	delegations := make([]stateReadAheadDelegation, 0)
+	var rewardOwners []stateReadAheadRewardOwner
 	add := func(raw []byte, contract bool) int {
 		if len(raw) != tcommon.AddressLength {
 			return -1
@@ -668,6 +708,22 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 		index[address] = idx
 		targets = append(targets, stateReadAheadTarget{address: address, contract: contract})
 		return idx
+	}
+	addRewardOwner := func(raw []byte, withVotes bool) {
+		if len(raw) != tcommon.AddressLength {
+			return
+		}
+		owner := tcommon.BytesToAddress(raw)
+		if !owner.ValidPrefix() {
+			return
+		}
+		rewardOwners = append(rewardOwners, stateReadAheadRewardOwner{owner: owner, withVotes: withVotes})
+		if withVotes {
+			if idx := add(owner[:], false); idx >= 0 {
+				targets[idx].rewardVotes = true
+			}
+		}
+		add(tcommon.SystemAccountAddress[:], false)
 	}
 
 	witness := block.WitnessAddress()
@@ -768,6 +824,14 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 			recordDelegation(c.GetOwnerAddress(), c.GetReceiverAddress(), c.GetResource())
 		case *contractpb.UnDelegateResourceContract:
 			recordDelegation(c.GetOwnerAddress(), c.GetReceiverAddress(), c.GetResource())
+		case *contractpb.WithdrawBalanceContract:
+			addRewardOwner(c.GetOwnerAddress(), true)
+		case *contractpb.VoteWitnessContract:
+			addRewardOwner(c.GetOwnerAddress(), false)
+		case *contractpb.FreezeBalanceV2Contract:
+			addRewardOwner(c.GetOwnerAddress(), false)
+		case *contractpb.UnfreezeBalanceV2Contract:
+			addRewardOwner(c.GetOwnerAddress(), false)
 		case *contractpb.TransferAssetContract:
 			if toIdx := add(c.ToAddress, false); toIdx >= 0 {
 				targets[toIdx].mayCreate = true
@@ -782,5 +846,5 @@ func stateReadAheadTargets(block *types.Block) ([]stateReadAheadTarget, []stateR
 			}
 		}
 	}
-	return targets, assetTransfers, delegations
+	return targets, assetTransfers, delegations, rewardOwners
 }

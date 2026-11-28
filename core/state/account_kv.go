@@ -200,7 +200,10 @@ type accountKVLatestBatch struct {
 	// Keep this metadata last so existing hot fields retain their layout.
 	pendingPrefixMu        sync.Mutex
 	pendingPrefixScans     uint8
+	pendingPrefixPruned    int
 	pendingFrozenBandwidth int // includes both puts and tombstones
+	pendingDomainCounts    [kvDomainStatCount]int
+	pendingOtherDomain     int
 	pendingPrefixes        map[tcommon.AccountID][]accountKVPendingPrefixKey
 }
 
@@ -547,9 +550,7 @@ func (w *accountKVLatestBatch) writeDomainChange(owner tcommon.Address, generati
 		if prevExists {
 			encoded = rawdb.EncodeStateKVLatestValue(prev)
 		}
-		if err := w.commitment.recordPhysicalBefore(rawdb.StateKVLatestCommitmentKey(owner, generation, domain, logicalKey), encoded, prevExists); err != nil {
-			return err
-		}
+		w.commitment.recordKVLatestBefore(owner, generation, domain, logicalKey, encoded, prevExists, false, true)
 	}
 	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, nextValue)) {
 		return nil
@@ -784,7 +785,11 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 	provablyDurable := func(opLayer uint64, hasOpLayer bool) bool {
 		return hasMinRem && hasOpLayer && opLayer <= cutoff && opLayer < minRem
 	}
-	prunedKV := false
+	w.pendingPrefixMu.Lock()
+	hasPrefixIndex := w.pendingPrefixes != nil
+	w.pendingPrefixMu.Unlock()
+	prunedKVCount := 0
+	var prunedOwners map[tcommon.AccountID]struct{}
 	if !w.pendingBlocksBroken && len(w.pendingBlocks) > w.pendingBlocksHead {
 		end := w.pendingBlocksHead
 		dst := w.pendingBlocksHead
@@ -801,10 +806,14 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 				}
 				if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.kvPendingDurable(k, e) {
 					delete(w.pending, k)
-					if k.domain == kvdomains.AccountFrozenBandwidthAux {
-						w.pendingFrozenBandwidth--
+					w.adjustPendingDomainCount(k.domain, -1)
+					prunedKVCount++
+					if hasPrefixIndex {
+						if prunedOwners == nil {
+							prunedOwners = make(map[tcommon.AccountID]struct{})
+						}
+						prunedOwners[k.owner] = struct{}{}
 					}
-					prunedKV = true
 				} else {
 					b.kv[keepKV] = k
 					keepKV++
@@ -853,9 +862,8 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 				dst++
 			}
 		}
-		if prunedKV {
-			w.pendingPrefixes = nil
-			w.pendingPrefixScans = 0
+		if prunedKVCount > 0 {
+			w.prunePendingPrefixIndex(prunedKVCount, prunedOwners)
 		}
 		if dst == w.pendingBlocksHead {
 			w.pendingBlocksHead = end
@@ -882,15 +890,18 @@ func (w *accountKVLatestBatch) prunePendingWithBatchState(cutoff uint64, provenN
 		}
 		if !w.deepAsync || provablyDurable(e.opLayer, e.hasOpLayer) || w.kvPendingDurable(k, e) {
 			delete(w.pending, k)
-			if k.domain == kvdomains.AccountFrozenBandwidthAux {
-				w.pendingFrozenBandwidth--
+			w.adjustPendingDomainCount(k.domain, -1)
+			prunedKVCount++
+			if hasPrefixIndex {
+				if prunedOwners == nil {
+					prunedOwners = make(map[tcommon.AccountID]struct{})
+				}
+				prunedOwners[k.owner] = struct{}{}
 			}
-			prunedKV = true
 		}
 	}
-	if prunedKV {
-		w.pendingPrefixes = nil
-		w.pendingPrefixScans = 0
+	if prunedKVCount > 0 {
+		w.prunePendingPrefixIndex(prunedKVCount, prunedOwners)
 	}
 	for k, e := range w.accountPending {
 		if e.number > cutoff {
@@ -1000,13 +1011,78 @@ func (w *accountKVLatestBatch) clearPending() {
 	}
 	w.pending = nil
 	w.pendingFrozenBandwidth = 0
+	w.pendingDomainCounts = [kvDomainStatCount]int{}
+	w.pendingOtherDomain = 0
+	w.pendingPrefixMu.Lock()
 	w.pendingPrefixes = nil
 	w.pendingPrefixScans = 0
+	w.pendingPrefixPruned = 0
+	w.pendingPrefixMu.Unlock()
 	w.accountPending = nil
 	w.generationPending = nil
 	w.pendingBlocks = nil
 	w.pendingBlocksHead = 0
 	w.pendingBlocksBroken = false
+}
+
+func (w *accountKVLatestBatch) adjustPendingDomainCount(domain kvdomains.KVDomain, delta int) {
+	if idx, ok := kvDomainStatIndex(domain); ok {
+		w.pendingDomainCounts[idx] += delta
+	} else {
+		w.pendingOtherDomain += delta
+	}
+	if domain == kvdomains.AccountFrozenBandwidthAux {
+		w.pendingFrozenBandwidth += delta
+	}
+}
+
+func (w *accountKVLatestBatch) pendingDomainCount(domain kvdomains.KVDomain) int {
+	if idx, ok := kvDomainStatIndex(domain); ok {
+		return w.pendingDomainCounts[idx]
+	}
+	return w.pendingOtherDomain
+}
+
+func (w *accountKVLatestBatch) prunePendingPrefixIndex(prunedKVCount int, prunedOwners map[tcommon.AccountID]struct{}) {
+	w.pendingPrefixMu.Lock()
+	defer w.pendingPrefixMu.Unlock()
+	if w.pendingPrefixes == nil || len(w.pending) <= 256 {
+		w.pendingPrefixes = nil
+		w.pendingPrefixScans = 0
+		w.pendingPrefixPruned = 0
+		return
+	}
+	w.pendingPrefixPruned += prunedKVCount
+	if w.pendingPrefixPruned >= 65536 {
+		w.pendingPrefixes = nil
+		w.pendingPrefixScans = 0
+		w.pendingPrefixPruned = 0
+		return
+	}
+	for owner := range prunedOwners {
+		bucket, ok := w.pendingPrefixes[owner]
+		if !ok {
+			continue
+		}
+		keep := 0
+		for _, row := range bucket {
+			if _, stillPending := w.pending[accountKVLatestPendingMapKey{
+				owner:      owner,
+				generation: row.generation,
+				domain:     row.domain,
+				logicalKey: row.logicalKey,
+			}]; stillPending {
+				bucket[keep] = row
+				keep++
+			}
+		}
+		clear(bucket[keep:])
+		if keep == 0 {
+			delete(w.pendingPrefixes, owner)
+		} else {
+			w.pendingPrefixes[owner] = bucket[:keep]
+		}
+	}
 }
 
 func (w *accountKVLatestBatch) writeAccountLatest(owner tcommon.Address, value []byte) error {
@@ -1270,11 +1346,16 @@ func (w *accountKVLatestBatch) iterateLatestPrefix(owner tcommon.Address, genera
 // The presence hint only suppresses the pending search; callers still emit
 // the durable rows they collected before reaching this method.
 func (w *accountKVLatestBatch) mergePendingPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, entries map[string][]byte) {
-	if domain == kvdomains.AccountFrozenBandwidthAux && len(w.pending) != 0 {
-		if w.pendingFrozenBandwidth == 0 {
+	if len(w.pending) == 0 {
+		return
+	}
+	if w.pendingDomainCount(domain) == 0 {
+		if domain == kvdomains.AccountFrozenBandwidthAux {
 			accountKVV1PendingOverlaySkipped.Inc(1)
-			return
 		}
+		return
+	}
+	if domain == kvdomains.AccountFrozenBandwidthAux {
 		accountKVV1PendingOverlaySearched.Inc(1)
 	}
 	ownerID := owner.AccountID()
@@ -1380,12 +1461,12 @@ func (w *accountKVLatestBatch) indexPendingKey(key accountKVLatestPendingMapKey,
 	if existed {
 		return
 	}
-	if key.domain == kvdomains.AccountFrozenBandwidthAux {
-		w.pendingFrozenBandwidth++
-	}
+	w.adjustPendingDomainCount(key.domain, 1)
+	w.pendingPrefixMu.Lock()
 	if w.pendingPrefixes != nil {
 		w.pendingPrefixes[key.owner] = append(w.pendingPrefixes[key.owner], key.prefixKey())
 	}
+	w.pendingPrefixMu.Unlock()
 }
 
 func (w *accountKVLatestBatch) rememberPut(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) {
@@ -2727,9 +2808,7 @@ func (s *StateDB) writeAccountKVGeneration(obj *stateObject, commitment *DomainC
 		if prevExists {
 			before = rawdb.EncodeStateKVGenerationValue(prev)
 		}
-		if err := commitment.recordPhysicalBefore(rawdb.StateKVGenerationCommitmentKey(obj.address), before, prevExists); err != nil {
-			return err
-		}
+		commitment.recordKVGenerationBefore(obj.address, before, prevExists, true)
 		if !prevExists || prev != obj.accountKVGeneration {
 			var prevValue []byte
 			if prevExists {

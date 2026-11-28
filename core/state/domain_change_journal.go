@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"cmp"
+	"encoding/binary"
 	"fmt"
 	"slices"
 
@@ -10,6 +11,112 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
+
+// domainChangeBlockArena slab-allocates rawdb.StateDomainChange values and
+// small copied payloads for the duration of a single block capture. Each
+// block starts with a zero arena, so external callers retaining returned
+// slices keep ownership without cross-block mutation or pool contention.
+type domainChangeBlockArena struct {
+	changeSlab []rawdb.StateDomainChange
+	changeIdx  int
+	byteSlab   []byte
+}
+
+func (a *domainChangeBlockArena) allocChange() *rawdb.StateDomainChange {
+	if a.changeIdx >= len(a.changeSlab) {
+		capHint := len(a.changeSlab) * 2
+		if capHint < 64 {
+			capHint = 64
+		} else if capHint > 512 {
+			capHint = 512
+		}
+		a.changeSlab = make([]rawdb.StateDomainChange, capHint)
+		a.changeIdx = 0
+	}
+	c := &a.changeSlab[a.changeIdx]
+	a.changeIdx++
+	return c
+}
+
+func (a *domainChangeBlockArena) allocBytes(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	if n > 2048 {
+		return make([]byte, n)
+	}
+	a.ensureByteSpace(n)
+	start := len(a.byteSlab)
+	end := start + n
+	a.byteSlab = a.byteSlab[:end]
+	return a.byteSlab[start:end:end]
+}
+
+func (a *domainChangeBlockArena) ensureByteSpace(n int) {
+	if cap(a.byteSlab)-len(a.byteSlab) >= n {
+		return
+	}
+	slabCap := 8192
+	if cap(a.byteSlab) > 0 {
+		slabCap = cap(a.byteSlab) * 2
+		if slabCap > 32768 {
+			slabCap = 32768
+		}
+	}
+	if slabCap < n {
+		slabCap = n
+	}
+	a.byteSlab = make([]byte, 0, slabCap)
+}
+
+func (a *domainChangeBlockArena) copyBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := a.allocBytes(len(src))
+	copy(dst, src)
+	return dst
+}
+
+func (a *domainChangeBlockArena) copyStringBytes(src string) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := a.allocBytes(len(src))
+	copy(dst, src)
+	return dst
+}
+
+func (a *domainChangeBlockArena) encodeUint64(v uint64) []byte {
+	dst := a.allocBytes(8)
+	binary.BigEndian.PutUint64(dst, v)
+	return dst
+}
+
+func (a *domainChangeBlockArena) appendAccountLatest(obj *stateObject, flatRoot bool) (next []byte, nextExist bool, rewindStart int, rewindable bool, err error) {
+	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
+		return nil, false, 0, false, nil
+	}
+	accBytes, err := obj.deterministicAccountProto()
+	if err != nil {
+		return nil, false, 0, false, err
+	}
+	accountKVRoot := obj.accountKVRoot
+	if flatRoot {
+		accountKVRoot = EmptyKVRoot
+	}
+	size := stateAccountV5EncodedSize(accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
+	if size > 2048 {
+		buf := make([]byte, 0, size)
+		buf = appendStateAccountV2Fields(buf, StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
+		return buf[:len(buf):len(buf)], true, 0, false, nil
+	}
+	a.ensureByteSpace(size)
+	start := len(a.byteSlab)
+	a.byteSlab = appendStateAccountV2Fields(a.byteSlab, StateAccountVersion, accBytes, accountKVRoot, obj.accountKVGeneration, obj.codeHash)
+	end := len(a.byteSlab)
+	return a.byteSlab[start:end:end], true, start, true, nil
+}
 
 type kvDomainTouchKey struct {
 	addr   tcommon.Address
@@ -415,25 +522,28 @@ func (s *StateDB) appendJournalDomainChanges(dst []*rawdb.StateDomainChange, ent
 
 func (s *StateDB) accountJournalDomainChange(touch accountDomainJournalTouch) (*rawdb.StateDomainChange, error) {
 	obj := s.stateObjects[touch.addr]
-	next, nextExist, err := encodeAccountLatestObject(obj, true)
+	arena := &s.changeSet.arena
+	next, nextExist, rewindStart, rewindable, err := arena.appendAccountLatest(obj, true)
 	if err != nil {
 		return nil, err
 	}
 	if touch.prevExist == nextExist && (!nextExist || bytes.Equal(touch.prev, next)) {
+		if rewindable && rewindStart <= len(arena.byteSlab) {
+			arena.byteSlab = arena.byteSlab[:rewindStart]
+		}
 		return nil, nil
 	}
-	var prev []byte
-	if len(touch.prev) > 0 {
-		prev = append([]byte(nil), touch.prev...)
-	}
-	return &rawdb.StateDomainChange{
+	prev := arena.copyBytes(touch.prev)
+	change := arena.allocChange()
+	*change = rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainAccountLatest,
 		Owner:      touch.addr,
 		PrevExists: touch.prevExist,
 		Prev:       prev,
 		NextExists: nextExist,
 		Next:       next,
-	}, nil
+	}
+	return change, nil
 }
 
 func (s *StateDB) generationJournalDomainChange(touch generationDomainJournalTouch) (*rawdb.StateDomainChange, error) {
@@ -441,22 +551,25 @@ func (s *StateDB) generationJournalDomainChange(touch generationDomainJournalTou
 	if obj == nil {
 		return nil, nil
 	}
-	next := rawdb.EncodeStateKVGenerationValue(obj.accountKVGeneration)
-	var prev []byte
-	if touch.prevExist {
-		prev = rawdb.EncodeStateKVGenerationValue(touch.prev)
-	}
 	if touch.prevExist && touch.prev == obj.accountKVGeneration {
 		return nil, nil
 	}
-	return &rawdb.StateDomainChange{
+	arena := &s.changeSet.arena
+	next := arena.encodeUint64(obj.accountKVGeneration)
+	var prev []byte
+	if touch.prevExist {
+		prev = arena.encodeUint64(touch.prev)
+	}
+	change := arena.allocChange()
+	*change = rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainKVGeneration,
 		Owner:      touch.addr,
 		PrevExists: touch.prevExist,
 		Prev:       prev,
 		NextExists: true,
 		Next:       next,
-	}, nil
+	}
+	return change, nil
 }
 
 func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.StateDomainChange, error) {
@@ -468,7 +581,6 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 	if !ok {
 		return nil, nil
 	}
-	key := []byte(touch.keyStr)
 	prev := touch.prev
 	prevExist := touch.prevExist
 	prevOwned := false
@@ -479,7 +591,7 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 			prevExist = false
 		} else {
 			var err error
-			prev, prevExist, err = s.readAccountKVLatest(touch.addr, obj.accountKVGeneration, touch.domain, key)
+			prev, prevExist, err = s.readAccountKVLatest(touch.addr, obj.accountKVGeneration, touch.domain, ownedStringBytes(touch.keyStr))
 			if err != nil {
 				return nil, err
 			}
@@ -491,14 +603,17 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 	if prevExist == nextExist && (!nextExist || bytes.Equal(prev, next)) {
 		return nil, nil
 	}
+	arena := &s.changeSet.arena
+	key := arena.copyStringBytes(touch.keyStr)
 	if !prevOwned && len(prev) > 0 {
-		prev = append([]byte(nil), prev...)
+		prev = arena.copyBytes(prev)
 	}
 	var nextCopy []byte
 	if nextExist {
-		nextCopy = append([]byte(nil), next...)
+		nextCopy = arena.copyBytes(next)
 	}
-	return &rawdb.StateDomainChange{
+	change := arena.allocChange()
+	*change = rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainKVLatest,
 		Owner:      touch.addr,
 		Generation: obj.accountKVGeneration,
@@ -508,7 +623,8 @@ func (s *StateDB) kvJournalDomainChange(touch kvDomainJournalTouch) (*rawdb.Stat
 		Prev:       prev,
 		NextExists: nextExist,
 		Next:       nextCopy,
-	}, nil
+	}
+	return change, nil
 }
 
 func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*rawdb.StateDomainChange, error) {
@@ -521,16 +637,19 @@ func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*
 	if touch.prevExist == nextExist && (!nextExist || touch.prev == value) {
 		return nil, nil
 	}
+	arena := &s.changeSet.arena
 	var prev []byte
 	if touch.prevExist {
-		prev = append([]byte(nil), touch.prev[:]...)
+		prev = arena.copyBytes(touch.prev[:])
 	}
 	var next []byte
 	if nextExist {
-		next = append([]byte(nil), value[:]...)
+		next = arena.copyBytes(value[:])
 	}
-	rowKey := s.storageRowKey(touch.addr, touch.slot).Bytes()
-	return &rawdb.StateDomainChange{
+	rowHash := s.storageRowKey(touch.addr, touch.slot)
+	rowKey := arena.copyBytes(rowHash[:])
+	change := arena.allocChange()
+	*change = rawdb.StateDomainChange{
 		FlatDomain: rawdb.StateFlatDomainKVLatest,
 		Owner:      touch.addr,
 		Generation: obj.accountKVGeneration,
@@ -540,7 +659,8 @@ func (s *StateDB) storageJournalDomainChange(touch storageDomainJournalTouch) (*
 		Prev:       prev,
 		NextExists: nextExist,
 		Next:       next,
-	}, nil
+	}
+	return change, nil
 }
 
 func (s *StateDB) prepareJournalDomainChange(change *rawdb.StateDomainChange) *rawdb.StateDomainChange {

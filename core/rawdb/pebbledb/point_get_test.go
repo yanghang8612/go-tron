@@ -66,8 +66,19 @@ func TestPointGetMVCCDifferential(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if unbounded.(*pointReadCursor).getCursor == nil || !unbounded.(*pointReadCursor).unbounded {
-			t.Fatal("unbounded prefetch did not eagerly pin its Get cursor")
+		if unbounded.(*pointReadCursor).getCursor != nil || !unbounded.(*pointReadCursor).unbounded || unbounded.(*pointReadCursor).getSnapshot == nil {
+			t.Fatal("unbounded prefetch should construct its Get cursor lazily on first View")
+		}
+		innersBeforeUnused := statePrefetchGetCursorInners.Snapshot().Count()
+		unusedUnbounded, err := s.NewCursor(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := unusedUnbounded.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := statePrefetchGetCursorInners.Snapshot().Count() - innersBeforeUnused; got != 0 {
+			t.Fatalf("closing unused unbounded cursor constructed %d inner cursors, want 0", got)
 		}
 		oracle, err := s.(*pointReadSnapshot).snapshot.NewIter(nil)
 		if err != nil {

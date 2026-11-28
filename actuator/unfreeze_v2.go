@@ -51,7 +51,7 @@ func (a *UnfreezeBalanceV2Actuator) Validate(ctx *Context) error {
 	if frozen < uc.UnfreezeBalance {
 		return errors.New("insufficient frozen balance")
 	}
-	if unfreezingV2Count(ctx.State.GetAccount(ownerAddr), ctx.PrevBlockTime) >= maxUnfreezeCount {
+	if unfreezingV2CountList(ctx.State.GetUnfrozenV2(ownerAddr), ctx.PrevBlockTime) >= maxUnfreezeCount {
 		return errors.New("too many pending unfreezes")
 	}
 	return nil
@@ -112,8 +112,12 @@ func unfreezingV2Count(account interface {
 	if account == nil {
 		return 0
 	}
+	return unfreezingV2CountList(account.UnfrozenV2(), now)
+}
+
+func unfreezingV2CountList(entries []*corepb.Account_UnFreezeV2, now int64) int {
 	var count int
-	for _, u := range account.UnfrozenV2() {
+	for _, u := range entries {
 		if u.UnfreezeExpireTime > now {
 			count++
 		}
@@ -129,8 +133,7 @@ func updateVotesAfterUnfreezeV2(ctx *Context, ownerAddr common.Address, resource
 	// Mirror java UnfreezeBalanceV2Actuator.updateVote control flow.
 	newResourceModel := forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps)
 	if newResourceModel {
-		account := ctx.State.GetAccount(ownerAddr)
-		if account != nil && account.OldTronPowerIsInvalid() {
+		if ctx.State.OldTronPowerIsInvalid(ownerAddr) {
 			// old_tron_power already invalid: a BANDWIDTH/ENERGY unfreeze leaves
 			// votes alone; a TRON_POWER unfreeze falls through to the proportional
 			// recompute below (java `default: break`), which must use getAllTronPower.

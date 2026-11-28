@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 var (
@@ -937,5 +938,137 @@ func capturePhysicalFixture(t *testing.T, d *DomainCommitmentState, db interface
 	}
 	if err = d.recordPhysicalBefore(key, before, present); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDomainCommitmentUnsortedBatchMatchesSortedMuHashAndDelPrefixPreservesBefore(t *testing.T) {
+	run := func(sorted bool) (tcommon.Hash, tcommon.Hash) {
+		disk := ethrawdb.NewMemoryDatabase()
+		defer disk.Close()
+		db := NewDatabase(disk)
+		sdb, err := New(tcommon.Hash{}, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner := testAddr(0x88)
+		domain := kvdomains.SystemReward
+		if err := rawdb.WriteStateAccountLatest(disk, owner, []byte("acc-before")); err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range map[string]string{"prefix/1": "one", "prefix/2": "two"} {
+			if err := rawdb.WriteStateKVLatest(disk, owner, 0, domain, []byte(k), []byte(v)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := statedomains.RebuildMuHashCommitment(disk); err != nil {
+			t.Fatal(err)
+		}
+		commitment := NewDomainCommitmentState(sdb)
+		commitment.recordAccountLatestBefore(owner, []byte("acc-before"), true, false)
+		commitment.recordKVLatestBefore(owner, 0, domain, []byte("prefix/1"), rawdb.EncodeStateKVLatestValue([]byte("one")), true, false, false)
+		commitment.recordKVLatestBefore(owner, 0, domain, []byte("prefix/2"), rawdb.EncodeStateKVLatestValue([]byte("two")), true, false, false)
+		commitment.recordKVLatestBefore(owner, 0, domain, []byte("prefix/3"), nil, false, false, false)
+		// Mark prefix/1 and prefix/2 as touched+loaded BEFORE MutationDelPrefix so the prefix loop hits existing entries.
+		commitment.recordKVLatestValue(owner, 0, domain, []byte("prefix/1"), []byte("tmp"), true, false)
+		commitment.recordKVLatestValue(owner, 0, domain, []byte("prefix/2"), []byte("tmp2"), true, false)
+
+		if err := rawdb.WriteStateAccountLatest(disk, owner, []byte("acc-after")); err != nil {
+			t.Fatal(err)
+		}
+		flat := statedomains.NewFlatStore(disk, 0)
+		tx := statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
+			Latest:     flat,
+			Writer:     flat,
+			Commitment: commitment,
+		})
+		if err := tx.DomainDelPrefix(owner, domain, []byte("prefix/")); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.DomainPut(owner, domain, []byte("prefix/3"), []byte("three")); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+
+		batch, err := commitment.latestUpdateBatchFromTouchesSorted(sorted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer batch.release()
+		root, err := statedomains.ApplyMuHashCommitment(disk, batch.updates, statedomains.CommitmentIdentity{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rebuilt, err := statedomains.RebuildMuHashCommitment(disk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return root, rebuilt
+	}
+
+	sortedRoot, sortedRebuilt := run(true)
+	unsortedRoot, unsortedRebuilt := run(false)
+	if sortedRoot != sortedRebuilt || unsortedRoot != unsortedRebuilt || sortedRoot != unsortedRoot {
+		t.Fatalf("root mismatch: sorted=%x (rebuilt=%x) unsorted=%x (rebuilt=%x)", sortedRoot, sortedRebuilt, unsortedRoot, unsortedRebuilt)
+	}
+}
+
+func BenchmarkStructuredCommitmentBeforeAndBatch(b *testing.B) {
+	const count = 256
+	owner := testAddr(0x7e)
+	keys := make([][]byte, count)
+	values := make([][]byte, count)
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.BigEndian.PutUint64(keys[i][24:], uint64(i))
+		values[i] = rawdb.EncodeStateKVLatestValue([]byte{byte(i), 1, 2, 3})
+	}
+	commitment := NewDomainCommitmentState(&StateDB{})
+	commitment.reserveTouches(count)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		commitment.resetForCommit(&StateDB{}, nil)
+		for i := range keys {
+			commitment.recordKVLatestBefore(owner, 7, kvdomains.ContractStorage, keys[i], values[i], true, true, true)
+			commitment.recordKVLatestEncodedValue(owner, 7, kvdomains.ContractStorage, keys[i], values[i])
+		}
+		batch, err := commitment.latestUpdateBatchFromTouchesSorted(false)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDomainCommitmentTouchCount = len(batch.updates)
+		batch.release()
+		commitment.finishCommit()
+	}
+}
+
+func BenchmarkAppendJournalDomainChanges(b *testing.B) {
+	disk := ethrawdb.NewMemoryDatabase()
+	defer disk.Close()
+	db := NewDatabase(disk)
+	owners := make([]tcommon.Address, 64)
+	for i := range owners {
+		owners[i] = testAddr(byte(i + 1))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		sdb, err := New(tcommon.Hash{}, db)
+		if err != nil {
+			b.Fatal(err)
+		}
+		sdb.BeginDomainChangeJournalCapture(disk, 1, tcommon.Hash{1}, 1, 1)
+		for i, owner := range owners {
+			sdb.CreateAccount(owner, corepb.AccountType_Normal)
+			sdb.AddBalance(owner, int64(1000+i))
+			_ = sdb.SetAccountKV(owner, kvdomains.AccountAssetV2, []byte("1000001"), []byte{byte(i), 1, 2, 3, 4, 5, 6, 7})
+		}
+		changes, err := sdb.collectDomainChangesSince(0, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDomainCommitmentTouchCount = len(changes)
 	}
 }

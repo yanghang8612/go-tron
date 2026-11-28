@@ -68,6 +68,9 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	if err := rawdb.WriteStateKVLatest(disk, contract, 7, kvdomains.ContractMetadata, contractMetaKVKey, []byte("contract-meta")); err != nil {
 		t.Fatal(err)
 	}
+	if err := rawdb.WriteStateKVLatest(disk, contract, 7, kvdomains.ContractRuntimeState, contractStateKVKey, []byte("contract-state")); err != nil {
+		t.Fatal(err)
+	}
 	if err := rawdb.WriteStateCode(disk, codeHash, code); err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +85,8 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	defer prefetcher.Close()
 
 	readsAfterWarmup := base.gets.Load()
-	if readsAfterWarmup != 12 {
-		t.Fatalf("durable warmup reads = %d, want 4 accounts + metadata + code + 6 permission/resource rows", readsAfterWarmup)
+	if readsAfterWarmup != 13 {
+		t.Fatalf("durable warmup reads = %d, want 4 accounts + metadata + contract state + code + 6 permission/resource rows", readsAfterWarmup)
 	}
 	for _, addr := range []tcommon.Address{owner, to, contract, witness} {
 		if _, ok, err := rawdb.ReadStateAccountLatestNoCopy(buffer, addr); err != nil || !ok {
@@ -96,12 +99,15 @@ func TestStateReadAheadWarmsCanonicalAccountAndContractReads(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, contract, 7, kvdomains.ContractMetadata, contractMetaKVKey); err != nil || !ok || string(got) != "contract-meta" {
 		t.Fatalf("metadata = %q/%t/%v", got, ok, err)
 	}
+	if got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, contract, 7, kvdomains.ContractRuntimeState, contractStateKVKey); err != nil || !ok || string(got) != "contract-state" {
+		t.Fatalf("contract state = %q/%t/%v", got, ok, err)
+	}
 	if got := base.gets.Load(); got != readsAfterWarmup {
 		t.Fatalf("canonical reads reached durable base after warmup: before=%d after=%d", readsAfterWarmup, got)
 	}
 
 	stats := prefetcher.Stats()
-	if stats.EnqueuedBlocks != 1 || stats.ProcessedBlocks != 1 || stats.Rows != 12 || stats.Present != 6 || stats.Missing != 6 || stats.QueuedBytes != 0 || stats.Errors != 0 {
+	if stats.EnqueuedBlocks != 1 || stats.ProcessedBlocks != 1 || stats.Rows != 13 || stats.Present != 7 || stats.Missing != 6 || stats.QueuedBytes != 0 || stats.Errors != 0 {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
@@ -177,14 +183,19 @@ func TestStateReadAheadWarmsTransferAssetPointReads(t *testing.T) {
 }
 
 func TestStateReadAheadTransferAssetCapPrioritizesV2Balances(t *testing.T) {
-	const transfers = 120 // 240 V2 balance rows fit the new cap but not the old 128-row cap.
-	const previousAssetRowLimit = 128
+	const transfers = 400 // 800 V2 balance rows fit the new 1024-row cap but not the previous 256-row cap.
+	const previousAssetRowLimit = 256
 	disk := rawdb.NewMemoryDatabase()
 	to, witness := readAheadAddress(0xe0), readAheadAddress(0xe1)
+	to[len(to)-3], witness[len(witness)-3] = 1, 1
 	owners := make([]tcommon.Address, transfers)
 	transactions := make([]*corepb.Transaction, 0, transfers)
 	for i := range owners {
-		owners[i] = readAheadAddress(byte(i + 1))
+		var addr tcommon.Address
+		addr[0] = tcommon.AddressPrefixMainnet
+		addr[len(addr)-2] = byte((i + 1) >> 8)
+		addr[len(addr)-1] = byte(i + 1)
+		owners[i] = addr
 	}
 	addresses := append(append([]tcommon.Address(nil), owners...), to, witness, tcommon.SystemAccountAddress)
 	for _, address := range addresses {
@@ -690,5 +701,62 @@ func TestStateReadAheadDefaultWorkers(t *testing.T) {
 	explicit := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 12})
 	if explicit.workers != maxStateReadAheadWorkers {
 		t.Fatalf("explicit capped workers = %d, want %d", explicit.workers, maxStateReadAheadWorkers)
+	}
+}
+
+func TestStateReadAheadWarmsWithdrawBalanceAndRewardRows(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	owner, witness := readAheadAddress(0x91), readAheadAddress(0x92)
+	const generation = uint64(5)
+	for _, addr := range []tcommon.Address{owner, witness, tcommon.SystemAccountAddress} {
+		encoded, err := (&StateAccountV3{Version: StateAccountVersion, AccountKVGeneration: generation}).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateAccountLatest(disk, addr, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rawdb.WriteStateKVLatest(disk, tcommon.SystemAccountAddress, generation, kvdomains.SystemReward, rawdb.BeginCycleStateKey(owner[:]), []byte("begin-cycle")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(disk, tcommon.SystemAccountAddress, generation, kvdomains.SystemReward, rawdb.EndCycleStateKey(owner[:]), []byte("end-cycle")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(disk, owner, generation, kvdomains.AccountVotesAux, accountVoteKey(0), []byte("vote-0")); err != nil {
+		t.Fatal(err)
+	}
+
+	wb, err := anypb.New(&contractpb.WithdrawBalanceContract{OwnerAddress: owner.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, WitnessAddress: witness.Bytes()}},
+		Transactions: []*corepb.Transaction{{RawData: &corepb.TransactionRaw{Contract: []*corepb.Transaction_Contract{{Type: corepb.Transaction_Contract_WithdrawBalanceContract, Parameter: wb}}}}},
+	})
+
+	base := &readAheadCountingReader{KeyValueReader: disk}
+	buffer := blockbuffer.New(base)
+	buffer.SetBaseReadCacheSize(1 << 20)
+	p := NewStateReadAhead(buffer, StateReadAheadConfig{Workers: 1})
+	defer p.Close()
+	if !p.EnqueueBlock(block, 1) {
+		t.Fatal("read-ahead block rejected")
+	}
+	p.Wait()
+
+	before := base.gets.Load()
+	if got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, tcommon.SystemAccountAddress, generation, kvdomains.SystemReward, rawdb.BeginCycleStateKey(owner[:])); err != nil || !ok || string(got) != "begin-cycle" {
+		t.Fatalf("BeginCycle = %q/%t/%v", got, ok, err)
+	}
+	if got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, tcommon.SystemAccountAddress, generation, kvdomains.SystemReward, rawdb.EndCycleStateKey(owner[:])); err != nil || !ok || string(got) != "end-cycle" {
+		t.Fatalf("EndCycle = %q/%t/%v", got, ok, err)
+	}
+	if got, ok, err := rawdb.ReadStateKVLatestNoCopy(buffer, owner, generation, kvdomains.AccountVotesAux, accountVoteKey(0)); err != nil || !ok || string(got) != "vote-0" {
+		t.Fatalf("AccountVotesAux(0) = %q/%t/%v", got, ok, err)
+	}
+	if after := base.gets.Load(); after != before {
+		t.Fatalf("reward/vote read-ahead missed cache: base gets %d -> %d", before, after)
 	}
 }

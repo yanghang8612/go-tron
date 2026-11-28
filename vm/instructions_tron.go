@@ -1665,8 +1665,8 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	// succeeded where java reverts — Nile 34,212,851 delegated to a non-existent
 	// account (expected REVERT, got SUCCESS). Use the account type, mirroring
 	// java receiverCapsule.getType() == Contract.
-	recvAccount := in.tvm.StateDB.GetAccount(receiver)
-	if receiver == caller || recvAccount == nil || recvAccount.Type() == corepb.AccountType_Contract {
+	recvType, recvExists := in.tvm.StateDB.GetAccountType(receiver)
+	if receiver == caller || !recvExists || recvType == corepb.AccountType_Contract {
 		rejectInternalTransaction(internalTx)
 		stack.push(uint256.NewInt(0))
 		return nil, nil

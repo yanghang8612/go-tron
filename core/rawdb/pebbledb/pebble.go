@@ -579,15 +579,6 @@ func (s *pointReadSnapshot) NewCursor(prefix []byte) (pointread.Cursor, error) {
 		cursor.getSnapshot = s.snapshot
 		cursor.prefix = lower
 		cursor.unbounded = len(prefix) == 0
-		if cursor.unbounded {
-			// State-prefetch cursors were already eager. Pin their Get readState
-			// here as well; bounded commitment cursors remain lazy.
-			var err error
-			cursor.getCursor, err = s.snapshot.NewGetCursorWithOptions(pointReadGetCursorOptions(true))
-			if err != nil {
-				return nil, err
-			}
-		}
 		return cursor, nil
 	}
 	iter, err := s.snapshot.NewIter(&pebble.IterOptions{

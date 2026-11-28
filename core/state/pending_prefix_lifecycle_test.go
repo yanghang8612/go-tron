@@ -211,3 +211,115 @@ func TestPendingPrefixTraceDistribution(t *testing.T) {
 		t.Logf("fixed synthetic trace: pending=%d owner/generation/domain groups=%d matching rows/group=%d..%d; not a mainnet replay", n, len(groups), min, max)
 	}
 }
+
+func TestPendingPrefixEmptyDomainSkipAndIncrementalPrune(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	defer disk.Close()
+	buf := blockbuffer.New(disk)
+	buf.SetMaxInflight(8)
+	buf.SetBaseReadCacheSize(0)
+	defer buf.Discard()
+
+	targetOwner := tcommon.BytesToAddress([]byte{0x41, 0x99, 0x01})
+	buf.BeginBlock(pruneBlockHash(0), 0)
+	if err := rawdb.WriteStateKVLatest(buf, targetOwner, 0, kvdomains.AccountAsset, []byte("existing"), []byte("durable-val")); err != nil {
+		t.Fatal(err)
+	}
+	buf.CommitBlock()
+	if err := buf.FlushUpTo(0, disk); err != nil {
+		t.Fatal(err)
+	}
+
+	w := newAccountKVLatestDomainBatch(buf, zeroGeneration, nil, nil)
+	buf.BeginBlock(pruneBlockHash(1), 1)
+	w.commitBlock = 1
+	// Seed >256 entries ONLY in AccountVotesAux and AccountResourceAux (0 in AccountAsset).
+	for i := 0; i < 300; i++ {
+		var owner tcommon.Address
+		owner[0] = 0x41
+		binary.BigEndian.PutUint32(owner[16:], uint32(i+1))
+		if err := w.put(owner, 0, kvdomains.AccountVotesAux, []byte{0, 0, 0, 0}, rawdb.EncodeStateKVLatestValue([]byte{1})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Block 2 adds a put and a delete in AccountVotesAux + one AccountAssetV2 entry (still 0 in AccountAsset).
+	buf.BeginBlock(pruneBlockHash(2), 2)
+	w.commitBlock = 2
+	var owner2 tcommon.Address
+	owner2[0] = 0x41
+	binary.BigEndian.PutUint32(owner2[16:], 1)
+	if err := w.put(targetOwner, 0, kvdomains.AccountAssetV2, []byte("1000001"), rawdb.EncodeStateKVLatestValue([]byte("v2"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.delete(owner2, 0, kvdomains.AccountVotesAux, []byte{0, 0, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build pendingPrefixes (requires >4 scans and >256 entries).
+	for i := 0; i < 6; i++ {
+		if err := w.iterateLatestPrefix(owner2, 0, kvdomains.AccountVotesAux, nil, func(_, _ []byte) (bool, error) {
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w.pendingPrefixes == nil {
+		t.Fatal("expected pendingPrefixes index to be built after >4 scans")
+	}
+
+	// Empty AccountAsset domain must skip pending merge and still return durable row.
+	var got []string
+	if err := w.iterateLatestPrefix(targetOwner, 0, kvdomains.AccountAsset, nil, func(k, v []byte) (bool, error) {
+		got = append(got, fmt.Sprintf("%s=%s", k, v))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "existing=durable-val" {
+		t.Fatalf("AccountAsset durable rows = %v, want [existing=durable-val]", got)
+	}
+	if w.pendingDomainCount(kvdomains.AccountAsset) != 0 || w.pendingDomainCount(kvdomains.AccountVotesAux) != 300 || w.pendingDomainCount(kvdomains.AccountAssetV2) != 1 {
+		t.Fatalf("unexpected domain counts: votes=%d asset=%d assetV2=%d",
+			w.pendingDomainCount(kvdomains.AccountVotesAux), w.pendingDomainCount(kvdomains.AccountAsset), w.pendingDomainCount(kvdomains.AccountAssetV2))
+	}
+
+	// Partial prune of block 1 (>256 entries remain? 299 pruned -> drops below 256 -> resets cleanly;
+	// first keep >256 entries across blocks 2..3 so incremental path is exercised!).
+	buf.BeginBlock(pruneBlockHash(3), 3)
+	w.commitBlock = 3
+	for i := 1000; i < 1300; i++ {
+		var owner tcommon.Address
+		owner[0] = 0x41
+		binary.BigEndian.PutUint32(owner[16:], uint32(i+1))
+		if err := w.put(owner, 0, kvdomains.AccountVotesAux, []byte{0, 0, 0, 0}, rawdb.EncodeStateKVLatestValue([]byte{2})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buf.CommitBlock() // block 1
+	if err := w.flushUpTo(1); err != nil {
+		t.Fatal(err)
+	}
+	if w.pendingPrefixes == nil {
+		t.Fatal("expected incremental pendingPrefixes retention while >256 entries remain")
+	}
+	// Pruned owner from block 1 must have no stale entries in pendingPrefixes; deleted owner2 (block 2) retains its block-2 tombstone.
+	var prunedOwner tcommon.Address
+	prunedOwner[0] = 0x41
+	binary.BigEndian.PutUint32(prunedOwner[16:], 2)
+	if len(w.pendingPrefixes[prunedOwner.AccountID()]) != 0 {
+		t.Fatalf("pruned owner still present in pendingPrefixes: %+v", w.pendingPrefixes[prunedOwner.AccountID()])
+	}
+	if count := len(w.pendingPrefixes[owner2.AccountID()]); count != 1 {
+		t.Fatalf("owner2 pendingPrefixes len = %d, want 1", count)
+	}
+	var votesForOwner2 int
+	if err := w.iterateLatestPrefix(owner2, 0, kvdomains.AccountVotesAux, nil, func(_, _ []byte) (bool, error) {
+		votesForOwner2++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if votesForOwner2 != 0 {
+		t.Fatalf("deleted block-2 key leaked back after block-1 prune: count=%d", votesForOwner2)
+	}
+}

@@ -49,33 +49,60 @@ func TestStorageCursorRetentionRoleIsolation(t *testing.T) {
 	if err = c.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Commitment keeps four; unbounded prefetch retains sixteen pairs.
-	for _, prefix := range [][]byte{nil, []byte("m")} {
-		p, e := db.NewPointReadSnapshot()
-		if e != nil {
-			t.Fatal(e)
+	// Bounded commitment cursor keeps four retained pairs.
+	p, e := db.NewPointReadSnapshot()
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, e := p.NewCursor([]byte("m"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if found, e := r.View([]byte("m"), func([]byte) error { t.Fatal("unexpected value"); return nil }); found || e != nil {
+		t.Fatalf("role missing: %v %v", found, e)
+	}
+	stats := r.(*pointReadCursor).getCursor.Stats()
+	if stats.MaxRetained != 4 || stats.TableFallbackAllLeased == 0 {
+		t.Fatalf("bounded commitment retention %+v", stats)
+	}
+	if e = r.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e = p.Close(); e != nil {
+		t.Fatal(e)
+	}
+
+	// Flush past 32 overlapping L0 tables; unbounded prefetch retains 32 before falling back.
+	for i := 20; i < 36; i++ {
+		for _, k := range []string{"a", "z"} {
+			if err = engine.Set([]byte(k), []byte(fmt.Sprint(i)), pebble.NoSync); err != nil {
+				t.Fatal(err)
+			}
 		}
-		r, e := p.NewCursor(prefix)
-		if e != nil {
-			t.Fatal(e)
+		if err = engine.Flush(); err != nil {
+			t.Fatal(err)
 		}
-		if found, e := r.View([]byte("m"), func([]byte) error { t.Fatal("unexpected value"); return nil }); found || e != nil {
-			t.Fatalf("role missing: %v %v", found, e)
-		}
-		stats := r.(*pointReadCursor).getCursor.Stats()
-		want := uint64(4)
-		if len(prefix) == 0 {
-			want = 16
-		}
-		if stats.MaxRetained != want || stats.TableFallbackAllLeased == 0 {
-			t.Fatalf("noncanonical retention %+v", stats)
-		}
-		if e = r.Close(); e != nil {
-			t.Fatal(e)
-		}
-		if e = p.Close(); e != nil {
-			t.Fatal(e)
-		}
+	}
+	p2, e := db.NewPointReadSnapshot()
+	if e != nil {
+		t.Fatal(e)
+	}
+	r2, e := p2.NewCursor(nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if found, e := r2.View([]byte("m"), func([]byte) error { t.Fatal("unexpected value"); return nil }); found || e != nil {
+		t.Fatalf("unbounded role missing: %v %v", found, e)
+	}
+	stats2 := r2.(*pointReadCursor).getCursor.Stats()
+	if stats2.MaxRetained != 32 || stats2.TableFallbackAllLeased == 0 {
+		t.Fatalf("unbounded prefetch retention %+v", stats2)
+	}
+	if e = r2.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e = p2.Close(); e != nil {
+		t.Fatal(e)
 	}
 }
 
@@ -89,7 +116,7 @@ func TestPrefetchRetentionRecoveryKeepsSixteenAndSnapshot(t *testing.T) {
 	}
 	d := &Database{db: p, boundedPointGet: true}
 	defer d.Close()
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 36; i++ {
 		for _, key := range []string{"a", "z"} {
 			if e = p.Set([]byte(key), []byte(fmt.Sprint(i)), pebble.NoSync); e != nil {
 				t.Fatal(e)
@@ -126,7 +153,7 @@ func TestPrefetchRetentionRecoveryKeepsSixteenAndSnapshot(t *testing.T) {
 		t.Fatalf("pinned missing retry: %t/%v", ok, e)
 	}
 	stats := r.(*pointReadCursor).getCursor.Stats()
-	if stats.MaxRetained != 16 || stats.TableFallbackAllLeased == 0 {
+	if stats.MaxRetained != 32 || stats.TableFallbackAllLeased == 0 {
 		t.Fatalf("recreated prefetch policy: %+v", stats)
 	}
 }
