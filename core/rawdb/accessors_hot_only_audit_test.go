@@ -1301,7 +1301,7 @@ func TestProductionEventLogCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
 			"EventLogRangeCoveredForFilter":             {},
 		},
 		"core/state/snapshots/event_log_segment_v3.go": {
-			"buildEventLogV4SegmentFromReaderWorkers": {},
+			"buildEventLogCompactSegmentWithKeys": {},
 		},
 	})
 	if len(offenders) > 0 {
