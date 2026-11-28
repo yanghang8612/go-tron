@@ -282,6 +282,34 @@ func (c *snapshotCoverageVerificationCache) retain(active map[snapshotHistoryVer
 	return err
 }
 
+func (c *snapshotCoverageVerificationCache) retainRecords(activeRecords map[snapshotHistoryVerificationRecord]struct{}) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	for key := range c.verified {
+		if _, ok := activeRecords[snapshotHistoryVerificationRecordFor(key)]; !ok {
+			delete(c.verified, key)
+		}
+	}
+	dirty := false
+	for record := range c.persistent {
+		if _, ok := activeRecords[record]; !ok {
+			delete(c.persistent, record)
+			dirty = true
+		}
+	}
+	if !dirty {
+		c.mu.Unlock()
+		c.publishStats()
+		return nil
+	}
+	err := c.persistLocked()
+	c.mu.Unlock()
+	c.publishStats()
+	return err
+}
+
 func (c *snapshotCoverageVerificationCache) Stats() snapshotCoverageVerificationCacheStats {
 	if c == nil {
 		return snapshotCoverageVerificationCacheStats{}
@@ -352,8 +380,15 @@ func (c *snapshotCoverageVerificationCache) setActiveManifest(active map[snapsho
 		}
 		bytes += size
 	}
+	c.setActiveManifestSummary(uint64(len(active)), bytes)
+}
+
+func (c *snapshotCoverageVerificationCache) setActiveManifestSummary(entries, bytes uint64) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
-	c.stats.ActiveEntries = uint64(len(active))
+	c.stats.ActiveEntries = entries
 	c.stats.ActiveBytes = bytes
 	c.mu.Unlock()
 	c.publishStats()
@@ -691,6 +726,51 @@ func validSnapshotVerificationChecksum(checksum string) bool {
 	}
 	_, err := hex.DecodeString(checksum[len(prefix):])
 	return err == nil
+}
+
+// snapshotHistoryVerificationRecordForView resolves the active companion refs
+// purely from manifest metadata without calling os.Stat. Callers using this
+// lazy summary still run full Stat + identity verification when verifying any
+// individual segment prior to destructive pruning.
+func snapshotHistoryVerificationRecordForView(manifest *snapshots.Manifest, history snapshots.SegmentRef, companions *snapshots.HistoryCompanionView) (snapshotHistoryVerificationRecord, uint64, error) {
+	record := snapshotHistoryVerificationRecord{History: history}
+	bytes := history.Size
+	cfg, ok := snapshots.DefaultDomainRegistry().ConfigForRef(history)
+	if !ok || !cfg.IsHistoryBinarySegmentPath(history.Path) {
+		return normalizeSnapshotHistoryVerificationRecord(record), bytes, nil
+	}
+	if cfg.HasHistoryInvertedIndex {
+		var found bool
+		if companions != nil {
+			record.Index, found = companions.HistoryIndexRef(cfg, history)
+		} else {
+			record.Index, found = cfg.HistoryIndexRef(manifest, history)
+		}
+		if !found {
+			return snapshotHistoryVerificationRecord{}, 0, errors.New("missing history index companion")
+		}
+		bytes = addSaturatingUint64(bytes, record.Index.Size)
+	}
+	if cfg.HasHistoryAccessor {
+		var found bool
+		if companions != nil {
+			record.Accessor, found = companions.HistoryAccessorRef(cfg, history)
+		} else {
+			record.Accessor, found = cfg.HistoryAccessorRef(manifest, history)
+		}
+		if !found {
+			return snapshotHistoryVerificationRecord{}, 0, errors.New("missing history accessor companion")
+		}
+		bytes = addSaturatingUint64(bytes, record.Accessor.Size)
+	}
+	return normalizeSnapshotHistoryVerificationRecord(record), bytes, nil
+}
+
+func addSaturatingUint64(a, b uint64) uint64 {
+	if ^uint64(0)-a < b {
+		return ^uint64(0)
+	}
+	return a + b
 }
 
 func snapshotHistoryVerificationKeyFor(dir string, manifest *snapshots.Manifest, history snapshots.SegmentRef) (snapshotHistoryVerificationKey, error) {

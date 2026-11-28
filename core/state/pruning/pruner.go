@@ -713,6 +713,21 @@ func (p *Pruner) recordRetiredVerificationCanceled() {
 	p.updateMetrics()
 }
 
+func updateAtomicMaxUint64(target *atomic.Uint64, candidate uint64) {
+	if target == nil || candidate == 0 {
+		return
+	}
+	for old := target.Load(); candidate > old; old = target.Load() {
+		if target.CompareAndSwap(old, candidate) {
+			return
+		}
+	}
+}
+
+func (p *Pruner) postingBoundaryReadyForSidecarDefer() bool {
+	return p == nil || p.cfg.Policy.Mode != ModeSnap || p.cfg.SnapshotDir == "" || p.postingPruneBoundary.Load() != nil
+}
+
 // PrunePassContext runs one prune pass that can be interrupted while it is
 // still in a read/plan phase. Lifecycle shutdown uses this path so a historical
 // CodeDomain reference scan cannot hold process exit open for minutes.
@@ -845,6 +860,8 @@ func (p *Pruner) PrunePassContext(ctx context.Context) (stats Stats, err error) 
 			})
 		}
 	} else if postingProofAvailable && stats.VerifiedHotPrunedThrough > 0 && stats.VerifiedHotPrunedThroughTx > 0 {
+		updateAtomicMaxUint64(&p.lastDomainChangePrunedThrough, stats.VerifiedHotPrunedThrough)
+		updateAtomicMaxUint64(&p.lastDomainChangePrunedThroughTx, stats.VerifiedHotPrunedThroughTx)
 		p.postingPruneBoundary.Store(&PostingPruneBoundary{
 			PrunedThrough: stats.VerifiedHotPrunedThrough,
 			ProofHead:     pruneHead, ProofHash: pruneHeadHash,

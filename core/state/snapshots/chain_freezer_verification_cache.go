@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
 )
@@ -23,7 +24,11 @@ const (
 	chainFreezerVerificationMetricsPrefix   = "state/snapshot/chain_freezer/verification/"
 )
 
-var chainFreezerVerificationCacheByteLimit int64 = maxChainFreezerVerificationCacheBytes
+var (
+	chainFreezerVerificationCacheByteLimit int64 = maxChainFreezerVerificationCacheBytes
+	chainFreezerEventPersistDeferThreshold       = 1024
+	chainFreezerEventPersistInterval             = 5 * time.Minute
+)
 
 type chainFreezerFileIdentity struct {
 	size        int64
@@ -127,6 +132,7 @@ type ChainFreezerVerificationCache struct {
 	eventPersistent    map[string]eventLogVerificationRecord
 	eventFlights       map[eventLogVerificationKey]*eventLogVerificationFlight
 	dirty              bool
+	lastPersist        time.Time
 	eventPersistWarned bool
 	loadErr            error
 	stats              ChainFreezerVerificationCacheStats
@@ -169,6 +175,8 @@ func NewChainFreezerVerificationCache(dir string) *ChainFreezerVerificationCache
 			c.eventPersistent = make(map[string]eventLogVerificationRecord)
 			c.dirty = true
 			c.stats.LoadErrors++
+		} else if len(c.eventPersistent) > chainFreezerEventPersistDeferThreshold {
+			c.lastPersist = time.Now()
 		}
 	}
 	c.updateMetricsLocked()
@@ -515,6 +523,7 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 	if err != nil {
 		return err
 	}
+	now := time.Now()
 	var warnErr error
 	c.mu.Lock()
 	record.IdentityKey = key.identityKey
@@ -529,14 +538,16 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 			c.eventPersistent[key.recordKey] = record
 			c.dirty = true
 		}
-		if persistErr := c.persistPendingLocked(); persistErr != nil {
-			if hadPrevious {
-				c.eventPersistent[key.recordKey] = previous
-			} else {
-				delete(c.eventPersistent, key.recordKey)
+		if !c.shouldDeferEventPersistLocked(now) {
+			if persistErr := c.persistPendingLocked(); persistErr != nil {
+				if hadPrevious {
+					c.eventPersistent[key.recordKey] = previous
+				} else {
+					delete(c.eventPersistent, key.recordKey)
+				}
+				c.dirty = wasDirty
+				warnErr = persistErr
 			}
-			c.dirty = wasDirty
-			warnErr = persistErr
 		}
 	}
 	shouldWarn := false
@@ -544,7 +555,7 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 		c.stats.EventPersistErrors++
 		shouldWarn = !c.eventPersistWarned
 		c.eventPersistWarned = true
-	} else {
+	} else if !c.dirty {
 		c.eventPersistWarned = false
 	}
 	c.updateMetricsLocked()
@@ -553,6 +564,25 @@ func (c *ChainFreezerVerificationCache) recordTrustedEventLogs(dir string, index
 		coldSnapshotLog.Warn("Could not persist advisory event-log verification cache", "err", warnErr)
 	}
 	return nil
+}
+
+func (c *ChainFreezerVerificationCache) shouldDeferEventPersistLocked(now time.Time) bool {
+	if c.dir == "" || len(c.eventPersistent) <= chainFreezerEventPersistDeferThreshold {
+		return false
+	}
+	if c.lastPersist.IsZero() {
+		return false
+	}
+	return now.Sub(c.lastPersist) < chainFreezerEventPersistInterval
+}
+
+func (c *ChainFreezerVerificationCache) Flush() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.persistPendingLocked()
 }
 
 func (c *ChainFreezerVerificationCache) persistPendingLocked() error {
@@ -587,7 +617,13 @@ func (c *ChainFreezerVerificationCache) persistPendingAdvisory() {
 	if c == nil {
 		return
 	}
+	now := time.Now()
 	c.mu.Lock()
+	if c.shouldDeferEventPersistLocked(now) {
+		c.updateMetricsLocked()
+		c.mu.Unlock()
+		return
+	}
 	err := c.persistPendingLocked()
 	shouldWarn := false
 	if err != nil {
@@ -717,7 +753,11 @@ func (c *ChainFreezerVerificationCache) persistLocked() error {
 	if err := os.Rename(tmpName, filepath.Join(c.dir, chainFreezerVerificationCacheFile)); err != nil {
 		return err
 	}
-	return syncSnapshotDir(c.dir)
+	if err := syncSnapshotDir(c.dir); err != nil {
+		return err
+	}
+	c.lastPersist = time.Now()
+	return nil
 }
 
 func (c *ChainFreezerVerificationCache) updateMetricsLocked() {

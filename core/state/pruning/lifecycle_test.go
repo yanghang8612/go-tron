@@ -1341,3 +1341,104 @@ func lifecycleBlockBalanceTrace(block *coretypes.Block, timestamp int64) *contra
 		Timestamp: timestamp,
 	}
 }
+
+func TestSnapshotLifecyclePureEventLogPassBootstrapsThenDefersPrune(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	canonicalHashes := make(map[uint64]common.Hash, 4)
+	for n := uint64(1); n <= 4; n++ {
+		block, infos := lifecycleEventLogBlock(t, n, []*corepb.TransactionInfo_Log{{Address: []byte{0x41, 0x31, 0x32, 0x33, 0x34}, Data: []byte{byte(n)}}})
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, n, infos); err != nil {
+			t.Fatal(err)
+		}
+		h, ok, err := rawdb.ReadBlockHashByNumberStrict(db, n)
+		if err != nil || !ok {
+			t.Fatal(h, ok, err)
+		}
+		canonicalHashes[n] = h
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 4, canonicalHashes[4]); err != nil {
+		t.Fatal(err)
+	}
+	historyRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, historyRefs)); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.UpdateHotPruneProgress(dir, 1, 12); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHotPrune, 12); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.DeleteStateDomainChanges(db, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	chain := &fakePruneChain{db: db, solidified: 4, syncRemaining: 1_000, syncRemainingOK: true, canonicalHashes: canonicalHashes}
+	var target uint64 = 2
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                              dir,
+			Enabled:                          true,
+			Interval:                         time.Hour,
+			HistoryWindow:                    1,
+			DeferHistoryBuildWhileSyncing:    true,
+			MaxDeferredHistoryBlocks:         100,
+			BuildEventLogs:                   true,
+			EventLogVersion:                  snapshots.EventLogSegmentV4Version,
+			DeferDerivedSidecarsWhileSyncing: true,
+			DeferLatestBuildWhileSyncing:     true,
+			BuildEventLogsWhileSyncing:       true,
+			EventLogIndependentFrontier:      true,
+			SyncEventLogCatchupBlocks:        2,
+			SyncEventLogTargetBlock:          func() (uint64, bool, bool) { return target, true, false },
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		DeferPruneOnSyncHistoryDeferral: true,
+	})
+
+	// Pass 1: pure Event-Log catch-up after restart must still run one prune pass
+	// to verify and populate PostingPruneBoundary + lastDomainChangePrunedThrough.
+	pass1, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	if !pass1.Snapshot.DerivedSidecarCatchup || !pass1.Snapshot.EventLogBuilt || pass1.Snapshot.Built {
+		t.Fatalf("pass 1 snapshot = %+v, want pure event-log build", pass1.Snapshot)
+	}
+	if pass1.PruneDeferred {
+		t.Fatalf("pass 1 deferred prune before PostingPruneBoundary bootstrap")
+	}
+	if lifecycle.PostingPruneBoundary().PrunedThrough != 1 {
+		t.Fatalf("posting boundary after pass 1 = %+v, want PrunedThrough=1", lifecycle.PostingPruneBoundary())
+	}
+	passesAfterOne := lifecycle.pruner.Stats().Passes
+
+	// Pass 2: with PostingPruneBoundary populated, pure Event-Log catch-up defers
+	// redundant no-op PrunePassContext while syncing.
+	target = 4
+	pass2, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if !pass2.Snapshot.DerivedSidecarCatchup || !pass2.Snapshot.EventLogBuilt || pass2.Snapshot.Built {
+		t.Fatalf("pass 2 snapshot = %+v, want pure event-log build", pass2.Snapshot)
+	}
+	if !pass2.PruneDeferred {
+		t.Fatalf("pass 2 did not defer redundant PrunePassContext")
+	}
+	if got := lifecycle.pruner.Stats().Passes; got != passesAfterOne {
+		t.Fatalf("pruner passes after deferred pass 2 = %d, want %d", got, passesAfterOne)
+	}
+}

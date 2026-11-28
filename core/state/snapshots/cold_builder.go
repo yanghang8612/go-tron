@@ -2590,7 +2590,7 @@ func (r *Runner) derivedSidecarCatchupPass(result *PassResult) (claimed bool, pa
 	}
 	// Reconcile the manifest-first/stage-second publication boundary even when
 	// another sidecar family is still blocked on incomplete hot source rows.
-	if err := r.reconcileEventLogBuildStage(manifest); err != nil {
+	if err := r.reconcileEventLogBuildStageWithHint(manifest, true); err != nil {
 		return false, err
 	}
 	if !result.DerivedSidecarsPending {
@@ -2853,6 +2853,10 @@ func (r *Runner) derivedSidecarCatchupPlan(manifest *Manifest, publishedBlock ui
 }
 
 func (r *Runner) reconcileEventLogBuildStage(manifest *Manifest) error {
+	return r.reconcileEventLogBuildStageWithHint(manifest, false)
+}
+
+func (r *Runner) reconcileEventLogBuildStageWithHint(manifest *Manifest, skipIfStageMatches bool) error {
 	if r == nil || !r.cfg.BuildEventLogs || manifest == nil {
 		return nil
 	}
@@ -2865,15 +2869,25 @@ func (r *Runner) reconcileEventLogBuildStage(manifest *Manifest) error {
 		if err != nil {
 			return err
 		}
-		manifest = eventManifestAtBlock(manifest, cap)
+		eventManifest, eventRefs := eventLogOnlyManifestAtBlock(manifest, cap)
+		if skipIfStageMatches {
+			row, ok, err := eventLogBuildStageProgress(chainDB, eventManifest)
+			if err == nil && ok {
+				existing, exists, readErr := rawdb.ReadStageProgressRow(chainDB, rawdb.StageSnapshotEventLogBuild)
+				if readErr == nil && exists && existing.BlockNum == row.BlockNum && existing.HasBlockHash && existing.BlockHash == row.BlockHash {
+					return nil
+				}
+			}
+		}
 		policy := eventCanonicalScopePolicy{
 			verify:              canonicalEventLogTerminalVerifier(r.chain, cap),
 			legacyStateBoundary: newLazyLegacyEventStateBoundary(r.chain, cap),
 		}
-		verified, err := verifyEventSourceRefsWithPolicy(eventLogRefs(manifest), 1, cap, policy)
+		verified, err := verifyEventSourceRefsWithPolicy(eventRefs, 1, cap, policy)
 		if err != nil || !verified {
 			return err
 		}
+		manifest = eventManifest
 	}
 	return writeEventLogBuildStage(chainDB, manifest)
 }

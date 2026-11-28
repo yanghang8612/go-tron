@@ -296,7 +296,7 @@ func (w Worker) PruneToContext(ctx context.Context, headNum uint64) (Stats, erro
 			}
 		}()
 		metadataStarted := time.Now()
-		coverage, err := w.newSnapshotStateDomainChangeCoverageGate(coverageCtx)
+		coverage, err := w.newSnapshotStateDomainChangeCoverageGateForPrune(coverageCtx)
 		stats.HistoryMetadataDuration += time.Since(metadataStarted)
 		if err != nil {
 			return Stats{}, err
@@ -762,6 +762,7 @@ type snapshotStateDomainCoverageGate struct {
 	cache       *snapshotCoverageVerificationCache
 	segments    []snapshotStateDomainCoverageSegment
 	prefixMaxTo []uint64
+	lazyStat    bool
 }
 
 func (w Worker) snapshotStateDomainChangeCoverage() (snapshotTxCoverage, error) {
@@ -882,6 +883,75 @@ func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*
 			return nil, fmt.Errorf("pruning: retain active state-domain history verifications: %w", err)
 		}
 	}
+	sortSnapshotStateDomainCoverageGate(gate)
+	return gate, nil
+}
+
+// newSnapshotStateDomainChangeCoverageGateForPrune constructs the coverage gate
+// from manifest metadata alone without upfront os.Stat calls across the full
+// active catalog. Fresh os.Stat + identity checks still execute inside verify(i)
+// for every segment actually consulted before deleting hot rows or chunks.
+func (w Worker) newSnapshotStateDomainChangeCoverageGateForPrune(ctx context.Context) (*snapshotStateDomainCoverageGate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	gate := &snapshotStateDomainCoverageGate{
+		ctx:      ctx,
+		dir:      w.SnapshotDir,
+		cache:    w.coverageVerificationCache,
+		lazyStat: true,
+	}
+	if (w.Policy.Mode != ModeSnap && w.Policy.Mode != ModeArchive) || w.SnapshotDir == "" {
+		return gate, nil
+	}
+	manifest, err := snapshots.LoadProductionManifest(w.SnapshotDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return gate, nil
+		}
+		return nil, err
+	}
+	gate.manifest = manifest
+	companions := snapshots.NewHistoryCompanionView(manifest)
+	gate.companions = companions
+	refs := make([]snapshots.SegmentRef, 0, len(manifest.Segments))
+	for _, ref := range manifest.Segments {
+		if ref.NormalizedDataset() != snapshots.SegmentDatasetStateDomainChange || ref.Kind != snapshots.SegmentHistory {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	activeRecords := make(map[snapshotHistoryVerificationRecord]struct{}, len(refs))
+	var activeBytes uint64
+	gate.segments = make([]snapshotStateDomainCoverageSegment, 0, len(refs))
+	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		record, segBytes, err := snapshotHistoryVerificationRecordForView(manifest, ref, companions)
+		if err != nil {
+			return nil, fmt.Errorf("hot prune coverage: identify state-domain history %q: %w", ref.Path, err)
+		}
+		if _, exists := activeRecords[record]; !exists {
+			activeRecords[record] = struct{}{}
+			activeBytes = addSaturatingUint64(activeBytes, segBytes)
+		}
+		gate.segments = append(gate.segments, snapshotStateDomainCoverageSegment{ref: ref})
+	}
+	if w.coverageVerificationCache != nil {
+		w.coverageVerificationCache.setActiveManifestSummary(uint64(len(activeRecords)), activeBytes)
+		if err := w.coverageVerificationCache.retainRecords(activeRecords); err != nil {
+			return nil, fmt.Errorf("pruning: retain active state-domain history verifications: %w", err)
+		}
+	}
+	sortSnapshotStateDomainCoverageGate(gate)
+	return gate, nil
+}
+
+func sortSnapshotStateDomainCoverageGate(gate *snapshotStateDomainCoverageGate) {
 	sort.Slice(gate.segments, func(i, j int) bool {
 		if gate.segments[i].ref.FromTxNum != gate.segments[j].ref.FromTxNum {
 			return gate.segments[i].ref.FromTxNum < gate.segments[j].ref.FromTxNum
@@ -898,7 +968,6 @@ func (w Worker) newSnapshotStateDomainChangeCoverageGate(ctx context.Context) (*
 			gate.prefixMaxTo[i] = maxTo
 		}
 	}
-	return gate, nil
 }
 
 func (g *snapshotStateDomainCoverageGate) firstSegmentFor(from uint64) int {
@@ -922,9 +991,10 @@ func (g *snapshotStateDomainCoverageGate) verify(index int) error {
 	if err != nil {
 		return err
 	}
-	if key != segment.key {
+	if !g.lazyStat && key != segment.key {
 		return fmt.Errorf("hot prune coverage: state-domain history %q identity changed before verification", segment.ref.Path)
 	}
+	segment.key = key
 	segment.verified = true
 	return nil
 }

@@ -69,6 +69,32 @@ func eventManifestAtBlock(manifest *Manifest, block uint64) *Manifest {
 	return &out
 }
 
+// eventLogOnlyManifestAtBlock extracts only active event-log and
+// event-log-index segments up to block, avoiding copying hundreds of thousands
+// of unrelated state-domain history segments during sidecar reconciliation.
+func eventLogOnlyManifestAtBlock(manifest *Manifest, block uint64) (*Manifest, []SegmentRef) {
+	if manifest == nil {
+		return nil, nil
+	}
+	out := *manifest
+	out.Segments = nil
+	out.Retired = nil
+	var eventRefs []SegmentRef
+	for _, ref := range manifest.Segments {
+		if ref.ToTxNum > block {
+			continue
+		}
+		switch ref.Kind {
+		case SegmentEventLog:
+			out.Segments = append(out.Segments, ref)
+			eventRefs = append(eventRefs, ref)
+		case SegmentEventLogIndex:
+			out.Segments = append(out.Segments, ref)
+		}
+	}
+	return &out, eventRefs
+}
+
 // SetEventLogCanonicalVerifier enables canonical authority checks in the live
 // manager. Set it before exposing the manager to ChainDB. Offline managers that
 // intentionally inspect files alone leave it unset. A false result means the

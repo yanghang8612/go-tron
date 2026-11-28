@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 )
@@ -256,5 +257,82 @@ func TestRecordTrustedEventLogsAdvisoryPersistFailureDoesNotFailOrPoison(t *test
 	}
 	if got := reloaded.Stats().EventEntries; got != 1 {
 		t.Fatalf("reloaded EventEntries = %d, want 1", got)
+	}
+}
+
+func TestRecordTrustedEventLogsDefersPersistAboveThresholdAndFlushes(t *testing.T) {
+	dir := t.TempDir()
+	prevThreshold := chainFreezerEventPersistDeferThreshold
+	prevInterval := chainFreezerEventPersistInterval
+	chainFreezerEventPersistDeferThreshold = 1
+	chainFreezerEventPersistInterval = time.Hour
+	t.Cleanup(func() {
+		chainFreezerEventPersistDeferThreshold = prevThreshold
+		chainFreezerEventPersistInterval = prevInterval
+	})
+
+	buildPair := func(blockNum uint64, segName, idxName string) (SegmentRef, SegmentRef) {
+		row := eventLogV3TestRow(blockNum, 0, 0, common.BytesToAddress(eventLogTestAddress(byte(0x80+blockNum))),
+			common.Hash{byte(0x10 + blockNum)}, common.Hash{byte(0x20 + blockNum)}, common.Hash{byte(0x30 + blockNum)}, []byte{byte(blockNum)})
+		seg, err := BuildEventLogV4SegmentFromReader(eventLogRowsReader{rows: []EventLog{row}}, dir, segName, blockNum, blockNum)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{seg}, idxName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return seg, idx
+	}
+
+	seg1, idx1 := buildPair(1, "log/defer-1.seg", "log/defer-1.idx")
+	seg2, idx2 := buildPair(2, "log/defer-2.seg", "log/defer-2.idx")
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{seg1, idx1, seg2, idx2})); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := NewChainFreezerVerificationCache(dir)
+	if err := cache.recordTrustedEventLogs(dir, idx1, []SegmentRef{seg1}); err != nil {
+		t.Fatalf("recordTrustedEventLogs 1: %v", err)
+	}
+	cachePath := filepath.Join(dir, chainFreezerVerificationCacheFile)
+	beforeInfo, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatalf("expected immediate persist at threshold: %v", err)
+	}
+
+	if err := cache.recordTrustedEventLogs(dir, idx2, []SegmentRef{seg2}); err != nil {
+		t.Fatalf("recordTrustedEventLogs 2: %v", err)
+	}
+	if got := cache.Stats(); got.EventEntries != 2 || got.EventTrustedRecorded != 2 || got.EventPersistErrors != 0 || !cache.dirty {
+		t.Fatalf("unexpected stats during deferred persist: %+v dirty=%t", got, cache.dirty)
+	}
+	afterDeferredInfo, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterDeferredInfo.Size() != beforeInfo.Size() || !afterDeferredInfo.ModTime().Equal(beforeInfo.ModTime()) {
+		t.Fatalf("cache file was rewritten during deferred window: before=(%d,%v) after=(%d,%v)",
+			beforeInfo.Size(), beforeInfo.ModTime(), afterDeferredInfo.Size(), afterDeferredInfo.ModTime())
+	}
+	if _, route, err := cache.verifyEventLogIndex(dir, idx2, []SegmentRef{seg2}); err != nil || route != chainFreezerVerificationMemory {
+		t.Fatalf("expected in-memory hit before flush: route=%v err=%v", route, err)
+	}
+
+	if err := cache.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if cache.dirty {
+		t.Fatal("cache still dirty after Flush")
+	}
+	reloaded := NewChainFreezerVerificationCache(dir)
+	if err := reloaded.LoadError(); err != nil {
+		t.Fatalf("reload flushed cache: %v", err)
+	}
+	if got := reloaded.Stats().EventEntries; got != 2 {
+		t.Fatalf("reloaded EventEntries = %d, want 2", got)
+	}
+	if _, route, err := reloaded.verifyEventLogIndex(dir, idx2, []SegmentRef{seg2}); err != nil || route != chainFreezerVerificationPersistent {
+		t.Fatalf("expected persistent hit after flush+reload: route=%v err=%v", route, err)
 	}
 }

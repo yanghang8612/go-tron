@@ -1691,6 +1691,9 @@ func gtron(ctx *cli.Context) error {
 	broadcaster.Stop()
 	syncService.Stop()
 	stack.Stop()
+	if err := chainFreezerVerificationCache.Flush(); err != nil {
+		log.Warn("Chain-freezer verification cache flush failed on shutdown", "err", err)
+	}
 	// Flush the BlockChain's per-block buffer before closing the underlying
 	// store so LastBlock, state roots, and latest-domain rows restart from the
 	// same head.

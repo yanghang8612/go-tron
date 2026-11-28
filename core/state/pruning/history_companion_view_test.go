@@ -430,6 +430,101 @@ func TestSnapshotCoverageVerificationCachePersistRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWorkerPruneToContextLazyStatGateSkipsUnqueriedAndAuthenticatesQueried(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	writeSnapPruningChange(t, db, 2, 20, 22)
+
+	firstRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 20, 22, "history/state-domain-change-20-22.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allRefs := append(append([]snapshots.SegmentRef(nil), firstRefs...), secondRefs...)
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 22, allRefs)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-populate a stale retired record in the verification cache so retainRecords
+	// is exercised alongside lazy gate construction.
+	cache := newSnapshotCoverageVerificationCache(dir)
+	staleRec := snapshotHistoryVerificationRecord{
+		History: snapshots.SegmentRef{
+			Dataset:   snapshots.SegmentDatasetStateDomainChange,
+			Kind:      snapshots.SegmentHistory,
+			FromTxNum: 1,
+			ToTxNum:   2,
+			Path:      "history/retired-stale.seg",
+			Size:      4096,
+			Checksum:  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		Index: snapshots.SegmentRef{
+			Dataset:   snapshots.SegmentDatasetStateDomainChange,
+			Kind:      snapshots.SegmentInverted,
+			FromTxNum: 1,
+			ToTxNum:   2,
+			Path:      "history/retired-stale.idx",
+			Size:      1024,
+			Checksum:  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+		Accessor: snapshots.SegmentRef{
+			Dataset:   snapshots.SegmentDatasetStateDomainChange,
+			Kind:      snapshots.SegmentAccessor,
+			FromTxNum: 1,
+			ToTxNum:   2,
+			Path:      "history/retired-stale.kvi",
+			Size:      512,
+			Checksum:  "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		},
+	}
+	staleKey := snapshotHistoryVerificationKey{history: staleRec.History, index: staleRec.Index, accessor: staleRec.Accessor}
+	cache.mu.Lock()
+	cache.verified[staleKey] = struct{}{}
+	cache.persistent[staleRec] = struct{}{}
+	cache.mu.Unlock()
+
+	// Remove the unqueried second history file on disk before pruning block 1.
+	secondHistory := historyRef(t, secondRefs)
+	if err := os.Remove(filepath.Join(dir, secondHistory.Path)); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := Worker{
+		DB:                        db,
+		Policy:                    SnapPolicy(1, 1),
+		SnapshotDir:               dir,
+		MaxBlocks:                 1,
+		coverageVerificationCache: cache,
+	}
+	first, err := worker.PruneToContext(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("first prune over healthy segment 1 failed: %v", err)
+	}
+	if first.DeletedDomainChangeBlocks != 1 || first.DomainChangePrunedThrough != 1 {
+		t.Fatalf("first prune stats = %+v, want block 1 deleted", first)
+	}
+	stats := cache.Stats()
+	if stats.ActiveEntries != 2 || stats.ActiveBytes == 0 || stats.Entries != 1 || stats.FullVerified != 1 {
+		t.Fatalf("cache stats after lazy gate = %+v, want ActiveEntries=2 Entries=1 FullVerified=1", stats)
+	}
+	cache.mu.Lock()
+	_, staleInMem := cache.verified[staleKey]
+	_, staleOnDisk := cache.persistent[staleRec]
+	cache.mu.Unlock()
+	if staleInMem || staleOnDisk {
+		t.Fatalf("retainRecords did not evict retired record: inMem=%t onDisk=%t", staleInMem, staleOnDisk)
+	}
+
+	// Pruning block 2 queries segment 2 and must fail fresh os.Stat authentication.
+	if _, err := worker.PruneToContext(context.Background(), 5); err == nil {
+		t.Fatal("expected prune touching removed segment 2 to fail fresh verification")
+	}
+}
+
 func BenchmarkHistoryCompanionGateCovers(b *testing.B) {
 	const count = 5000
 	segments := make([]snapshotStateDomainCoverageSegment, count)

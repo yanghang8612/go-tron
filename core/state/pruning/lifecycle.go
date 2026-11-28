@@ -291,7 +291,9 @@ func (l *SnapshotLifecycle) OnePass() (out SnapshotLifecyclePass, passErr error)
 				return nil
 			}
 			coveredAhead := l.pruner != nil && published.PublishedBlock > l.pruner.lastDomainChangePrunedThrough.Load()
-			out.PruneDeferred = l.deferPruneOnHistory && published.HistoryDeferred && l.pruner != nil && l.pruner.syncActive() && !coveredAhead && !published.HistorySpaceDeferred
+			pureSidecarCatchup := published.DerivedSidecarCatchup && !published.Built
+			deferPureSidecar := pureSidecarCatchup && l.pruner != nil && l.pruner.postingBoundaryReadyForSidecarDefer()
+			out.PruneDeferred = l.deferPruneOnHistory && (published.HistoryDeferred || deferPureSidecar) && l.pruner != nil && l.pruner.syncActive() && !coveredAhead && !published.HistorySpaceDeferred
 			if l.pruner == nil || out.PruneDeferred {
 				return nil
 			}
