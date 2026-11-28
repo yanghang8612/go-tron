@@ -24,7 +24,7 @@ func isHistoryInlineAccessor(version uint32) bool {
 }
 
 func isHistoryOffsetAccessor(version uint32) bool {
-	return version == stateDomainChangeBinaryAccessorVersionV9 || version == stateDomainChangeBinaryAccessorVersionV10 || version == stateDomainChangeBinaryAccessorVersionV11
+	return version == stateDomainChangeBinaryAccessorVersionV9 || version == stateDomainChangeBinaryAccessorVersionV10 || version == stateDomainChangeBinaryAccessorVersionV11 || version == stateDomainChangeBinaryAccessorVersionV12
 }
 
 func historyOffsetCRC(page uint64, entry, payload []byte) uint32 {

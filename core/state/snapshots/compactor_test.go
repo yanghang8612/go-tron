@@ -353,8 +353,8 @@ func TestCompactHistoryDomainUpgradesV2AccessorToV9(t *testing.T) {
 	}
 	accessorRef := compactionRefByKind(t, result, SegmentAccessor)
 	data := mustReadFile(t, filepath.Join(dir, accessorRef.Path))
-	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryAccessorVersionV9 {
-		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryAccessorVersionV9)
+	if got := binary.BigEndian.Uint32(data[8:12]); got != stateDomainChangeBinaryAccessorVersionV12 {
+		t.Fatalf("compacted accessor version = %d, want %d", got, stateDomainChangeBinaryAccessorVersionV12)
 	}
 
 	mgr, err := OpenManager(dir)

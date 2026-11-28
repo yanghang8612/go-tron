@@ -13,6 +13,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/maintenance"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -517,5 +518,116 @@ func TestColdBuilderEventLogCompactionSoftLoadArmsPendingAndBusyCap(t *testing.T
 	}
 	if runner.compactionBudget.pending {
 		t.Fatal("shouldPrioritizePendingCompaction did not consume pending")
+	}
+}
+
+func TestColdBuilderHistoryMergeDoesNotStarveBehindHeavyRouting(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	addr := common.BytesToAddress(eventLogTestAddress(0x79))
+
+	const totalLeaves = 140
+	dsCfg, _ := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	var refs []SegmentRef
+	for block := uint64(1); block <= totalLeaves; block++ {
+		db := rawdb.NewMemoryDatabase()
+		c := binaryStateDomainChange(block, block, 1, fmt.Sprintf("account-%d", block))
+		c.FlatDomain = rawdb.StateFlatDomainAccountLatest
+		c.Domain = 0
+		c.Key = nil
+		if err := rawdb.WriteStateTxRange(db, block, c.BlockHash, block, block); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateDomainChangeBlockRows(db, []*rawdb.StateDomainChange{c}); err != nil {
+			t.Fatal(err)
+		}
+		leafRefs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, block, block, dsCfg.HistoryPath(block, block))
+		_ = db.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, leafRefs...)
+	}
+	ev1, idx1 := buildV4TestPairForCompactor(t, dir, 1, 5, common.Hash{1}, []EventLog{
+		eventLogV3TestRow(1, 0, 0, addr, common.Hash{1}, common.Hash{11}, common.Hash{21}, []byte("ev-1")),
+	})
+	ev2, idx2 := buildV4TestPairForCompactor(t, dir, 6, 10, common.Hash{2}, []EventLog{
+		eventLogV3TestRow(6, 0, 0, addr, common.Hash{2}, common.Hash{12}, common.Hash{22}, []byte("ev-2")),
+	})
+	refs = append(refs, ev1, idx1, ev2, idx2)
+	if err := PublishManifest(dir, NewManifest(1, totalLeaves, refs)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain small & metadata routing families so only heavy account-history-routing
+	// (>1 batch of 64), history leaf merges (8 at a time), and event-log compaction remain.
+	for _, refresh := range []func() (bool, error){
+		func() (bool, error) { return refreshSmallSystemHistoryRoutingContext(ctx, dir, false) },
+		func() (bool, error) { return refreshMetadataHistoryRoutingContext(ctx, dir, false) },
+	} {
+		for i := 0; i < 8; i++ {
+			built, err := refresh()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !built {
+				break
+			}
+		}
+	}
+
+	runner := NewRunner(&priorityCompactionTestChain{idle: false}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryDataset:     SegmentDatasetStateDomainChange,
+		HistoryCatchupMode: HistoryCatchupThroughput,
+		CompactMaxSteps:    busyHistoryCompactionSources,
+		BuildEventLogs:     true,
+		CompactEventLogs:   true,
+		HeavyWorkGate:      maintenance.NewHeavyWorkGate(),
+		MetricsNamespace:   "test/" + strings.ReplaceAll(t.Name(), "/", "_") + "/",
+	})
+	t.Cleanup(runner.cancel)
+
+	// Turn 1: heavy routing builds one bounded batch.
+	t1, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	if !t1.RoutingBuilt || t1.Merged || t1.EventLogsCompacted {
+		t.Fatalf("turn 1 should build heavy routing: %+v", t1)
+	}
+
+	// Turn 2: event-log compaction gets fair share.
+	runner.compactionBudget.notBefore = time.Time{}
+	runner.cfg.HeavyWorkGate = maintenance.NewHeavyWorkGate()
+	t2, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+	if !t2.EventLogsCompacted || t2.RoutingBuilt || t2.Merged {
+		t.Fatalf("turn 2 should compact event logs: %+v", t2)
+	}
+
+	// Turn 3: heavy routing yields so history leaf compaction merges 8 leaves without starving!
+	runner.compactionBudget.notBefore = time.Time{}
+	runner.cfg.HeavyWorkGate = maintenance.NewHeavyWorkGate()
+	t3, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 3: %v", err)
+	}
+	if !t3.Merged || t3.InputSources != busyHistoryCompactionSources || t3.RoutingBuilt || t3.EventLogsCompacted {
+		t.Fatalf("turn 3 should merge %d history leaves without heavy-routing starvation: %+v", busyHistoryCompactionSources, t3)
+	}
+
+	// Turn 4: event logs are already settled, so it falls through in the SAME turn to heavy routing again!
+	runner.compactionBudget.notBefore = time.Time{}
+	runner.cfg.HeavyWorkGate = maintenance.NewHeavyWorkGate()
+	t4, err := runner.compactHistory(ctx, true)
+	if err != nil {
+		t.Fatalf("turn 4: %v", err)
+	}
+	if !t4.RoutingBuilt || t4.Merged || t4.EventLogsCompacted {
+		t.Fatalf("turn 4 should advance heavy routing after settled event logs: %+v", t4)
 	}
 }

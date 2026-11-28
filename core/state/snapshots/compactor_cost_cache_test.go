@@ -197,7 +197,7 @@ func TestHistoryCostCacheDoesNotReplacePayloadAuthentication(t *testing.T) {
 
 func TestHistoryCostCacheProductionBudgetBoundary(t *testing.T) {
 	cfg := CompactionConfig{MaxInputBytes: busyHistoryCompactionInputBytes, MaxInputLogicalBytes: busyHistoryCompactionLogicalBytes, MaxInputRecords: busyHistoryCompactionInputRecords, MaxSources: busyHistoryCompactionSources}
-	if !historyCompactionWithinBudget(cfg, 128<<20, 512<<20, 400_000, 4) || historyCompactionWithinBudget(cfg, 128<<20, 512<<20, 400_001, 4) || historyCompactionWithinBudget(cfg, 128<<20, 512<<20, 400_000, 5) {
+	if !historyCompactionWithinBudget(cfg, 128<<20, 512<<20, 400_000, busyHistoryCompactionSources) || historyCompactionWithinBudget(cfg, 128<<20, 512<<20, 400_001, busyHistoryCompactionSources) || historyCompactionWithinBudget(cfg, 128<<20, 512<<20, 400_000, busyHistoryCompactionSources+1) {
 		t.Fatal("production admission boundary changed")
 	}
 }

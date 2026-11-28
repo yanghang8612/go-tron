@@ -736,7 +736,7 @@ func (b *stateDomainChangeV6Build) BuildAccessor(dir string, ref SegmentRef, rec
 }
 
 func (b *stateDomainChangeV6Build) BuildAccessorContext(ctx context.Context, dir string, ref SegmentRef, recordCount uint64) (SegmentRef, etl.Stats, error) {
-	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV11)
+	return b.buildAccessorContextVersion(ctx, dir, ref, recordCount, stateDomainChangeBinaryAccessorVersionV12)
 }
 
 func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Context, dir string, ref SegmentRef, recordCount uint64, version uint32) (SegmentRef, etl.Stats, error) {
@@ -754,7 +754,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 	if b == nil || b.postings == nil || uint64(b.keyCount) > recordCount {
 		return SegmentRef{}, etl.Stats{}, errors.New("snapshots: invalid V6 accessor build")
 	}
-	if version == stateDomainChangeBinaryAccessorVersionV11 {
+	if isHistoryTxAccessor(version) {
 		if b.txRuns == nil {
 			version = stateDomainChangeBinaryAccessorVersionV10
 		} else {
@@ -764,19 +764,19 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			if b.txRuns.rows != recordCount {
 				return SegmentRef{}, etl.Stats{}, errors.New("snapshots: transaction table row count")
 			}
-			if b.txRuns.tooLarge || uint64(b.keyCount) == recordCount {
+			if b.txRuns.tooLarge || (version == stateDomainChangeBinaryAccessorVersionV11 && uint64(b.keyCount) == recordCount) {
 				version = stateDomainChangeBinaryAccessorVersionV10
 			}
 		}
 	}
 	var owners *historyOwnerTable
-	if version == stateDomainChangeBinaryAccessorVersionV10 || version == stateDomainChangeBinaryAccessorVersionV11 {
+	if version == stateDomainChangeBinaryAccessorVersionV10 || isHistoryTxAccessor(version) {
 		var err error
 		owners, err = b.buildHistoryOwnerTable(ctx)
 		if err != nil {
 			return SegmentRef{}, etl.Stats{}, err
 		}
-		if owners == nil && version != stateDomainChangeBinaryAccessorVersionV11 {
+		if owners == nil && !isHistoryTxAccessor(version) {
 			version = stateDomainChangeBinaryAccessorVersionV9
 		}
 	}
@@ -853,11 +853,11 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 		var raw, stored []byte
 		var storedLen uint32
 		if owners != nil {
-			raw, stored, storedLen, err = encodeHistoryOwnerKeyBlock(records, ref.FromTxNum, owners, &largestRawKeyBlock)
+			raw, stored, storedLen, err = encodeHistoryOwnerKeyBlockVersion(records, ref.FromTxNum, owners, &largestRawKeyBlock, version)
 			if err != nil {
 				return SegmentRef{}, postingStats, err
 			}
-			plain, err := encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
+			plain, err := encodeStateDomainChangeBinaryAccessorKeyBlockVersion(records, ref.FromTxNum, version)
 			if err != nil {
 				return SegmentRef{}, postingStats, err
 			}
@@ -872,7 +872,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			plainOffset += uint64(len(packed))
 		} else {
 			if isHistoryInlineAccessor(version) {
-				raw, err = encodeStateDomainChangeBinaryAccessorV8KeyBlock(records, ref.FromTxNum)
+				raw, err = encodeStateDomainChangeBinaryAccessorKeyBlockVersion(records, ref.FromTxNum, version)
 			} else {
 				raw, err = encodeStateDomainChangeBinaryAccessorV6KeyBlock(records)
 			}
@@ -907,7 +907,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			return SegmentRef{}, postingStats, err
 		}
 		if uint64(keyStat.Size())+owners.size() >= uint64(plainStat.Size()) {
-			if version != stateDomainChangeBinaryAccessorVersionV11 {
+			if !isHistoryTxAccessor(version) {
 				version = stateDomainChangeBinaryAccessorVersionV9
 			}
 			owners = nil
@@ -1016,7 +1016,7 @@ func (b *stateDomainChangeV6Build) buildAccessorContextVersion(ctx context.Conte
 			return SegmentRef{}, postingStats, err
 		}
 	}
-	if version == stateDomainChangeBinaryAccessorVersionV11 {
+	if isHistoryTxAccessor(version) {
 		if err := b.txRuns.AppendTo(metadata, metadata.size, owners != nil); err != nil {
 			return SegmentRef{}, postingStats, err
 		}

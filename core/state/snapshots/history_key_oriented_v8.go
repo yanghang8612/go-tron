@@ -30,7 +30,12 @@ func stateDomainChangeAccessorHeaderCRC(raw []byte, version uint32) uint32 {
 }
 
 func encodeStateDomainChangeBinaryAccessorV8KeyBlock(keys []stateDomainChangeBinaryAccessorV6Key, from uint64) ([]byte, error) {
+	return encodeStateDomainChangeBinaryAccessorKeyBlockVersion(keys, from, stateDomainChangeBinaryAccessorVersionV8)
+}
+
+func encodeStateDomainChangeBinaryAccessorKeyBlockVersion(keys []stateDomainChangeBinaryAccessorV6Key, from uint64, version uint32) ([]byte, error) {
 	var raw, previous []byte
+	compactSingletons := isHistoryCompactSingletonAccessor(version)
 	for _, key := range keys {
 		prefix := commonPrefixLength(previous, key.key)
 		raw = binary.AppendUvarint(raw, uint64(prefix))
@@ -49,8 +54,10 @@ func encodeStateDomainChangeBinaryAccessorV8KeyBlock(keys []stateDomainChangeBin
 				return nil, errors.New("snapshots: invalid V8 singleton")
 			}
 			raw = binary.AppendUvarint(raw, 0)
-			raw = binary.AppendUvarint(raw, p.txNum-from)
-			raw = binary.AppendUvarint(raw, p.offset)
+			if !compactSingletons {
+				raw = binary.AppendUvarint(raw, p.txNum-from)
+				raw = binary.AppendUvarint(raw, p.offset)
+			}
 			raw = binary.AppendUvarint(raw, uint64(p.recordIndex))
 		} else {
 			if count < 2 {
@@ -71,6 +78,19 @@ func readStateDomainChangeAccessorV8Meta(br io.ByteReader, h stateDomainChangeBi
 		return rec, err
 	}
 	if token == 0 {
+		if isHistoryCompactSingletonAccessor(h.version) {
+			idx, e := binary.ReadUvarint(br)
+			if e != nil {
+				return rec, e
+			}
+			if idx >= h.recordCount || idx > math.MaxUint32 {
+				return rec, errors.New("snapshots: V12 singleton outside segment bounds")
+			}
+			rec.inline = true
+			rec.postings = 1
+			rec.inlinePosting = stateDomainChangeBinaryAccessorV6Posting{recordIndex: uint32(idx)}
+			return rec, nil
+		}
 		a, e := binary.ReadUvarint(br)
 		if e != nil {
 			return rec, e

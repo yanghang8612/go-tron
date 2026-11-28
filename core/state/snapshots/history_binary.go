@@ -1901,7 +1901,7 @@ func verifyStateDomainChangeBinaryV7CoverageSequentialWithBuffer(ctx context.Con
 		if err != nil {
 			return err
 		}
-		if cursor.deferOffsets && !cursor.records[cursor.record-1].inline {
+		if cursor.deferOffsets && (!cursor.records[cursor.record-1].inline || isHistoryCompactSingletonAccessor(accessorHeader.version)) {
 			expected.offset = 0
 		}
 		if keyID != expectedKeyID || posting != expected {

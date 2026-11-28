@@ -16,13 +16,12 @@ const (
 	historyCompressionIdentityBytes = 4 << 20
 )
 
-// Automatic policies share the same bounded CDC evidence. Only their ordinary
-// V6 output differs; explicit and legacy formats never enter that observer.
+// Automatic policies share the same bounded CDC evidence and default to fast
+// 1-pass 128 KiB record columns (Format 5) for ordinary segments. Explicit
+// numeric formats ("2", "3", etc.) keep their exact overrides.
 func historyAutomaticOrdinaryFormat(format string) (ordinary string, automatic bool) {
 	switch format {
-	case "auto":
-		return "2", true
-	case historyCompressionAutoColumns:
+	case "auto", historyCompressionAutoColumns:
 		return "5", true
 	default:
 		return format, false

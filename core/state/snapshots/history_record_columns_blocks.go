@@ -31,20 +31,29 @@ func encodeRecordColumnStoredPage(raw []byte, starts []uint32, enc *zstd.Encoder
 	if len(raw) == 0 || len(raw) > historyRecordColumnPageMax {
 		return nil, errHistoryRecordColumns
 	}
-	best := enc.EncodeAll(raw, nil)
-	mode := byte(0)
-	for keyMode := uint32(0); len(starts) > 0 && keyMode < 3; keyMode++ {
+	if len(starts) == 0 {
+		return append([]byte{0}, enc.EncodeAll(raw, nil)...), nil
+	}
+	var candidates [3][]byte
+	for keyMode := uint32(0); keyMode < 3; keyMode++ {
 		transformed, e := encodeHistoryRecordColumns(raw, starts, keyMode)
 		if e != nil {
 			return nil, e
 		}
-		compressed := enc.EncodeAll(transformed, nil)
-		if len(compressed) < len(best) {
-			best = compressed
-			mode = 1
+		candidates[keyMode] = transformed
+	}
+	k0 := int(binary.BigEndian.Uint32(candidates[0][16:20]))
+	k1 := int(binary.BigEndian.Uint32(candidates[1][16:20]))
+	k2 := candidates[2][historyRecordColumnHeader : historyRecordColumnHeader+4*len(starts)]
+	mode := selectRecordColumnKeyMode(len(starts), k0, k1, k2)
+	best := enc.EncodeAll(candidates[mode], nil)
+	if len(best) >= len(raw) {
+		plain := enc.EncodeAll(raw, nil)
+		if len(plain) < len(best) {
+			return append([]byte{0}, plain...), nil
 		}
 	}
-	return append([]byte{mode}, best...), nil
+	return append([]byte{1}, best...), nil
 }
 
 // scratch is distinct from dst and the compressed input. Reader ownership is

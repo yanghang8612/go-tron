@@ -519,10 +519,7 @@ func TestCDCAutoBuildAndMergeSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := compressedBlockFooterVersion
-			if tc.format == historyCompressionAutoColumns {
-				want = compressedBlockRecordColumnsVersion
-			}
+			want := compressedBlockRecordColumnsVersion
 			if large {
 				want = compressedBlockCDCVersion
 			}

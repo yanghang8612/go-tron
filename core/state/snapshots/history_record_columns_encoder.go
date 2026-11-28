@@ -119,19 +119,49 @@ func recordColumnEncodeTo(enc *zstd.Encoder, data, dst []byte, mode byte) []byte
 	return enc.EncodeAll(data, dst)
 }
 
+// selectRecordColumnKeyMode picks the lowest-entropy key representation in O(N)
+// without invoking Zstd multiple times per page.
+func selectRecordColumnKeyMode(n, key0Len, key1Len int, key2 []byte) int {
+	bestMode, bestScore := 0, key0Len
+	if key1Len < bestScore {
+		bestMode, bestScore = 1, key1Len
+	}
+	if n > 0 && len(key2) == 4*n {
+		planeScore := 0
+		for b := 0; b < 4; b++ {
+			plane := key2[b*n : (b+1)*n]
+			changes := 0
+			for i := 1; i < len(plane); i++ {
+				if plane[i] != plane[i-1] {
+					changes++
+				}
+			}
+			if changes > 0 {
+				planeScore += changes + 1
+			}
+		}
+		if planeScore < bestScore {
+			bestMode = 2
+		}
+	}
+	return bestMode
+}
+
 func (e *recordColumnPageEncoder) encode(raw []byte, starts []uint32, enc *zstd.Encoder) ([]byte, error) {
 	if len(raw) == 0 || len(raw) > historyRecordColumnPageMax {
 		return nil, errHistoryRecordColumns
 	}
-	e.best = recordColumnEncodeTo(enc, raw, e.best, 0)
 	if len(starts) == 0 {
+		e.best = recordColumnEncodeTo(enc, raw, e.best, 0)
 		return e.best, nil
 	}
 	if err := e.prepare(raw, starts); err != nil {
 		return nil, err
 	}
-	for mode := 0; mode < 3; mode++ {
-		e.candidate = recordColumnEncodeTo(enc, e.transformed(mode), e.candidate, 1)
+	mode := selectRecordColumnKeyMode(len(starts), len(e.keys[0]), len(e.keys[1]), e.keys[2])
+	e.best = recordColumnEncodeTo(enc, e.transformed(mode), e.best, 1)
+	if len(e.best) >= len(raw) {
+		e.candidate = recordColumnEncodeTo(enc, raw, e.candidate, 0)
 		if len(e.candidate) < len(e.best) {
 			e.best, e.candidate = e.candidate, e.best
 		}

@@ -14,6 +14,15 @@ import (
 )
 
 const stateDomainChangeBinaryAccessorVersionV11 = uint32(11)
+const stateDomainChangeBinaryAccessorVersionV12 = uint32(12)
+
+func isHistoryTxAccessor(version uint32) bool {
+	return version == stateDomainChangeBinaryAccessorVersionV11 || version == stateDomainChangeBinaryAccessorVersionV12
+}
+
+func isHistoryCompactSingletonAccessor(version uint32) bool {
+	return version == stateDomainChangeBinaryAccessorVersionV12
+}
 const historyTxPageRuns = uint64(256)
 const historyTxEntrySize = uint64(32)
 const historyTxFooterSize = uint64(64)

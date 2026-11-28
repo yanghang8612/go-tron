@@ -15,7 +15,7 @@ var historyCompressionFormatFlag = &cli.StringFlag{
 	Name:    "history.compression-format",
 	Value:   "auto",
 	EnvVars: []string{"GTRON_HISTORY_COMPRESSION_FORMAT"},
-	Usage:   "Cold history container: auto selects CDC for repeated large values; auto-columns keeps that CDC policy and uses 128 KiB record columns for ordinary V6 builds/merges (experimental); 1=legacy, 2=streaming footer, 3=CDC for every history segment, 4=bounded account delta pages (experimental), 5=128 KiB record columns (experimental)",
+	Usage:   "Cold history container: auto selects CDC for repeated large values and fast 1-pass 128 KiB record columns (Format 5) for ordinary V6 builds/merges; auto-columns is an alias for auto; 1=legacy, 2=streaming footer, 3=CDC for every history segment, 4=bounded account delta pages (experimental), 5=128 KiB record columns",
 }
 
 // Configure once before opening stores/starting any node lifecycle. Individual

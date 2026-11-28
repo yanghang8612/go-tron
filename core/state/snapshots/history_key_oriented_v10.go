@@ -334,7 +334,11 @@ func (t *historyOwnerTable) appendTo(w io.Writer, prefixSize uint64) error {
 }
 
 func encodeHistoryOwnerKeyBlock(keys []stateDomainChangeBinaryAccessorV6Key, from uint64, table *historyOwnerTable, largest *int) ([]byte, []byte, uint32, error) {
-	legacy, err := encodeStateDomainChangeBinaryAccessorV8KeyBlock(keys, from)
+	return encodeHistoryOwnerKeyBlockVersion(keys, from, table, largest, stateDomainChangeBinaryAccessorVersionV10)
+}
+
+func encodeHistoryOwnerKeyBlockVersion(keys []stateDomainChangeBinaryAccessorV6Key, from uint64, table *historyOwnerTable, largest *int, version uint32) ([]byte, []byte, uint32, error) {
+	legacy, err := encodeStateDomainChangeBinaryAccessorKeyBlockVersion(keys, from, version)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -368,7 +372,7 @@ func encodeHistoryOwnerKeyBlock(keys []stateDomainChangeBinaryAccessorV6Key, fro
 		copy(compact[i].key[5:], k.key[21:])
 	}
 	if len(pages) <= historyOwnerKeyPageLimit {
-		candidate, err := encodeStateDomainChangeBinaryAccessorV8KeyBlock(compact, from)
+		candidate, err := encodeStateDomainChangeBinaryAccessorKeyBlockVersion(compact, from, version)
 		if err != nil {
 			return nil, nil, 0, err
 		}

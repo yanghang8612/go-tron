@@ -78,10 +78,7 @@ func TestAutoColumnsOpaqueCDCAndOrdinaryBuild(t *testing.T) {
 				if err != nil || !reflect.DeepEqual(got, want) {
 					t.Fatal("independent hot/cold oracle", err, got, want)
 				}
-				version := compressedBlockFooterVersion
-				if format == historyCompressionAutoColumns {
-					version = compressedBlockRecordColumnsVersion
-				}
+				version := compressedBlockRecordColumnsVersion
 				if large {
 					version = compressedBlockCDCVersion
 				}

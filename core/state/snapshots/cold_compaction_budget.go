@@ -14,27 +14,29 @@ const (
 	busyHistoryCompactionInputBytes          = uint64(128 << 20)
 	busyHistoryCompactionLogicalBytes        = uint64(512 << 20)
 	busyHistoryCompactionInputRecords        = uint64(400_000)
-	busyHistoryCompactionSources             = uint64(4)
+	busyHistoryCompactionSources             = uint64(8)
 	busyHistoryCompactionNoCandidateRetry    = 30 * time.Second
 	busyEventLogCompactionMaxSourceMainBytes = uint64(128 << 20)
 	eventLogCompactionFairShareInterval      = 1
+	heavyRoutingCompactionFairShareInterval  = 1
 )
 
 // Protected by Runner.passMu. A merge recovery belongs to optional compaction,
 // independently of the deadline for publishing and pruning new cold history.
 type historyCompactionBudgetState struct {
-	notBefore               time.Time
-	pending                 bool
-	pendingAt               time.Time
-	inputCosts              *historyCompactionCostCache
-	outerMetrics            *historyCompactionOuterMetrics
-	routingRetiredCursor    retiredMetadataSweepCursor
-	systemRouting           systemRoutingRefreshState
-	preferMetadata          bool
-	nonEventCompactionTurns int
-	eventLogCompactHintBlk  uint64
-	eventLogCompactIdleGen  uint64
-	eventLogCompactLastBusy bool
+	notBefore                  time.Time
+	pending                    bool
+	pendingAt                  time.Time
+	inputCosts                 *historyCompactionCostCache
+	outerMetrics               *historyCompactionOuterMetrics
+	routingRetiredCursor       retiredMetadataSweepCursor
+	systemRouting              systemRoutingRefreshState
+	preferMetadata             bool
+	nonEventCompactionTurns    int
+	heavyRoutingCompactionTurns int
+	eventLogCompactHintBlk     uint64
+	eventLogCompactIdleGen     uint64
+	eventLogCompactLastBusy    bool
 }
 
 // Consume one priority opportunity, never a history admission deadline. Without
@@ -275,6 +277,30 @@ func (r *Runner) accountRoutingExpansion(busy bool) func() bool {
 	}
 }
 
+func (r *Runner) refreshHeavyHistoryRouting(ctx context.Context, busy bool, routingLimits accountRoutingRefreshLimits) (built bool, expansionDenied bool, err error) {
+	r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
+	built, err = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
+	if err != nil || built {
+		return built, false, err
+	}
+	permitExtra := r.accountRoutingExpansion(busy)
+	if permitExtra != nil {
+		check := permitExtra
+		permitExtra = func() bool {
+			expansionDenied = !check()
+			return !expansionDenied
+		}
+	}
+	built, err = refreshAccountHistoryRoutingWithExpansionContext(ctx, r.cfg.Dir, busy, permitExtra, routingLimits)
+	if err != nil {
+		return false, expansionDenied, err
+	}
+	if built {
+		return true, false, nil
+	}
+	return false, expansionDenied, nil
+}
+
 func (r *Runner) compactHistory(ctx context.Context, catchingUp bool) (HistoryCompactionResult, error) {
 	return r.compactHistoryWithRoutingLimits(ctx, catchingUp, defaultAccountRoutingRefreshLimits())
 }
@@ -369,6 +395,7 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 	}
 	// The small singleton routing index removes cross-segment negative reads
 	// without rewriting canonical rows or enlarging streaming merge budgets.
+	deferHeavyRouting := r.compactionBudget.heavyRoutingCompactionTurns >= heavyRoutingCompactionFairShareInterval
 	if r.cfg.HistoryDataset == SegmentDatasetStateDomainChange {
 		if !r.cfg.RetainObsoleteSegments {
 			pruned, pruneErr := pruneRetiredHistoryRoutingContext(ctx, r.cfg.Dir, r.compactionBudget.routingRetiredCursor)
@@ -397,38 +424,21 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
 			}
 		}
-		r.compactionBudget.systemRouting.initMetrics(r.cfg.MetricsNamespace)
-		var built bool
-		var routeErr error
-		built, routeErr = refreshSystemHistoryRoutingWithStateContext(ctx, r.cfg.Dir, busy, &r.compactionBudget.systemRouting, time.Now())
-		if routeErr != nil {
-			return total, routeErr
-		}
-		if built {
-			r.compactionBudget.nonEventCompactionTurns++
-			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
-		}
-		var expansionDenied bool
-		permitExtra := r.accountRoutingExpansion(busy)
-		if permitExtra != nil {
-			check := permitExtra
-			permitExtra = func() bool {
-				expansionDenied = !check()
-				return !expansionDenied
+		if !deferHeavyRouting {
+			built, expansionDenied, routeErr := r.refreshHeavyHistoryRouting(ctx, busy, routingLimits)
+			if routeErr != nil {
+				return total, routeErr
 			}
-		}
-		built, routeErr = refreshAccountHistoryRoutingWithExpansionContext(ctx, r.cfg.Dir, busy, permitExtra, routingLimits)
-		if routeErr != nil {
-			return total, routeErr
-		}
-		if built {
-			r.compactionBudget.nonEventCompactionTurns++
-			return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
-		}
-		if expansionDenied {
-			// A fresh storage or CPU/memory rejection supersedes this pass's
-			// initial admission. Do not start a different heavy job.
-			return HistoryCompactionResult{Deferred: true, DeferReason: "import-load"}, nil
+			if built {
+				r.compactionBudget.heavyRoutingCompactionTurns++
+				r.compactionBudget.nonEventCompactionTurns++
+				return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+			}
+			if expansionDenied {
+				// A fresh storage or CPU/memory rejection supersedes this pass's
+				// initial admission. Do not start a different heavy job.
+				return HistoryCompactionResult{Deferred: true, DeferReason: "import-load"}, nil
+			}
 		}
 	}
 	if r.compactionBudget.outerMetrics == nil {
@@ -462,6 +472,20 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 		}
 		if !result.Merged {
 			if !total.Merged && !total.RoutingBuilt {
+				if deferHeavyRouting && r.cfg.HistoryDataset == SegmentDatasetStateDomainChange {
+					r.compactionBudget.heavyRoutingCompactionTurns = 0
+					built, expansionDenied, routeErr := r.refreshHeavyHistoryRouting(ctx, busy, routingLimits)
+					if routeErr != nil {
+						return total, routeErr
+					}
+					if built {
+						r.compactionBudget.nonEventCompactionTurns++
+						return HistoryCompactionResult{Dataset: SegmentDatasetStateDomainChange, RoutingBuilt: true}, nil
+					}
+					if expansionDenied {
+						return HistoryCompactionResult{Deferred: true, DeferReason: "import-load"}, nil
+					}
+				}
 				evRes, compacted, evErr := r.tryCompactEventLogs(ctx, busy)
 				if evErr != nil {
 					return total, evErr
@@ -480,6 +504,7 @@ func (r *Runner) compactHistoryWithRoutingLimits(ctx context.Context, catchingUp
 			}
 			return total, nil
 		}
+		r.compactionBudget.heavyRoutingCompactionTurns = 0
 		r.compactionBudget.nonEventCompactionTurns++
 		mergeHistoryCompactionResult(&total, result)
 		if !drain || r.cfg.MaxCompactionPasses > 0 && uint64(total.MergePasses) >= r.cfg.MaxCompactionPasses {
